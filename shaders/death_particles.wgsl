@@ -1,14 +1,14 @@
 // Death particle rendering shader
 //
-// Visual intent: dead cell membrane fragments — irregular, translucent blobs
+// Visual intent: dead cell membrane fragments - irregular, translucent blobs
 // that look like broken organelles or cytoplasm drifting in fluid.
 //
 // Shape technique: domain-warped signed distance field.
 //   The UV coordinates are warped by layered sine noise before the distance
-//   is computed. This produces genuinely irregular shapes with concavities —
+//   is computed. This produces genuinely irregular shapes with concavities -
 //   not just a circle with bumpy edges.
 //
-// Lighting: rim-bright membrane effect — the edge of each fragment is slightly
+// Lighting: rim-bright membrane effect - the edge of each fragment is slightly
 //   brighter/more opaque than the interior, like a thin cell wall catching light.
 //   The interior is semi-transparent with subtle internal density variation.
 
@@ -42,7 +42,7 @@ struct VertexOutput {
 
 const QUAD_INDICES: array<u32, 6> = array<u32, 6>(0u, 2u, 1u, 1u, 2u, 3u);
 
-// ── Vertex shader ─────────────────────────────────────────────────────────────
+// -- Vertex shader -------------------------------------------------------------
 
 @vertex
 fn vs_main(
@@ -95,9 +95,9 @@ fn vs_main(
     return out;
 }
 
-// ── Fragment utilities ────────────────────────────────────────────────────────
+// -- Fragment utilities --------------------------------------------------------
 
-// Smooth hash — maps a 2D point to [0,1) pseudo-randomly
+// Smooth hash - maps a 2D point to [0,1) pseudo-randomly
 fn hash2(p: vec2<f32>) -> f32 {
     let k = vec2<f32>(127.1, 311.7);
     return fract(sin(dot(p, k)) * 43758.5453);
@@ -124,11 +124,11 @@ fn warp(p: vec2<f32>, seed: f32, strength: f32) -> vec2<f32> {
     let s1 = seed * 6.2831;
     let s2 = seed * 3.1415 + 1.7;
 
-    // First warp pass — large-scale deformation
+    // First warp pass - large-scale deformation
     let wx1 = vnoise(p * 2.1 + vec2<f32>(s1, s1 + 1.3)) - 0.5;
     let wy1 = vnoise(p * 2.1 + vec2<f32>(s1 + 3.7, s1 + 5.1)) - 0.5;
 
-    // Second warp pass — finer detail, applied to already-warped coords
+    // Second warp pass - finer detail, applied to already-warped coords
     let p2  = p + vec2<f32>(wx1, wy1) * strength;
     let wx2 = vnoise(p2 * 3.8 + vec2<f32>(s2, s2 + 2.4)) - 0.5;
     let wy2 = vnoise(p2 * 3.8 + vec2<f32>(s2 + 4.1, s2 + 0.9)) - 0.5;
@@ -136,7 +136,7 @@ fn warp(p: vec2<f32>, seed: f32, strength: f32) -> vec2<f32> {
     return p + vec2<f32>(wx1 + wx2 * 0.5, wy1 + wy2 * 0.5) * strength;
 }
 
-// ── Fragment shader ───────────────────────────────────────────────────────────
+// -- Fragment shader -----------------------------------------------------------
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -147,18 +147,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let warp_strength = 0.22 + in.life_frac * 0.08;
     let warped = warp(centered * 2.0, in.shape_seed, warp_strength);
 
-    // Distance in warped space — this is what makes the shape irregular
+    // Distance in warped space - this is what makes the shape irregular
     let warped_dist = length(warped);
 
     // Outer edge: soft falloff in warped space
-    // Radius ~0.85 in warped coords (the *2.0 scale above means 0.5 world → 1.0 warped)
+    // Radius ~0.85 in warped coords (the *2.0 scale above means 0.5 world -> 1.0 warped)
     let outer_alpha = 1.0 - smoothstep(0.72, 0.95, warped_dist);
 
     if outer_alpha < 0.005 {
         discard;
     }
 
-    // ── Membrane rim effect ───────────────────────────────────────────────────
+    // -- Membrane rim effect ---------------------------------------------------
     // Real cell fragments have a denser membrane at the edge.
     // Compute the unwarped distance for the rim so it follows the true boundary.
     let true_dist = length(centered);
@@ -171,23 +171,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                   * (1.0 - smoothstep(rim_outer, 0.50, true_dist));
     let rim_opacity = rim * 0.55; // how much extra opacity the rim adds
 
-    // ── Interior translucency ─────────────────────────────────────────────────
+    // -- Interior translucency -------------------------------------------------
     // The interior is semi-transparent with subtle density variation from noise.
-    // This mimics cytoplasm — not uniformly filled.
+    // This mimics cytoplasm - not uniformly filled.
     let interior_noise = vnoise(centered * 5.5 + vec2<f32>(in.shape_seed * 4.0, in.life_frac));
     // Interior is more transparent at center, denser mid-way out
     let interior_density = smoothstep(0.05, 0.30, true_dist) * (0.5 + interior_noise * 0.35);
 
-    // ── Combine opacity layers ────────────────────────────────────────────────
+    // -- Combine opacity layers ------------------------------------------------
     // Base: the warped shape boundary
     // + rim: membrane edge
     // + interior: cytoplasm density
     let combined_opacity = outer_alpha * (0.30 + interior_density * 0.45 + rim_opacity);
 
-    // ── Fade over lifetime ────────────────────────────────────────────────────
+    // -- Fade over lifetime ----------------------------------------------------
     let fade = 1.0 - smoothstep(0.65, 1.0, in.life_frac);
 
-    // ── Color variation across the fragment ──────────────────────────────────
+    // -- Color variation across the fragment ----------------------------------
     // Rim is slightly cooler/more saturated (membrane pigment)
     // Interior is slightly warmer/more washed out (cytoplasm)
     let rim_tint   = mix(in.color.rgb, in.color.rgb * vec3<f32>(0.88, 0.92, 1.0), rim * 0.4);

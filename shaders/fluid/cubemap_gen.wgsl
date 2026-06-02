@@ -1,6 +1,6 @@
 // Procedural cubemap generation compute shader
 // Generates a static environment cubemap for water reflections
-// Each face is 256×256 pixels, written to a 2D texture array with 6 layers
+// Each face is 256x256 pixels, written to a 2D texture array with 6 layers
 
 struct CubemapParams {
     light_dir: vec3<f32>,
@@ -51,11 +51,11 @@ fn sky_color(dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
 
     var color: vec3<f32>;
     if up < 0.0 {
-        // Below horizon — dark ocean/abyss
+        // Below horizon - dark ocean/abyss
         let t = clamp(-up, 0.0, 1.0);
         color = mix(horizon_color * 0.4, deep_color, t * t);
     } else {
-        // Above horizon — sky gradient
+        // Above horizon - sky gradient
         let t = clamp(up, 0.0, 1.0);
         color = mix(horizon_color, zenith_color, sqrt(t));
     }

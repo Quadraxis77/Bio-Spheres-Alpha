@@ -23,7 +23,7 @@ pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained
 pub const SENSE_CELL: u32     = 1 << 0; // bit 0
 pub const SENSE_FOOD: u32     = 1 << 1; // bit 1
 pub const SENSE_LIGHT: u32    = 1 << 2; // bit 2
-pub const SENSE_WALL: u32     = 1 << 3; // bit 3 — world boundary sphere + cave solid voxels + water surface
+pub const SENSE_WALL: u32     = 1 << 3; // bit 3 - world boundary sphere + cave solid voxels + water surface
 pub const SENSE_SELF: u32     = 1 << 4; // bit 4
 pub const SENSE_MOSSROCK: u32 = 1 << 5; // bit 5
 
@@ -101,7 +101,7 @@ pub fn sense_oculocytes(
             ((sense_mask & SENSE_SELF) != 0)  // Self always fires
             || ((sense_mask & SENSE_CELL) != 0 && sense_cells_ray(state, cell_idx, pos, forward, ray_length))
             || ((sense_mask & SENSE_WALL) != 0 && sense_barrier_ray(pos, forward, ray_length, boundary_radius))
-            // Food and Light require fluid/light systems — not available in preview
+            // Food and Light require fluid/light systems - not available in preview
             || (sense_mask & SENSE_FOOD) != 0 && false
             || (sense_mask & SENSE_LIGHT) != 0 && false;
 
@@ -160,8 +160,8 @@ fn sense_barrier_ray(
     boundary_radius: f32,
 ) -> bool {
     // For a sphere centered at origin with radius R:
-    // |pos + t*forward|² = R²
-    // t² + 2*(pos·forward)*t + (|pos|² - R²) = 0
+    // |pos + t*forward|^2 = R^2
+    // t^2 + 2*(posforward)*t + (|pos|^2 - R^2) = 0
     let b = 2.0 * pos.dot(forward);
     let c = pos.length_squared() - boundary_radius * boundary_radius;
 
@@ -273,7 +273,7 @@ pub fn propagate_signals(
                         }
                         state.signal_flow_tracker.add_flow(cell_idx, neighbor);
                     }
-                    // Shorter path already won — signal does not flow backward.
+                    // Shorter path already won - signal does not flow backward.
                 }
             }
             std::mem::swap(&mut current_frontier, &mut next_frontier);
@@ -297,8 +297,8 @@ pub fn propagate_signals(
 /// not itself receive a signal value written to its channels.
 ///
 /// Only oculocytes qualify: their output is determined by ray-casting and must
-/// not be altered by inbound signals from other cells. Every other cell type —
-/// including regulation emitters — should both emit *and* receive signals normally.
+/// not be altered by inbound signals from other cells. Every other cell type -
+/// including regulation emitters - should both emit *and* receive signals normally.
 /// Regulation emitters participating as receivers is exactly how inter-cell signal
 /// gating (division, apoptosis, mode-switching) works in practice.
 fn is_signal_sender(state: &CanonicalState, genome: &Genome, cell_idx: usize, _emissions: &[SignalEmission]) -> bool {
@@ -408,7 +408,7 @@ fn read_channel(state: &CanonicalState, cell_idx: usize, channel: usize) -> Opti
 /// and return a list of signal emissions. Runs after an initial propagation
 /// pass so upstream sensor/regulation signals are already visible.
 ///
-/// If a required input channel has no signal the cell emits nothing —
+/// If a required input channel has no signal the cell emits nothing -
 /// misconfigured circuits go dark visibly rather than silently misbehave.
 pub fn process_cognocytes(
     state: &CanonicalState,
@@ -431,7 +431,7 @@ pub fn process_cognocytes(
         let ch_b = mode.cognocyte_input_channel_b.clamp(0, 15) as usize;
         let op   = mode.cognocyte_operation;
 
-        // NOT is unary — only A required.
+        // NOT is unary - only A required.
         let a = match read_channel(state, cell_idx, ch_a) {
             Some(v) => v,
             None => continue,
@@ -552,7 +552,7 @@ pub fn process_photocytes(
 
 /// Emit signals from Lipocyte cells based on their storage level vs threshold.
 ///
-/// Lipocytes store up to 200 nutrients. The storage fraction (0.0–1.0) is compared
+/// Lipocytes store up to 200 nutrients. The storage fraction (0.0-1.0) is compared
 /// against `lipocyte_emit_threshold`. emit_mode 0 = emit when above, 1 = emit when below.
 pub fn process_lipocytes(
     state: &CanonicalState,
@@ -636,7 +636,7 @@ pub fn run_signal_system(
 }
 
 /// Emit regulation signals for all cells whose mode has regulation_emit_channel >= 8.
-/// These are unconditional emissions — any cell type can emit on regulation channels.
+/// These are unconditional emissions - any cell type can emit on regulation channels.
 pub fn emit_regulation_signals(
     state: &CanonicalState,
     genome: &Genome,
@@ -673,7 +673,7 @@ pub fn emit_regulation_signals(
 }
 
 /// Run signal propagation with manually-provided emissions (for test buttons).
-/// Does NOT clear signals first — call clear_all_signals() separately if needed.
+/// Does NOT clear signals first - call clear_all_signals() separately if needed.
 pub fn propagate_test_signals(
     state: &mut CanonicalState,
     genome: &Genome,

@@ -1,18 +1,18 @@
 //! Boulder Renderer
 //!
 //! Renders boulders by reading directly from the GPU physics storage buffers.
-//! No CPU→GPU instance upload needed — the vertex shader indexes into
+//! No CPU->GPU instance upload needed - the vertex shader indexes into
 //! `boulder_state` and `boulder_moss_dir` by `instance_index`.
 //! Dead boulders are culled in the vertex shader by outputting degenerate geometry.
 //!
-//! Draw call: `draw(0..240, 0..MAX_BOULDERS)` — always draws all slots,
+//! Draw call: `draw(0..240, 0..MAX_BOULDERS)` - always draws all slots,
 //! dead ones collapse to a zero-area triangle and are discarded by the rasterizer.
 
 use bytemuck::{Pod, Zeroable};
 
 use crate::simulation::gpu_physics::boulder_buffers::{BoulderBuffers, MAX_BOULDERS};
 
-/// Number of vertices per boulder instance (20 faces × 4 sub-tris × 3 corners).
+/// Number of vertices per boulder instance (20 faces x 4 sub-tris x 3 corners).
 pub const VERTICES_PER_BOULDER: u32 = 240;
 
 /// Camera uniform matching the cell renderer layout.
@@ -60,7 +60,7 @@ impl BoulderRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        // ── Group 0: camera + lighting ────────────────────────────────────────
+        // -- Group 0: camera + lighting ----------------------------------------
         let camera_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Boulder Camera BGL"),
             entries: &[
@@ -87,7 +87,7 @@ impl BoulderRenderer {
             ],
         });
 
-        // ── Group 1: boulder storage buffers ─────────────────────────────────
+        // -- Group 1: boulder storage buffers ---------------------------------
         let ro = |b: u32| wgpu::BindGroupLayoutEntry {
             binding: b,
             visibility: wgpu::ShaderStages::VERTEX,
@@ -106,7 +106,7 @@ impl BoulderRenderer {
             },
         );
 
-        // ── Buffers ───────────────────────────────────────────────────────────
+        // -- Buffers -----------------------------------------------------------
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Boulder Camera Buffer"),
             size: std::mem::size_of::<CameraUniform>() as u64,
@@ -138,27 +138,27 @@ impl BoulderRenderer {
             ],
         });
 
-        // ── Shader ────────────────────────────────────────────────────────────
+        // -- Shader ------------------------------------------------------------
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Boulder Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/boulder.wgsl").into()),
         });
 
-        // ── Pipeline layout ───────────────────────────────────────────────────
+        // -- Pipeline layout ---------------------------------------------------
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Boulder Pipeline Layout"),
             bind_group_layouts: &[&camera_bgl, &boulder_bind_group_layout],
             push_constant_ranges: &[],
         });
 
-        // ── Render pipeline — no vertex buffers, geometry is procedural ───────
+        // -- Render pipeline - no vertex buffers, geometry is procedural -------
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Boulder Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[], // no vertex buffer — reads from storage buffers
+                buffers: &[], // no vertex buffer - reads from storage buffers
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -301,7 +301,7 @@ impl BoulderRenderer {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(1, boulder_bg, &[]);
-        // Draw MAX_BOULDERS instances — dead ones output degenerate triangles
+        // Draw MAX_BOULDERS instances - dead ones output degenerate triangles
         pass.draw(0..VERTICES_PER_BOULDER, 0..MAX_BOULDERS);
     }
 }

@@ -325,7 +325,7 @@ impl CaveSystemRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                // Cull back faces — the camera is always inside the cave, so only the
+                // Cull back faces - the camera is always inside the cave, so only the
                 // inward-facing (front) surfaces are ever visible. Culling the exterior
                 // faces halves the fragment load with no visual difference.
                 cull_mode: Some(wgpu::Face::Back),
@@ -596,7 +596,7 @@ impl CaveSystemRenderer {
         if let Some(ref shadow_bg) = self.shadow_bind_group {
             render_pass.set_bind_group(2, shadow_bg, &[]);
         } else {
-            return; // Shadow bind group not yet ready — skip draw to avoid validation error
+            return; // Shadow bind group not yet ready - skip draw to avoid validation error
         }
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -650,7 +650,7 @@ impl CaveSystemRenderer {
         if let Some(ref shadow_bg) = self.shadow_bind_group {
             render_pass.set_bind_group(2, shadow_bg, &[]);
         } else {
-            return; // Shadow bind group not yet ready — skip draw to avoid validation error
+            return; // Shadow bind group not yet ready - skip draw to avoid validation error
         }
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -696,7 +696,7 @@ impl CaveSystemRenderer {
     }
 }
 
-/// CPU-side cave SDF evaluation — exact port of the WGSL shader logic.
+/// CPU-side cave SDF evaluation - exact port of the WGSL shader logic.
 ///
 /// Returns the corrected position after pushing `pos` out of any solid rock.
 /// If `pos` is already in open space the input is returned unchanged.
@@ -710,7 +710,7 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
         return pos;
     }
 
-    // ── helpers (mirrors WGSL) ────────────────────────────────────────────────
+    // -- helpers (mirrors WGSL) ------------------------------------------------
 
     fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
         let mut h = seed;
@@ -790,7 +790,7 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
         }
     };
 
-    // ── collision response ────────────────────────────────────────────────────
+    // -- collision response ----------------------------------------------------
 
     let center_density = sample(pos);
     // Early exit: safely in open space

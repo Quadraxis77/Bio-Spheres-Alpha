@@ -82,7 +82,7 @@ var<storage, read> mode_properties_v13: array<vec4<f32>>;
 @group(1) @binding(6)
 var<storage, read_write> merge_events: array<atomic<u32>>;
 
-// Embryocyte/Gametocyte reserve buffer (×1000 fixed-point, read-only here)
+// Embryocyte/Gametocyte reserve buffer (x1000 fixed-point, read-only here)
 @group(1) @binding(7)
 var<storage, read> embryocyte_reserves: array<u32>;
 
@@ -198,7 +198,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // Claim an event slot atomically
                     let slot = atomicAdd(&merge_events[0], 1u);
                     if slot >= MAX_GAMETE_MERGE_EVENTS {
-                        // No space — skip (will be retried next frame if cells survive)
+                        // No space - skip (will be retried next frame if cells survive)
                         return;
                     }
 
@@ -213,7 +213,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     atomicStore(&merge_events[event_base + 4u], bitcast<u32>(mid.x));
                     atomicStore(&merge_events[event_base + 5u], bitcast<u32>(mid.y));
                     atomicStore(&merge_events[event_base + 6u], bitcast<u32>(mid.z));
-                    // Combine reserves from both gametes (capped at max reserve ×1000)
+                    // Combine reserves from both gametes (capped at max reserve x1000)
                     let reserve_a = embryocyte_reserves[cell_idx];
                     let reserve_b = embryocyte_reserves[other_idx];
                     let combined = min(reserve_a + reserve_b, 65535000u);

@@ -10,7 +10,7 @@ struct CameraUniform {
     _padding: f32,
 }
 
-// Must match OrganismSkinParams in Rust (80 bytes = 5 × vec4)
+// Must match OrganismSkinParams in Rust (80 bytes = 5 x vec4)
 struct SkinParams {
     // vec4 0
     base_r: f32, base_g: f32, base_b: f32, ambient: f32,
@@ -20,7 +20,7 @@ struct SkinParams {
     fresnel_power: f32, alpha: f32, time: f32, sss_strength: f32,
     // vec4 3
     sss_r: f32, sss_g: f32, sss_b: f32, rim_strength: f32,
-    // vec4 4 — light direction (world space, pointing toward light) + padding
+    // vec4 4 - light direction (world space, pointing toward light) + padding
     light_dir_x: f32, light_dir_y: f32, light_dir_z: f32, _pad: f32,
 }
 
@@ -50,9 +50,9 @@ fn vs_main(v: VertexInput) -> VertexOutput {
     return out;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Lighting helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 fn phong_diffuse(n: vec3<f32>, l: vec3<f32>) -> f32 {
     return max(dot(n, l), 0.0);
@@ -74,7 +74,7 @@ fn rim_light(v: vec3<f32>, n: vec3<f32>) -> f32 {
     return pow(1.0 - clamp(dot(v, n), 0.0, 1.0), 3.5);
 }
 
-// Cheap SSS approximation: thickness proxy from normal·view_dir (back-lit halo)
+// Cheap SSS approximation: thickness proxy from normalview_dir (back-lit halo)
 fn sss_approx(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, strength: f32) -> f32 {
     // Light transmitted through the surface appears where the normal faces away from camera
     let back_diffuse = max(-dot(n, l) + 0.3, 0.0);  // light bleeding from behind
@@ -91,27 +91,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let base_color = vec3<f32>(skin.base_r, skin.base_g, skin.base_b);
     let sss_color  = vec3<f32>(skin.sss_r,  skin.sss_g,  skin.sss_b);
 
-    // ── Diffuse ──────────────────────────────────────────────────────────────
+    // -- Diffuse --------------------------------------------------------------
     let diff = phong_diffuse(n, l);
 
-    // ── Specular ─────────────────────────────────────────────────────────────
+    // -- Specular -------------------------------------------------------------
     let spec = phong_specular(n, v, l, skin.shininess);
 
-    // ── Fresnel rim ──────────────────────────────────────────────────────────
+    // -- Fresnel rim ----------------------------------------------------------
     let fres = fresnel_schlick(v, n, skin.fresnel);
     let rim  = rim_light(v, n) * skin.rim_strength;
 
-    // ── Subsurface scattering approximation ──────────────────────────────────
+    // -- Subsurface scattering approximation ----------------------------------
     let sss = sss_approx(n, l, v, skin.sss_strength);
 
-    // ── Combine ──────────────────────────────────────────────────────────────
+    // -- Combine --------------------------------------------------------------
     var color = base_color * (skin.ambient + skin.diffuse * diff)
               + base_color * pow(fres, skin.fresnel_power) * 0.4  // fresnel tint
               + vec3<f32>(1.0) * skin.specular * spec             // white specular
               + vec3<f32>(1.0, 1.0, 1.0) * rim                   // cool rim
               + sss_color * sss;                                   // warm sss bleed
 
-    // ── Alpha: more opaque toward surface, translucent at glancing angles ────
+    // -- Alpha: more opaque toward surface, translucent at glancing angles ----
     let alpha = clamp(skin.alpha + fres * 0.25, 0.0, 1.0);
 
     return vec4<f32>(color, alpha);

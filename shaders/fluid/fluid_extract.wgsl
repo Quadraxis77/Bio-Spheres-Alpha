@@ -1,5 +1,5 @@
 // Extract density from fluid state for rendering
-// Both fluid simulation and surface nets use 128³ grid with 128-stride indexing
+// Both fluid simulation and surface nets use 128^3 grid with 128-stride indexing
 
 struct ExtractParams {
     grid_resolution: u32,  // Fluid simulation resolution (128)
@@ -43,7 +43,7 @@ fn is_solid(x: u32, y: u32, z: u32) -> bool {
 
 // Returns true if the water voxel at (x,y,z) is resting on something solid or liquid.
 // Unsupported (falling) water is excluded from the density field so it doesn't
-// form blobs in the surface nets mesh — only puddles and pools are rendered.
+// form blobs in the surface nets mesh - only puddles and pools are rendered.
 fn is_water_supported(x: u32, y: u32, z: u32) -> bool {
     let res = extract_params.grid_resolution;
 
@@ -113,7 +113,7 @@ fn extract_density(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Output index in 128³ grid
+    // Output index in 128^3 grid
     let out_idx = gid.x + gid.y * res + gid.z * res * res;
     
     let state = sample_fluid_state(gid.x, gid.y, gid.z);

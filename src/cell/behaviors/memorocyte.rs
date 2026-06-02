@@ -1,4 +1,4 @@
-//! Memorocyte Cell Behavior — leaky integrator memory cell.
+//! Memorocyte Cell Behavior - leaky integrator memory cell.
 //!
 //! A Memorocyte maintains a single floating-point memory value that accumulates
 //! incoming signals and decays toward zero over time:
@@ -12,13 +12,13 @@
 //!
 //! # Parameters
 //!
-//! - **decay** (0–1): fraction of memory retained per tick. 1.0 = perfect memory,
-//!   0.0 = no memory at all. Typical values are 0.90–0.99.
-//! - **gain** (0–10): how much of the incoming signal is added to memory per tick.
+//! - **decay** (0-1): fraction of memory retained per tick. 1.0 = perfect memory,
+//!   0.0 = no memory at all. Typical values are 0.90-0.99.
+//! - **gain** (0-10): how much of the incoming signal is added to memory per tick.
 //!   Values > 1 can drive the memory above the raw signal level.
-//! - **input_channel** (0–15): channel to read. If absent the memory just decays.
-//! - **output_channel** (0–15): channel the memory value is emitted on.
-//! - **output_hops** (1–20): adhesion hops the emitted signal travels.
+//! - **input_channel** (0-15): channel to read. If absent the memory just decays.
+//! - **output_channel** (0-15): channel the memory value is emitted on.
+//! - **output_hops** (1-20): adhesion hops the emitted signal travels.
 //!
 //! # Uses
 //!

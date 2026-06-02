@@ -16,15 +16,15 @@
 // mutation_candidates buffer written by division execute).
 //
 // Buffer layout for genome mode data (flat arrays, absolute mode indexing):
-//   mode_properties:           20 f32 per mode (80 bytes) — physics/division params
-//   genome_mode_data:          20 f32 per mode (80 bytes) — orientations, split quat
-//   child_mode_indices:         2 i32 per mode (8 bytes)  — absolute child mode refs
-//   mode_cell_types:            1 u32 per mode (4 bytes)  — cell type enum
-//   parent_make_adhesion_flags: 1 u32 per mode (4 bytes)  — bool
-//   child_a_keep_adhesion_flags:1 u32 per mode (4 bytes)  — bool
-//   child_b_keep_adhesion_flags:1 u32 per mode (4 bytes)  — bool
-//   glueocyte_env_adhesion_flags:1 u32 per mode (4 bytes) — bool
-//   oculocyte_params:           4 u32 per mode (16 bytes) — sense params
+//   mode_properties:           20 f32 per mode (80 bytes) - physics/division params
+//   genome_mode_data:          20 f32 per mode (80 bytes) - orientations, split quat
+//   child_mode_indices:         2 i32 per mode (8 bytes)  - absolute child mode refs
+//   mode_cell_types:            1 u32 per mode (4 bytes)  - cell type enum
+//   parent_make_adhesion_flags: 1 u32 per mode (4 bytes)  - bool
+//   child_a_keep_adhesion_flags:1 u32 per mode (4 bytes)  - bool
+//   child_b_keep_adhesion_flags:1 u32 per mode (4 bytes)  - bool
+//   glueocyte_env_adhesion_flags:1 u32 per mode (4 bytes) - bool
+//   oculocyte_params:           4 u32 per mode (16 bytes) - sense params
 
 // ============================================================
 // Structs
@@ -65,7 +65,7 @@ struct MutationParamEntry {
     //   7 = glueocyte_env_adhesion_flags (u32, 1 per mode)
     //   8 = oculocyte_params (u32 array, 4 per mode)
     //   9 = mode_visuals (f32 array, 2 vec4 per mode: color + emissive)
-    //  10 = genome_initial_mode (u32, per-genome — stored in genome_meta[id].z)
+    //  10 = genome_initial_mode (u32, per-genome - stored in genome_meta[id].z)
     buffer_id: u32,
     // Element offset within one mode's data in that buffer.
     // e.g. for mode_properties index 4 (split_mass), element_offset = 4
@@ -126,14 +126,14 @@ var<storage, read> mutation_candidates: array<vec2<u32>>;
 @group(1) @binding(1)
 var<storage, read> mutation_candidate_count: array<u32>;
 
-// Per-cell genome_ids and mode_indices (read_write — we update on mutation)
+// Per-cell genome_ids and mode_indices (read_write - we update on mutation)
 @group(1) @binding(2)
 var<storage, read_write> genome_ids: array<u32>;
 
 @group(1) @binding(3)
 var<storage, read_write> mode_indices: array<u32>;
 
-// Per-cell cell_types (read_write — mutation updates this when cell type changes)
+// Per-cell cell_types (read_write - mutation updates this when cell type changes)
 @group(1) @binding(4)
 var<storage, read_write> cell_types: array<u32>;
 
@@ -205,7 +205,7 @@ var<storage, read_write> mode_colors: array<vec4<f32>>;
 var<storage, read_write> mode_emissive: array<vec4<f32>>;
 
 // Adhesion settings buffer: 12 f32 per mode (48 bytes = 3 vec4s)
-// Adhesion settings split into 3 × vec4 sub-buffers (16 bytes each per mode).
+// Adhesion settings split into 3 x vec4 sub-buffers (16 bytes each per mode).
 // v0: [can_break(u32 bits), break_force(f32 bits), rest_length(f32 bits), linear_spring_stiffness(f32 bits)]
 // v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
 // v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint(u32 bits), _padding]
@@ -218,7 +218,7 @@ var<storage, read_write> adhesion_settings_v1: array<vec4<u32>>;
 @group(2) @binding(23)
 var<storage, read_write> adhesion_settings_v2: array<vec4<u32>>;
 
-// Signal-conditional settings: 5 × vec4<f32> sub-buffers per mode
+// Signal-conditional settings: 5 x vec4<f32> sub-buffers per mode
 // v0: [division_signal_channel, division_signal_threshold, division_signal_invert, apoptosis_signal_channel]
 // v1: [apoptosis_signal_threshold, apoptosis_signal_invert, signal_child_a_channel, signal_child_a_threshold]
 // v2: [signal_child_a_mode_above, signal_child_a_mode_below, signal_child_b_channel, signal_child_b_threshold]
@@ -256,7 +256,7 @@ fn pcg_hash(input: u32) -> u32 {
 // Returns a pseudo-random u32 from a unique_id, frame seed, and salt.
 // unique_id must be unique per mutation event (e.g. new_genome_id).
 // We hash unique_id first to avalanche its bits before mixing with the
-// frame seed — this prevents correlated outputs when unique_id is a small
+// frame seed - this prevents correlated outputs when unique_id is a small
 // sequential integer (which it often is from the monotonic allocator).
 fn rng_u32(unique_id: u32, salt: u32) -> u32 {
     // First avalanche the unique_id so sequential IDs produce uncorrelated seeds
@@ -290,7 +290,7 @@ fn rng_signed_f32(unique_id: u32, salt: u32) -> f32 {
 // GC resets next_genome_id to user_genome_count each cycle so the monotonic
 // path re-fills IDs that haven't been recycled into the free ring yet.
 // The monotonic path skips IDs with ref_count > 0 to avoid colliding with
-// active genomes — collisions would corrupt genome_meta and leak mode buffer
+// active genomes - collisions would corrupt genome_meta and leak mode buffer
 // space, eventually exhausting next_mode_offset and stopping all mutations.
 // ============================================================
 
@@ -307,7 +307,7 @@ fn allocate_genome_slot() -> u32 {
         return genome_free_ring[ring_idx];
     }
 
-    // Ring empty — undo the head increment and fall through to monotonic path
+    // Ring empty - undo the head increment and fall through to monotonic path
     atomicSub(&genome_ring_state[0], 1u);
 
     // Monotonic path: try successive IDs, skipping any that are still active.
@@ -315,12 +315,12 @@ fn allocate_genome_slot() -> u32 {
     // may belong to genomes still referenced by living cells. Blindly returning
     // those IDs would cause the caller to overwrite their genome_meta (corrupting
     // the active genome) and allocate a fresh mode range from next_mode_offset
-    // instead of reusing the recycled one — leaking mode buffer space until
+    // instead of reusing the recycled one - leaking mode buffer space until
     // next_mode_offset hits MAX_TOTAL_MODES and all mutations silently stop.
     for (var attempt = 0u; attempt < 64u; attempt++) {
         let new_id = atomicAdd(&genome_ring_state[2], 1u);
         if (new_id >= mutation_params.genome_ring_capacity) {
-            // Exhausted — undo and signal failure
+            // Exhausted - undo and signal failure
             atomicSub(&genome_ring_state[2], 1u);
             return 0xFFFFFFFFu;
         }
@@ -331,15 +331,15 @@ fn allocate_genome_slot() -> u32 {
         if (ref_count == 0u) {
             return new_id;
         }
-        // Otherwise this ID is still in use — skip it and try the next one.
+        // Otherwise this ID is still in use - skip it and try the next one.
     }
 
-    // Couldn't find a free slot in 64 attempts — give up for this frame.
+    // Couldn't find a free slot in 64 attempts - give up for this frame.
     return 0xFFFFFFFFu;
 }
 
 // ============================================================
-// Quaternion snap to cardinal / 45° / 15° grid
+// Quaternion snap to cardinal / 45 deg / 15 deg grid
 // ============================================================
 
 // Hamilton product: a * b (XYZW convention, w is scalar component)
@@ -354,73 +354,73 @@ fn quat_mul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
 
 // Returns a unit quaternion snapped to a discrete rotation grid.
 // Tier is chosen by weighted RNG seeded from (cell_id, salt):
-//   r < 0.60 → cardinal  (90° rotations: identity + ±90° around X/Y/Z)
-//   r < 0.90 → 45° diagonal (half-way between cardinals)
-//   r < 1.00 → 15° fine   (small rotations around each axis)
+//   r < 0.60 -> cardinal  (90 deg rotations: identity + 90 deg around X/Y/Z)
+//   r < 0.90 -> 45 deg diagonal (half-way between cardinals)
+//   r < 1.00 -> 15 deg fine   (small rotations around each axis)
 fn snap_quaternion(cell_id: u32, salt: u32) -> vec4<f32> {
     let tier_r = rng_f32(cell_id, salt);
     let idx    = rng_u32(cell_id, salt + 1u);
 
-    // half-sqrt(2) constant used for 45° quaternions
+    // half-sqrt(2) constant used for 45 deg quaternions
     let h = 0.7071067811865476; // sqrt(2)/2
 
     if (tier_r < 0.60) {
-        // --- Cardinal: 90° rotations (14 orientations) ---
-        // identity + ±90° around X, Y, Z + 180° around X, Y, Z + ±90° around diagonals
-        // We use 12 clean 90° axis-aligned rotations + identity + 180° identity
+        // --- Cardinal: 90 deg rotations (14 orientations) ---
+        // identity + 90 deg around X, Y, Z + 180 deg around X, Y, Z + 90 deg around diagonals
+        // We use 12 clean 90 deg axis-aligned rotations + identity + 180 deg identity
         let n = idx % 14u;
         switch (n) {
             case  0u: { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }           // identity
-            case  1u: { return vec4<f32>(1.0, 0.0, 0.0, 0.0); }           // 180° X
-            case  2u: { return vec4<f32>(0.0, 1.0, 0.0, 0.0); }           // 180° Y
-            case  3u: { return vec4<f32>(0.0, 0.0, 1.0, 0.0); }           // 180° Z
-            case  4u: { return vec4<f32>(h,   0.0, 0.0, h  ); }           // +90° X
-            case  5u: { return vec4<f32>(-h,  0.0, 0.0, h  ); }           // -90° X
-            case  6u: { return vec4<f32>(0.0, h,   0.0, h  ); }           // +90° Y
-            case  7u: { return vec4<f32>(0.0, -h,  0.0, h  ); }           // -90° Y
-            case  8u: { return vec4<f32>(0.0, 0.0, h,   h  ); }           // +90° Z
-            case  9u: { return vec4<f32>(0.0, 0.0, -h,  h  ); }           // -90° Z
-            case 10u: { return vec4<f32>(h,   h,   0.0, 0.0); }           // 180° XY diagonal
-            case 11u: { return vec4<f32>(h,   0.0, h,   0.0); }           // 180° XZ diagonal
-            case 12u: { return vec4<f32>(0.0, h,   h,   0.0); }           // 180° YZ diagonal
-            default:  { return vec4<f32>(h,   -h,  0.0, 0.0); }           // 180° X-Y diagonal
+            case  1u: { return vec4<f32>(1.0, 0.0, 0.0, 0.0); }           // 180 deg X
+            case  2u: { return vec4<f32>(0.0, 1.0, 0.0, 0.0); }           // 180 deg Y
+            case  3u: { return vec4<f32>(0.0, 0.0, 1.0, 0.0); }           // 180 deg Z
+            case  4u: { return vec4<f32>(h,   0.0, 0.0, h  ); }           // +90 deg X
+            case  5u: { return vec4<f32>(-h,  0.0, 0.0, h  ); }           // -90 deg X
+            case  6u: { return vec4<f32>(0.0, h,   0.0, h  ); }           // +90 deg Y
+            case  7u: { return vec4<f32>(0.0, -h,  0.0, h  ); }           // -90 deg Y
+            case  8u: { return vec4<f32>(0.0, 0.0, h,   h  ); }           // +90 deg Z
+            case  9u: { return vec4<f32>(0.0, 0.0, -h,  h  ); }           // -90 deg Z
+            case 10u: { return vec4<f32>(h,   h,   0.0, 0.0); }           // 180 deg XY diagonal
+            case 11u: { return vec4<f32>(h,   0.0, h,   0.0); }           // 180 deg XZ diagonal
+            case 12u: { return vec4<f32>(0.0, h,   h,   0.0); }           // 180 deg YZ diagonal
+            default:  { return vec4<f32>(h,   -h,  0.0, 0.0); }           // 180 deg X-Y diagonal
         }
     } else if (tier_r < 0.90) {
-        // --- 45° diagonal rotations (12 orientations) ---
-        // Rotations of 45° around single axes (X/Y/Z) and 45° around diagonal axes ((X+Y)/√2, etc.)
-        // For diagonal axes we need the axis to be unit length: (1,1,0)/√2 has normalization 1/√2.
-        // q = (sin(θ/2)*axis.x, sin(θ/2)*axis.y, sin(θ/2)*axis.z, cos(θ/2))
-        // For 45° around (1,1,0)/√2: components are (s45/√2, s45/√2, 0, c45) — magnitude = 1.0 ✓
-        let s = 0.7071067811865476; // 1/√2 — axis normalization factor for diagonal axes
-        let c45 = 0.9238795325112867; // cos(22.5°)
-        let s45 = 0.3826834323650898; // sin(22.5°)
+        // --- 45 deg diagonal rotations (12 orientations) ---
+        // Rotations of 45 deg around single axes (X/Y/Z) and 45 deg around diagonal axes ((X+Y)/2, etc.)
+        // For diagonal axes we need the axis to be unit length: (1,1,0)/2 has normalization 1/2.
+        // q = (sin(theta/2)*axis.x, sin(theta/2)*axis.y, sin(theta/2)*axis.z, cos(theta/2))
+        // For 45 deg around (1,1,0)/2: components are (s45/2, s45/2, 0, c45) - magnitude = 1.0 
+        let s = 0.7071067811865476; // 1/2 - axis normalization factor for diagonal axes
+        let c45 = 0.9238795325112867; // cos(22.5 deg)
+        let s45 = 0.3826834323650898; // sin(22.5 deg)
         let n = idx % 12u;
         switch (n) {
-            case  0u: { return vec4<f32>(s45,  0.0,  0.0,  c45); }        // +45° X
-            case  1u: { return vec4<f32>(-s45, 0.0,  0.0,  c45); }        // -45° X
-            case  2u: { return vec4<f32>(0.0,  s45,  0.0,  c45); }        // +45° Y
-            case  3u: { return vec4<f32>(0.0,  -s45, 0.0,  c45); }        // -45° Y
-            case  4u: { return vec4<f32>(0.0,  0.0,  s45,  c45); }        // +45° Z
-            case  5u: { return vec4<f32>(0.0,  0.0,  -s45, c45); }        // -45° Z
-            case  6u: { return vec4<f32>(s*s45, s*s45, 0.0, c45); }       // +45° XY
-            case  7u: { return vec4<f32>(s*s45, 0.0, s*s45, c45); }       // +45° XZ
-            case  8u: { return vec4<f32>(0.0, s*s45, s*s45, c45); }       // +45° YZ
-            case  9u: { return vec4<f32>(-s*s45, s*s45, 0.0, c45); }      // -45° XY
-            case 10u: { return vec4<f32>(-s*s45, 0.0, s*s45, c45); }      // -45° XZ
-            default:  { return vec4<f32>(0.0, -s*s45, s*s45, c45); }      // -45° YZ
+            case  0u: { return vec4<f32>(s45,  0.0,  0.0,  c45); }        // +45 deg X
+            case  1u: { return vec4<f32>(-s45, 0.0,  0.0,  c45); }        // -45 deg X
+            case  2u: { return vec4<f32>(0.0,  s45,  0.0,  c45); }        // +45 deg Y
+            case  3u: { return vec4<f32>(0.0,  -s45, 0.0,  c45); }        // -45 deg Y
+            case  4u: { return vec4<f32>(0.0,  0.0,  s45,  c45); }        // +45 deg Z
+            case  5u: { return vec4<f32>(0.0,  0.0,  -s45, c45); }        // -45 deg Z
+            case  6u: { return vec4<f32>(s*s45, s*s45, 0.0, c45); }       // +45 deg XY
+            case  7u: { return vec4<f32>(s*s45, 0.0, s*s45, c45); }       // +45 deg XZ
+            case  8u: { return vec4<f32>(0.0, s*s45, s*s45, c45); }       // +45 deg YZ
+            case  9u: { return vec4<f32>(-s*s45, s*s45, 0.0, c45); }      // -45 deg XY
+            case 10u: { return vec4<f32>(-s*s45, 0.0, s*s45, c45); }      // -45 deg XZ
+            default:  { return vec4<f32>(0.0, -s*s45, s*s45, c45); }      // -45 deg YZ
         }
     } else {
-        // --- 15° fine rotations ---
-        let c15 = 0.9914449160435743; // cos(7.5°)
-        let s15 = 0.1305261922200517; // sin(7.5°)
+        // --- 15 deg fine rotations ---
+        let c15 = 0.9914449160435743; // cos(7.5 deg)
+        let s15 = 0.1305261922200517; // sin(7.5 deg)
         let n = idx % 6u;
         switch (n) {
-            case 0u: { return vec4<f32>(s15,  0.0,  0.0,  c15); }         // +15° X
-            case 1u: { return vec4<f32>(-s15, 0.0,  0.0,  c15); }         // -15° X
-            case 2u: { return vec4<f32>(0.0,  s15,  0.0,  c15); }         // +15° Y
-            case 3u: { return vec4<f32>(0.0,  -s15, 0.0,  c15); }         // -15° Y
-            case 4u: { return vec4<f32>(0.0,  0.0,  s15,  c15); }         // +15° Z
-            default: { return vec4<f32>(0.0,  0.0,  -s15, c15); }         // -15° Z
+            case 0u: { return vec4<f32>(s15,  0.0,  0.0,  c15); }         // +15 deg X
+            case 1u: { return vec4<f32>(-s15, 0.0,  0.0,  c15); }         // -15 deg X
+            case 2u: { return vec4<f32>(0.0,  s15,  0.0,  c15); }         // +15 deg Y
+            case 3u: { return vec4<f32>(0.0,  -s15, 0.0,  c15); }         // -15 deg Y
+            case 4u: { return vec4<f32>(0.0,  0.0,  s15,  c15); }         // +15 deg Z
+            default: { return vec4<f32>(0.0,  0.0,  -s15, c15); }         // -15 deg Z
         }
     }
 }
@@ -478,7 +478,7 @@ fn clone_genome_modes(
         mode_properties_v2[dst] = mode_properties_v2[src];
         mode_properties_v3[dst] = mode_properties_v3[src];
         // v4: [max_adhesions, mode_a_after_splits(abs), mode_b_after_splits(abs), padding]
-        // mode_a/b_after_splits are stored as absolute mode indices — remap with offset_delta.
+        // mode_a/b_after_splits are stored as absolute mode indices - remap with offset_delta.
         // A value of -1.0 means "unused" and must not be remapped.
         let src_v4 = mode_properties_v4[src];
         var dst_v4 = src_v4;
@@ -526,8 +526,8 @@ fn clone_genome_modes(
         adhesion_settings_v2[dst] = adhesion_settings_v2[src];
 
         // signal_settings: 5 separate vec4<f32> sub-buffers per mode
-        // v0: [division_signal_channel, division_signal_threshold, division_signal_invert, apoptosis_signal_channel] — no mode indices
-        // v1: [apoptosis_signal_threshold, apoptosis_signal_invert, signal_child_a_channel, signal_child_a_threshold] — no mode indices
+        // v0: [division_signal_channel, division_signal_threshold, division_signal_invert, apoptosis_signal_channel] - no mode indices
+        // v1: [apoptosis_signal_threshold, apoptosis_signal_invert, signal_child_a_channel, signal_child_a_threshold] - no mode indices
         // v2: [signal_child_a_mode_above(abs), signal_child_a_mode_below(abs), signal_child_b_channel, signal_child_b_threshold]
         // v3: [signal_child_b_mode_above(abs), signal_child_b_mode_below(abs), mode_switch_signal_channel, mode_switch_signal_threshold]
         // v4: [mode_switch_target(abs), mode_switch_invert, padding, padding]
@@ -645,10 +645,10 @@ fn apply_mutation(
                 // CHAIN_EXTEND: append current mode to the end of T's chain via child_a.
                 //
                 // Walk T's child_a chain to find the tail (a mode whose child_a is
-                // self-referential or out-of-genome). Then wire tail → current.
+                // self-referential or out-of-genome). Then wire tail -> current.
                 // Current's child_a is left as-is (self-referential = new chain end).
                 //
-                // This builds genuine linear chains: T → ... → tail → current
+                // This builds genuine linear chains: T -> ... -> tail -> current
                 // Loops only form later via CHAIN_CLOSE.
 
                 let rand_local = rng_u32(cell_id, salt_base + 450u) % mode_count;
@@ -676,7 +676,7 @@ fn apply_mutation(
 
                 // Only extend if tail != current (avoid self-wiring)
                 if (tail != current_abs) {
-                    // Wire tail.child_a → current
+                    // Wire tail.child_a -> current
                     var tail_indices = child_mode_indices_buf[u32(tail)];
                     tail_indices.x = current_abs;
                     child_mode_indices_buf[u32(tail)] = tail_indices;
@@ -685,7 +685,7 @@ fn apply_mutation(
                     // Don't overwrite if current already points somewhere useful
                     // (i.e. only reset if it was self-referential before).
                     if (indices.x == current_abs) {
-                        // Already self-referential, leave as chain endpoint — no change needed.
+                        // Already self-referential, leave as chain endpoint - no change needed.
                     }
                     // If current.child_a pointed to tail, that would create a 2-node loop.
                     // Break it by making current self-referential instead.
@@ -696,7 +696,7 @@ fn apply_mutation(
                 }
 
                 // Force both children to keep adhesion on the newly inserted mode.
-                // Chain extension is the precursor to loop closure — ensuring zone C
+                // Chain extension is the precursor to loop closure - ensuring zone C
                 // adhesion inheritance early means the loop will have interesting
                 // branching topology from the start when it eventually closes.
                 child_a_keep_adhesion_flags[mode_abs] = 1u;
@@ -710,7 +710,7 @@ fn apply_mutation(
                 // A mode whose child_a is self-referential is a chain endpoint (not a loop).
                 // Only next == current_abs means we've found an existing loop.
                 // The walk must traverse at least 2 hops to form a meaningful loop
-                // (A→B→...→tail→A, minimum 3 nodes).
+                // (A->B->...->tail->A, minimum 3 nodes).
 
                 let current_abs = i32(mode_abs);
                 let genome_start = i32(dst_base);
@@ -766,9 +766,9 @@ fn apply_mutation(
                 // random mode T that is different from current.
                 //
                 // Precondition: current.child_b == current (self-referential = unused slot).
-                // Action: current.child_b → T  (T != current, picked randomly)
+                // Action: current.child_b -> T  (T != current, picked randomly)
                 //
-                // This creates a branch point — a mode that was only in a linear chain now
+                // This creates a branch point - a mode that was only in a linear chain now
                 // has a second outgoing edge, which is the raw material for a second
                 // interconnected loop to grow from.
 
@@ -778,7 +778,7 @@ fn apply_mutation(
                 if (child_b_is_self) {
                     // Collect the 4-hop reachable set via child_a to avoid branching back
                     // into the immediate loop (we want a genuinely new branch).
-                    // Self-referential child_a means chain endpoint — stop walking.
+                    // Self-referential child_a means chain endpoint - stop walking.
                     let child_a = indices.x;
                     var reachable_0 = current_abs;
                     var reachable_1 = current_abs; // fallback (overwritten if child_a is real)
@@ -830,8 +830,8 @@ fn apply_mutation(
                 // LOOP_MERGE: cross-connect two separate loop structures.
                 //
                 // Walk child_a from current to detect a real cycle (not self-references).
-                // If a real loop is found, pick a remote mode T and wire T.child_b → loop_head.
-                // If no real loop exists, wire T.child_b → current anyway (creates convergence).
+                // If a real loop is found, pick a remote mode T and wire T.child_b -> loop_head.
+                // If no real loop exists, wire T.child_b -> current anyway (creates convergence).
 
                 let current_abs = i32(mode_abs);
                 let genome_start = i32(dst_base);
@@ -879,7 +879,7 @@ fn apply_mutation(
                 let t_local = (lh_local + offset) % mode_count;
                 let t_abs = u32(genome_start + i32(t_local));
 
-                // Wire T.child_b → loop_head (cross-connect)
+                // Wire T.child_b -> loop_head (cross-connect)
                 var t_indices = child_mode_indices_buf[t_abs];
                 t_indices.y = loop_head;
                 child_mode_indices_buf[t_abs] = t_indices;
@@ -914,8 +914,8 @@ fn apply_mutation(
         // buffer_id 3-5: boolean flag buffers
         case 3u: {
             // Biased flip: adhesion-on is strongly favoured for multicellularity.
-            // If currently OFF  → always flip to ON.
-            // If currently ON   → only flip to OFF ~10% of the time.
+            // If currently OFF  -> always flip to ON.
+            // If currently ON   -> only flip to OFF ~10% of the time.
             let adhesion_currently_on = parent_make_adhesion_flags[mode_abs] > 0u;
             let flip_off = rng_f32(cell_id, salt_base + 350u) < 0.1;
             parent_make_adhesion_flags[mode_abs] = select(
@@ -946,7 +946,7 @@ fn apply_mutation(
             if (entry.data_type == 9u) {
                 // QUAT_SNAP: replace the quaternion with a snapped orientation.
                 // Division applies: parent_rotation * split_rotation * child_orientation
-                // So child_orientation is a LOCAL rotation — just use the snap directly.
+                // So child_orientation is a LOCAL rotation - just use the snap directly.
                 // For the split direction (v4), it's also a local rotation in parent space.
                 v = snap_quaternion(cell_id, salt_base + 700u);
             } else {
@@ -986,7 +986,7 @@ fn apply_mutation(
             oculocyte_params_buf[mode_abs] = p;
         }
 
-        // buffer_id 9: mode_colors (vec4 per mode — RGB color)
+        // buffer_id 9: mode_colors (vec4 per mode - RGB color)
         // element_offset == 0xFF (255): re-roll all 3 RGB components randomly (dramatic).
         // element_offset 0/1/2: perturb that single component by delta (subtle).
         case 9u: {
@@ -1002,7 +1002,7 @@ fn apply_mutation(
             mode_colors[mode_abs] = v;
         }
 
-        // buffer_id 10: genome_initial_mode (u32, per-genome — stored in genome_meta[new_genome_id].z)
+        // buffer_id 10: genome_initial_mode (u32, per-genome - stored in genome_meta[new_genome_id].z)
         // element_offset is ignored; data_type must be MODE_INDEX_CLAMP (3).
         // Nudges the local initial mode index, clamped to [0, mode_count - 1].
         case 10u: {
@@ -1015,12 +1015,12 @@ fn apply_mutation(
             genome_meta[new_genome_id].z = u32(new_local);
         }
 
-        // buffer_id 11: adhesion_settings (3 × vec4<u32> sub-buffers per mode)
+        // buffer_id 11: adhesion_settings (3 x vec4<u32> sub-buffers per mode)
         // Data is stored as bitcast u32 (f32 values) or raw u32 (booleans).
         // element_offset encodes: sub-buffer = offset / 4, component = offset % 4
-        //   offsets 0–3  → adhesion_settings_v0 (can_break, break_force, rest_length, linear_spring_stiffness)
-        //   offsets 4–7  → adhesion_settings_v1 (linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation)
-        //   offsets 8–11 → adhesion_settings_v2 (twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding)
+        //   offsets 0-3  -> adhesion_settings_v0 (can_break, break_force, rest_length, linear_spring_stiffness)
+        //   offsets 4-7  -> adhesion_settings_v1 (linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation)
+        //   offsets 8-11 -> adhesion_settings_v2 (twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding)
         case 11u: {
             let sub_buf = entry.element_offset / 4u;
             let comp = entry.element_offset % 4u;
@@ -1054,7 +1054,7 @@ fn apply_mutation(
             }
         }
 
-        // buffer_id 12: signal_settings (5 × vec4<f32> sub-buffers per mode)
+        // buffer_id 12: signal_settings (5 x vec4<f32> sub-buffers per mode)
         // element_offset encodes: sub-buffer = offset / 4, component = offset % 4
         // Data types: CONTINUOUS_F32 for thresholds, INTEGER for channels/mode indices, BOOLEAN for inverts
         // Data type 8 (SIGNAL_WIRE): correlated mutation that wires both emitter + receiver
@@ -1240,7 +1240,7 @@ fn apply_mutation(
 
         // buffer_id 14: structural genome mutations (MODE_APPEND = 10, MODE_TRIM = 11)
         // These operate on the tail of the genome rather than a randomly-selected mode.
-        // mode_abs is unused here — we always act on the last mode slot.
+        // mode_abs is unused here - we always act on the last mode slot.
         case 14u: {
             if (entry.data_type == 10u) {
                 // MODE_APPEND: add a dormant mode at the end of the genome.
@@ -1310,7 +1310,7 @@ fn apply_mutation(
                 //
                 // We scan child_mode_indices for all modes except the last.
                 // If any child_a or child_b points to the last mode, abort.
-                // Also abort if a live cell is currently in the last mode — that check
+                // Also abort if a live cell is currently in the last mode - that check
                 // is deferred to CPU (rare; the cell will simply find mode_count shrunk).
                 if (mode_count <= 1u) { return param_idx; }
 
@@ -1326,7 +1326,7 @@ fn apply_mutation(
                     if (idx.x == last_abs_i || idx.y == last_abs_i) { return param_idx; }
                 }
 
-                // Unreferenced — safe to trim
+                // Unreferenced - safe to trim
                 genome_meta[new_genome_id].x = last_local;
             }
         }
@@ -1372,7 +1372,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = candidate.x;
     let parent_genome_id = candidate.y;
 
-    // Roll mutation chance — candidate_idx is unique per thread in this dispatch
+    // Roll mutation chance - candidate_idx is unique per thread in this dispatch
     let roll = rng_f32(candidate_idx, 1u);
     if (roll >= mutation_params.radiation_level) {
         return; // No mutation this time
@@ -1398,7 +1398,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var attempt = 0u; attempt < 100u; attempt++) {
         let current_offset = atomicLoad(&genome_ring_state[3]);
         if (current_offset + parent_mode_count > mutation_params.total_mode_count) {
-            // No space — return slot to ring
+            // No space - return slot to ring
             let tail = atomicAdd(&genome_ring_state[1], 1u);
             let ring_idx2 = tail % mutation_params.genome_ring_capacity;
             genome_free_ring[ring_idx2] = new_genome_id;
@@ -1422,7 +1422,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Initialize new genome metadata — copy initial_mode_local (.z) from parent
+    // Initialize new genome metadata - copy initial_mode_local (.z) from parent
     genome_meta[new_genome_id] = vec4<u32>(parent_mode_count, new_base_offset, parent_meta.z, 0u);
 
     // Update reference counts atomically

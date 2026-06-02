@@ -12,7 +12,7 @@ struct CameraUniforms {
     time: f32,
 }
 
-// Theme-driven color params — uploaded from the active UI palette each frame.
+// Theme-driven color params - uploaded from the active UI palette each frame.
 struct SkyboxThemeParams {
     zenith_color:  vec3<f32>,  // sky color at the top
     _pad0:         f32,
@@ -29,7 +29,7 @@ struct SkyboxThemeParams {
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(1) @binding(0) var<uniform> theme:  SkyboxThemeParams;
 
-// ── Vertex shader ─────────────────────────────────────────────────────────────
+// -- Vertex shader -------------------------------------------------------------
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -46,7 +46,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 // Smooth grid lines: returns 1.0 on a line, 0.0 between lines
 fn grid_line(v: f32, line_width: f32) -> f32 {
@@ -54,16 +54,16 @@ fn grid_line(v: f32, line_width: f32) -> f32 {
     return 1.0 - smoothstep(0.0, line_width, f);
 }
 
-// ── Fragment shader ───────────────────────────────────────────────────────────
+// -- Fragment shader -----------------------------------------------------------
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // ── Reconstruct view direction (rotation-only, no shaking) ────────────────
+    // -- Reconstruct view direction (rotation-only, no shaking) ----------------
     let ndc    = vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 1.0, 1.0);
     let wh     = camera.inv_view_rot_proj * ndc;
     let dir    = normalize(wh.xyz / wh.w);
 
-    // ── Sky gradient ──────────────────────────────────────────────────────────
+    // -- Sky gradient ----------------------------------------------------------
     // dir.y: +1 = straight up, -1 = straight down, 0 = horizon
     let horizon_t = clamp(dir.y * 1.5 + 0.1, 0.0, 1.0);
     let horizon_smooth = horizon_t * horizon_t * (3.0 - 2.0 * horizon_t);
@@ -74,7 +74,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let glow = max(0.0, 1.0 - abs(dir.y) * 4.0);
     sky += theme.glow_color * glow * glow;
 
-    // ── Perspective grid floor ────────────────────────────────────────────────
+    // -- Perspective grid floor ------------------------------------------------
     // Only draw grid where the ray hits the floor plane (y < 0 direction)
     var color = sky;
 

@@ -146,7 +146,7 @@ pub fn compute_collision_forces(state: &mut CanonicalState, collision_pairs: &[C
         let r_b =  pair.normal * radius_b; // from B centre to contact
 
         // Surface velocity at the contact point for each cell:
-        //   v_contact = v_linear + omega × r
+        //   v_contact = v_linear + omega x r
         let omega_a = state.angular_velocities[idx_a];
         let omega_b = state.angular_velocities[idx_b];
         let v_contact_a = state.velocities[idx_a] + omega_a.cross(r_a);
@@ -167,7 +167,7 @@ pub fn compute_collision_forces(state: &mut CanonicalState, collision_pairs: &[C
             state.forces[idx_a] += friction_force;
             state.forces[idx_b] -= friction_force;
 
-            // Torque on each cell: τ = r × F_friction
+            // Torque on each cell: tau = r x F_friction
             state.torques[idx_a] += r_a.cross(friction_force);
             state.torques[idx_b] += r_b.cross(-friction_force);
         }
@@ -285,7 +285,7 @@ pub fn integrate_angular_velocities(
 /// half of the bond independently.
 ///
 /// In pulse mode: oscillates between contracted and relaxed using a sine wave timer.
-/// Pulse A contracts when sin(time * rate * 2π) >= 0, Pulse B when < 0.
+/// Pulse A contracts when sin(time * rate * 2pi) >= 0, Pulse B when < 0.
 /// In signal mode: reads a signal channel and contracts based on threshold.
 pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, current_time: f32) {
     // Write per-cell contraction values. Non-myocyte cells get 0.0 (relaxed).
@@ -474,7 +474,7 @@ pub fn consume_swim_nutrients(
 /// they must receive nutrients through adhesion connections from other cells.
 /// Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 ///
-/// Embryocytes (cell_type == 10) skip this function entirely — their energy
+/// Embryocytes (cell_type == 10) skip this function entirely - their energy
 /// comes exclusively from the reserve field (see `update_embryocyte_reserve_burn`
 /// and `transport_nutrients_through_adhesions`).
 ///
@@ -488,7 +488,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
-            // Embryocytes skip normal metabolism entirely — reserve-only energy system
+            // Embryocytes skip normal metabolism entirely - reserve-only energy system
             if mode.cell_type == 10 {
                 continue;
             }
@@ -547,7 +547,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
                 // Attempt to cover drain from reserve before nutrients
                 let reserve = state.reserves[i];
                 if reserve > 0 {
-                    // Reserve covers the full drain 1:1. Reserve is stored ×1000 (fixed-point)
+                    // Reserve covers the full drain 1:1. Reserve is stored x1000 (fixed-point)
                     // so burn total_loss * 1000 milli-units, then apply any remainder to nutrients.
                     let reserve_burned = ((total_loss * 1000.0) as u32).min(reserve);
                     state.reserves[i] = reserve.saturating_sub(reserve_burned);
@@ -613,7 +613,7 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
 /// Burn Embryocyte reserve for free (detached) Embryocytes at 10 units/sec,
 /// and tick the accumulation timer for attached Embryocytes.
 ///
-/// - **Attached** (≥1 active adhesion): increment `embryocyte_timers[i]` by `dt`.
+/// - **Attached** (>=1 active adhesion): increment `embryocyte_timers[i]` by `dt`.
 /// - **Free** (no adhesions): burn `reserve` at 10 units/sec.
 ///
 /// This runs after `transport_nutrients_through_adhesions` so reserve
@@ -633,7 +633,7 @@ pub fn update_embryocyte_reserve_burn(state: &mut CanonicalState, genome: &Genom
             // Attached: tick the accumulation timer
             state.embryocyte_timers[i] += dt;
         } else {
-            // Free: burn reserve (stored ×1000 fixed-point, so burn rate * 1000)
+            // Free: burn reserve (stored x1000 fixed-point, so burn rate * 1000)
             let burn = (RESERVE_BURN_RATE * dt * 1000.0) as u32;
             state.reserves[i] = state.reserves[i].saturating_sub(burn);
             // Reset timer (will restart when re-attached)
@@ -773,7 +773,7 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
 
         // Embryocyte fill rate: scale the rate cap by priority so high-priority
         // embryocytes can receive faster than the base 30/sec.
-        // Embryocytes are always a pure sink — treat their "pressure" as 0 so the
+        // Embryocytes are always a pure sink - treat their "pressure" as 0 so the
         // sender always pushes toward them as long as it has nutrients. The rate cap
         // (not the pressure diff) is what limits fill speed.
         let embryo_rate_cap = if is_embryo_b_pass1 {
@@ -785,9 +785,9 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         };
 
         // For embryocyte receivers, bypass the pressure-equilibrium formula entirely.
-        // The embryocyte is a pure sink — the sender should push at the full rate cap
+        // The embryocyte is a pure sink - the sender should push at the full rate cap
         // as long as it has nutrients. The pressure-diff formula caps flow at
-        // nutrients_a / priority_a (e.g. 20/3.5 ≈ 5.7/sec), which is far too slow.
+        // nutrients_a / priority_a (e.g. 20/3.5 ~= 5.7/sec), which is far too slow.
         // Instead, use the full embryo_rate_cap as desired so the sender drains into
         // the embryocyte as fast as the rate cap allows.
         let effective_nutrients_b = if is_embryo_b_pass1 { 0.0 } else { nutrients_b };
@@ -805,7 +805,7 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         };
 
         let desired = if is_embryo_b_pass1 {
-            // Embryocyte receiver: always push at full rate cap (A→B direction)
+            // Embryocyte receiver: always push at full rate cap (A->B direction)
             embryo_rate_cap
         } else if is_embryo_a_pass1 {
             // Embryocyte sender: will be blocked later, but set negative for direction
@@ -899,13 +899,13 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
 
         // Route the transfer: if the receiver is an Embryocyte, add to reserve instead of nutrients.
         if transfer > 0.0 && is_embryo_b {
-            // A→B, B is Embryocyte: add to B's reserve (×1000 fixed-point)
+            // A->B, B is Embryocyte: add to B's reserve (x1000 fixed-point)
             let gained = (actual.max(0.0) * 1000.0) as u32;
             state.reserves[cell_b] = state.reserves[cell_b].saturating_add(gained).min(65_535_000);
             nutrient_deltas[cell_a] -= actual;
-            // Don't touch nutrient_deltas[cell_b] — reserve was updated directly
+            // Don't touch nutrient_deltas[cell_b] - reserve was updated directly
         } else if transfer < 0.0 && is_embryo_a {
-            // B→A, A is Embryocyte: add to A's reserve (×1000 fixed-point)
+            // B->A, A is Embryocyte: add to A's reserve (x1000 fixed-point)
             let gained = ((-actual).max(0.0) * 1000.0) as u32;
             state.reserves[cell_a] = state.reserves[cell_a].saturating_add(gained).min(65_535_000);
             nutrient_deltas[cell_b] -= -actual;
@@ -915,7 +915,7 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             nutrient_deltas[cell_b] += actual;
         }
 
-        // Store actual flow rate (nutrients/sec, positive = A→B) for display
+        // Store actual flow rate (nutrients/sec, positive = A->B) for display
         if dt > 0.0 {
             state.adhesion_connections.connection_flow_rates[cf.conn_idx] = actual / dt;
         }
@@ -1050,19 +1050,19 @@ pub fn form_glueocyte_contact_bonds(state: &mut CanonicalState, genome: &Genome,
 /// of frantic cells in a connected organism exceeds `FRENZY_FRACTION_THRESHOLD`, the
 /// entire organism is removed.
 ///
-/// Connected components are found via BFS over active adhesion connections — the same
+/// Connected components are found via BFS over active adhesion connections - the same
 /// topology the adhesion solver uses, so the kill boundary matches the physical problem.
 ///
 /// Isolated single cells are never killed by this check (they can legitimately move fast).
 pub fn kill_frenzied_organisms(state: &mut CanonicalState) {
     // Speed above which a cell is considered "frantic".
-    // Normal adhesion-driven motion tops out around 20–30 units/sec.
-    // Exploding constraint fights routinely hit 200–1000+.
+    // Normal adhesion-driven motion tops out around 20-30 units/sec.
+    // Exploding constraint fights routinely hit 200-1000+.
     const FRENZY_SPEED_THRESHOLD: f32 = 150.0;
     // Fraction of an organism's cells that must be frantic before the whole thing dies.
     // 0.5 = majority vote: avoids killing organisms where one cell briefly spikes.
     const FRENZY_FRACTION_THRESHOLD: f32 = 0.5;
-    // Minimum organism size to apply the check — don't kill isolated single cells.
+    // Minimum organism size to apply the check - don't kill isolated single cells.
     const MIN_ORGANISM_SIZE: usize = 2;
 
     let n = state.cell_count;
@@ -1335,7 +1335,7 @@ pub fn physics_step_with_genome(
     crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius, dt);
 
     // Apply persistent test signals (if any) after normal signal system.
-    // Do NOT clear signals first — regulation signals (channels 8-15) must remain intact.
+    // Do NOT clear signals first - regulation signals (channels 8-15) must remain intact.
     // run_signal_system already called clear_all_signals at the start of this step, so
     // there is no cross-step accumulation. Test signals simply add on top of the
     // normally-computed oculocyte and regulation signals.

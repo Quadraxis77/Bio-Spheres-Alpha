@@ -4,10 +4,10 @@
 // size-gated moss consumption. Larger organisms consume faster (Michaelis-Menten).
 // Accumulated eat direction is written to boulder_eat_dir for moss_dir update.
 //
-// NOTE — architectural debt:
+// NOTE - architectural debt:
 // This shader queries the spatial grid that was built by the cell pipeline, which
 // is correct. However, because boulders are not in the cell slot system, cells
-// cannot consume moss from boulders they are standing on — only phagocytes within
+// cannot consume moss from boulders they are standing on - only phagocytes within
 // the boulder's radius are detected. If boulders had been placed in cell slots,
 // the existing moss_consume.wgsl could have handled this with a cell type branch,
 // and the spatial grid query would have been unnecessary (cells already know their
@@ -17,10 +17,10 @@
 // main physics pipeline to avoid buffer aliasing with cell_count_buffer.
 //
 // Bind groups:
-//   Group 0: boulder consume params (minimal uniform — delta_time, world_size,
+//   Group 0: boulder consume params (minimal uniform - delta_time, world_size,
 //            grid params only; avoids binding cell_count_buffer which is
 //            STORAGE_READ_WRITE in the main physics group)
-//   Group 1: spatial grid (read-only — grid already built by cell pipeline)
+//   Group 1: spatial grid (read-only - grid already built by cell pipeline)
 //   Group 2: cell data (positions, cell_types, nutrients, organism_size,
 //            death_flags, split_thresholds)
 //   Group 3: boulder buffers (state, moss, eat_dir_accum, count)
@@ -35,7 +35,7 @@ struct BoulderConsumeParams {
     grid_resolution: i32,
 }
 
-// ── Group 0: Boulder consume params (minimal uniform, no storage buffers) ────
+// -- Group 0: Boulder consume params (minimal uniform, no storage buffers) ----
 @group(0) @binding(0) var<uniform> params: BoulderConsumeParams;
 
 struct GpuBoulder {
@@ -49,12 +49,12 @@ struct GpuBoulder {
     orientation:      vec4<f32>,
 }
 
-// ── Group 1: Spatial grid (read-only) ────────────────────────────────────────
+// -- Group 1: Spatial grid (read-only) ----------------------------------------
 @group(1) @binding(0) var<storage, read> spatial_grid_counts:  array<u32>;
 @group(1) @binding(1) var<storage, read> spatial_grid_offsets: array<u32>;
 @group(1) @binding(2) var<storage, read> spatial_grid_cells:   array<u32>;
 
-// ── Group 2: Cell data ────────────────────────────────────────────────────────
+// -- Group 2: Cell data --------------------------------------------------------
 @group(2) @binding(0) var<storage, read>       cell_positions:           array<vec4<f32>>;
 @group(2) @binding(1) var<storage, read>       cell_types:               array<u32>;
 @group(2) @binding(2) var<storage, read_write> nutrients_buffer:         array<atomic<i32>>;
@@ -62,21 +62,21 @@ struct GpuBoulder {
 @group(2) @binding(4) var<storage, read>       death_flags:              array<u32>;
 @group(2) @binding(5) var<storage, read>       split_nutrient_thresholds: array<f32>;
 
-// ── Group 3: Boulder buffers ──────────────────────────────────────────────────
+// -- Group 3: Boulder buffers --------------------------------------------------
 @group(3) @binding(0) var<storage, read>       boulder_state:    array<GpuBoulder>;
 @group(3) @binding(1) var<storage, read_write> boulder_moss:     array<atomic<i32>>;
 @group(3) @binding(2) var<storage, read_write> boulder_eat_dir:  array<atomic<i32>>; // 3 per boulder
 @group(3) @binding(3) var<storage, read>       boulder_count:    array<u32>;
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 const PHAGOCYTE_TYPE: u32 = 2u;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 
 // Michaelis-Menten size gate:
 //   rate = MAX_CONSUME_RATE * org_size / (org_size + SIZE_GATE)
-// Solo cell (size 1): 1/21 ≈ 5% of max rate
-// 10-cell organism:   10/30 ≈ 33%
-// 100-cell organism:  100/120 ≈ 83%
+// Solo cell (size 1): 1/21 ~= 5% of max rate
+// 10-cell organism:   10/30 ~= 33%
+// 100-cell organism:  100/120 ~= 83%
 const MAX_CONSUME_RATE: f32 = 400.0;  // nutrients/sec at infinite size
 const SIZE_GATE: f32 = 20.0;          // half-saturation constant (cells)
 
@@ -114,7 +114,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell_count = arrayLength(&cell_positions);
     let dt = params.delta_time;
 
-    // Query spatial grid: 5×5×5 neighborhood around boulder center
+    // Query spatial grid: 5x5x5 neighborhood around boulder center
     let gc = world_to_grid(b.position);
     let res = params.grid_resolution;
 
@@ -141,7 +141,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let diff = cell_pos - b.position;
                     let dist = length(diff);
 
-                    // Must be in close surface contact — cell centre within 2.5 units of the boulder surface.
+                    // Must be in close surface contact - cell centre within 2.5 units of the boulder surface.
                     // This means the cell must be nearly touching the boulder, not just inside it.
                     let surface_dist = abs(dist - b.radius);
                     if (surface_dist > 2.5) { continue; }
@@ -156,7 +156,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let rate = MAX_CONSUME_RATE * org_size / (org_size + SIZE_GATE);
                     let desired_gain = rate * dt;
 
-                    // Clamp by cell headroom only — boulder atomic handles over-consumption.
+                    // Clamp by cell headroom only - boulder atomic handles over-consumption.
                     // The physics pass clamps boulder_moss to 0 on death check.
                     let headroom = max(max_nutrients - current_nutrients, 0.0);
                     let actual_gain = min(desired_gain, headroom);

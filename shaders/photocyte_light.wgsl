@@ -175,7 +175,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     if (in_light) {
         // In light: gain nutrients at the full rate from the brightness setting.
-        // Use atomicAdd of the delta — atomicStore would overwrite concurrent writes
+        // Use atomicAdd of the delta - atomicStore would overwrite concurrent writes
         // from nutrient_transport running in the same frame.
         let nutrient_gain = min(nutrient_rate * params.delta_time, max(max_nutrients - current_nutrients, 0.0));
         if (nutrient_gain > 0.0) {

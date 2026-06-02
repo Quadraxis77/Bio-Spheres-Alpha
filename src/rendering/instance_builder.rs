@@ -1,7 +1,7 @@
 //! GPU-based instance buffer builder using compute shaders.
 //!
 //! Builds cell instance data on the GPU to eliminate CPU-side iteration
-//! and reduce CPU→GPU data transfer. Includes frustum and occlusion culling.
+//! and reduce CPU->GPU data transfer. Includes frustum and occlusion culling.
 
 use crate::cell::types::{CellType, CellTypeVisuals};
 use crate::genome::Genome;
@@ -290,7 +290,7 @@ impl InstanceBuilder {
     pub fn new(device: &wgpu::Device, cell_capacity: usize) -> Self {
         // Must match triple_buffer max_modes (8_000_000) so GPU-mutated mode indices never go out of bounds.
         // mode_visuals stores 2 vec4<f32> per mode (color + emissive) = 32 bytes per mode.
-        // 8_000_000 * 32 = 256 MB — at wgpu's buffer limit.
+        // 8_000_000 * 32 = 256 MB - at wgpu's buffer limit.
         let mode_capacity = 8_000_000;
         let cell_type_capacity = 16;
         
@@ -1336,7 +1336,7 @@ impl InstanceBuilder {
         }
 
         // IDLE EARLY-OUT: Skip all GPU work when there are no live cells.
-        // cell_count_hint is the high-water mark (total_cell_slots) — when it's 0 no cells
+        // cell_count_hint is the high-water mark (total_cell_slots) - when it's 0 no cells
         // have ever been placed (or all were cleared by reset). Zero the indirect buffer so
         // the renderer issues 0 draw calls, then return early.
         if cell_count_hint == 0 {

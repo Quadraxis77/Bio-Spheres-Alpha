@@ -70,7 +70,7 @@ fn vs_main(
     // At ~8 steps/sec the particle glides one full cell every ~0.125s, which matches
     // typical fluid sim throughput at 60fps with 4 sub-steps.
     let step_freq = 8.0;
-    let phase = fract(instance.animation.x * step_freq);  // 0→1 within current step
+    let phase = fract(instance.animation.x * step_freq);  // 0->1 within current step
     let cell_size = instance.size / 0.7;  // recover approximate cell_size from particle size
     // Lerp moving particles toward next voxel. For stationary ones (zero velocity),
     // add a tiny time-based wobble so they don't appear frozen in place.
@@ -89,19 +89,19 @@ fn vs_main(
     }
 
     let world_pos = instance.position + lerp_offset;
-    // Scale size down for stationary/slow particles — rain drops are larger,
+    // Scale size down for stationary/slow particles - rain drops are larger,
     // circular stationary ones should be smaller so they don't dominate.
     let size_scale = mix(0.35, 1.0, smoothstep(0.0, 0.5, speed));
     let size = instance.size * size_scale;
 
     // Determine elongation factor for teardrop shape when moving.
     // Use a soft speed threshold so the elongated shape lingers briefly after
-    // the particle slows — prevents snapping instantly to a circle.
+    // the particle slows - prevents snapping instantly to a circle.
     // speed is 0 (stationary), ~1.0 (cardinal move), or ~1.7 (diagonal).
     // We map speed through a smooth curve and blend with a slow decay driven
     // by the time phase so the shape fades over ~0.3s rather than one frame.
     let speed_factor = smoothstep(0.05, 0.8, speed);
-    // Decay: fract(time * decay_freq) gives a 0→1 ramp; when speed is zero the
+    // Decay: fract(time * decay_freq) gives a 0->1 ramp; when speed is zero the
     // elongation rides this ramp down to 0 over one cycle (~0.25s at 4Hz).
     let decay_phase = fract(instance.animation.x * 4.0);
     let lingering = speed_factor + (1.0 - speed_factor) * (1.0 - decay_phase);
@@ -169,7 +169,7 @@ fn vs_main(
         out.elongation = elongation_factor;
         return out;
     } else {
-        // Standard circular billboard for stationary/slow particles — apply lerp offset too
+        // Standard circular billboard for stationary/slow particles - apply lerp offset too
         right = normalize(cross(to_camera, vec3<f32>(0.0, 1.0, 0.0)));
         up = cross(right, to_camera);
 
@@ -204,7 +204,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // uv.y > 0 = tip (pointed, against motion), uv.y < 0 = belly (round).
         var dist: f32;
         if uv.y > 0.0 {
-            // Tip: narrow parabolic cone — squash x to create a sharp point
+            // Tip: narrow parabolic cone - squash x to create a sharp point
             dist = length(vec2<f32>(uv.x * 2.8, uv.y));
         } else {
             // Belly: standard circle
@@ -212,11 +212,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         alpha = 1.0 - smoothstep(0.38, 0.52, dist);
 
-        // Specular highlight — small bright spot on the belly
+        // Specular highlight - small bright spot on the belly
         let hl = length(uv - vec2<f32>(-0.09, -0.11));
         alpha = max(alpha, (1.0 - smoothstep(0.0, 0.11, hl)) * 0.65);
     } else {
-        // Stationary droplet — round with a crisp edge and a highlight
+        // Stationary droplet - round with a crisp edge and a highlight
         let dist = length(uv);
         alpha = 1.0 - smoothstep(0.35, 0.48, dist);
 

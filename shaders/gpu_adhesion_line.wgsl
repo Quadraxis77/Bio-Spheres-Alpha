@@ -1,6 +1,6 @@
 // GPU Adhesion Line Shader - Outlined Billboard Quads
 // Renders adhesion connections directly from GPU buffers (no CPU readback)
-// Each connection = 12 vertices (2 half-segments × 2 triangles × 3 verts)
+// Each connection = 12 vertices (2 half-segments x 2 triangles x 3 verts)
 // Center colored by zone classification, outline by signal state
 
 const LINE_HALF_WIDTH: f32 = 0.04;
@@ -71,9 +71,9 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     
-    // 12 vertices per instance: 2 half-segments × 2 triangles × 3 verts
-    // Half-segment 0 (verts 0-5): A → midpoint, zone_a color
-    // Half-segment 1 (verts 6-11): midpoint → B, zone_b color
+    // 12 vertices per instance: 2 half-segments x 2 triangles x 3 verts
+    // Half-segment 0 (verts 0-5): A -> midpoint, zone_a color
+    // Half-segment 1 (verts 6-11): midpoint -> B, zone_b color
     
     let adhesion_count = adhesion_counts[0];
     let cell_count = cell_count_buffer[0];
@@ -113,7 +113,7 @@ fn vs_main(
     let midpoint = (pos_a + pos_b) * 0.5;
     
     // Signal outline color: yellow only when signal actually flowed through this bond.
-    // Both endpoints having signal is not sufficient — two 1-hop neighbours of the same
+    // Both endpoints having signal is not sufficient - two 1-hop neighbours of the same
     // source both have signal but the connection between them was never traversed.
     // Instead, signal flowed along this bond only if the hop counts differ by exactly 1
     // (the upstream cell has one more remaining hop than the downstream cell).
@@ -158,7 +158,7 @@ fn vs_main(
     }
     
     // Determine which half-segment and which triangle vertex
-    let half_seg = vertex_index / 6u;  // 0 = A→mid, 1 = mid→B
+    let half_seg = vertex_index / 6u;  // 0 = A->mid, 1 = mid->B
     let local_vert = vertex_index % 6u; // 0-5 within the half-segment
     
     // Endpoints for this half-segment
@@ -181,8 +181,8 @@ fn vs_main(
     // v1 = start - perp * hw  (edge=-1)
     // v2 = end   + perp * hw  (edge=+1)
     // v3 = end   - perp * hw  (edge=-1)
-    // Triangle 1: v0, v1, v2 → local_vert 0, 1, 2
-    // Triangle 2: v1, v3, v2 → local_vert 3, 4, 5
+    // Triangle 1: v0, v1, v2 -> local_vert 0, 1, 2
+    // Triangle 2: v1, v3, v2 -> local_vert 3, 4, 5
     
     var world_pos: vec3<f32>;
     var edge_f: f32;

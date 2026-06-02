@@ -1,4 +1,4 @@
-//! GPU Scene Snapshot — save and restore simulation state.
+//! GPU Scene Snapshot - save and restore simulation state.
 //!
 //! ## What is saved
 //!
@@ -37,7 +37,7 @@
 use serde::{Deserialize, Serialize};
 use crate::simulation::gpu_physics::adhesion::{GpuAdhesionConnection, CellAdhesionIndices};
 
-// ─── Per-cell data ────────────────────────────────────────────────────────────
+// --- Per-cell data ------------------------------------------------------------
 
 /// Position and mass for one cell: `[x, y, z, mass]`
 pub type CellPositionMass = [f32; 4];
@@ -51,7 +51,7 @@ pub type CellRotation = [f32; 4];
 /// Genome-space orientation quaternion for one cell: `[x, y, z, w]`
 pub type CellGenomeOrientation = [f32; 4];
 
-// ─── Main snapshot struct ─────────────────────────────────────────────────────
+// --- Main snapshot struct -----------------------------------------------------
 
 /// Complete serialisable snapshot of a GPU scene.
 ///
@@ -60,10 +60,10 @@ pub type CellGenomeOrientation = [f32; 4];
 /// restore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuSceneSnapshot {
-    /// Snapshot format version — bump when the layout changes.
+    /// Snapshot format version - bump when the layout changes.
     pub version: u32,
 
-    // ── Capacity / counts ────────────────────────────────────────────────────
+    // -- Capacity / counts ----------------------------------------------------
     /// Buffer capacity the snapshot was taken from.
     pub capacity: u32,
     /// Number of live cells at save time (informational).
@@ -71,7 +71,7 @@ pub struct GpuSceneSnapshot {
     /// Total slots used (high-water mark) at save time.
     pub total_cell_slots: u32,
 
-    // ── Per-cell arrays (length == total_cell_slots) ─────────────────────────
+    // -- Per-cell arrays (length == total_cell_slots) -------------------------
     /// `[x, y, z, mass]` per cell slot.
     pub positions_and_mass: Vec<CellPositionMass>,
     /// `[vx, vy, vz, 0]` per cell slot.
@@ -102,7 +102,7 @@ pub struct GpuSceneSnapshot {
     #[serde(default)]
     pub embryocyte_reserves: Vec<u32>,
 
-    // ── Adhesion state (CPU caches — no readback needed) ─────────────────────
+    // -- Adhesion state (CPU caches - no readback needed) ---------------------
     /// All adhesion connection slots (including inactive ones).
     /// Length == `capacity * MAX_ADHESIONS_PER_CELL / 2`.
     pub adhesion_connections: Vec<GpuAdhesionConnection>,
@@ -112,12 +112,12 @@ pub struct GpuSceneSnapshot {
     /// Number of adhesion slots that were allocated at save time.
     pub adhesion_allocated_count: u32,
 
-    // ── Genomes ───────────────────────────────────────────────────────────────
+    // -- Genomes ---------------------------------------------------------------
     /// All genomes present in the scene at save time, serialised as YAML
     /// strings using the existing genome serialization path.
     pub genomes_yaml: Vec<String>,
 
-    // ── Scalar scene settings ─────────────────────────────────────────────────
+    // -- Scalar scene settings -------------------------------------------------
     pub current_time: f32,
     pub current_frame: i32,
     pub next_cell_id: u32,
@@ -141,7 +141,7 @@ pub struct GpuSceneSnapshot {
     pub nutrient_despawn_start: f32,
     pub world_radius: f32,
 
-    // ── Cave parameters ───────────────────────────────────────────────────────
+    // -- Cave parameters -------------------------------------------------------
     /// Whether a cave system was active at save time.
     pub cave_active: bool,
     pub cave_density: f32,
@@ -153,11 +153,11 @@ pub struct GpuSceneSnapshot {
     pub cave_seed: u32,
     pub cave_resolution: u32,
 
-    // ── Fluid / water state ───────────────────────────────────────────────────
+    // -- Fluid / water state ---------------------------------------------------
     /// Whether a fluid simulator was active at save time.
     pub fluid_active: bool,
     /// Fluid voxel state: one `u32` per voxel (0=Empty, 1=Water, 2=Lava, 3=Steam).
-    /// Length == `TOTAL_VOXELS` (128³ = 2,097,152) when `fluid_active` is true,
+    /// Length == `TOTAL_VOXELS` (128^3 = 2,097,152) when `fluid_active` is true,
     /// empty otherwise.
     pub fluid_voxels: Vec<u32>,
     /// Nutrient voxel state: one `u32` per voxel (0=empty, 1=has nutrient).
@@ -185,7 +185,7 @@ impl GpuSceneSnapshot {
     }
 }
 
-// ─── Error type ───────────────────────────────────────────────────────────────
+// --- Error type ---------------------------------------------------------------
 
 /// Errors that can occur during snapshot save or restore.
 #[derive(Debug)]

@@ -134,7 +134,7 @@ pub fn division_step(
             // Check nutrient threshold - cells must have enough nutrients to split
             // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
             // Lipocytes (cell_type 4) can have threshold up to 200
-            // Reserve counts 1:1 toward the threshold — cells with reserve can split even
+            // Reserve counts 1:1 toward the threshold - cells with reserve can split even
             // if their regular nutrients alone are below the threshold.
             let is_lipocyte = mode.map(|m| m.cell_type == 4).unwrap_or(false);
             let max_threshold = if is_lipocyte { 200.0 } else { 100.0 };
@@ -320,13 +320,13 @@ pub fn division_step(
                 // Determine split counts for children:
                 // - Reset to 0 when the child's mode changes (new mode starts fresh).
                 // - Reset to 0 when the after-splits routing fires AND routes to a
-                //   DIFFERENT mode than the normal child mode — this is a deliberate
+                //   DIFFERENT mode than the normal child mode - this is a deliberate
                 //   lifecycle transition (e.g. stem cell shedding an egg then continuing
                 //   to grow). Without the reset, the child that stays in the same mode
                 //   via mode_b_after_splits would have split_count >= max_splits and
                 //   immediately fail can_split_by_count on the very next tick.
                 // - Setting mode_a/b_after_splits to the same mode as the normal child
-                //   is identical to leaving it at default (-1) — no reset, cell stops.
+                //   is identical to leaving it at default (-1) - no reset, cell stops.
                 // - Otherwise increment. If max_splits is reached with no after-splits
                 //   routing, the count stays >= max_splits and the cell stops dividing.
                 let normal_child_a_mode = mode.child_a.mode_number.max(0) as usize;
@@ -558,7 +558,7 @@ pub fn division_step(
 
             if let Some(mode) = parent_mode {
                 // When will_reach_max_splits fires and child_a_after_split_keep_adhesion is false,
-                // child A is the detached egg — do NOT create a sibling bond to it.
+                // child A is the detached egg - do NOT create a sibling bond to it.
                 let will_reach_max_splits = mode.max_splits >= 0
                     && (data.parent_split_count + 1) >= mode.max_splits;
                 let egg_detach = will_reach_max_splits && !mode.child_a_after_split_keep_adhesion;
@@ -763,7 +763,7 @@ pub fn division_step_multi(
             // Check nutrient threshold - cells must have enough nutrients to split
             // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
             // Lipocytes (cell_type 4) can have threshold up to 200
-            // Reserve counts 1:1 toward the threshold — cells with reserve can split even
+            // Reserve counts 1:1 toward the threshold - cells with reserve can split even
             // if their regular nutrients alone are below the threshold.
             let is_lipocyte = mode.map(|m| m.cell_type == 4).unwrap_or(false);
             let max_threshold = if is_lipocyte { 200.0 } else { 100.0 };
@@ -865,7 +865,7 @@ pub fn division_step_multi(
             
             let pitch = mode.parent_split_direction.x.to_radians();
             let yaw = mode.parent_split_direction.y.to_radians();
-            // Use genome orientation (not physics rotation) — same reasoning as the
+            // Use genome orientation (not physics rotation) - same reasoning as the
             // primary division path above: genome orientation is drift-free.
             let split_direction = parent_genome_orientation
                 * Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
@@ -1105,7 +1105,7 @@ pub fn division_step_multi(
                 // (matches GPU line 588: only checks make_adhesion flag, not keep flags)
                 if mode.parent_make_adhesion {
                     // Use the full world-space spawn direction (parent_genome_orientation * split_rotation),
-                    // then transform into each child's genome-local space — matching division_step exactly.
+                    // then transform into each child's genome-local space - matching division_step exactly.
                     let pitch = mode.parent_split_direction.x.to_radians();
                     let yaw = mode.parent_split_direction.y.to_radians();
                     let split_rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);

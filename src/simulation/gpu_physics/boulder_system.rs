@@ -3,7 +3,7 @@
 //! Owns BoulderBuffers and BoulderRenderer, handles spawning from cave ceiling
 //! voxels, and coordinates the per-frame update cycle.
 //!
-//! ## Architectural note — why not reuse the cell physics pipeline?
+//! ## Architectural note - why not reuse the cell physics pipeline?
 //!
 //! See boulder_buffers.rs for the full explanation. In short: boulders should have
 //! been placed in reserved slots within the existing cell physics buffers so that
@@ -35,7 +35,7 @@ pub struct BoulderSystem {
     pub buffers:  BoulderBuffers,
     pub renderer: BoulderRenderer,
     pub bubbles:  BoulderBubbleSystem,
-    /// Cached compute bind group for bubbles — rebuilt when water system initializes.
+    /// Cached compute bind group for bubbles - rebuilt when water system initializes.
     pub bubble_compute_bg: Option<wgpu::BindGroup>,
 
     /// Pre-computed ceiling spawn positions (world space).
@@ -53,7 +53,7 @@ pub struct BoulderSystem {
     /// Target number of live boulders.
     pub target_count: u32,
 
-    /// Initial moss store per boulder (fixed-point ×1000).
+    /// Initial moss store per boulder (fixed-point x1000).
     pub initial_moss: i32,
 
     /// Spawn radius for new boulders.
@@ -74,7 +74,7 @@ pub struct BoulderSystem {
     /// Seconds between spawn attempts. Lower = more frequent spawning.
     pub spawn_interval: f32,
 
-    /// Set to true when buoyancy changed in UI — applied on next update().
+    /// Set to true when buoyancy changed in UI - applied on next update().
     pub buoyancy_dirty: bool,
     /// Current buoyancy gravity multiplier (0 = float, 1 = full gravity).
     pub buoyancy: f32,
@@ -181,7 +181,7 @@ impl BoulderSystem {
         }
     }
 
-    /// Render boulders and bubbles. Reads directly from GPU storage buffers — no CPU upload.
+    /// Render boulders and bubbles. Reads directly from GPU storage buffers - no CPU upload.
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -223,7 +223,7 @@ impl BoulderSystem {
         self.spawn_radius = radius;
     }
 
-    /// Clear all live boulders — called on scene reset.
+    /// Clear all live boulders - called on scene reset.
     pub fn clear(&mut self, queue: &wgpu::Queue) {
         let n = crate::simulation::gpu_physics::boulder_buffers::MAX_BOULDERS as usize;
 
@@ -263,7 +263,7 @@ impl BoulderSystem {
         let t_radius = self.rand_f32();
         let radius = self.radius_min + (self.radius_max - self.radius_min) * t_radius;
 
-        // Spawn at the ceiling voxel center — inside the solid rock.
+        // Spawn at the ceiling voxel center - inside the solid rock.
         // The cave SDF collision in boulder_physics.wgsl detects the penetration
         // and ejects the mossrock downward, giving a natural "breaking free" emergence.
         let pos = spawn_pos;
@@ -303,7 +303,7 @@ impl BoulderSystem {
     }
 }
 
-// ── Ceiling voxel detection ───────────────────────────────────────────────────
+// -- Ceiling voxel detection ---------------------------------------------------
 
 /// Returns the world-space "up" direction (opposite of gravity).
 fn anti_gravity_direction(gravity_mode: u32, _pos: Vec3) -> Vec3 {
@@ -347,7 +347,7 @@ fn find_ceiling_voxels(
         _ => (0, -1, 0), // default -Y
     };
 
-    // "Up" step — anti-gravity direction (toward the ceiling surface)
+    // "Up" step - anti-gravity direction (toward the ceiling surface)
     let (ux, uy, uz) = (-dx, -dy, -dz);
 
     let mut positions = Vec::new();
@@ -359,7 +359,7 @@ fn find_ceiling_voxels(
                 let iy = y as i32;
                 let iz = z as i32;
 
-                // Must be solid — this is the ceiling rock
+                // Must be solid - this is the ceiling rock
                 if !is_solid(ix, iy, iz) {
                     continue;
                 }
@@ -372,7 +372,7 @@ fn find_ceiling_voxels(
                     continue;
                 }
 
-                // The voxel directly BELOW (in gravity direction) must also be open —
+                // The voxel directly BELOW (in gravity direction) must also be open -
                 // the mossrock needs somewhere to fall into.
                 if is_solid(ix + dx, iy + dy, iz + dz) {
                     continue;
@@ -394,7 +394,7 @@ fn find_ceiling_voxels(
     }
 
     // Subsample to avoid too many candidates (keep every Nth)
-    // With 128³ grid there can be tens of thousands of ceiling voxels
+    // With 128^3 grid there can be tens of thousands of ceiling voxels
     let step = (positions.len() / 500).max(1);
     positions.into_iter().step_by(step).collect()
 }

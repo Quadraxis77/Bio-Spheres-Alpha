@@ -141,7 +141,7 @@ impl AdhesionConnectionManager {
             return None;
         }
 
-        // Check if a bond between these two cells already exists — if so, replace it.
+        // Check if a bond between these two cells already exists - if so, replace it.
         // This handles the case where a cell splits and the new sibling bond would
         // stack on top of an inherited bond pointing in the same direction.
         if let Some(existing_idx) = self.find_connection_between(connections, cell_a, cell_b) {

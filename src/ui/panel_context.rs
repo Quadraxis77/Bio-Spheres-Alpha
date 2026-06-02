@@ -79,7 +79,7 @@ pub struct GenomeEditorState {
     pub renaming_mode: Option<usize>,
     /// Buffer for rename text input
     pub rename_buffer: String,
-    /// Currently selected mode index (primary selection — the mode whose settings are shown)
+    /// Currently selected mode index (primary selection - the mode whose settings are shown)
     pub selected_mode_index: usize,
     /// All currently selected mode indices (for multi-select editing).
     /// Always contains `selected_mode_index` as one of its entries.
@@ -166,7 +166,7 @@ pub struct GenomeEditorState {
     pub enable_snapping: bool,
 
     // Time slider state
-    /// Current time value for preview (0-60 seconds) — purely UI-driven, never written by simulation
+    /// Current time value for preview (0-60 seconds) - purely UI-driven, never written by simulation
     pub time_value: f32,
     /// Maximum preview duration (60 seconds)
     pub max_preview_duration: f32,
@@ -206,9 +206,9 @@ pub struct GenomeEditorState {
     pub nutrient_epoch_duration: f32,
     /// Nutrient epoch spacing in seconds (< duration = overlap)
     pub nutrient_epoch_spacing: f32,
-    /// Fraction of epoch for spawn ramp (0.0–1.0)
+    /// Fraction of epoch for spawn ramp (0.0-1.0)
     pub nutrient_spawn_end: f32,
-    /// Fraction of epoch where despawn starts (0.0–1.0)
+    /// Fraction of epoch where despawn starts (0.0-1.0)
     pub nutrient_despawn_start: f32,
     
     // Fluid visualization
@@ -408,7 +408,7 @@ pub struct GenomeEditorState {
     /// Flag to sync moss params to GPU
     pub moss_params_dirty: bool,
 
-    // ── Boulder / Mossrock settings ───────────────────────────────────────────
+    // -- Boulder / Mossrock settings -------------------------------------------
     /// Whether mossrocks are enabled
     pub show_boulders: bool,
     /// Target number of boulders to maintain
@@ -491,7 +491,7 @@ pub struct GenomeEditorState {
     /// Request to capture a GIF thumbnail of the current genome.
     /// Processed in app.rs after the frame is presented.
     pub request_gif_capture: bool,
-    /// The path the genome was just saved to — used to name the GIF correctly.
+    /// The path the genome was just saved to - used to name the GIF correctly.
     pub gif_capture_save_path: Option<std::path::PathBuf>,
 
     /// Request to open the genome browser in save mode.
@@ -524,9 +524,9 @@ pub struct GenomeEditorState {
     pub show_name_dialog: bool,
     /// Text buffer for the name dialog's custom name field.
     pub name_dialog_buffer: String,
-    /// Variation seed for the procedural name — incremented each time the user clicks Regenerate.
+    /// Variation seed for the procedural name - incremented each time the user clicks Regenerate.
     pub name_dialog_seed: u64,
-    /// Names already in use on disk — populated when the dialog opens so suggestions avoid clashes.
+    /// Names already in use on disk - populated when the dialog opens so suggestions avoid clashes.
     pub name_dialog_used_names: Vec<String>,
     /// Whether the name dialog text field has been focused this session (prevents re-stealing focus).
     pub name_dialog_focused: bool,

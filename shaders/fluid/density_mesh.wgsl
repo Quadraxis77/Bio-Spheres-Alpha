@@ -336,7 +336,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let n_dot_h = max(dot(normal, half_dir), 0.0);
     let specular = pow(n_dot_h, params.shininess) * params.specular;
     
-    // Fresnel effect (unused — kept as variable for rim light compatibility)
+    // Fresnel effect (unused - kept as variable for rim light compatibility)
     let fresnel = pow(1.0 - max(dot(normal, view_dir), 0.0), params.fresnel_power) * params.fresnel;
     
     // Rim lighting
@@ -348,7 +348,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let lighting = ambient_light + direct_light;
     var final_color = base_color * sun_color * lighting;
     
-    // Add specular (also shadowed — no specular highlight in shadow)
+    // Add specular (also shadowed - no specular highlight in shadow)
     final_color += sun_color * specular * shadow;
     
     // Lava emissive glow (unaffected by shadow)
@@ -362,7 +362,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let reflect_normal = normalize(in.geometry_normal);
     let reflect_dir = reflect(-view_dir, reflect_normal);
     let env_color = textureSample(env_cubemap, env_sampler, reflect_dir).rgb;
-    // Boost reflection brightness — cave walls are dark, need to be visible in reflection
+    // Boost reflection brightness - cave walls are dark, need to be visible in reflection
     let boosted_env = env_color * params.reflection_brightness;
     // Mirror blend: at reflection=1.0, surface is pure cubemap; at 0.0, pure lit surface
     final_color = mix(final_color, boosted_env, params.reflection);

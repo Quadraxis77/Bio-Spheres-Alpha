@@ -192,7 +192,7 @@ fn sunspots(uv: vec2<f32>, time: f32) -> f32 {
 fn solar_flares(angle: f32, dist: f32, time: f32) -> f32 {
     let speed = sun_params.flare_speed;
 
-    // Use sin/cos of angle to avoid seam at atan2 discontinuity (±π)
+    // Use sin/cos of angle to avoid seam at atan2 discontinuity (pi)
     let ca = cos(angle);
     let sa = sin(angle);
 

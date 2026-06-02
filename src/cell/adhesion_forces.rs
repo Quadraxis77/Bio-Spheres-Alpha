@@ -7,10 +7,10 @@ use super::adhesion::AdhesionConnections;
 const EPSILON: f32 = 1e-6;
 const ANGLE_EPSILON: f32 = 0.001;
 const QUATERNION_EPSILON: f32 = 0.0001;
-const TWIST_CLAMP_LIMIT: f32 = 1.57; // ±90 degrees
+const TWIST_CLAMP_LIMIT: f32 = 1.57; // 90 degrees
 
 /// Per-bond force cap. Without this, large blobs accumulate phantom net forces
-/// because spring errors across many bonds don't cancel perfectly — the residual
+/// because spring errors across many bonds don't cancel perfectly - the residual
 /// is enough to produce locomotion. Matches the GPU adhesion_physics.wgsl cap.
 const MAX_BOND_FORCE: f32 = 500.0;
 
@@ -307,7 +307,7 @@ fn compute_adhesion_force_pair(
     force_b -= geo_force_on_a + damping_force;
 
     // Orientation spring: aligns each cell's anchor toward the live adhesion direction.
-    // This is what enforces the angular shape — it pulls the cell's anchor to point at
+    // This is what enforces the angular shape - it pulls the cell's anchor to point at
     // its bonded neighbor, creating the rigid inter-cell angle defined by the genome.
     let axis_a = anchor_a.cross(adhesion_dir);
     let sin_a = axis_a.length();
@@ -318,7 +318,7 @@ fn compute_adhesion_force_pair(
         torque_a += axis_a_norm * angle_a * settings.orientation_spring_stiffness;
         torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
     }
-    // Damp spin around the bond axis itself — the orientation spring's axis is always
+    // Damp spin around the bond axis itself - the orientation spring's axis is always
     // perpendicular to adhesion_dir so it cannot see bond-axis spin. This plugs that gap.
     torque_a -= adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 
@@ -351,7 +351,7 @@ fn compute_adhesion_force_pair(
         // Extract twist component about the adhesion axis directly from the quaternion's
         // imaginary part. This avoids the axis-angle double-cover ambiguity that causes
         // the spring to fire in the wrong direction when the error crosses the hemisphere.
-        // twist_scalar ≈ sin(half_angle) * sign, which is monotone in [-1, 1] for ±180°.
+        // twist_scalar ~= sin(half_angle) * sign, which is monotone in [-1, 1] for 180 deg.
         let twist_imag = Vec3::new(twist_error_quat.x, twist_error_quat.y, twist_error_quat.z);
         let twist_error_scalar = twist_imag.dot(adhesion_axis).clamp(-TWIST_CLAMP_LIMIT, TWIST_CLAMP_LIMIT);
 
@@ -360,10 +360,10 @@ fn compute_adhesion_force_pair(
         let relative_angular_vel = angular_vel_a_proj - angular_vel_b_proj;
 
         // Clamp the damping coefficient to the explicit-integration stability limit.
-        // A relative angular damper applied as ±c·ω_rel is only stable when
-        // c·dt·(1/I_a + 1/I_b) <= 1, otherwise it overshoots and reverses ω_rel,
+        // A relative angular damper applied as comega_rel is only stable when
+        // cdt(1/I_a + 1/I_b) <= 1, otherwise it overshoots and reverses omega_rel,
         // pumping energy into the structure until it spins out and collapses into a blob.
-        // I = 0.4·m·r² (solid sphere), matching the angular integrator.
+        // I = 0.4mr^2 (solid sphere), matching the angular integrator.
         let damp = stable_twist_damping(settings.twist_constraint_damping, mass_a, mass_b, dt);
 
         let twist_spring = adhesion_axis * twist_error_scalar * settings.twist_constraint_stiffness;
@@ -377,8 +377,8 @@ fn compute_adhesion_force_pair(
 
 /// Clamp a relative angular damping coefficient to the explicit-integration stability
 /// limit. Returns the largest coefficient <= the requested value that keeps the per-step
-/// relative-angular-velocity update non-divergent: c·dt·(1/I_a + 1/I_b) <= 1.
-/// Moment of inertia uses I = 0.4·m·r² with r = clamp(mass, 0.5, 2.0), matching the
+/// relative-angular-velocity update non-divergent: cdt(1/I_a + 1/I_b) <= 1.
+/// Moment of inertia uses I = 0.4mr^2 with r = clamp(mass, 0.5, 2.0), matching the
 /// angular velocity integrator.
 #[inline]
 fn stable_twist_damping(requested: f32, mass_a: f32, mass_b: f32, dt: f32) -> f32 {
@@ -655,7 +655,7 @@ fn compute_substep_force_pair(
         torque_a += axis_a_norm * angle_a * settings.orientation_spring_stiffness;
         torque_a += -axis_a_norm * ang_vel_a.dot(axis_a_norm) * settings.orientation_spring_damping;
     }
-    // Damp spin around the bond axis itself — the orientation spring's axis is always
+    // Damp spin around the bond axis itself - the orientation spring's axis is always
     // perpendicular to adhesion_dir so it cannot see bond-axis spin. This plugs that gap.
     torque_a -= adhesion_dir * ang_vel_a.dot(adhesion_dir) * settings.orientation_spring_damping * 0.5;
 

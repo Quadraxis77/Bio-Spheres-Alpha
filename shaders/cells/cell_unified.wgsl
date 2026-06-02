@@ -233,10 +233,10 @@ fn vs_main(
 
     out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
     // Scale UV so that local_pos = uv*2-1 correctly maps to sphere-radius units.
-    // For the expanded Devorocyte billboard (1.55x), quad_pos=±1 corresponds to ±1.409 sphere radii.
-    // We encode this by scaling uv: local_pos = (uv*2-1) will then range to ±billboard_scale/1.1.
-    // Standard cells: billboard_scale=1.1, ratio=1.0, uv=quad_pos*0.5+0.5 → local_pos=quad_pos ∈ [-1,1].
-    // Devorocyte:     billboard_scale=1.85, ratio≈1.682, uv scaled → local_pos ∈ [-1.682, 1.682].
+    // For the expanded Devorocyte billboard (1.55x), quad_pos=1 corresponds to 1.409 sphere radii.
+    // We encode this by scaling uv: local_pos = (uv*2-1) will then range to billboard_scale/1.1.
+    // Standard cells: billboard_scale=1.1, ratio=1.0, uv=quad_pos*0.5+0.5 -> local_pos=quad_pos  [-1,1].
+    // Devorocyte:     billboard_scale=1.85, ratio~=1.682, uv scaled -> local_pos  [-1.682, 1.682].
     let uv_scale = billboard_scale / 1.1;
     out.uv = quad_pos * uv_scale * 0.5 + 0.5;
     out.color = instance.color;
@@ -365,10 +365,10 @@ fn blob_pattern(p: vec3<f32>, scale: f32) -> f32 {
 // ============================================================================
 // Proper icosahedron-based hex pattern. The Voronoi diagram of the 42 vertices
 // of a frequency-2 geodesic sphere (12 original ico verts + 30 edge midpoints)
-// produces 12 pentagons and 20 hexagons — a classic soccer ball / icosphere.
+// produces 12 pentagons and 20 hexagons - a classic soccer ball / icosphere.
 //
 // type_data_0 per-instance params:
-//   .x = subdivision    (1 or 2, default 2) — 1 = 12 pentagons, 2 = 12 pent + 20 hex
+//   .x = subdivision    (1 or 2, default 2) - 1 = 12 pentagons, 2 = 12 pent + 20 hex
 //   .y = ridge_width    (0.01-0.5, default 0.12)
 //   .z = meander        (0.0-0.3, default 0.08)
 //   .w = ridge_strength (0.0-0.5, default 0.15)
@@ -438,15 +438,15 @@ struct HexTripletResult {
 
 // Convert a unit sphere direction to equirectangular UV coordinates.
 fn dir_to_equirect_uv(dir: vec3<f32>) -> vec2<f32> {
-    let theta = atan2(dir.z, dir.x); // -π..π
-    let phi = acos(clamp(dir.y, -1.0, 1.0)); // 0..π
+    let theta = atan2(dir.z, dir.x); // -pi..pi
+    let phi = acos(clamp(dir.y, -1.0, 1.0)); // 0..pi
     let u = (theta / (2.0 * PI)) + 0.5; // 0..1
     let v = phi / PI; // 0..1
     return vec2<f32>(u, v);
 }
 
 // Sample the pre-baked hex pattern texture. Applies meander distortion before lookup.
-// Returns HexTripletResult from a single texture sample — no Voronoi math at runtime.
+// Returns HexTripletResult from a single texture sample - no Voronoi math at runtime.
 fn hex_triplet(dir: vec3<f32>, meander_amount: f32) -> HexTripletResult {
     let meander = noise3(dir * MEANDER_SCALE) * meander_amount;
     let p = normalize(dir + meander);
@@ -459,7 +459,7 @@ fn hex_triplet(dir: vec3<f32>, meander_amount: f32) -> HexTripletResult {
     return result;
 }
 
-// Gaussian ridge: peaks at edge (edge_dist≈0), zero at face centers.
+// Gaussian ridge: peaks at edge (edge_dist~=0), zero at face centers.
 fn geodesic_ridge(edge_dist: f32, ridge_width: f32) -> f32 {
     return exp(-(edge_dist * edge_dist) / (ridge_width * ridge_width));
 }
@@ -471,7 +471,7 @@ fn geodesic_ridge(edge_dist: f32, ridge_width: f32) -> f32 {
 // pattern_value: 0 = pure cytoplasm, 1 = full organelle coverage
 // color_shift: how much to shift the color (positive = lighter, negative = darker)
 
-// Type 0: Test Cell — Concentric rings pattern, configurable.
+// Type 0: Test Cell - Concentric rings pattern, configurable.
 // type_data_0: x=ring_frequency, y=ring_sharpness, z=ring_brightness, w=unused
 fn internals_test(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
     let freq      = clamp(type_data_0.x, 1.0, 20.0);
@@ -484,7 +484,7 @@ fn internals_test(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
     return vec3<f32>(ring * brightness * 0.5, ring * brightness * 0.2 - 0.1, 0.0);
 }
 
-// Type 10: Embryocyte — Egg-like appearance.
+// Type 10: Embryocyte - Egg-like appearance.
 // A warm amber yolk sphere visible through a translucent albumen interior.
 // type_data_0: x=yolk_radius (0.3-0.7), y=yolk_offset_y (-0.3-0.0), z=yolk_brightness (0.5-1.5), w=unused
 fn internals_embryocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
@@ -512,7 +512,7 @@ fn internals_embryocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f3
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 13: Gametocyte — Translucent reproductive cell with a glowing central nucleus.
+// Type 13: Gametocyte - Translucent reproductive cell with a glowing central nucleus.
 // A bright pulsing nucleus is visible deep inside a lightly pigmented, softly-lit cytoplasm.
 // type_data_0: x=merge_range (unused for visuals), y=unused, z=unused, w=unused
 // Visual parameters come from CellTypeVisuals (param_a=pulse_speed, param_b=nucleus_glow).
@@ -539,7 +539,7 @@ fn internals_gametocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 15: Memorocyte — Leaky-integrator memory cell.
+// Type 15: Memorocyte - Leaky-integrator memory cell.
 // Concentric rings drift inward (memory charging) and fade (decaying).
 // A dim ambient glow pulses slowly to suggest an analogue charge level.
 fn internals_memorocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
@@ -565,7 +565,7 @@ fn internals_memorocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 14: Cognocyte — Signal-processing cell with a pulsing computational core
+// Type 14: Cognocyte - Signal-processing cell with a pulsing computational core
 // and three pairs of radiating signal traces (one per axis).
 // The traces pulse with 120-degree phase offsets suggesting active signal routing.
 fn internals_cognocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
@@ -611,14 +611,14 @@ fn internals_cognocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 7: Oculocyte — handled inline in fs_main (needs surface direction, not interior pos).
+// Type 7: Oculocyte - handled inline in fs_main (needs surface direction, not interior pos).
 
-// Type 1: Flagellocyte — Same as test cell (tail is rendered separately).
+// Type 1: Flagellocyte - Same as test cell (tail is rendered separately).
 fn internals_flagellocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
-// Type 2: Phagocyte — nucleus sphere visible through cytoplasm.
+// Type 2: Phagocyte - nucleus sphere visible through cytoplasm.
 // type_data_0: x=nucleus_radius (0.1-0.5), y=nucleus_darkness (0.1-0.8),
 //              z=nucleus_sharpness (0.01-0.15), w=unused
 fn internals_phagocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
@@ -634,12 +634,12 @@ fn internals_phagocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 3: Photocyte — internals handled as inner sphere in fragment shader.
+// Type 3: Photocyte - internals handled as inner sphere in fragment shader.
 fn internals_photocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
-// Type 4: Lipocyte — Oily looking internals.
+// Type 4: Lipocyte - Oily looking internals.
 // Large blobby fat droplets with bright highlights and dark boundaries.
 // type_data_0: x=droplet_scale (1.0-8.0), y=droplet_threshold (0.2-0.6),
 //              z=boundary_sharpness (0.05-0.3), w=brightness (0.3-1.0)
@@ -662,15 +662,15 @@ fn internals_lipocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32>
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 6: Glueocyte — Domain-warped Voronoi slime pattern.
+// Type 6: Glueocyte - Domain-warped Voronoi slime pattern.
 // voro_scale: cell density (higher = more cells)
 // border_width: thickness of the dark border between cells (0..1)
-// meander: domain warp strength — how much borders wiggle
+// meander: domain warp strength - how much borders wiggle
 // border_dark: darkness of the border groove (0..1)
 fn internals_glueocyte(surf: vec3<f32>, voro_scale: f32, border_width: f32, meander: f32, border_dark: f32, t: f32, cell_seed: f32, anim_speed: f32) -> vec3<f32> {
     // Per-cell random phase and speed offsets so each cell animates differently
     let phase  = cell_seed * 6.2831853;                        // 0..2pi offset
-    let speed  = anim_speed * (1.0 + cell_seed * 0.4);        // ±20% variation per cell
+    let speed  = anim_speed * (1.0 + cell_seed * 0.4);        // 20% variation per cell
     let anim   = t * speed + phase;
 
     // Domain warp: distort the lookup position with noise so borders meander organically.
@@ -717,7 +717,7 @@ fn internals_glueocyte(surf: vec3<f32>, voro_scale: f32, border_width: f32, mean
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 5: Buoyocyte — Gas bubbles scattered inside a hollow cell.
+// Type 5: Buoyocyte - Gas bubbles scattered inside a hollow cell.
 // 7 bubbles of varying sizes. Since p is in rotation-aware cell-local space,
 // the bubbles rotate with the cell automatically.
 // type_data_0: x=bubble_scale (0.5-2.0), y=rotation_speed (0.1-2.0),
@@ -819,7 +819,7 @@ fn internals_buoyocyte(p: vec3<f32>, r: f32, time: f32, cell_index: u32, type_da
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
-// Type 9: Myocyte — Peripheral flattened nuclei (syncytial cell with multiple nuclei).
+// Type 9: Myocyte - Peripheral flattened nuclei (syncytial cell with multiple nuclei).
 // Nuclei are elongated ellipsoids near the membrane, compressed along the fiber axis (local Z).
 // type_data_0: x=line_freq, y=bulge_strength, z=warp_amt, w=sarc_freq_packed
 fn internals_myocyte(p: vec3<f32>, r: f32) -> vec3<f32> {
@@ -882,85 +882,85 @@ struct MembraneParams {
 fn get_membrane_params(cell_type: u32) -> MembraneParams {
     var m: MembraneParams;
     switch (cell_type) {
-        case 0u: { // Test — standard membrane
+        case 0u: { // Test - standard membrane
             m.thickness = 0.06;
             m.opacity = 0.5;
             m.rim_power = 2.5;
             m.color_darken = 0.25;
         }
-        case 1u: { // Flagellocyte — same as test
+        case 1u: { // Flagellocyte - same as test
             m.thickness = 0.06;
             m.opacity = 0.5;
             m.rim_power = 2.5;
             m.color_darken = 0.25;
         }
-        case 2u: { // Phagocyte — standard membrane
+        case 2u: { // Phagocyte - standard membrane
             m.thickness = 0.06;
             m.opacity = 0.5;
             m.rim_power = 2.5;
             m.color_darken = 0.25;
         }
-        case 3u: { // Photocyte — translucent hex membrane over solar panel internals
+        case 3u: { // Photocyte - translucent hex membrane over solar panel internals
             m.thickness = 0.05;
             m.opacity = 0.35;
             m.rim_power = 2.0;
             m.color_darken = 0.2;
         }
-        case 4u: { // Lipocyte — translucent to show oily internals
+        case 4u: { // Lipocyte - translucent to show oily internals
             m.thickness = 0.04;
             m.opacity = 0.3;
             m.rim_power = 2.0;
             m.color_darken = 0.15;
         }
-        case 5u: { // Buoyocyte — thick membrane for gas bladder
+        case 5u: { // Buoyocyte - thick membrane for gas bladder
             m.thickness = 0.08;
             m.opacity = 0.4;
             m.rim_power = 3.0;
             m.color_darken = 0.3;
         }
-        case 6u: { // Glueocyte — sticky cell, thin membrane
+        case 6u: { // Glueocyte - sticky cell, thin membrane
             m.thickness = 0.05;
             m.opacity = 0.45;
             m.rim_power = 2.5;
             m.color_darken = 0.2;
         }
-        case 7u: { // Oculocyte — glossy cornea, high specular
+        case 7u: { // Oculocyte - glossy cornea, high specular
             m.thickness = 0.04;
             m.opacity = 0.35;
             m.rim_power = 1.8;
             m.color_darken = 0.1;
         }
-        case 8u: { // Ciliocyte — standard membrane, rings are normal perturbation only
+        case 8u: { // Ciliocyte - standard membrane, rings are normal perturbation only
             m.thickness = 0.06;
             m.opacity = 0.5;
             m.rim_power = 2.5;
             m.color_darken = 0.25;
         }
-        case 9u: { // Myocyte — semi-translucent membrane reveals fiber+sarcomere texture beneath
+        case 9u: { // Myocyte - semi-translucent membrane reveals fiber+sarcomere texture beneath
             m.thickness = 0.055;
             m.opacity = 0.42;
             m.rim_power = 2.5;
             m.color_darken = 0.22;
         }
-        case 10u: { // Embryocyte — thick chalky eggshell membrane, matte and opaque
+        case 10u: { // Embryocyte - thick chalky eggshell membrane, matte and opaque
             m.thickness = 0.10;
             m.opacity = 0.65;
             m.rim_power = 3.5;
             m.color_darken = 0.35;
         }
-        case 13u: { // Gametocyte — thin, translucent membrane with strong fresnel rim
+        case 13u: { // Gametocyte - thin, translucent membrane with strong fresnel rim
             m.thickness = 0.04;
             m.opacity = 0.35;
             m.rim_power = 1.8;
             m.color_darken = 0.15;
         }
-        case 14u: { // Cognocyte — moderately translucent to reveal internal traces
+        case 14u: { // Cognocyte - moderately translucent to reveal internal traces
             m.thickness = 0.055;
             m.opacity = 0.40;
             m.rim_power = 3.2;
             m.color_darken = 0.28;
         }
-        case 15u: { // Memorocyte — very translucent glassy shell, rings visible within
+        case 15u: { // Memorocyte - very translucent glassy shell, rings visible within
             m.thickness = 0.04;
             m.opacity = 0.28;
             m.rim_power = 2.0;
@@ -980,9 +980,9 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
 // Fragment Shader - Cheap 3-Layer Analytical Compositing
 //
 // No ray marching. Three sample points on the same view ray through the sphere:
-//   1. Back wall  (z = -sqrt(1-r²)) → opaque cytoplasm background
-//   2. Midpoint   (z = 0 plane)     → organelle pattern sampled at interior 3D pos
-//   3. Front wall (z = +sqrt(1-r²)) → semi-transparent membrane + specular/fresnel
+//   1. Back wall  (z = -sqrt(1-r^2)) -> opaque cytoplasm background
+//   2. Midpoint   (z = 0 plane)     -> organelle pattern sampled at interior 3D pos
+//   3. Front wall (z = +sqrt(1-r^2)) -> semi-transparent membrane + specular/fresnel
 //
 // Composited back-to-front in a single pass.
 // ============================================================================
@@ -1005,7 +1005,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let r2 = dot(local_pos, local_pos);
 
     // For non-Devorocyte cells, discard outside the sphere as usual.
-    // For Devorocyte (type 11), the billboard is expanded — pixels outside r2>1 may be spikes.
+    // For Devorocyte (type 11), the billboard is expanded - pixels outside r2>1 may be spikes.
     let is_devorocyte = (cell_type == 11u);
     if (r2 > 1.0 && !is_devorocyte) {
         discard;
@@ -1040,7 +1040,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     );
 
     // Transform midpoint to cell-local 3D space (rotation-aware)
-    // mid_pos is (x, y, 0) in billboard space — a flat cross-section through the sphere.
+    // mid_pos is (x, y, 0) in billboard space - a flat cross-section through the sphere.
     // Do NOT normalize: we want the actual interior position, not a direction on the shell.
     let world_mid_vec = in.cam_right * mid_pos.x + in.cam_up * mid_pos.y;
     let interior_pos = quat_rotate_inverse(in.rotation, world_mid_vec);
@@ -1159,18 +1159,18 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Myocyte (type 9): Sarcomere striations + longitudinal myofibril bundles (LOD >= 1)
     //
     // Two overlapping patterns produce the classic striated-muscle appearance:
-    //   1. Longitudinal myofibrils — azimuthal (around Y) cosine bands; each fiber
+    //   1. Longitudinal myofibrils - azimuthal (around Y) cosine bands; each fiber
     //      looks like a convex cylinder from the normal perturbation below.
-    //      Fibers converge at the ±Y poles (forward / rear of the cell).
-    //   2. Sarcomere cross-striations — periodic transverse bands along local Y:
-    //        Z-disc (very dark) → I-band (light, actin) → A-band (dark, myosin+actin)
-    //        → H-zone (medium, myosin only) → M-line (dark seam) → H-zone → A-band
-    //        → I-band → Z-disc (next sarcomere)
+    //      Fibers converge at the Y poles (forward / rear of the cell).
+    //   2. Sarcomere cross-striations - periodic transverse bands along local Y:
+    //        Z-disc (very dark) -> I-band (light, actin) -> A-band (dark, myosin+actin)
+    //        -> H-zone (medium, myosin only) -> M-line (dark seam) -> H-zone -> A-band
+    //        -> I-band -> Z-disc (next sarcomere)
     //
     // type_data_0: x=line_freq (fiber count), y=bulge_strength, z=warp_amt,
     // ====================================================================
     // Myocyte (type 9): Longitudinal fiber bundles converging at forward/rear poles
-    // Lines run like meridians on a globe — converging at local +Z (forward)
+    // Lines run like meridians on a globe - converging at local +Z (forward)
     // and local -Z (rear). type_data_0: x=line_freq, y=bulge_str, z=warp, w=unused
     // ====================================================================
     if (cell_type == 9u) {
@@ -1180,7 +1180,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let line_freq = clamp(in.type_data_0.x, 4.0, 20.0);
         let warp_amt  = clamp(in.type_data_0.z, 0.0, 0.30);
 
-        // Angle around local Z — lines of constant angle are meridians
+        // Angle around local Z - lines of constant angle are meridians
         // converging at the forward (+Z) and rear (-Z) poles
         let angle = atan2(surf_local.y, surf_local.x);
         let wn1 = value_noise_3d(surf_local * 4.5 + vec3<f32>(2.3, 8.1, 0.0));
@@ -1215,7 +1215,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let ring_speed = in.type_data_0.w;
 
         // Ring phase: position along forward axis (local Z) + time scroll
-        // When effective_speed is 0, time term vanishes → static rings
+        // When effective_speed is 0, time term vanishes -> static rings
         let phase = cilia_local_dir.z * ring_freq - camera.time * ring_speed * effective_speed;
 
         // Sinusoidal ring wave in [-1, 1]
@@ -1342,7 +1342,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let bulge_str  = clamp(in.type_data_0.y, 0.1, 0.90);
         let warp_amt   = clamp(in.type_data_0.z, 0.0, 0.30);
 
-        // ── Fiber bundle normals (azimuthal bumps around local forward Z) ──
+        // -- Fiber bundle normals (azimuthal bumps around local forward Z) --
         // Matches the color pass: atan2(y, x) orbits around local +Z so fibers
         // converge at the cell's own forward and rear poles.
         let angle = atan2(myo_surf.y, myo_surf.x);
@@ -1353,7 +1353,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
         let fiber_slope = -sin(angle_warped * line_freq) * line_freq;
         // Tangent sweeps around local Z, transformed to world space.
-        // Safe: when myo_surf is near the Z poles, xy_len → 0; clamp to avoid NaN.
+        // Safe: when myo_surf is near the Z poles, xy_len -> 0; clamp to avoid NaN.
         let xy_len = length(myo_surf.xy);
         let tangent_local = select(
             normalize(vec3<f32>(-myo_surf.y, myo_surf.x, 0.0)),
@@ -1450,7 +1450,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         // r is the normalised radial distance [0, 1] on the billboard.
         // The outline occupies r in [1 - outline_width, 1].
         let outline_inner = 1.0 - lighting.outline_width;
-        let aa = fwidth(r) * 1.5; // fwidth(r) ≈ constant ≈ 1/screen_radius — well-behaved
+        let aa = fwidth(r) * 1.5; // fwidth(r) ~= constant ~= 1/screen_radius - well-behaved
         let outline = smoothstep(outline_inner - aa, outline_inner + aa, r);
         final_color = mix(final_color, vec3<f32>(0.0, 0.0, 0.0), outline);
     }
@@ -1486,7 +1486,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let ray_d = normalize(quat_rotate_inverse(in.rotation, ray_dir_world));
 
         // t at which the ray hits the sphere front surface in cell-local space.
-        // Solve |ray_o + t*ray_d|² = 1. Take the larger positive root (front face).
+        // Solve |ray_o + t*ray_d|^2 = 1. Take the larger positive root (front face).
         let sph_b    = dot(ray_o, ray_d);
         let sph_c    = dot(ray_o, ray_o) - 1.0;
         let sph_disc = sph_b * sph_b - sph_c;
@@ -1589,7 +1589,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
             return out;
         }
 
-        // No spike closer than the sphere — discard if we're in the expanded region.
+        // No spike closer than the sphere - discard if we're in the expanded region.
         if (r2 > 1.0) { discard; }
         // Otherwise fall through to normal sphere shading.
     }
@@ -1619,13 +1619,13 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     return out;
 }
 
-// ── Depth-only prepass entry point ───────────────────────────────────────────
+// -- Depth-only prepass entry point -------------------------------------------
 // Runs the minimum work needed to write correct sphere depth:
 //   - discard pixels outside the circle
 //   - project the sphere front face to clip space and write its depth
 // No lighting, no internals, no color output.
 // The color pass that follows uses LessEqual + no depth write to eliminate
-// all overdraw — every hidden fragment is rejected before its shader runs.
+// all overdraw - every hidden fragment is rejected before its shader runs.
 struct DepthOnlyOutput {
     @builtin(frag_depth) depth: f32,
 }

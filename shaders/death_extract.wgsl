@@ -1,8 +1,8 @@
 // Death particle extract compute shader
 //
 // Two entry points:
-//   spawn_new     — scans cell arrays for newly-dead cells and spawns particles
-//   age_particles — advances particle lifetimes each frame
+//   spawn_new     - scans cell arrays for newly-dead cells and spawns particles
+//   age_particles - advances particle lifetimes each frame
 //
 // Particle layout (must match DeathParticle in death_particles.rs, 64 bytes):
 //   position:  vec3<f32>   (12 bytes)
@@ -37,7 +37,7 @@ struct ParticleCounter {
 @group(0) @binding(4) var<storage, read_write> counter:           ParticleCounter;
 @group(0) @binding(5) var<uniform>             params:            ExtractParams;
 
-// ── Utilities ────────────────────────────────────────────────────────────────
+// -- Utilities ----------------------------------------------------------------
 
 fn hash_u32(x: u32) -> u32 {
     var h = x;
@@ -64,11 +64,11 @@ fn random_unit_vec3(seed: u32) -> vec3<f32> {
     );
 }
 
-// ── spawn_new ────────────────────────────────────────────────────────────────
-// Detects cells that transitioned alive→dead this frame and emits tissue fragments.
+// -- spawn_new ----------------------------------------------------------------
+// Detects cells that transitioned alive->dead this frame and emits tissue fragments.
 //
 // Visual intent: pale, semi-transparent fragments that drift slowly outward in a
-// sphere and gradually fade — like dead cell membrane breaking apart in fluid.
+// sphere and gradually fade - like dead cell membrane breaking apart in fluid.
 @compute @workgroup_size(256)
 fn spawn_new(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -89,7 +89,7 @@ fn spawn_new(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Radius from mass: r = cbrt(3*mass / (4*pi))
     let radius = pow(mass * 0.23873241463, 0.33333333333);
 
-    // More fragments than before — they're small and subtle so we need density
+    // More fragments than before - they're small and subtle so we need density
     let num_particles = 10u;
     let base_seed = hash_u32(cell_idx ^ u32(params.time * 1000.0));
 
@@ -99,21 +99,21 @@ fn spawn_new(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let seed_i = base_seed + i * 11u;
 
-        // Direction: uniform sphere — fragments scatter in all directions equally
+        // Direction: uniform sphere - fragments scatter in all directions equally
         let vel_dir = random_unit_vec3(seed_i);
 
-        // Speed: slow — fragments drift, not fly.
-        // Range: 0.3–0.8 cell-radii per second.
+        // Speed: slow - fragments drift, not fly.
+        // Range: 0.3-0.8 cell-radii per second.
         let speed = radius * (0.3 + random_float(seed_i + 2u) * 0.5);
 
-        // Lifetime: long — tissue lingers before dissolving (1.5–3.5 s)
+        // Lifetime: long - tissue lingers before dissolving (1.5-3.5 s)
         let lifetime = 1.5 + random_float(seed_i + 3u) * 2.0;
 
         // Fragment size: small relative to cell, slight variation
-        // Fragments are 15–35% of cell radius
+        // Fragments are 15-35% of cell radius
         let sz = radius * (0.15 + random_float(seed_i + 4u) * 0.20);
 
-        // Color: pale biological tones — grey-white, faint pink, muted beige
+        // Color: pale biological tones - grey-white, faint pink, muted beige
         // Vary hue slightly per particle for organic feel
         let hue_roll = random_float(seed_i + 5u);
         var r: f32;
@@ -150,7 +150,7 @@ fn spawn_new(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
-// ── age_particles ────────────────────────────────────────────────────────────
+// -- age_particles ------------------------------------------------------------
 @compute @workgroup_size(256)
 fn age_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let particle_idx = global_id.x;

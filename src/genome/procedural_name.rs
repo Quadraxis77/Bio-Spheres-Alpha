@@ -1,4 +1,4 @@
-//! Procedural genome naming — generates biologically plausible names from
+//! Procedural genome naming - generates biologically plausible names from
 //! Latin/Greek roots based on the genome's actual cell-type composition.
 //!
 //! `generate_unique` keeps rerolling until it finds a name not already in use.
@@ -6,7 +6,7 @@
 use crate::genome::Genome;
 
 /// Generate a name that is not in `used_names`, rerolling up to 200 times.
-/// `variation` is the user-facing "regenerate" counter — each click increments it.
+/// `variation` is the user-facing "regenerate" counter - each click increments it.
 pub fn generate_unique(genome: &Genome, variation: u64, used_names: &[String]) -> String {
     for attempt in 0u64..200 {
         let name = generate(genome, variation.wrapping_add(attempt.wrapping_mul(0x9e3779b97f4a7c15)));
@@ -23,7 +23,7 @@ pub fn generate_unique(genome: &Genome, variation: u64, used_names: &[String]) -
 pub fn generate(genome: &Genome, variation: u64) -> String {
     let modes = &genome.modes;
 
-    // ── Trait detection ───────────────────────────────────────────────────────
+    // -- Trait detection -------------------------------------------------------
     let has = |id: i32| modes.iter().any(|m| m.cell_type == id);
     let has_photo  = has(12);
     let has_devour = has(9);
@@ -52,7 +52,7 @@ pub fn generate(genome: &Genome, variation: u64) -> String {
     seed ^= seed >> 27;
     let mut rng = Rng(seed);
 
-    // ── Trophic root ──────────────────────────────────────────────────────────
+    // -- Trophic root ----------------------------------------------------------
     let trophic: &str = match (has_photo, has_devour, has_phage) {
         (true, true, true) => rng.pick(&[
             "Pantotroph", "Omnivore", "Polytroph", "Euryphage",
@@ -99,7 +99,7 @@ pub fn generate(genome: &Genome, variation: u64) -> String {
         ]),
     };
 
-    // ── Mobility prefix ───────────────────────────────────────────────────────
+    // -- Mobility prefix -------------------------------------------------------
     let mobility: Option<&str> = if has_flag && has_myo {
         Some(rng.pick(&[
             "Natato", "Kineto", "Motile ", "Agile ",
@@ -140,7 +140,7 @@ pub fn generate(genome: &Genome, variation: u64) -> String {
         None
     };
 
-    // ── Structural suffix ─────────────────────────────────────────────────────
+    // -- Structural suffix -----------------------------------------------------
     let structure: Option<&str> = if has_oculo && has_signal {
         Some(rng.pick(&[
             " Coordinator", " Signaller", " Networker", " Synapse",
@@ -201,7 +201,7 @@ pub fn generate(genome: &Genome, variation: u64) -> String {
         None
     };
 
-    // ── Optional habitat/size adjective (adds variety on ~40% of names) ───────
+    // -- Optional habitat/size adjective (adds variety on ~40% of names) -------
     let habitat: Option<&str> = if rng.chance(40) {
         if has_buoy || has_flag {
             Some(rng.pick(&[
@@ -228,7 +228,7 @@ pub fn generate(genome: &Genome, variation: u64) -> String {
         None
     };
 
-    // ── Assemble ──────────────────────────────────────────────────────────────
+    // -- Assemble --------------------------------------------------------------
     // Pick one of several assembly patterns for variety
     let name = match rng.u8() % 4 {
         0 => {
@@ -273,7 +273,7 @@ pub fn is_default_name(name: &str) -> bool {
         || t.eq_ignore_ascii_case("unnamed genome")
 }
 
-// ── Minimal seeded RNG ────────────────────────────────────────────────────────
+// -- Minimal seeded RNG --------------------------------------------------------
 
 struct Rng(u64);
 
@@ -289,6 +289,6 @@ impl Rng {
         slice[idx]
     }
     fn u8(&mut self) -> u8 { (self.step() & 0xFF) as u8 }
-    /// Returns true with `percent`% probability (0–100).
+    /// Returns true with `percent`% probability (0-100).
     fn chance(&mut self, percent: u64) -> bool { (self.step() % 100) < percent }
 }

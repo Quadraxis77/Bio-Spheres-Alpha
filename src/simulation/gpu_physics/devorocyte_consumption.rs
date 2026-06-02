@@ -13,7 +13,7 @@ pub struct DevorocyteConsumptionSystem {
 
 impl DevorocyteConsumptionSystem {
     pub fn new(device: &wgpu::Device) -> Self {
-        // Group 0: Standard physics bind group (subset — positions read-only, cell_count read)
+        // Group 0: Standard physics bind group (subset - positions read-only, cell_count read)
         let bind_group_layout_0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Devorocyte Physics Layout"),
             entries: &[
@@ -39,7 +39,7 @@ impl DevorocyteConsumptionSystem {
                     },
                     count: None,
                 },
-                // 2: velocities_in (read — unused but keeps layout consistent with physics group)
+                // 2: velocities_in (read - unused but keeps layout consistent with physics group)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -50,7 +50,7 @@ impl DevorocyteConsumptionSystem {
                     },
                     count: None,
                 },
-                // 3: positions_out (read_only — Devorocyte only reads positions, never writes them)
+                // 3: positions_out (read_only - Devorocyte only reads positions, never writes them)
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -61,7 +61,7 @@ impl DevorocyteConsumptionSystem {
                     },
                     count: None,
                 },
-                // 4: velocities_out (read_only — Devorocyte only reads positions, never writes them)
+                // 4: velocities_out (read_only - Devorocyte only reads positions, never writes them)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -123,7 +123,7 @@ impl DevorocyteConsumptionSystem {
                     },
                     count: None,
                 },
-                // 3: death_flags (read_write — we write 1 to kill victims)
+                // 3: death_flags (read_write - we write 1 to kill victims)
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -167,7 +167,7 @@ impl DevorocyteConsumptionSystem {
                     },
                     count: None,
                 },
-                // 7: mode_properties_v11 (read) — [consume_range, consume_rate, 0, 0] per mode
+                // 7: mode_properties_v11 (read) - [consume_range, consume_rate, 0, 0] per mode
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -251,7 +251,7 @@ impl DevorocyteConsumptionSystem {
         }
     }
 
-    /// Create physics bind group (group 0) — uses the standard 6-binding physics layout.
+    /// Create physics bind group (group 0) - uses the standard 6-binding physics layout.
     pub fn create_physics_bind_group(
         &self,
         device: &wgpu::Device,

@@ -50,7 +50,7 @@ pub struct FogParams {
 
 /// Volumetric fog renderer
 ///
-/// Renders fog at half resolution for ~4× speedup, then composites
+/// Renders fog at half resolution for ~4x speedup, then composites
 /// back to full resolution with bilinear upscaling.
 pub struct VolumetricFogRenderer {
     // Fog ray-march pipeline (renders to half-res offscreen texture)
@@ -94,7 +94,7 @@ pub struct VolumetricFogRenderer {
 }
 
 impl VolumetricFogRenderer {
-    /// Half-resolution divisor (2 = half-res = 4× fewer pixels)
+    /// Half-resolution divisor (2 = half-res = 4x fewer pixels)
     const HALF_RES_DIVISOR: u32 = 2;
     /// Format for the offscreen fog texture (needs alpha for blending)
     const FOG_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -120,7 +120,7 @@ impl VolumetricFogRenderer {
             }],
         });
 
-        // Fog data bind group layout (group 1) — no solid_mask, uses light_field sentinel instead
+        // Fog data bind group layout (group 1) - no solid_mask, uses light_field sentinel instead
         let fog_data_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Fog Data Layout"),
             entries: &[
@@ -182,7 +182,7 @@ impl VolumetricFogRenderer {
             push_constant_ranges: &[],
         });
 
-        // Create render pipeline — renders to half-res Rgba16Float offscreen texture
+        // Create render pipeline - renders to half-res Rgba16Float offscreen texture
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Volumetric Fog Pipeline"),
             layout: Some(&pipeline_layout),
@@ -197,7 +197,7 @@ impl VolumetricFogRenderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: Self::FOG_FORMAT,
-                    blend: None, // No blending — write raw fog to offscreen
+                    blend: None, // No blending - write raw fog to offscreen
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -560,7 +560,7 @@ impl VolumetricFogRenderer {
         // Ensure cached fog data bind group exists
         self.ensure_fog_data_bind_group(device, light_field_buffer, depth_view);
 
-        // Pass 1: Ray march fog at half resolution → offscreen texture
+        // Pass 1: Ray march fog at half resolution -> offscreen texture
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Volumetric Fog Pass (half-res)"),

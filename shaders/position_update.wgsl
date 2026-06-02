@@ -197,7 +197,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mass = positions_in[cell_idx].w;
 
     // Clear prev_accelerations for dead/near-dead cells so recycled slots start clean.
-    // Do NOT freeze position — death_scan (lifecycle pipeline) is the authority on removal.
+    // Do NOT freeze position - death_scan (lifecycle pipeline) is the authority on removal.
     // Freezing here caused starving cells to get stuck when mass transiently dipped below
     // the threshold before death_scan ran, since mass_accum can bump it back above 0.5.
     if (mass < 0.5) {
@@ -225,7 +225,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Anisotropic water drag: cells aligned with their forward axis slip through
         // water efficiently (low axial drag), while broadside motion is heavily resisted
         // (high lateral drag). This creates a natural selection pressure for flagellocytes
-        // to orient their thrust correctly — swimming aligned is cheap, drifting sideways
+        // to orient their thrust correctly - swimming aligned is cheap, drifting sideways
         // bleeds speed fast.
         //
         // Implemented as exponential velocity damping (not a force) so it is
@@ -247,7 +247,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let vel_axial   = forward * vel_axial_mag;
             let vel_lateral = vel - vel_axial;
 
-            // Exponential damping per second — stable at any viscosity value.
+            // Exponential damping per second - stable at any viscosity value.
             // axial_retain   = e^(-viscosity * 8  * dt)
             // lateral_retain = e^(-viscosity * 40 * dt)
             let axial_retain   = exp(-water_params.water_viscosity * 8.0  * params.delta_time);
@@ -299,7 +299,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let damping_factor = pow(params.acceleration_damping, params.delta_time);
     var new_vel = (vel + velocity_change) * damping_factor;
     
-    // Clamp velocity to max 150 units/second (safety cap — matches preview frenzy threshold)
+    // Clamp velocity to max 150 units/second (safety cap - matches preview frenzy threshold)
     let speed = length(new_vel);
     if (speed > 150.0) {
         new_vel = (new_vel / speed) * 150.0;

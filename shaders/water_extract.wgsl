@@ -186,7 +186,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var particle: WaterParticle;
     particle.position = world_pos;
     
-    // Water particle size — small droplets, clearly visible but not oversized
+    // Water particle size - small droplets, clearly visible but not oversized
     let base_size = params.cell_size * 0.4;
     let max_size = params.cell_size * 1.2;
     particle.size = mix(base_size, max_size, params.prominence_factor);

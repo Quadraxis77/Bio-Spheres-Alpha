@@ -147,7 +147,7 @@ impl PerformanceMetrics {
             self.cpu_usage_total = total / cpus.len() as f32;
         }
         
-        // Update memory usage — read this process's resident memory, not total system usage
+        // Update memory usage - read this process's resident memory, not total system usage
         let pid = Pid::from(std::process::id() as usize);
         self.system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
         if let Some(process) = self.system.process(pid) {

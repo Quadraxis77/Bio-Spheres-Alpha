@@ -13,7 +13,7 @@
 // vs_main / fs_main: renders live particles as camera-facing billboards.
 //   Bubbles are small white circles that fade out as they age.
 
-// ── Structs ───────────────────────────────────────────────────────────────────
+// -- Structs -------------------------------------------------------------------
 
 struct BubbleParticle {
     position:    vec3<f32>,
@@ -59,7 +59,7 @@ struct BubbleParams {
     _pad0:           u32,
     _pad1:           u32,
     _pad2:           u32,
-    // Pad to 64 bytes — wgpu requires uniform buffers to be at least 64 bytes
+    // Pad to 64 bytes - wgpu requires uniform buffers to be at least 64 bytes
     _pad3:           vec4<f32>,
 }
 
@@ -69,7 +69,7 @@ struct CameraUniform {
     _pad: f32,
 }
 
-// ── Compute bindings ──────────────────────────────────────────────────────────
+// -- Compute bindings ----------------------------------------------------------
 
 @group(0) @binding(0) var<uniform>            bubble_params:   BubbleParams;
 @group(0) @binding(1) var<storage, read>      boulder_state:   array<GpuBoulder>;
@@ -82,23 +82,23 @@ struct CameraUniform {
 // Per-boulder: seconds remaining in the entry burst. Written by spawn_bubbles.
 @group(0) @binding(7) var<storage, read_write> entry_timer:    array<f32>;
 
-// ── Anti-gravity direction ────────────────────────────────────────────────────
+// -- Anti-gravity direction ----------------------------------------------------
 // Returns the direction bubbles should float (opposite of gravity).
 fn anti_gravity_dir(pos: vec3<f32>) -> vec3<f32> {
     switch (bubble_params.gravity_mode) {
-        case 0u: { return vec3<f32>(1.0, 0.0, 0.0); }  // gravity -X → float +X
-        case 2u: { return vec3<f32>(0.0, 0.0, 1.0); }  // gravity -Z → float +Z
+        case 0u: { return vec3<f32>(1.0, 0.0, 0.0); }  // gravity -X -> float +X
+        case 2u: { return vec3<f32>(0.0, 0.0, 1.0); }  // gravity -Z -> float +Z
         case 3u: {
             // Radial: float outward from origin
             let r = length(pos);
             if (r > 0.001) { return pos / r; }
             return vec3<f32>(0.0, 1.0, 0.0);
         }
-        default: { return vec3<f32>(0.0, 1.0, 0.0); }  // gravity -Y → float +Y
+        default: { return vec3<f32>(0.0, 1.0, 0.0); }  // gravity -Y -> float +Y
     }
 }
 
-// ── Water detection ───────────────────────────────────────────────────────────
+// -- Water detection -----------------------------------------------------------
 
 const WATER_GRID_X_GROUPS: u32 = 4u;
 
@@ -120,7 +120,7 @@ fn is_in_water(world_pos: vec3<f32>) -> bool {
     return (water_bitfield[idx] & (1u << bit)) != 0u;
 }
 
-// ── Hash helpers ──────────────────────────────────────────────────────────────
+// -- Hash helpers --------------------------------------------------------------
 
 fn hash_u32(v: u32) -> f32 {
     var h = v;
@@ -136,7 +136,7 @@ fn rand3(seed: u32) -> vec3<f32> {
     );
 }
 
-// ── Spawn pass ────────────────────────────────────────────────────────────────
+// -- Spawn pass ----------------------------------------------------------------
 // Dispatched per-boulder. Detects water entry, manages entry_timer, emits bubbles
 // only during the burst window after the boulder enters water.
 
@@ -158,8 +158,8 @@ fn spawn_bubbles(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Update previous-frame water state
     prev_in_water[bi] = select(0u, 1u, currently_in_water);
 
-    // Detect entry: was dry last frame, wet this frame → start burst timer
-    // Scale burst by entry speed — gentle entries produce few/no bubbles,
+    // Detect entry: was dry last frame, wet this frame -> start burst timer
+    // Scale burst by entry speed - gentle entries produce few/no bubbles,
     // fast plunges produce a large burst.
     if (currently_in_water && !was_in_water) {
         // Entry speed = component of velocity in the gravity direction (how fast it fell in)
@@ -173,7 +173,7 @@ fn spawn_bubbles(@builtin(global_invocation_id) gid: vec3<u32>) {
             let speed_factor = clamp((entry_speed - min_entry_speed) / 12.0, 0.0, 1.0);
             entry_timer[bi] = bubble_params.burst_duration * speed_factor;
         }
-        // If entry_speed <= min_entry_speed, timer stays 0 → no bubbles
+        // If entry_speed <= min_entry_speed, timer stays 0 -> no bubbles
     }
 
     // Tick down the burst timer
@@ -189,7 +189,7 @@ fn spawn_bubbles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let speed = length(b.velocity);
     if (speed < bubble_params.min_speed) { return; }
 
-    // Emission rate scales with how early in the burst we are — dense at entry, sparse at end
+    // Emission rate scales with how early in the burst we are - dense at entry, sparse at end
     let burst_fraction = timer / bubble_params.burst_duration; // 1.0 at entry, 0.0 at end
     let effective_rate = bubble_params.emit_rate * burst_fraction;
     let prob = effective_rate * bubble_params.delta_time;
@@ -218,7 +218,7 @@ fn spawn_bubbles(@builtin(global_invocation_id) gid: vec3<u32>) {
     );
 }
 
-// ── Age pass ──────────────────────────────────────────────────────────────────
+// -- Age pass ------------------------------------------------------------------
 // Advances age and position, zeroes expired particles or particles that left water.
 
 @compute @workgroup_size(256)
@@ -237,7 +237,7 @@ fn age_bubbles(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Rise and drift — velocity direction is already set toward anti-gravity
+    // Rise and drift - velocity direction is already set toward anti-gravity
     p.position += p.velocity * bubble_params.delta_time;
     // Gentle drag
     p.velocity *= pow(0.92, bubble_params.delta_time * 60.0);
@@ -245,7 +245,7 @@ fn age_bubbles(@builtin(global_invocation_id) gid: vec3<u32>) {
     particles[idx] = p;
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
+// -- Render --------------------------------------------------------------------
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 

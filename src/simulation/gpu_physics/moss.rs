@@ -1,6 +1,6 @@
 //! Moss system for cave wall vegetation
 //!
-//! Manages a 128³ voxel buffer of moss density values and two compute pipelines:
+//! Manages a 128^3 voxel buffer of moss density values and two compute pipelines:
 //! - Growth/erosion: moss grows on lit cave surfaces near water, erodes under flow
 //! - Consumption: phagocytes eat moss and gain nutrients
 //!
@@ -49,9 +49,9 @@ pub struct MossConsumeParams {
 }
 
 pub struct MossSystem {
-    /// 128³ f32 buffer of moss density values [0.0, 1.0]
+    /// 128^3 f32 buffer of moss density values [0.0, 1.0]
     moss_density_buffer: wgpu::Buffer,
-    /// 128³ f32 buffer of wetness values [0.0, 1.0] — moisture memory
+    /// 128^3 f32 buffer of wetness values [0.0, 1.0] - moisture memory
     wetness_buffer: wgpu::Buffer,
 
     // Growth pipeline
@@ -93,7 +93,7 @@ impl MossSystem {
         cell_size: f32,
         grid_origin: [f32; 3],
     ) -> Self {
-        // Create moss density buffer (128³ × 4 bytes = 8MB), initialized to zero
+        // Create moss density buffer (128^3 x 4 bytes = 8MB), initialized to zero
         let moss_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Moss Density Buffer"),
             size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
@@ -103,7 +103,7 @@ impl MossSystem {
             mapped_at_creation: false,
         });
 
-        // Create wetness buffer (128³ × 4 bytes = 8MB), initialized to zero
+        // Create wetness buffer (128^3 x 4 bytes = 8MB), initialized to zero
         let wetness_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Moss Wetness Buffer"),
             size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,

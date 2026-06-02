@@ -1,6 +1,6 @@
 // Compute shader: bake Goldberg hex triplet pattern into equirectangular texture.
 // Output: RG texture where R = edge_dist (Voronoi d2-d1), G = is_hex (1.0 or 0.0)
-// The texture is sampled by cell_unified.wgsl using spherical direction → UV mapping.
+// The texture is sampled by cell_unified.wgsl using spherical direction -> UV mapping.
 
 const ICO_PHI: f32 = 1.618033988749895;
 const PI: f32 = 3.14159265359;
@@ -111,12 +111,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Equirectangular: UV → spherical direction
+    // Equirectangular: UV -> spherical direction
     let u = (f32(gid.x) + 0.5) / f32(dims.x); // 0..1
     let v = (f32(gid.y) + 0.5) / f32(dims.y); // 0..1
 
-    let theta = u * 2.0 * PI;        // longitude: 0..2π
-    let phi = v * PI;                  // latitude: 0..π (top to bottom)
+    let theta = u * 2.0 * PI;        // longitude: 0..2pi
+    let phi = v * PI;                  // latitude: 0..pi (top to bottom)
 
     let sin_phi = sin(phi);
     let dir = vec3<f32>(

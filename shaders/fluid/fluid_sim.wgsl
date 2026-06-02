@@ -1,5 +1,5 @@
 // GPU Fluid Simulation - Pair-based swapping
-// 6 directional passes (±X, ±Y, ±Z), each with 2 checkered phases
+// 6 directional passes (X, Y, Z), each with 2 checkered phases
 // Simple rule: swap neighbors unless it's air-above-water (anti-gravity)
 
 struct FluidParams {
@@ -109,7 +109,7 @@ fn is_solid(x: u32, y: u32, z: u32) -> bool {
 // Check if a voxel is encapsulated (surrounded on all 6 sides by solids or water)
 // If true, this voxel can be skipped during processing as it cannot move
 fn is_encapsulated(x: u32, y: u32, z: u32) -> bool {
-    // Never skip fluid inside solid — it needs the push-out path
+    // Never skip fluid inside solid - it needs the push-out path
     if is_solid(x, y, z) {
         return false;
     }
@@ -209,7 +209,7 @@ fn gravity_dir_to_index_noisy(grav_dir: vec3<f32>, gid: vec3<u32>) -> u32 {
     let h = (gid.x * 73u + gid.y * 157u + gid.z * 239u + u32(params.time * 60.0)) & 255u;
     let noise = f32(h) / 255.0; // 0..1
     
-    // Weighted random selection: probability of picking each axis ∝ its component magnitude
+    // Weighted random selection: probability of picking each axis  its component magnitude
     let px = ax / total;
     let py = ay / total;
     // pz = az / total = 1 - px - py
@@ -426,7 +426,7 @@ fn water_is_supported(gid: vec3<u32>) -> bool {
     let neighbor_state = atomicLoad(&voxels[neighbor_idx]);
     let neighbor_type = get_fluid_type(neighbor_state);
     
-    // Steam (3) also supports water — water sits on top of steam bubbles
+    // Steam (3) also supports water - water sits on top of steam bubbles
     return neighbor_type >= 1u && neighbor_type <= 3u;
 }
 
@@ -506,7 +506,7 @@ fn get_surface_force(gid: vec3<u32>) -> vec3<f32> {
                 let dir = vec3<f32>(f32(dx), f32(dy), f32(dz));
                 let dir_n = dir / length(dir);
 
-                // Tangential component = dir - (dir·radial)*radial
+                // Tangential component = dir - (dirradial)*radial
                 let tangential = dir_n - dot(dir_n, radial) * radial;
                 tangential_sum += tangential;
             }
@@ -514,7 +514,7 @@ fn get_surface_force(gid: vec3<u32>) -> vec3<f32> {
     }
 
     // Net tangential force pulls toward the denser side;
-    // surface pressure slides voxel away from dense neighbors → negate.
+    // surface pressure slides voxel away from dense neighbors -> negate.
     // Scale by gravity magnitude so surface smoothing is proportional to gravity strength.
     let grav_mag = length(get_effective_gravity(gid));
     return -tangential_sum * params.surface_pressure * grav_mag * 0.1;
@@ -569,7 +569,7 @@ fn radial_move(gid: vec3<u32>) {
     var best_dz = 0;
     var found = false;
 
-    // Noise seed for tie-breaking — use non-linear hash to avoid planar banding
+    // Noise seed for tie-breaking - use non-linear hash to avoid planar banding
     let noise_seed = hash_position(gid) ^ u32(params.time * 1000.0);
 
     for (var dx = -1; dx <= 1; dx++) {
@@ -597,7 +597,7 @@ fn radial_move(gid: vec3<u32>) {
                 let dir_len = length(dir);
                 var score = dot(dir, force_dir) / dir_len;
 
-                // Tie-breaking noise (±0.04)
+                // Tie-breaking noise (0.04)
                 let nh = (noise_seed ^ (u32(nx) * 31u + u32(ny) * 97u + u32(nz) * 61u)) & 255u;
                 score += (f32(nh) / 255.0 - 0.5) * 0.08;
 
@@ -624,7 +624,7 @@ fn radial_move(gid: vec3<u32>) {
 
     let target_state = atomicLoad(&voxels[target_idx]);
     if get_fluid_type(target_state) != 0u {
-        // Target no longer empty — restore source
+        // Target no longer empty - restore source
         atomicExchange(&voxels[idx], state);
         return;
     }
@@ -635,7 +635,7 @@ fn radial_move(gid: vec3<u32>) {
         return;
     }
 
-    // Both claimed — swap
+    // Both claimed - swap
     atomicStore(&voxels[idx], target_state);
     atomicStore(&voxels[target_idx], state);
 
@@ -692,7 +692,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         let up_offset = get_offset(gravity_dir_index_steam ^ 1u);
 
         // Scan upward (against gravity) to find the nearest water voxel
-        // Cap at 16 steps — enough for realistic steam behavior, avoids 64-step worst case
+        // Cap at 16 steps - enough for realistic steam behavior, avoids 64-step worst case
         for (var step = 1; step <= 16; step++) {
             let sx = i32(gid.x) + up_offset.x * step;
             let sy = i32(gid.y) + up_offset.y * step;
@@ -713,7 +713,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             let scan_fluid_type = get_fluid_type(scan_state);
 
             if scan_fluid_type == 1u {
-                // Found water — swap with it (nearest water above, not topmost)
+                // Found water - swap with it (nearest water above, not topmost)
                 let water_idx_tele = scan_idx;
                 let water_state_tele = scan_state;
 
@@ -744,7 +744,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         let up_offset_lat = get_offset(gravity_dir_index_lat ^ 1u);
 
         // Check if the cell directly above is blocked (solid, out of bounds, or water that
-        // the teleportation already handled — meaning we're still here because it failed)
+        // the teleportation already handled - meaning we're still here because it failed)
         let above_x = i32(gid.x) + up_offset_lat.x;
         let above_y = i32(gid.y) + up_offset_lat.y;
         let above_z = i32(gid.z) + up_offset_lat.z;
@@ -798,7 +798,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                     continue;
                 }
 
-                // High probability lateral escape — steam behaves like a gas
+                // High probability lateral escape - steam behaves like a gas
                 let time_hash = u32(params.time * 1000.0) + lat_dir * 12345u;
                 let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
                 let combined_hash = time_hash ^ pos_hash;
@@ -824,14 +824,14 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Cache support check once — reused by fast-drop and all process_direction calls below.
+    // Cache support check once - reused by fast-drop and all process_direction calls below.
     // water_is_supported() does a neighbor atomic load; calling it once here avoids
-    // repeating it up to 8 more times (twice per process_direction × 4 horizontal calls).
+    // repeating it up to 8 more times (twice per process_direction x 4 horizontal calls).
     let this_voxel_supported = params.gravity_mode == 3u || fluid_type != 1u || water_is_supported(gid);
 
     // Water fast-drop: unsupported water falls instantly to nearest support
     // This bypasses checker/probability gates in process_direction
-    // Skip in radial mode — radial_move() handles all movement there.
+    // Skip in radial mode - radial_move() handles all movement there.
     if fluid_type == 1u && params.gravity_mode != 3u && !this_voxel_supported {
         let grav_dir = get_effective_gravity(gid);
         let gravity_dir_index = gravity_dir_to_index(grav_dir);
@@ -839,7 +839,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         let down = get_offset(gravity_dir_index);
         
         // Scan downward to find the lowest empty cell above a surface
-        // Cap at 16 steps — matches steam teleport cap, avoids 64-step worst case
+        // Cap at 16 steps - matches steam teleport cap, avoids 64-step worst case
         var target_y = -1;
         for (var step = 1; step <= 16; step++) {
             let sx = i32(gid.x) + down.x * step;
@@ -859,7 +859,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             let scan_type = get_fluid_type(scan_state);
             
             if scan_type == 3u {
-                // Steam blocks water from falling through — water sits on top of steam
+                // Steam blocks water from falling through - water sits on top of steam
                 break;
             } else if scan_type == 0u {
                 // Empty cell - this is the target (don't skip through empty space)
@@ -940,7 +940,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let target_type = get_fluid_type(target_state);
                 
                 if target_type == 0u {
-                    // Found empty non-solid cell — teleport fluid there
+                    // Found empty non-solid cell - teleport fluid there
                     let result = atomicCompareExchangeWeak(&voxels[target_idx], target_state, state);
                     if result.exchanged {
                         atomicStore(&voxels[idx], 0u);
@@ -949,7 +949,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                     break;
                 }
                 
-                // Hit another fluid — can't place here, stop this direction
+                // Hit another fluid - can't place here, stop this direction
                 break;
             }
             
@@ -1102,7 +1102,7 @@ fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
     // For non-gravity directions: Use configurable probability for lateral spreading
     if abs(alignment) <= 0.5 {
         // Water can only move laterally if it's supported (touching other water or solids)
-        // Exception: radial mode — water on the shell surface must flow freely to round out
+        // Exception: radial mode - water on the shell surface must flow freely to round out
         if params.gravity_mode != 3u && (a_is_water || b_is_water) {
             // a_supported is pre-computed by the caller; only compute b's support on demand.
             var b_supported = true;

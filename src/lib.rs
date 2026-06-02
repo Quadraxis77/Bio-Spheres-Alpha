@@ -84,7 +84,7 @@
 //! 
 //! 1. **Understanding the Data Flow**:
 //!    ```
-//!    Input Events → Camera Update → Physics Step → State Update → Render
+//!    Input Events -> Camera Update -> Physics Step -> State Update -> Render
 //!    ```
 //! 
 //! 2. **Key Files to Read First**:

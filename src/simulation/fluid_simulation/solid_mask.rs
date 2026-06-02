@@ -25,7 +25,7 @@ impl SolidMaskGenerator {
 
     /// Generate solid mask data using cave generation logic
     /// Returns a vector of u32 values where 1 = solid, 0 = empty
-    /// Grid uses resolution³ to match all shader indexing (128-stride)
+    /// Grid uses resolution^3 to match all shader indexing (128-stride)
     pub fn generate_solid_mask(&self, cave_params: &CaveParams) -> Vec<u32> {
         let resolution = self.grid_resolution as usize;
         let grid_size = resolution;

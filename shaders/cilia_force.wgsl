@@ -1,14 +1,14 @@
 // Cilia Force Shader - Applies contact-dependent surface propulsion for Ciliocyte cells
 //
-// Ciliocytes push against anything touching them — neighboring cells or solid surfaces —
+// Ciliocytes push against anything touching them - neighboring cells or solid surfaces -
 // generating thrust along the cell's local forward axis (+Z). In open water with nothing
 // to push against, the cell is completely inert.
 //
 // Force model:
-// - Wall/boundary contact: self-propulsion along forward axis (forward × speed × mass × CILIA_WALL_MULTIPLIER)
+// - Wall/boundary contact: self-propulsion along forward axis (forward x speed x mass x CILIA_WALL_MULTIPLIER)
 // - Neighbor attraction: gentle radial pull on non-organism cells within attract_range (v6.w)
-// - Neighbor contact: one-sided conveyor force — pushes cargo cells in +forward direction
-//   (force_mag = speed × mass × CILIA_PUSH_MULTIPLIER; no reaction on self — wall thrust
+// - Neighbor contact: one-sided conveyor force - pushes cargo cells in +forward direction
+//   (force_mag = speed x mass x CILIA_PUSH_MULTIPLIER; no reaction on self - wall thrust
 //   already handles locomotion, and a reaction force would stall the conveyor against cargo)
 //
 // Must run after swim_force and before glueocyte_env_adhesion.
@@ -203,12 +203,12 @@ var<uniform> cave_params: CaveParams;
 
 const CILIA_WALL_MULTIPLIER: f32 = 800.0;
 const CILIA_PUSH_MULTIPLIER: f32 = 200.0;
-const CILIA_ATTRACT_MULTIPLIER: f32 = 80.0; // Attraction force scale — intentionally small relative to push
+const CILIA_ATTRACT_MULTIPLIER: f32 = 80.0; // Attraction force scale - intentionally small relative to push
 const CONTACT_THRESHOLD: f32 = 3.0;
 const CONTACT_THRESHOLD_NEIGHBOR: f32 = 0.5;
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const FIXED_POINT_SCALE: f32 = 1000.0;
-const CILIA_MAX_CRAWL_SPEED: f32 = 8.0; // Terminal crawl speed — high traction, low top speed
+const CILIA_MAX_CRAWL_SPEED: f32 = 8.0; // Terminal crawl speed - high traction, low top speed
 const CILIA_ATTRACT_MAX_RANGE: f32 = 10.0; // Maximum attraction radius at force=1.0 (world units)
 
 // ---- Utility Functions ----
@@ -455,7 +455,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let push_bonded = v5.y >= 0.5; // cilia_push_bonded
     let my_grid_idx = cell_grid_indices[cell_idx];
 
-    // Skip overflow cells — same reason as collision_detection.wgsl.
+    // Skip overflow cells - same reason as collision_detection.wgsl.
     // An overflow ciliocyte querying the grid would push neighbours one-sidedly.
     if (my_grid_idx == 0xFFFFFFFFu) {
         return;
@@ -518,7 +518,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let contact_dist = radius + other_radius + CONTACT_THRESHOLD_NEIGHBOR;
 
             if (dist < contact_dist) {
-                // Neighbor is in contact — skip if same organism (ciliocytes never
+                // Neighbor is in contact - skip if same organism (ciliocytes never
                 // push cells belonging to their own organism regardless of settings)
                 let other_org = organism_labels[other_idx];
                 if (my_org != 0xFFFFFFFFu && other_org != 0xFFFFFFFFu && my_org == other_org) {
@@ -557,7 +557,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // cells drifting near a chain of ciliocytes are drawn in and kept close enough
     // to be handed along by successive pushes, rather than escaping sideways.
     //
-    // Range scales with attract_force (2–10 units) so low values give a tight,
+    // Range scales with attract_force (2-10 units) so low values give a tight,
     // short-range pull while high values cast a wider net.
     // Force falls off linearly from full strength at contact_dist to zero at attract_range.
     let attract_force = v6.w; // cilia_attract_force (0.0 = off, 1.0 = max)
@@ -594,7 +594,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 
                 let other_radius = calculate_radius_from_mass(other_mass);
-                let delta = pos - other_pos; // points from other → self
+                let delta = pos - other_pos; // points from other -> self
                 let dist = length(delta);
                 let contact_dist = radius + other_radius + CONTACT_THRESHOLD_NEIGHBOR;
 

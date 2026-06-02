@@ -1,6 +1,6 @@
 // Skybox rendering
 //
-// Procedural space skybox — renders a fullscreen starfield as the background.
+// Procedural space skybox - renders a fullscreen starfield as the background.
 // Uses the same fullscreen-triangle pattern as SunRenderer:
 //   - No vertex buffer; 3 vertices generated in the vertex shader
 //   - Depth = 1.0 (far plane) so all scene geometry draws over it
@@ -20,7 +20,7 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct SkyboxCameraUniforms {
-    /// Inverse of (proj * rotation-only view) — no translation component.
+    /// Inverse of (proj * rotation-only view) - no translation component.
     /// Multiply by NDC to get a world-space direction directly.
     pub inv_view_rot_proj: [[f32; 4]; 4],
     pub time:              f32,
@@ -33,13 +33,13 @@ pub struct SkyboxCameraUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct SkyboxParams {
-    /// Controls how many stars appear (0.0–1.0; default 0.8)
+    /// Controls how many stars appear (0.0-1.0; default 0.8)
     pub star_density:        f32,
     /// Overall star brightness multiplier (default 1.0)
     pub star_brightness:     f32,
     /// How fast stars twinkle in Hz (default 1.5)
     pub twinkle_speed:       f32,
-    /// Twinkle amplitude — 0 = no twinkle, 1 = full twinkle (default 0.25)
+    /// Twinkle amplitude - 0 = no twinkle, 1 = full twinkle (default 0.25)
     pub twinkle_amount:      f32,
     /// Nebula color cloud intensity (default 1.0)
     pub nebula_intensity:    f32,
@@ -83,7 +83,7 @@ pub struct SkyboxRenderer {
 impl SkyboxRenderer {
     /// Create a new skybox renderer.
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
-        // ── Bind group layouts ────────────────────────────────────────────────
+        // -- Bind group layouts ------------------------------------------------
 
         // Group 0: camera uniforms
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -115,13 +115,13 @@ impl SkyboxRenderer {
             }],
         });
 
-        // ── Shader ────────────────────────────────────────────────────────────
+        // -- Shader ------------------------------------------------------------
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Skybox Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../../shaders/skybox.wgsl").into()),
         });
 
-        // ── Pipeline ──────────────────────────────────────────────────────────
+        // -- Pipeline ----------------------------------------------------------
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Skybox Pipeline Layout"),
             bind_group_layouts: &[&camera_layout, &params_layout],
@@ -134,7 +134,7 @@ impl SkyboxRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[], // fullscreen triangle — no vertex buffer
+                buffers: &[], // fullscreen triangle - no vertex buffer
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -142,7 +142,7 @@ impl SkyboxRenderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    // Opaque write — the skybox IS the background
+                    // Opaque write - the skybox IS the background
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -152,12 +152,12 @@ impl SkyboxRenderer {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, // fullscreen triangle — no culling
+                cull_mode: None, // fullscreen triangle - no culling
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            // No depth attachment — the skybox writes at depth 1.0 via the
+            // No depth attachment - the skybox writes at depth 1.0 via the
             // vertex shader; we don't need a depth test or write here.
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
@@ -165,7 +165,7 @@ impl SkyboxRenderer {
             cache: None,
         });
 
-        // ── GPU buffers ───────────────────────────────────────────────────────
+        // -- GPU buffers -------------------------------------------------------
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skybox Camera Buffer"),
             size: std::mem::size_of::<SkyboxCameraUniforms>() as u64,
@@ -231,7 +231,7 @@ impl SkyboxRenderer {
         // Upload appearance params
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
 
-        // Build bind groups (cheap — no textures, just two small uniforms)
+        // Build bind groups (cheap - no textures, just two small uniforms)
         let camera_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Skybox Camera Bind Group"),
             layout: &self.camera_layout,
@@ -250,7 +250,7 @@ impl SkyboxRenderer {
             }],
         });
 
-        // Render pass — color only, no depth attachment
+        // Render pass - color only, no depth attachment
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Skybox Render Pass"),

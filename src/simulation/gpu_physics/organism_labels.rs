@@ -6,7 +6,7 @@
 //!
 //! ## Stable IDs
 //!
-//! Raw labels are volatile — they change when the minimum-index cell dies.
+//! Raw labels are volatile - they change when the minimum-index cell dies.
 //! `stable_id_per_cell_buffer` maps each cell to a stable sequential ID in
 //! [1, 512] that persists across label changes.  The shrinkwrap skin system
 //! uses this buffer instead of raw labels.
@@ -22,7 +22,7 @@ use wgpu::util::DeviceExt;
 
 use super::{AdhesionBuffers, GpuTripleBufferSystem};
 
-// ── GPU-side state ────────────────────────────────────────────────────────────
+// -- GPU-side state ------------------------------------------------------------
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -42,7 +42,7 @@ const _: () = assert!(std::mem::size_of::<LabelState>() == 32);
 #[allow(dead_code)]
 const MAX_STABLE_ID: u32 = 512;
 
-// ── Public system ─────────────────────────────────────────────────────────────
+// -- Public system -------------------------------------------------------------
 
 pub struct OrganismLabelSystem {
     /// Per-cell label buffer (volatile root label).
@@ -52,7 +52,7 @@ pub struct OrganismLabelSystem {
     pub organism_size_buffer: wgpu::Buffer,
 
     /// Per-cell stable organism ID in [1, 512].  0 = no skin / too small.
-    /// This is what the shrinkwrap system should use — it doesn't change when
+    /// This is what the shrinkwrap system should use - it doesn't change when
     /// the root label changes due to cell death.
     pub stable_id_per_cell_buffer: wgpu::Buffer,
 
@@ -98,7 +98,7 @@ impl OrganismLabelSystem {
         let cell_capacity = triple_buffers.capacity;
         let cell_workgroups = (cell_capacity + 255) / 256;
 
-        // ── Label buffers ─────────────────────────────────────────────────────
+        // -- Label buffers -----------------------------------------------------
 
         let initial_labels: Vec<u32> = vec![0xFFFFFFFFu32; cell_capacity as usize];
         let label_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -120,7 +120,7 @@ impl OrganismLabelSystem {
             usage:    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        // ── Stable ID buffers ─────────────────────────────────────────────────
+        // -- Stable ID buffers -------------------------------------------------
 
         // stable_id_map: one u32 per cell slot, indexed by root label.
         // Stores the stable ID assigned to each organism root.
@@ -137,14 +137,14 @@ impl OrganismLabelSystem {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        // stable_id_per_cell: output — one u32 per cell, the stable ID for that cell.
+        // stable_id_per_cell: output - one u32 per cell, the stable ID for that cell.
         let stable_id_per_cell_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Stable ID Per Cell"),
             contents: bytemuck::cast_slice(&vec![0u32; cell_capacity as usize]),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         });
 
-        // ── Label bind group layout & pipelines ───────────────────────────────
+        // -- Label bind group layout & pipelines -------------------------------
 
         let label_layout = Self::create_label_bind_group_layout(device);
         let label_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -192,7 +192,7 @@ impl OrganismLabelSystem {
             ],
         });
 
-        // ── Stable ID bind group layout & pipelines ───────────────────────────
+        // -- Stable ID bind group layout & pipelines ---------------------------
 
         let stable_layout = Self::create_stable_id_bind_group_layout(device);
         let stable_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -288,7 +288,7 @@ impl OrganismLabelSystem {
     /// - **Kleiber discount**: organism size is slightly stale.  The discount
     ///   changes by at most 1 cell per update, which is imperceptible.
     /// - **Shrinkwrap skin**: stable IDs update at the same rate.  The skin
-    ///   mesh lags by at most `LABEL_PERIOD` frames — invisible at 60 fps.
+    ///   mesh lags by at most `LABEL_PERIOD` frames - invisible at 60 fps.
     ///
     /// Set `LABEL_PERIOD = 1` to restore every-frame behaviour.
     /// Returns true if the *next* encode_frame call will be a label reset frame.
@@ -299,7 +299,12 @@ impl OrganismLabelSystem {
         (self.debug_frame.wrapping_add(1) % RESET_PERIOD) == 1
     }
 
-    pub fn encode_frame(&mut self, encoder: &mut wgpu::CommandEncoder, cell_slots_used: u32) {
+    pub fn encode_frame(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        cell_slots_used: u32,
+        update_stable_ids: bool,
+    ) {
         if cell_slots_used == 0 {
             return;
         }
@@ -310,10 +315,12 @@ impl OrganismLabelSystem {
         // Every RESET_PERIOD frames, reinitialise label[i] = i so stale labels from
         // dead organisms don't persist indefinitely. Between resets the continuous
         // single-hop flood fill keeps labels fresh.
-        // 300 frames (~5 seconds at 60fps) — infrequent enough to avoid visible
+        // 300 frames (~5 seconds at 60fps) - infrequent enough to avoid visible
         // disruption, frequent enough to clear dead organism label fossils.
         const RESET_PERIOD: u32 = 300;
         let is_reset_frame = (self.debug_frame % RESET_PERIOD) == 1;
+        const SIZE_PERIOD: u32 = 4;
+        let update_sizes = !is_reset_frame && (self.debug_frame % SIZE_PERIOD == 0);
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label:            Some("Organism Label Pass"),
@@ -333,17 +340,17 @@ impl OrganismLabelSystem {
         }
 
         // Single hook pass per frame: propagate minimum label one hop through bonds.
-        // The flood fill converges over successive frames — no fixed iteration count,
+        // The flood fill converges over successive frames - no fixed iteration count,
         // no size limit.
         pass.set_pipeline(&self.hook_pipeline);
         pass.dispatch_workgroups(active_workgroups, 1, 1);
 
         // Recount organism sizes from current labels.
-        // Skip on reset frames — labels were just reset to cell indices so sizes
+        // Skip on reset frames - labels were just reset to cell indices so sizes
         // would read as 1 for every cell, causing a violent Kleiber metabolic spike.
         // The previous frame's sizes remain valid; they'll catch up over the next
         // few frames as labels reconverge through the flood fill.
-        if !is_reset_frame {
+        if update_sizes {
             pass.set_pipeline(&self.clear_sizes_pipeline);
             pass.dispatch_workgroups(active_workgroups, 1, 1);
             pass.set_pipeline(&self.count_sizes_accumulate_pipeline);
@@ -354,8 +361,8 @@ impl OrganismLabelSystem {
 
         drop(pass);
 
-        // Stable ID passes (separate compute pass — need label+size results visible).
-        {
+        // Stable ID passes (separate compute pass - need label+size results visible).
+        if update_stable_ids && update_sizes {
             let mut stable_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label:            Some("Organism Stable ID Pass"),
                 timestamp_writes: None,
@@ -411,7 +418,7 @@ impl OrganismLabelSystem {
             let _ = device.poll(wgpu::PollType::Poll);
             match rx.try_recv() {
                 Ok(Ok(())) => {
-                    // Data is ready — read and discard (debug only).
+                    // Data is ready - read and discard (debug only).
                     drop(self.debug_staging.slice(..).get_mapped_range());
                     self.debug_staging.unmap();
                     self.debug_map_receiver = None;
@@ -425,7 +432,7 @@ impl OrganismLabelSystem {
         }
     }
 
-    // ── Private ───────────────────────────────────────────────────────────────
+    // -- Private ---------------------------------------------------------------
 
     fn create_label_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         let rw = |b: u32| wgpu::BindGroupLayoutEntry {

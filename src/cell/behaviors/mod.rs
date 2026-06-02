@@ -9,20 +9,20 @@
 //! The behavior system follows a trait-based design pattern:
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                     CellBehavior Trait                      │
-//! │  ┌─────────────────────────────────────────────────────┐   │
-//! │  │  build_instance_data(&self, mode: &ModeSettings)    │   │
-//! │  │  -> TypeSpecificInstanceData                        │   │
-//! │  └─────────────────────────────────────────────────────┘   │
-//! └─────────────────────────────────────────────────────────────┘
-//!                              │
-//!          ┌───────────────────┼───────────────────┐
-//!          ▼                   ▼                   ▼
-//!   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-//!   │ TestCell    │    │Flagellocyte │    │  Lipocyte   │
-//!   │ Behavior    │    │  Behavior   │    │  Behavior   │
-//!   └─────────────┘    └─────────────┘    └─────────────┘
+//! +-------------------------------------------------------------+
+//! |                     CellBehavior Trait                      |
+//! |  +-----------------------------------------------------+   |
+//! |  |  build_instance_data(&self, mode: &ModeSettings)    |   |
+//! |  |  -> TypeSpecificInstanceData                        |   |
+//! |  +-----------------------------------------------------+   |
+//! +-------------------------------------------------------------+
+//!                              |
+//!          +-------------------+-------------------+
+//!          v                   v                   v
+//!   +-------------+    +-------------+    +-------------+
+//!   | TestCell    |    |Flagellocyte |    |  Lipocyte   |
+//!   | Behavior    |    |  Behavior   |    |  Behavior   |
+//!   +-------------+    +-------------+    +-------------+
 //! ```
 //!
 //! # Adding a New Cell Type Behavior
@@ -257,18 +257,18 @@ impl TypeSpecificInstanceData {
 /// # Instance Data Flow
 ///
 /// ```text
-/// ModeSettings ──► CellBehavior::build_instance_data()
-///                          │
-///                          ▼
+/// ModeSettings --> CellBehavior::build_instance_data()
+///                          |
+///                          v
 ///              TypeSpecificInstanceData
-///                          │
-///                          ▼
+///                          |
+///                          v
 ///              CellInstance.type_data[0..8]
-///                          │
-///                          ▼
+///                          |
+///                          v
 ///              GPU Instance Buffer
-///                          │
-///                          ▼
+///                          |
+///                          v
 ///              Appearance Shader (type_data_0, type_data_1)
 /// ```
 ///

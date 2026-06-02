@@ -121,8 +121,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // can spin freely while still gradually losing rotational energy to drag.
     // Multiply exponent by 100.0 to match the CPU path (integrate_angular_velocities
     // uses powf(dt * 100.0)). Without this, GPU damping is ~100x weaker than CPU
-    // because dt is ~0.016, making pow(0.95, 0.016) ≈ 0.9992 instead of the
-    // intended pow(0.95, 1.6) ≈ 0.92.
+    // because dt is ~0.016, making pow(0.95, 0.016) ~= 0.9992 instead of the
+    // intended pow(0.95, 1.6) ~= 0.92.
     let ang_damp = select(params.angular_damping, 0.94, params.angular_damping < 0.001);
     let angular_damping_factor = pow(ang_damp, params.delta_time * 100.0);
     let new_ang_vel = (ang_vel + angular_acceleration * params.delta_time) * angular_damping_factor;

@@ -32,7 +32,7 @@ use crate::simulation::CanonicalState;
 use super::gpu_scene::GpuScene;
 use super::snapshot::{GpuSceneSnapshot, SnapshotError};
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// --- helpers -----------------------------------------------------------------
 
 /// Read `byte_count` bytes from `src_buffer` starting at `src_offset` into a
 /// `Vec<u8>` using a temporary staging buffer.  Blocks until the GPU work is
@@ -99,7 +99,7 @@ fn readback_typed<T: bytemuck::Pod>(
     Ok(bytemuck::cast_slice::<u8, T>(&bytes).to_vec())
 }
 
-// ─── GpuScene impl ───────────────────────────────────────────────────────────
+// --- GpuScene impl -----------------------------------------------------------
 
 impl GpuScene {
     /// Capture the current simulation state into a `GpuSceneSnapshot`.
@@ -126,7 +126,7 @@ impl GpuScene {
             self.current_cell_count
         );
 
-        // ── Per-cell GPU readbacks ────────────────────────────────────────────
+        // -- Per-cell GPU readbacks --------------------------------------------
         // Each readback creates a staging buffer, copies, polls, and maps.
         // We read only `slots` elements (the high-water mark) to keep the
         // snapshot compact.
@@ -215,12 +215,12 @@ impl GpuScene {
             Vec::new()
         };
 
-        // ── Adhesion state (CPU caches — no readback needed) ──────────────────
+        // -- Adhesion state (CPU caches - no readback needed) ------------------
         let adhesion_connections = self.adhesion_buffers.snapshot_connections();
         let cell_adhesion_indices = self.adhesion_buffers.snapshot_cell_indices();
         let adhesion_allocated_count = self.adhesion_buffers.snapshot_allocated_count();
 
-        // ── Genomes ───────────────────────────────────────────────────────────
+        // -- Genomes -----------------------------------------------------------
         // Serialise each genome to a YAML string using the existing path.
         let mut genomes_yaml: Vec<String> = Vec::with_capacity(self.genomes.len());
         for genome in &self.genomes {
@@ -230,7 +230,7 @@ impl GpuScene {
             genomes_yaml.push(yaml);
         }
 
-        // ── Cave parameters ───────────────────────────────────────────────────
+        // -- Cave parameters ---------------------------------------------------
         let cave_active = self.cave_renderer.is_some();
         let (cave_density, cave_scale, cave_octaves, cave_persistence,
              cave_threshold, cave_smoothness, cave_seed, cave_resolution) =
@@ -242,7 +242,7 @@ impl GpuScene {
                 (0.5, 100.0, 2, 0.5, 1.0, 0.0, 12345, 128)
             };
 
-        // ── Fluid / water state ───────────────────────────────────────────────
+        // -- Fluid / water state -----------------------------------------------
         let fluid_active = self.fluid_simulator.is_some();
         let (fluid_voxels, nutrient_voxels, fluid_time, fluid_type, fluid_continuous_spawn) =
             if let Some(ref sim) = self.fluid_simulator {
@@ -330,7 +330,7 @@ impl GpuScene {
     /// arrays, pushes all data to the GPU via the existing
     /// `sync_from_canonical_state` path, and restores adhesion state.
     ///
-    /// The scene capacity must be **≥** the snapshot capacity.  If it is
+    /// The scene capacity must be **>=** the snapshot capacity.  If it is
     /// smaller, this returns `SnapshotError::CapacityMismatch`.
     pub fn restore_from_snapshot(
         &mut self,
@@ -338,7 +338,7 @@ impl GpuScene {
         queue: &wgpu::Queue,
         snapshot: &GpuSceneSnapshot,
     ) -> Result<(), SnapshotError> {
-        // ── Version and capacity checks ───────────────────────────────────────
+        // -- Version and capacity checks ---------------------------------------
         if !snapshot.is_compatible() {
             return Err(SnapshotError::IncompatibleVersion {
                 found: snapshot.version,
@@ -361,10 +361,10 @@ impl GpuScene {
             snapshot.genomes_yaml.len()
         );
 
-        // ── Reset scene to clean state ────────────────────────────────────────
+        // -- Reset scene to clean state ----------------------------------------
         self.reset(queue);
 
-        // ── Restore scalar settings ───────────────────────────────────────────
+        // -- Restore scalar settings -------------------------------------------
         self.current_time = snapshot.current_time;
         self.current_frame = snapshot.current_frame;
         self.next_cell_id = snapshot.next_cell_id;
@@ -390,7 +390,7 @@ impl GpuScene {
         self.current_cell_count = snapshot.live_cell_count;
         self.total_cell_slots = snapshot.total_cell_slots;
 
-        // ── Restore genomes ───────────────────────────────────────────────────
+        // -- Restore genomes ---------------------------------------------------
         let mut genomes: Vec<Genome> = Vec::with_capacity(snapshot.genomes_yaml.len());
         for yaml in &snapshot.genomes_yaml {
             let genome = Genome::from_yaml_string(yaml)
@@ -415,7 +415,7 @@ impl GpuScene {
             }
         }
 
-        // ── Rebuild CanonicalState from snapshot arrays ───────────────────────
+        // -- Rebuild CanonicalState from snapshot arrays -----------------------
         let slots = snapshot.total_cell_slots as usize;
 
         if slots > 0 {
@@ -478,7 +478,7 @@ impl GpuScene {
             }
         }
 
-        // ── Restore adhesion state ────────────────────────────────────────────
+        // -- Restore adhesion state --------------------------------------------
         self.adhesion_buffers.restore_from_snapshot(
             snapshot.adhesion_connections.clone(),
             snapshot.cell_adhesion_indices.clone(),
@@ -486,7 +486,7 @@ impl GpuScene {
         );
         self.adhesion_buffers.sync_to_gpu(queue);
 
-        // ── Sync genome mode data to GPU ──────────────────────────────────────
+        // -- Sync genome mode data to GPU --------------------------------------
         // sync_from_canonical_state already calls sync_genome_mode_data, but
         // we also need to sync the adhesion settings for the restored genomes.
         if !self.genomes.is_empty() {
@@ -515,7 +515,7 @@ impl GpuScene {
         self.instance_builder.mark_all_dirty();
         self.genomes_dirty = true;
 
-        // ── Restore cave parameters ───────────────────────────────────────────
+        // -- Restore cave parameters -------------------------------------------
         // Cave geometry is fully deterministic from its scalar params, so we
         // just push the saved values back into the cave renderer and mark dirty.
         // The mesh will be regenerated on the next `update_cave_params` call.
@@ -538,7 +538,7 @@ impl GpuScene {
             }
         }
 
-        // ── Restore fluid / water state ───────────────────────────────────────
+        // -- Restore fluid / water state ---------------------------------------
         // Write the saved voxel arrays directly into the GPU buffers.
         if snapshot.fluid_active
             && !snapshot.fluid_voxels.is_empty()
@@ -558,7 +558,7 @@ impl GpuScene {
     }
 }
 
-// ─── File I/O helpers on GpuSceneSnapshot ────────────────────────────────────
+// --- File I/O helpers on GpuSceneSnapshot ------------------------------------
 
 impl GpuSceneSnapshot {
     /// Serialise this snapshot to a RON string.

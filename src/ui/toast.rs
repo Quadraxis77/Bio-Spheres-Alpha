@@ -39,7 +39,7 @@ pub struct Toast {
     pub kind: ToastKind,
     /// Elapsed time since this toast was created (seconds).
     pub age: f32,
-    /// Optional progress 0.0–1.0 (only used for Progress kind).
+    /// Optional progress 0.0-1.0 (only used for Progress kind).
     pub progress: Option<f32>,
 }
 
@@ -57,7 +57,7 @@ impl Toast {
         Self { message: msg.into(), kind: ToastKind::Progress, age: 0.0, progress: Some(frac) }
     }
 
-    /// Alpha 0–255 based on age.
+    /// Alpha 0-255 based on age.
     pub fn alpha(&self) -> u8 {
         if self.age < TOAST_VISIBLE_SECS {
             255

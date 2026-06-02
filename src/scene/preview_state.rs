@@ -57,7 +57,7 @@ impl InitialState {
         // All cells start with full nutrients (100.0)
         let initial_nutrients = 100.0;
 
-        // Embryocytes start with a full reserve (65535 whole units, stored as ×1000 fixed-point);
+        // Embryocytes start with a full reserve (65535 whole units, stored as x1000 fixed-point);
         // other cell types start at 0
         let is_embryocyte = mode.map(|m| m.cell_type == 10).unwrap_or(false);
         let initial_reserve: u32 = if is_embryocyte { 65_535_000 } else { 0 };
@@ -122,12 +122,12 @@ impl InitialState {
 /// viewport stays frozen on the last completed result while the yellow
 /// progress bar shows `work_time` advancing toward the target.
 pub struct PreviewState {
-    /// Work buffer — resimulation runs physics steps on this
+    /// Work buffer - resimulation runs physics steps on this
     pub work_state: CanonicalState,
     /// Current time of the work buffer
     pub work_time: f32,
 
-    /// Display buffer — what the viewport renders (frozen during resim)
+    /// Display buffer - what the viewport renders (frozen during resim)
     pub display_state: CanonicalState,
     /// Time of the display buffer
     pub display_time: f32,
@@ -172,12 +172,12 @@ impl PreviewState {
     }
 
     /// Compute a comprehensive hash of the genome for change detection.
-    /// Only simulation-relevant fields are hashed — display names are excluded
+    /// Only simulation-relevant fields are hashed - display names are excluded
     /// so renaming a genome or mode does not trigger a resimulation.
     pub fn compute_genome_hash(genome: &Genome) -> u64 {
         let mut hasher = DefaultHasher::new();
         
-        // genome.name intentionally excluded — name changes must not cause resim
+        // genome.name intentionally excluded - name changes must not cause resim
         genome.initial_mode.hash(&mut hasher);
         
         // Hash quaternion components
@@ -188,7 +188,7 @@ impl PreviewState {
         
         // Hash each mode
         for mode in &genome.modes {
-            // mode.name and mode.default_name excluded — display only, no sim effect
+            // mode.name and mode.default_name excluded - display only, no sim effect
             mode.color.x.to_bits().hash(&mut hasher);
             mode.color.y.to_bits().hash(&mut hasher);
             mode.color.z.to_bits().hash(&mut hasher);
@@ -431,14 +431,14 @@ impl PreviewState {
 
     /// Request seeking to a specific time.
     /// If already resimulating forward and the new target is ahead of current
-    /// work progress, just update the target without restarting — this prevents
+    /// work progress, just update the target without restarting - this prevents
     /// rapid slider drags from repeatedly restarting from t=0.
     pub fn seek_to_time(&mut self, target_time: f32) {
         if self.is_resimulating && target_time >= self.work_time {
-            // Already making forward progress — just move the goalposts.
+            // Already making forward progress - just move the goalposts.
             self.target_time = Some(target_time);
         } else {
-            // New seek or backward seek — start fresh.
+            // New seek or backward seek - start fresh.
             self.target_time = Some(target_time);
             self.is_resimulating = false;
         }
@@ -509,13 +509,13 @@ impl PreviewState {
             self.work_state.adhesion_expansion_active = adhesion_expansion;
         }
         
-        // Calculate step range from work_time → target_time
+        // Calculate step range from work_time -> target_time
         let start_step = (self.work_time / config.fixed_timestep).ceil() as u32;
         let end_step = (target_time / config.fixed_timestep).ceil() as u32;
         let remaining = end_step.saturating_sub(start_step);
         
         if remaining == 0 {
-            // Already there — promote to display
+            // Already there - promote to display
             self.work_time = target_time;
             self.display_state = self.work_state.clone();
             self.display_time = target_time;
@@ -544,7 +544,7 @@ impl PreviewState {
             
             steps_run += 1;
             
-            // Checkpoint at intervals — keep a rolling window of 60 entries so
+            // Checkpoint at intervals - keep a rolling window of 60 entries so
             // the Vec doesn't grow without bound during long menu sessions.
             let ci = (sim_time / self.checkpoint_interval).floor() as usize;
             if ci > last_checkpoint_index {
@@ -566,7 +566,7 @@ impl PreviewState {
             }
         }
         
-        // Completed — promote work to display
+        // Completed - promote work to display
         self.work_time = target_time;
         self.display_state = self.work_state.clone();
         self.display_time = target_time;

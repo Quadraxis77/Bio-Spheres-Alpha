@@ -434,7 +434,7 @@ impl GpuToolOperations {
             return None;
         }
         
-        // Poll the device non-blocking — the map callback fires asynchronously
+        // Poll the device non-blocking - the map callback fires asynchronously
         // after queue.submit() completes. Using PollType::Wait with a timeout
         // would stall the render thread for up to 5ms per call (10ms total when
         // called twice), consuming a significant fraction of the 16ms frame budget.

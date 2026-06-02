@@ -139,7 +139,7 @@ pub struct GpuCellDataExtraction {
     /// Cached extracted data (from last successful readback)
     cached_data: Option<InspectedCellData>,
     
-    /// Pending map_async receiver — Some means a mapping is in flight
+    /// Pending map_async receiver - Some means a mapping is in flight
     map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
@@ -387,7 +387,7 @@ impl GpuCellDataExtraction {
     /// Returns Some(data) if extraction is complete, None if still in progress.
     pub fn poll_extraction(&mut self, device: &wgpu::Device) -> Option<InspectedCellData> {
         if self.map_receiver.is_none() {
-            // No mapping in flight — start one
+            // No mapping in flight - start one
             let slice = self.readback_buffer.slice(..);
             let (sender, receiver) = std::sync::mpsc::channel();
             slice.map_async(wgpu::MapMode::Read, move |result| {

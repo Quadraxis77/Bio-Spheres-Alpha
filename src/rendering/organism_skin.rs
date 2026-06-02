@@ -5,34 +5,34 @@
 //!
 //! ## Pipeline (per frame)
 //! ```text
-//! clear_org_state  → accumulate_cells → finalize_orgs
-//!   → shrink_step (×N_SHRINK_ITERS)
-//!   → smooth_step (×N_SMOOTH_ITERS)
-//!   → render pass
+//! clear_org_state  -> accumulate_cells -> finalize_orgs
+//!   -> shrink_step (xN_SHRINK_ITERS)
+//!   -> smooth_step (xN_SMOOTH_ITERS)
+//!   -> render pass
 //! ```
 //!
 //! ## Public API (unchanged from old OrganismSkinRenderer)
-//! - `new(...)` — same signature
-//! - `create_count_bind_group(...)` — kept for gpu_scene.rs compatibility (unused internally)
-//! - `create_density_bind_group(...)` — kept for compatibility (unused internally)
-//! - `count_organisms(...)` — now runs clear+accumulate+finalize
-//! - `generate_density(...)` — now runs shrink+smooth iterations
-//! - `extract_mesh(...)` — no-op (mesh is already in vertex_buffer)
-//! - `render(...)` — unchanged
-//! - `try_read_skinned_count(...)` — reads org_state to count active organisms
-//! - `set_skin_radius_scale(...)`, `set_iso_level(...)`, `set_time(...)` — update params
+//! - `new(...)` - same signature
+//! - `create_count_bind_group(...)` - kept for gpu_scene.rs compatibility (unused internally)
+//! - `create_density_bind_group(...)` - kept for compatibility (unused internally)
+//! - `count_organisms(...)` - now runs clear+accumulate+finalize
+//! - `generate_density(...)` - now runs shrink+smooth iterations
+//! - `extract_mesh(...)` - no-op (mesh is already in vertex_buffer)
+//! - `render(...)` - unchanged
+//! - `try_read_skinned_count(...)` - reads org_state to count active organisms
+//! - `set_skin_radius_scale(...)`, `set_iso_level(...)`, `set_time(...)` - update params
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 
 const VERTS_PER_ORG: u32 = 642;
 const TRIS_PER_ORG:  u32 = 1280;
 const MAX_ORGANISMS: u32 = 512;
 
-// ── GPU structs ───────────────────────────────────────────────────────────────
+// -- GPU structs ---------------------------------------------------------------
 
 /// Matches ShrinkParams in organism_shrinkwrap.wgsl (32 bytes)
 #[repr(C)]
@@ -94,7 +94,7 @@ struct CameraUniform {
     _padding:   f32,
 }
 
-/// Organism skin material params — same as before, kept for API compatibility
+/// Organism skin material params - same as before, kept for API compatibility
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct OrganismSkinParams {
@@ -118,7 +118,7 @@ impl Default for OrganismSkinParams {
     }
 }
 
-// ── Icosphere geometry (2 subdivisions: 162 vertices, 320 triangles) ─────────
+// -- Icosphere geometry (2 subdivisions: 162 vertices, 320 triangles) ---------
 
 /// Build a subdivided icosphere on the CPU.
 /// Returns (vertices_on_unit_sphere, triangle_indices).
@@ -231,17 +231,17 @@ fn build_icosphere_positions() -> Vec<[f32; 3]> {
     build_icosphere(2).0
 }
 
-// ── OrganismSkinRenderer ──────────────────────────────────────────────────────
+// -- OrganismSkinRenderer ------------------------------------------------------
 
 pub struct OrganismSkinRenderer {
-    // ── Compute pipelines ─────────────────────────────────────────────────────
+    // -- Compute pipelines -----------------------------------------------------
     clear_pipeline:      wgpu::ComputePipeline,
     accumulate_pipeline: wgpu::ComputePipeline,
     finalize_pipeline:   wgpu::ComputePipeline,
     shrink_pipeline:     wgpu::ComputePipeline,
     smooth_pipeline:     wgpu::ComputePipeline,
 
-    // ── Compute bind group (rebuilt when triple-buffer index changes) ─────────
+    // -- Compute bind group (rebuilt when triple-buffer index changes) ---------
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
     params_buffer:   wgpu::Buffer,
     org_accum_buffer: wgpu::Buffer,
@@ -250,20 +250,20 @@ pub struct OrganismSkinRenderer {
     index_buffer:    wgpu::Buffer,
     ico_unit_positions_buffer: wgpu::Buffer,
 
-    // ── Render pipeline ───────────────────────────────────────────────────────
+    // -- Render pipeline -------------------------------------------------------
     render_pipeline:   wgpu::RenderPipeline,
     render_bind_group: wgpu::BindGroup,
     camera_buffer:     wgpu::Buffer,
     skin_params_buffer: wgpu::Buffer,
 
-    // ── Compatibility shims (kept so gpu_scene.rs compiles unchanged) ─────────
-    /// Dummy layout — create_count_bind_group returns a no-op bind group
+    // -- Compatibility shims (kept so gpu_scene.rs compiles unchanged) ---------
+    /// Dummy layout - create_count_bind_group returns a no-op bind group
     pub count_bind_group_layout:   wgpu::BindGroupLayout,
-    /// Dummy layout — create_density_bind_group returns a no-op bind group
+    /// Dummy layout - create_density_bind_group returns a no-op bind group
     pub density_bind_group_layout: wgpu::BindGroupLayout,
     dummy_buffer: wgpu::Buffer,
 
-    // ── Config ────────────────────────────────────────────────────────────────
+    // -- Config ----------------------------------------------------------------
     world_size:      f32,
     grid_resolution: i32,
     grid_cell_size:  f32,
@@ -300,7 +300,7 @@ impl OrganismSkinRenderer {
         let grid_cell_size  = world_size / grid_resolution as f32;
         let skin_offset     = settings.radius_scale.max(0.1); // reuse radius_scale as offset
 
-        // ── Buffers ───────────────────────────────────────────────────────────
+        // -- Buffers -----------------------------------------------------------
         let params = ShrinkParams {
             world_size,
             grid_cell_size,
@@ -362,7 +362,7 @@ impl OrganismSkinRenderer {
             mapped_at_creation: false,
         });
 
-        // ── Compute bind group layout ─────────────────────────────────────────
+        // -- Compute bind group layout -----------------------------------------
         // Bindings (must match organism_shrinkwrap.wgsl):
         //  0: params (uniform)
         //  1: position_and_mass (read)
@@ -389,7 +389,7 @@ impl OrganismSkinRenderer {
             },
         );
 
-        // ── Compute pipelines ─────────────────────────────────────────────────
+        // -- Compute pipelines -------------------------------------------------
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label:  Some("ShrinkWrap Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -417,7 +417,7 @@ impl OrganismSkinRenderer {
         let shrink_pipeline     = make_cp("shrink_step",       "SW Shrink");
         let smooth_pipeline     = make_cp("smooth_step",       "SW Smooth");
 
-        // ── Dummy layouts for API compatibility ───────────────────────────────
+        // -- Dummy layouts for API compatibility -------------------------------
         let dummy_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label:   Some("ShrinkWrap Dummy BGL"),
             entries: &[bgl_storage_ro(0)],
@@ -430,7 +430,7 @@ impl OrganismSkinRenderer {
             },
         );
 
-        // ── Render pipeline ───────────────────────────────────────────────────
+        // -- Render pipeline ---------------------------------------------------
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label:  Some("ShrinkWrap Render Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -546,7 +546,7 @@ impl OrganismSkinRenderer {
         }
     }
 
-    // ── API compatibility shims ───────────────────────────────────────────────
+    // -- API compatibility shims -----------------------------------------------
 
     /// Creates a dummy bind group (kept so gpu_scene.rs compiles unchanged).
     /// The shrink-wrap system uses its own internal bind group created via
@@ -619,7 +619,7 @@ impl OrganismSkinRenderer {
         })
     }
 
-    // ── Main per-frame passes ─────────────────────────────────────────────────
+    // -- Main per-frame passes -------------------------------------------------
 
     /// Pass 1+2+3: clear state, accumulate cell positions, finalize org spheres.
     /// `count_bind_group` is ignored (kept for API compat).
@@ -629,7 +629,7 @@ impl OrganismSkinRenderer {
         _count_bind_group: &wgpu::BindGroup,
         _max_cells: u32,
     ) {
-        // Actual work is done in encode_shrinkwrap_frame — this is a no-op shim.
+        // Actual work is done in encode_shrinkwrap_frame - this is a no-op shim.
     }
 
     /// Pass 4+5: shrink + smooth iterations.
@@ -640,10 +640,10 @@ impl OrganismSkinRenderer {
         _density_bind_group: &wgpu::BindGroup,
         _max_cells: u32,
     ) {
-        // Actual work is done in encode_shrinkwrap_frame — this is a no-op shim.
+        // Actual work is done in encode_shrinkwrap_frame - this is a no-op shim.
     }
 
-    /// No-op — mesh is already in vertex_buffer after encode_shrinkwrap_frame.
+    /// No-op - mesh is already in vertex_buffer after encode_shrinkwrap_frame.
     pub fn extract_mesh(&self, _encoder: &mut wgpu::CommandEncoder) {}
 
     /// Run the full shrink-wrap pipeline for one frame.
@@ -744,7 +744,7 @@ impl OrganismSkinRenderer {
         pass.draw_indexed(0..total_indices, 0, 0..1);
     }
 
-    // ── Setters ───────────────────────────────────────────────────────────────
+    // -- Setters ---------------------------------------------------------------
 
     pub fn update_skin_params(&mut self, queue: &wgpu::Queue, params: OrganismSkinParams) {
         self.skin_params = params;
@@ -799,7 +799,7 @@ impl OrganismSkinRenderer {
         self.height = height;
     }
 
-    /// No-op shim — skinned_cell_count is updated by encode_shrinkwrap_frame.
+    /// No-op shim - skinned_cell_count is updated by encode_shrinkwrap_frame.
     pub fn try_read_skinned_count(&mut self, _device: &wgpu::Device) {
         // For the shrink-wrap system we always consider there to be active skins
         // when the simulation has cells. The actual per-organism activity is
@@ -811,7 +811,7 @@ impl OrganismSkinRenderer {
         MAX_ORGANISMS * TRIS_PER_ORG
     }
 
-    // ── Private ───────────────────────────────────────────────────────────────
+    // -- Private ---------------------------------------------------------------
 
     fn upload_params(&self, queue: &wgpu::Queue) {
         let p = ShrinkParams {
@@ -828,7 +828,7 @@ impl OrganismSkinRenderer {
     }
 }
 
-// ── Bind group layout helpers ─────────────────────────────────────────────────
+// -- Bind group layout helpers -------------------------------------------------
 
 fn bgl_uniform(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {

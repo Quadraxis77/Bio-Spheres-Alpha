@@ -92,6 +92,8 @@ pub struct GpuScene {
     pub genomes: Vec<Genome>,
     /// Whether any genome has an oculocyte mode (for signal system gating)
     pub(super) has_oculocytes: bool,
+    /// Whether any genome has a glueocyte mode (for adhesion-system gating)
+    pub(super) has_glueocytes: bool,
     /// Maximum signal hops across all oculocyte modes in all genomes (for signal propagation dispatch count)
     pub(super) max_signal_hops: u32,
     /// Genome buffer manager for per-genome GPU resources
@@ -118,7 +120,7 @@ pub struct GpuScene {
     pending_boost_result: Option<usize>,
     /// Pending cell insertion (genome, world position)
     /// Pending cell insertion: (position, genome, initial_reserve_override, initial_nutrients_override).
-    /// Both are ×1000 fixed-point; 0 means "use cell_type default".
+    /// Both are x1000 fixed-point; 0 means "use cell_type default".
     pending_cell_insertion: Option<(glam::Vec3, Genome, u32, u32)>,
     /// Pending tool query position and type for GPU spatial query
     pending_query_position: Option<(f32, f32, ToolQueryType)>,  // (screen_x, screen_y, query_type)
@@ -177,9 +179,9 @@ pub struct GpuScene {
     pub nutrient_epoch_duration: f32,
     /// Nutrient epoch spacing in seconds (time between epoch starts; < duration = overlap)
     pub nutrient_epoch_spacing: f32,
-    /// Fraction of epoch spent ramping up spawns (0.0–1.0)
+    /// Fraction of epoch spent ramping up spawns (0.0-1.0)
     pub nutrient_spawn_end: f32,
-    /// Fraction of epoch where despawn ramp begins (0.0–1.0, must be > spawn_end)
+    /// Fraction of epoch where despawn ramp begins (0.0-1.0, must be > spawn_end)
     pub nutrient_despawn_start: f32,
     /// Current cell count (tracked on GPU, no CPU canonical state)
     pub current_cell_count: u32,
@@ -200,7 +202,7 @@ pub struct GpuScene {
     cave_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Track previous world diameter to detect changes for cave regeneration
     previous_world_diameter: f32,
-    /// Fluid simulation buffers (128³ voxel grid)
+    /// Fluid simulation buffers (128^3 voxel grid)
     pub fluid_buffers: Option<FluidBuffers>,
     /// Voxel renderer for fluid visualization
     pub voxel_renderer: Option<VoxelRenderer>,
@@ -212,7 +214,7 @@ pub struct GpuScene {
     pub gpu_surface_nets: Option<GpuSurfaceNets>,
     /// Whether to show GPU surface nets density mesh
     pub show_gpu_density_mesh: bool,
-    /// Organism skin renderer — wraps cell clusters in a smooth isosurface skin
+    /// Organism skin renderer - wraps cell clusters in a smooth isosurface skin
     pub organism_skin_renderer: Option<OrganismSkinRenderer>,
     /// Whether to show organism skins
     pub show_organism_skins: bool,
@@ -220,7 +222,7 @@ pub struct GpuScene {
     organism_skin_density_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached count bind group for organism skin (kept for API compat)
     organism_skin_count_bind_group: Option<wgpu::BindGroup>,
-    /// Shrink-wrap compute bind groups (one per triple-buffer index — position_and_mass changes)
+    /// Shrink-wrap compute bind groups (one per triple-buffer index - position_and_mass changes)
     organism_skin_compute_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
@@ -254,7 +256,7 @@ pub struct GpuScene {
     nutrient_extract_bind_group: Option<wgpu::BindGroup>,
     /// Cached nutrient particle render bind group
     nutrient_render_bind_group: Option<wgpu::BindGroup>,
-    /// Death particle system renderer — emits burst particles when cells die
+    /// Death particle system renderer - emits burst particles when cells die
     pub death_particle_renderer: Option<DeathParticleRenderer>,
     /// Whether to show death particles
     pub show_death_particles: bool,
@@ -302,7 +304,7 @@ pub struct GpuScene {
     moss_consume_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached moss consumption moss bind group (shared across frames)
     moss_consume_moss_bind_group: Option<wgpu::BindGroup>,
-    /// Boulder system — falling cave debris with size-gated moss nutrients
+    /// Boulder system - falling cave debris with size-gated moss nutrients
     pub boulder_system: Option<BoulderSystem>,
     /// Whether boulders are enabled
     pub show_boulders: bool,
@@ -328,9 +330,9 @@ pub struct GpuScene {
     pub boulder_moss_min: f32,
     /// Maximum boulder moss store (nutrients)
     pub boulder_moss_max: f32,
-    /// Organism label system — GPU-driven connected-component labeling
+    /// Organism label system - GPU-driven connected-component labeling
     pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
-    /// Mutation system — GPU-driven genome mutation during cell division
+    /// Mutation system - GPU-driven genome mutation during cell division
     pub mutation_system: Option<crate::simulation::gpu_physics::MutationSystem>,
     /// Light field system for photocyte nutrients and volumetric fog
     pub light_field_system: Option<LightFieldSystem>,
@@ -405,18 +407,18 @@ pub struct GpuScene {
     #[allow(dead_code)]
     signal_sense_dummy_density_buffer: wgpu::Buffer,
 
-    // ── Organism follow camera ────────────────────────────────────────────────
+    // -- Organism follow camera ------------------------------------------------
     /// Root label (min cell index) of the organism the camera is following.
     pub follow_organism_id: Option<u32>,
-    /// Raw GPU center-of-mass — snapped to the latest readback value each time one arrives.
+    /// Raw GPU center-of-mass - snapped to the latest readback value each time one arrives.
     follow_target: glam::Vec3,
-    /// Smoothed orbit pivot — lerps toward follow_target every frame.
+    /// Smoothed orbit pivot - lerps toward follow_target every frame.
     follow_center: glam::Vec3,
     /// Persistent staging buffer for position readback (reused every frame).
     follow_pos_staging: Option<wgpu::Buffer>,
     /// Persistent staging buffer for label readback (reused every frame).
     follow_lbl_staging: Option<wgpu::Buffer>,
-    /// True when a GPU→staging copy has been submitted and not yet consumed.
+    /// True when a GPU->staging copy has been submitted and not yet consumed.
     follow_copy_submitted: bool,
     /// True when copy_buffer_to_buffer was encoded this frame and map_async
     /// needs to be called after queue.submit (via tick_follow_camera_post_submit).
@@ -486,9 +488,9 @@ impl GpuScene {
         let next_id: [u32; 1] = [0];
         queue.write_buffer(&gpu_triple_buffers.next_cell_id, 0, bytemuck::cast_slice(&next_id));
         
-        // Create adhesion buffer system with split sub-buffers (3 × 128 MB) to stay under
+        // Create adhesion buffer system with split sub-buffers (3 x 128 MB) to stay under
         // wgpu's 256 MB/buffer limit. The mutation shader writes adhesion settings for all
-        // 8M possible mode slots; splitting into 3 × vec4 sub-buffers matches the pattern
+        // 8M possible mode slots; splitting into 3 x vec4 sub-buffers matches the pattern
         // used by mode_properties_v0..v4 in triple_buffer.rs.
         let mut adhesion_buffers = AdhesionBuffers::new(device, capacity);
         
@@ -568,7 +570,7 @@ impl GpuScene {
             &signal_sense_dummy_density_buffer,
             organism_label_system.as_ref().map(|s| &s.label_buffer),
             organism_label_system.as_ref().map(|s| &s.organism_size_buffer),
-            None, // boulder_buffers — created later
+            None, // boulder_buffers - created later
         );
 
         // Create GPU cell inspector system (will be initialized later with device)
@@ -611,6 +613,7 @@ impl GpuScene {
             current_time: 0.0,
             genomes: Vec::new(),
             has_oculocytes: false,
+            has_glueocytes: false,
             max_signal_hops: 0,
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
@@ -812,6 +815,7 @@ impl GpuScene {
         self.genomes.clear();
         self.parent_make_adhesion_flags.clear();
         self.has_oculocytes = false;
+        self.has_glueocytes = false;
         self.max_signal_hops = 0;
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately
@@ -840,7 +844,7 @@ impl GpuScene {
 
         // Note: Fluid reset is handled separately via reset_fluid() which requires encoder
 
-        // Clear all boulders — they are environmental objects tied to the session,
+        // Clear all boulders - they are environmental objects tied to the session,
         // not to the cell simulation, but should still be removed on any reset.
         if let Some(ref mut bs) = self.boulder_system {
             bs.clear(queue);
@@ -890,7 +894,7 @@ impl GpuScene {
     /// For GPU-mutated genomes, performs synchronous GPU readback of all mode buffers
     /// and reconstructs the Genome from raw buffer data.
     ///
-    /// This is a blocking operation (waits for GPU) — only call from UI button clicks.
+    /// This is a blocking operation (waits for GPU) - only call from UI button clicks.
     pub fn read_back_genome(
         &self,
         device: &wgpu::Device,
@@ -1419,7 +1423,7 @@ impl GpuScene {
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
         // Repopulate nutrient voxels each physics step so phagocyte intake scales with
         // sim speed. At Nx speed the physics loop runs N steps per frame; phagocytes
-        // consume voxel nutrients each step via atomic CAS (1→2), so populate must
+        // consume voxel nutrients each step via atomic CAS (1->2), so populate must
         // also run each step to reset consumed voxels back to available.
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.populate_nutrients(
@@ -1433,13 +1437,13 @@ impl GpuScene {
         }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         self.run_phagocyte_consumption(device, encoder, queue);
-        // Run devorocyte consumption — steals nutrients from and kills foreign cells
+        // Run devorocyte consumption - steals nutrients from and kills foreign cells
         // Must run AFTER the spatial grid is built (which happens inside execute_gpu_physics_step)
         // but BEFORE nutrient_transport so stolen nutrients are visible this frame.
         // We run it here (before the main physics step) using the grid from the previous frame,
         // which is a one-frame lag but avoids a second grid build pass.
         self.run_devorocyte_consumption(device, encoder);
-        // Run gametocyte merge detection — detects contact between gametes from different organisms
+        // Run gametocyte merge detection - detects contact between gametes from different organisms
         self.run_gametocyte_merge(device, encoder, queue);
         // Run moss consumption (phagocytes eating moss) alongside nutrient consumption
         self.run_moss_consumption(device, encoder, queue);
@@ -1505,6 +1509,7 @@ impl GpuScene {
             self.solo_metabolism_multiplier,
             self.boulder_system.as_ref().map(|bs| bs.active_count()).unwrap_or(0),
             self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_force_accum),
+            self.has_glueocytes,
         );
         
         // Increment frame counter for time-based shader logic
@@ -1542,9 +1547,9 @@ impl GpuScene {
         // NOTE: Spatial grid rebuild after lifecycle is unnecessary because the grid
         // is rebuilt at the START of each physics step (stages 1-3). Nothing between
         // lifecycle and the next physics step reads the spatial grid. Removing this
-        // saves 3 compute dispatches (clear 128³ grid + assign + insert) per step.
+        // saves 3 compute dispatches (clear 128^3 grid + assign + insert) per step.
 
-        // Organism label pass intentionally moved out of run_physics —
+        // Organism label pass intentionally moved out of run_physics -
         // see the call site in the per-render-frame update loop.
 
         // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
@@ -1573,6 +1578,7 @@ impl GpuScene {
             &self.adhesion_buffers,
             self.total_cell_slots,
             self.constraint_iterations,
+            self.has_glueocytes,
         );
         
         // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
@@ -1638,7 +1644,7 @@ impl GpuScene {
         // Use cached bind groups - select by output buffer index (where physics wrote positions)
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         if let (Some(ref physics_bgs), Some(ref nutrient_bg)) = (&self.phagocyte_physics_bind_groups, &self.phagocyte_nutrient_bind_group) {
-            // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
+            // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
             // Using total_cell_slots (async readback, lags 1-3 frames) would under-dispatch
             // and miss cells at higher slot indices during the lag window.
             consumption_system.run(encoder, &physics_bgs[output_idx], nutrient_bg, self.gpu_triple_buffers.capacity);
@@ -1713,8 +1719,8 @@ impl GpuScene {
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
         
-        // Compute light field — skip entirely when there are no cells and volumetric fog
-        // is not shown. The ray-march dispatches 32,768 workgroups (128³/64) every frame;
+        // Compute light field - skip entirely when there are no cells and volumetric fog
+        // is not shown. The ray-march dispatches 32,768 workgroups (128^3/64) every frame;
         // with no photocytes the result is a uniform dark field, so the work is wasted.
         // Volumetric fog reads the light field, so we must still run it when fog is on.
         if self.current_cell_count == 0 && !self.show_volumetric_fog {
@@ -1791,7 +1797,7 @@ impl GpuScene {
         let photocyte_physics_bg = &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
         let photocyte_system_bg = self.cached_photocyte_system_bind_group.as_ref().unwrap();
         
-        // Dispatch at full capacity — the shader reads cell_count_buffer[0] (the GPU-side
+        // Dispatch at full capacity - the shader reads cell_count_buffer[0] (the GPU-side
         // high-water mark) for its own bounds check. Using total_cell_slots (the async
         // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
         // at higher slot indices during the lag window, causing them to receive no light.
@@ -1820,7 +1826,7 @@ impl GpuScene {
         // advanced beyond total_cell_slots (which lags 1-3 frames behind the async
         // readback). If we truncated to total_cell_slots, a new child B at a higher
         // slot index would not be copied and the instance builder would render stale
-        // data from the previous occupant — causing garbage cells to flicker.
+        // data from the previous occupant - causing garbage cells to flicker.
         // The instance builder shader uses cell_count_buffer[0] (always current) for
         // its own bounds check, so bytes beyond the true high-water mark are never read.
         let copy_slots = self.gpu_triple_buffers.capacity as usize;
@@ -2015,10 +2021,15 @@ impl GpuScene {
     fn update_has_oculocytes(&mut self) {
         use crate::cell::types::CellType;
         let oculocyte_type = CellType::Oculocyte as u32 as i32;
+        let glueocyte_type = CellType::Glueocyte as u32 as i32;
         self.has_oculocytes = false;
+        self.has_glueocytes = false;
         self.max_signal_hops = 0;
         for g in &self.genomes {
             for m in &g.modes {
+                if m.cell_type == glueocyte_type {
+                    self.has_glueocytes = true;
+                }
                 if m.cell_type == oculocyte_type {
                     self.has_oculocytes = true;
                     self.max_signal_hops = self.max_signal_hops.max(m.oculocyte_signal_hops.clamp(1, 20) as u32);
@@ -2106,7 +2117,7 @@ impl GpuScene {
             mode.signal_child_a_channel as f32,
             mode.signal_child_a_threshold,
         ]).collect();
-        // v2 and v3 contain child routing mode indices — must remap local → absolute
+        // v2 and v3 contain child routing mode indices - must remap local -> absolute
         let remap = |local: i32| -> f32 {
             if local < 0 { -1.0 } else { (global_start_index as i32 + local.max(0)) as f32 }
         };
@@ -2658,7 +2669,7 @@ impl GpuScene {
         }
 
         // Re-queue extraction every frame while a cell is selected and no extraction
-        // is already in flight — this gives live-updating data in the inspector panel.
+        // is already in flight - this gives live-updating data in the inspector panel.
         if let Some(cell_idx) = radial_menu.inspected_cell {
             let inspector_idle = self.cell_inspector
                 .as_ref()
@@ -2684,7 +2695,7 @@ impl GpuScene {
         }
     }
 
-    // ── Organism follow camera ────────────────────────────────────────────────
+    // -- Organism follow camera ------------------------------------------------
 
     /// Start a spatial query to find the cell under the cursor for organism following.
     /// Called on double-click when no tool is active.
@@ -2723,8 +2734,8 @@ impl GpuScene {
     }
 
     /// Called every frame from inside `render()`, while the encoder is still open.
-    /// Encodes the GPU→staging copy and polls the previous frame's result.
-    /// Does NOT call map_async — that must happen after queue.submit via
+    /// Encodes the GPU->staging copy and polls the previous frame's result.
+    /// Does NOT call map_async - that must happen after queue.submit via
     /// tick_follow_camera_post_submit().
     ///
     /// Copies both the position buffer and the label buffer each frame. On readback,
@@ -2749,7 +2760,7 @@ impl GpuScene {
             return;
         }
 
-        // ── Step 1: poll for the previous frame's copy result ─────────────────
+        // -- Step 1: poll for the previous frame's copy result -----------------
         // Both pos and label buffers are mapped; we wait for both (flag >= 2).
         if self.follow_copy_submitted {
             let _ = device.poll(wgpu::PollType::Poll);
@@ -2762,7 +2773,7 @@ impl GpuScene {
                 self.follow_copy_submitted = false;
 
                 // If the label buffer was copied on a reset frame, labels are
-                // temporarily set to each cell's own index — the CoM scan would
+                // temporarily set to each cell's own index - the CoM scan would
                 // find only 1 matching cell and produce a jump. Skip this readback.
                 let skip_update = self.follow_label_was_reset;
                 self.follow_label_was_reset = false;
@@ -2816,7 +2827,7 @@ impl GpuScene {
                         pos_buf.unmap();
                     }
                 } else {
-                    // Reset frame — just unmap without reading.
+                    // Reset frame - just unmap without reading.
                     organism_alive = true; // assume still alive, check next frame
                     if let Some(ref pos_buf) = self.follow_pos_staging { pos_buf.unmap(); }
                     if let Some(ref lbl_buf) = self.follow_lbl_staging { lbl_buf.unmap(); }
@@ -2835,12 +2846,12 @@ impl GpuScene {
             }
         }
 
-        // ── Step 1.5: lerp follow_center toward follow_target every frame ─────
-        // Spring constant 12 → ~95% convergence in 0.25s at 60fps.
+        // -- Step 1.5: lerp follow_center toward follow_target every frame -----
+        // Spring constant 12 -> ~95% convergence in 0.25s at 60fps.
         let alpha = 1.0 - (-12.0_f32 * dt).exp();
         self.follow_center = self.follow_center.lerp(self.follow_target, alpha);
 
-        // ── Step 2: encode fresh copies of position + label buffers ──────────
+        // -- Step 2: encode fresh copies of position + label buffers ----------
         if !self.follow_copy_submitted && cell_count > 0 {
             let output_idx = self.gpu_triple_buffers.output_buffer_index();
             let pos_src = &self.gpu_triple_buffers.position_and_mass[output_idx];
@@ -2892,13 +2903,13 @@ impl GpuScene {
             self.follow_needs_map = true;
         }
 
-        // ── Step 3: set orbit pivot to the smoothed follow center ────────────
+        // -- Step 3: set orbit pivot to the smoothed follow center ------------
         self.camera.center = self.follow_center;
     }
 
     /// Called after queue.submit() to call map_async on the staging buffers.
     /// map_async must not be called while the buffer is referenced by a pending
-    /// command encoder — doing so causes a wgpu validation error.
+    /// command encoder - doing so causes a wgpu validation error.
     pub fn tick_follow_camera_post_submit(&mut self) {
         if !self.follow_needs_map {
             return;
@@ -4006,7 +4017,7 @@ impl GpuScene {
     }
 
     /// Initialize the organism skin renderer.
-    /// Safe to call multiple times — no-op if already initialized.
+    /// Safe to call multiple times - no-op if already initialized.
     pub fn initialize_organism_skin(
         &mut self,
         device: &wgpu::Device,
@@ -4017,7 +4028,7 @@ impl GpuScene {
             return;
         }
 
-        // Derive capacity from the triple buffer size (each cell = 4×f32 = 16 bytes in position_and_mass)
+        // Derive capacity from the triple buffer size (each cell = 4xf32 = 16 bytes in position_and_mass)
         let cell_capacity = (self.gpu_triple_buffers.position_and_mass[0].size() / 16) as u32;
 
         let renderer = OrganismSkinRenderer::new(
@@ -4049,7 +4060,7 @@ impl GpuScene {
             None => return,
         };
 
-        // Dummy count bind group (kept for API compat — not used by shrink-wrap)
+        // Dummy count bind group (kept for API compat - not used by shrink-wrap)
         if self.organism_skin_count_bind_group.is_none() {
             if let Some(ref label_system) = self.organism_label_system {
                 self.organism_skin_count_bind_group = Some(renderer.create_count_bind_group(
@@ -4061,7 +4072,7 @@ impl GpuScene {
             }
         }
 
-        // Dummy density bind groups (kept for API compat — not used by shrink-wrap)
+        // Dummy density bind groups (kept for API compat - not used by shrink-wrap)
         if self.organism_skin_density_bind_groups.is_none() {
             let bgs = std::array::from_fn(|i| {
                 renderer.create_density_bind_group(
@@ -4327,7 +4338,7 @@ impl GpuScene {
         // Initialize nutrient particle renderer
         self.initialize_nutrient_particle_renderer(device, queue, surface_format);
 
-        // Initialize death particle renderer (independent of fluid — works in all modes)
+        // Initialize death particle renderer (independent of fluid - works in all modes)
         self.initialize_death_particle_renderer(device, surface_format);
 
         // Initialize phagocyte consumption system
@@ -4378,7 +4389,7 @@ impl GpuScene {
         log::info!("Devorocyte consumption system initialized");
     }
 
-    /// Run devorocyte consumption compute shader — steals nutrients from and kills foreign cells.
+    /// Run devorocyte consumption compute shader - steals nutrients from and kills foreign cells.
     fn run_devorocyte_consumption(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         let system = match &self.devorocyte_consumption {
             Some(s) => s,
@@ -4394,8 +4405,8 @@ impl GpuScene {
                     &bufs.physics_params,
                     &bufs.position_and_mass[0],
                     &bufs.velocity[0],
-                    &bufs.position_and_mass[0], // positions_out (same buffer — read-only in shader)
-                    &bufs.velocity[0],           // velocities_out (same buffer — read-only in shader)
+                    &bufs.position_and_mass[0], // positions_out (same buffer - read-only in shader)
+                    &bufs.velocity[0],           // velocities_out (same buffer - read-only in shader)
                     &bufs.cell_count_buffer,
                 ),
                 system.create_physics_bind_group(
@@ -4454,7 +4465,7 @@ impl GpuScene {
             &self.devorocyte_cell_data_bind_group,
             &self.devorocyte_spatial_bind_group,
         ) {
-            // Dispatch over live cell slots only — avoids dispatching empty workgroups.
+            // Dispatch over live cell slots only - avoids dispatching empty workgroups.
             system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.total_cell_slots.max(1));
         }
     }
@@ -4521,7 +4532,7 @@ impl GpuScene {
             &self.gametocyte_cell_data_bind_group,
             &self.gametocyte_spatial_bind_group,
         ) {
-            // Gametocyte merges are rare — run every 4 physics steps rather than every step.
+            // Gametocyte merges are rare - run every 4 physics steps rather than every step.
             // Dispatching over total_cell_slots (live count) rather than full capacity
             // avoids dispatching twice as many workgroups as necessary.
             if self.current_frame % 4 == 0 {
@@ -4536,7 +4547,7 @@ impl GpuScene {
     }
 
     /// Poll the gamete events staging buffer and process any completed merges.
-    /// Uses a non-blocking poll — if the staging buffer isn't mapped yet, waits until next frame.
+    /// Uses a non-blocking poll - if the staging buffer isn't mapped yet, waits until next frame.
     fn poll_gamete_merge_events(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue) {
         if !self.gamete_readback_in_flight {
             return;
@@ -4591,7 +4602,7 @@ impl GpuScene {
             }
 
             // --- Similarity gate ---
-            // Compute genome similarity: mode-count alignment × cell-type match fraction.
+            // Compute genome similarity: mode-count alignment x cell-type match fraction.
             let similarity = crate::genome::Genome::similarity(
                 &self.genomes[genome_a_id],
                 &self.genomes[genome_b_id],
@@ -4605,7 +4616,7 @@ impl GpuScene {
                     similarity,
                     crate::genome::GAMETOCYTE_MIN_SIMILARITY,
                 );
-                continue; // Incompatible — both cells already died, no offspring spawned
+                continue; // Incompatible - both cells already died, no offspring spawned
             }
 
             // --- Crossover ---
@@ -4621,7 +4632,7 @@ impl GpuScene {
             );
 
             // Determine the initial cell type from the crossover genome.
-            // The gametes become whatever the offspring genome's initial mode specifies —
+            // The gametes become whatever the offspring genome's initial mode specifies -
             // no forced override. The combined reserve is only meaningful for Embryocyte
             // initial cells (cell_type == 10); for all other types the reserve is discarded
             // and the cell starts with normal full nutrients instead.
@@ -4635,7 +4646,7 @@ impl GpuScene {
             let is_embryocyte = initial_cell_type == crate::cell::CellType::Embryocyte as i32;
 
             // Pass combined reserve only when the initial cell is an Embryocyte.
-            // For any other cell type: convert the reserve 1:1 into nutrients (same ×1000
+            // For any other cell type: convert the reserve 1:1 into nutrients (same x1000
             // fixed-point scale), capped at 100000 (= 100.0, a full nutrient pool).
             // The reserve itself is discarded for non-storage cells.
             let initial_reserve = if is_embryocyte { event.combined_reserve } else { 0 };
@@ -4819,7 +4830,7 @@ impl GpuScene {
             ));
         }
 
-        // Run growth pass — needs &mut self.moss_system for frame throttle counter
+        // Run growth pass - needs &mut self.moss_system for frame throttle counter
         let world_radius = self.config.sphere_radius;
         if let (Some(ref mut moss), Some(ref growth_bg)) = (&mut self.moss_system, &self.moss_growth_bind_group) {
             moss.run_growth(encoder, queue, growth_bg, delta_time, world_radius);
@@ -4874,7 +4885,7 @@ impl GpuScene {
 
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
         if let (Some(ref physics_bgs), Some(ref moss_bg)) = (&self.moss_consume_physics_bind_groups, &self.moss_consume_moss_bind_group) {
-            // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
+            // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
             moss.run_consumption(encoder, queue, &physics_bgs[output_idx], moss_bg, self.gpu_triple_buffers.capacity);
         }
     }
@@ -5090,7 +5101,7 @@ impl GpuScene {
 
     /// Initialize the death particle renderer.
     ///
-    /// This can be called at any time — it only needs the device and surface format.
+    /// This can be called at any time - it only needs the device and surface format.
     /// The compute bind group is rebuilt every frame (not cached) because the
     /// position buffer index rotates with the triple-buffer system.
     pub fn initialize_death_particle_renderer(
@@ -5131,9 +5142,9 @@ impl GpuScene {
         log::info!("Death particle renderer initialized (GPU-based)");
     }
 
-    /// Snapshot death_flags → prev_death_flags BEFORE physics runs this frame.
+    /// Snapshot death_flags -> prev_death_flags BEFORE physics runs this frame.
     /// This must be called at the start of the frame so spawn_new can detect
-    /// the alive→dead transition after physics completes.
+    /// the alive->dead transition after physics completes.
     pub fn snapshot_death_flags_for_particles(&self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(ref renderer) = self.death_particle_renderer {
             renderer.snapshot_death_flags(
@@ -5158,7 +5169,7 @@ impl GpuScene {
             return;
         }
 
-        // Use current_index() — the last completed physics frame's positions.
+        // Use current_index() - the last completed physics frame's positions.
         // output_index() is the buffer being written this frame (positions may be
         // partially zeroed by death_scan already).
         let current_idx = self.gpu_triple_buffers.current_index();
@@ -6025,7 +6036,7 @@ impl Scene for GpuScene {
         // NOTE: Moss growth is dispatched AFTER the cave render pass (near queue.submit)
         // to avoid a read-after-write pipeline stall on moss_density_buffer.
         // The cave fragment shader reads moss_density; if growth runs before the render
-        // pass in the same encoder, the GPU serializes them — stalling the render pass
+        // pass in the same encoder, the GPU serializes them - stalling the render pass
         // until the 32K-workgroup compute finishes. Moving it after rendering means the
         // write lands in the buffer that the NEXT frame's render pass will read, which
         // is a 1-frame lag that is completely invisible for a slowly-changing moss field.
@@ -6033,7 +6044,7 @@ impl Scene for GpuScene {
         let is_dragging = self.dragged_cell_index != u32::MAX;
 
         // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it.
-        // Only write when the value has changed — the buffer retains its last value between frames,
+        // Only write when the value has changed - the buffer retains its last value between frames,
         // so we only need to update it when dragging starts, the target changes, or dragging stops.
         if self.dragged_cell_index != self.last_written_dragged_index {
             queue.write_buffer(
@@ -6047,7 +6058,7 @@ impl Scene for GpuScene {
         // Execute drag position update BEFORE physics so adhesion springs see the
         // correct dragged cell position and can pull connected cells toward it.
         // update_position.wgsl writes to ALL THREE triple buffers, and
-        // position_update.wgsl preserves the dragged cell's position (copies in→out),
+        // position_update.wgsl preserves the dragged cell's position (copies in->out),
         // so one dispatch before physics is sufficient.
         let position_updated = if is_dragging {
             self.execute_pending_position_updates(device, &mut encoder, queue)
@@ -6055,8 +6066,8 @@ impl Scene for GpuScene {
             false
         };
 
-        // Snapshot death_flags BEFORE physics runs — needed by spawn_new to detect
-        // the alive→dead transition this frame.
+        // Snapshot death_flags BEFORE physics runs - needed by spawn_new to detect
+        // the alive->dead transition this frame.
         if self.show_death_particles && !self.paused {
             self.snapshot_death_flags_for_particles(&mut encoder);
         }
@@ -6089,11 +6100,11 @@ impl Scene for GpuScene {
 
             // Organism label pass: runs ONCE per render frame after all physics steps
             // complete, not inside run_physics. Previously it ran every physics step
-            // (up to 4×/frame), making it 5–7 dispatches × 4 steps = 20–28 dispatches
+            // (up to 4x/frame), making it 5-7 dispatches x 4 steps = 20-28 dispatches
             // per render frame. Labels change slowly (bonds form/break over many frames)
             // so one update per render frame is sufficient.
             if let Some(label_system) = &mut self.organism_label_system {
-                label_system.encode_frame(&mut encoder, self.total_cell_slots);
+                label_system.encode_frame(&mut encoder, self.total_cell_slots, self.show_organism_skins);
             }
         } else if is_dragging {
             // Paused but dragging: run mechanics-only physics step so adhesion-connected
@@ -6106,7 +6117,7 @@ impl Scene for GpuScene {
         // Execute non-drag pending position updates (e.g. from other tools)
         let position_updated = position_updated || self.execute_pending_position_updates(device, &mut encoder, queue);
 
-        // Update death particles AFTER physics — spawn_new reads death_flags written
+        // Update death particles AFTER physics - spawn_new reads death_flags written
         // by lifecycle_unified.wgsl (death_scan) and positions from the current
         // triple-buffer slot (last completed frame, not the one being written).
         if self.show_death_particles && !self.paused {
@@ -6146,10 +6157,10 @@ impl Scene for GpuScene {
         // Copy buffers to instance builder after physics (always needed for division)
         // Division creates new cells with updated cell_types that must be copied before rendering
         // Also copy after position update, cell removal, or cell boost
-        // Skip entirely when there are no cells — the copies are full-capacity DMA transfers
+        // Skip entirely when there are no cells - the copies are full-capacity DMA transfers
         // (positions, rotations, mode_indices, cell_ids, genome_ids, cell_types, mode_properties)
         // and with 0 cells the instance builder will produce 0 visible instances regardless.
-        // IMPORTANT: also copy when cell_inserted is true — total_cell_slots lags 1-3 frames
+        // IMPORTANT: also copy when cell_inserted is true - total_cell_slots lags 1-3 frames
         // behind the async readback, so the first cell would be invisible without this override.
         let has_cells = self.total_cell_slots > 0 || cell_inserted;
 
@@ -6265,7 +6276,7 @@ impl Scene for GpuScene {
 
         // Render cells using GPU-culled instance buffer
         let visible_count = self.instance_builder.visible_count();
-        // Update shadow bind group for cell renderer — created once and cached.
+        // Update shadow bind group for cell renderer - created once and cached.
         // The light field buffers never change after initialization, so there is no
         // need to recreate this bind group every frame.
         if !self.cell_shadow_bind_group_set {
@@ -6532,7 +6543,7 @@ impl Scene for GpuScene {
         if self.show_gpu_density_mesh {
             // Only re-extract the mesh when the fluid state has actually changed.
             // When the simulation is paused and there are no cells (nothing can disturb
-            // the fluid), the density field is static — re-running extract_to_surface_nets,
+            // the fluid), the density field is static - re-running extract_to_surface_nets,
             // smooth_density, and extract_mesh every frame wastes ~100K workgroups for
             // an identical result. We still render the last extracted mesh every frame.
             let fluid_changed = !self.paused || self.current_cell_count > 0;
@@ -6704,7 +6715,7 @@ impl Scene for GpuScene {
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
 
-        // Call map_async on follow camera staging buffers NOW — after submit.
+        // Call map_async on follow camera staging buffers NOW - after submit.
         // map_async must not be called while the buffer is referenced by a pending
         // encoder (wgpu validation error: "buffer is still mapped").
         if self.follow_organism_id.is_some() {
@@ -6712,7 +6723,7 @@ impl Scene for GpuScene {
         }
 
         // Moss growth runs in a SEPARATE submit after the main frame.
-        // This prevents it from competing with rendering on the GPU timeline —
+        // This prevents it from competing with rendering on the GPU timeline -
         // the driver can schedule it in background while the CPU prepares the next frame.
         // The 1-frame lag on moss_density is invisible for a slowly-changing field.
         if !self.paused && self.show_moss {

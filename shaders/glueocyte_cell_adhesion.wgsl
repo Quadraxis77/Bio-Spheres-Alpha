@@ -2,13 +2,13 @@
 //
 // Two entry points dispatched once per physics step:
 //
-//   bond_create  — Each glueocyte thread scans its spatial-grid neighbourhood.
+//   bond_create  - Each glueocyte thread scans its spatial-grid neighbourhood.
 //                  When it finds an overlapping cell it is not yet bonded to, it
 //                  allocates an adhesion slot and writes the connection.
 //                  Skipped when the signal gate is active and the signal is below
 //                  the threshold (glueocyte is "inactive").
 //
-//   bond_release — Each glueocyte thread walks its own per-cell adhesion list and
+//   bond_release - Each glueocyte thread walks its own per-cell adhesion list and
 //                  marks every bond that has BOND_FLAG_GLUEOCYTE set as inactive,
 //                  then removes it from both cells' index arrays and frees the slot.
 //                  Only runs when the signal gate is active AND the signal is below
@@ -24,7 +24,7 @@
 //       bit 1 = invert gate   (0 = active when sig >= threshold, 1 = active when sig < threshold)
 //
 // Bond origin flag stored in AdhesionConnection._align_pad.x (offset 24):
-//   BOND_FLAG_GLUEOCYTE = 1u  — created by this shader, released on deactivation
+//   BOND_FLAG_GLUEOCYTE = 1u  - created by this shader, released on deactivation
 //
 // Group 0: Standard physics bind group
 // Group 1: Adhesion buffers (connections, indices, next_id, free_slots, counts)
@@ -225,7 +225,7 @@ fn is_glueocyte_active(mode_idx: u32, cell_idx: u32) -> bool {
 
     let channel = glueocyte_cell_adhesion_flags[base + 1u];
     if (channel == 0xFFFFFFFFu) {
-        // No signal gate — always active
+        // No signal gate - always active
         return true;
     }
 
@@ -258,7 +258,7 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (!is_glueocyte_active(mode_idx, cell_idx)) { return; }
 
     // Read max_adhesions for this mode from adhesion_counts[0] (total capacity).
-    // We use the per-cell count gate instead — read from the index array directly.
+    // We use the per-cell count gate instead - read from the index array directly.
     // The max_adhesions limit is encoded in the mode; we approximate it as
     // MAX_ADHESIONS_PER_CELL here (the shader doesn't have mode_properties access).
     // Callers can tighten this via the genome's max_adhesions setting which the
@@ -340,13 +340,13 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let other_rot = genome_orientations[other_idx];
                     let anchor_b = normalize(rotate_by_quat_inv(dir_b_to_a, other_rot));
 
-                    // Build connection — use parent mode_index for adhesion settings lookup
+                    // Build connection - use parent mode_index for adhesion settings lookup
                     var conn: AdhesionConnection;
                     conn.cell_a_index = cell_idx;
                     conn.cell_b_index = other_idx;
                     conn.mode_index   = mode_idx;
                     conn.is_active    = 1u;
-                    conn.zone_a       = 2u; // ZoneC (equatorial — no zone preference)
+                    conn.zone_a       = 2u; // ZoneC (equatorial - no zone preference)
                     conn.zone_b       = 2u;
                     conn.bond_flags   = BOND_FLAG_GLUEOCYTE;
                     conn._align_pad1  = 0u;
@@ -365,7 +365,7 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let ok_b = try_add_adhesion_to_cell(other_idx, slot);
 
                     if (!ok_a || !ok_b) {
-                        // Couldn't register — roll back: mark inactive and free slot
+                        // Couldn't register - roll back: mark inactive and free slot
                         adhesion_connections[slot].is_active = 0u;
                         if (ok_a) { remove_adhesion_from_cell(cell_idx, slot); }
                         if (ok_b) { remove_adhesion_from_cell(other_idx, slot); }
@@ -405,10 +405,10 @@ fn bond_release(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (base + 3u >= arrayLength(&glueocyte_cell_adhesion_flags)) { return; }
 
     let enabled = glueocyte_cell_adhesion_flags[base + 0u];
-    if (enabled == 0u) { return; } // cell adhesion disabled entirely — nothing to release
+    if (enabled == 0u) { return; } // cell adhesion disabled entirely - nothing to release
 
     let channel = glueocyte_cell_adhesion_flags[base + 1u];
-    if (channel == 0xFFFFFFFFu) { return; } // no signal gate — never releases
+    if (channel == 0xFFFFFFFFu) { return; } // no signal gate - never releases
 
     let threshold_bits = glueocyte_cell_adhesion_flags[base + 2u];
     let threshold = bitcast<f32>(threshold_bits);
@@ -416,7 +416,7 @@ fn bond_release(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let flags = glueocyte_cell_adhesion_flags[base + 3u];
     let invert = (flags & 2u) != 0u;
     let still_active = select(sig >= threshold, sig < threshold, invert);
-    if (still_active) { return; } // still active — don't release
+    if (still_active) { return; } // still active - don't release
 
     // Glueocyte is inactive: release all bonds it created
     let adh_base = cell_idx * MAX_ADHESIONS_PER_CELL;

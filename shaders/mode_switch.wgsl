@@ -104,7 +104,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // ss_v3.z = mode_switch_signal_channel (f32, -1 = disabled, 8-15 = active)
     let switch_channel = ss_v3.z;
-    if (switch_channel < 8.0) { return; } // Disabled or oculocyte channel — skip
+    if (switch_channel < 8.0) { return; } // Disabled or oculocyte channel - skip
 
     let switch_threshold = ss_v3.w;
     let switch_target    = ss_v4.x; // absolute mode index (f32)

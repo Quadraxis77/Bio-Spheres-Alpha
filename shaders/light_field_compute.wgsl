@@ -158,7 +158,7 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
             consecutive_solid += 1u;
             // Only apply absorption after 2+ consecutive solid voxels (actual wall)
             if (consecutive_solid >= 2u) {
-                // Fast exp approximation: exp(-x) ≈ 1 / (1 + x + x²/2)
+                // Fast exp approximation: exp(-x) ~= 1 / (1 + x + x^2/2)
                 let x = params.absorption_solid;
                 transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
             }

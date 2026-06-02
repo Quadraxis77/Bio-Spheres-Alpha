@@ -78,7 +78,7 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 @group(1) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 
-// Adhesion settings split into 3 × vec4 sub-buffers (16 bytes each per mode).
+// Adhesion settings split into 3 x vec4 sub-buffers (16 bytes each per mode).
 // v0: [can_break(f32), break_force, rest_length, linear_spring_stiffness]
 // v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
 // v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint(f32), _padding]
@@ -357,7 +357,7 @@ fn compute_adhesion_forces_for_cell(
         // Extract twist component about the adhesion axis directly from the quaternion's
         // imaginary part, avoiding the axis-angle double-cover ambiguity that causes
         // the spring to fire in the wrong direction when the error crosses the hemisphere.
-        // twist_scalar ≈ sin(half_angle) * sign, monotone in [-1, 1] for ±180°.
+        // twist_scalar ~= sin(half_angle) * sign, monotone in [-1, 1] for 180 deg.
         let twist_error_scalar = clamp(dot(twist_error_quat.xyz, adhesion_axis), -1.57, 1.57);
 
         let angular_vel_a_proj = dot(ang_vel_a, adhesion_axis);
@@ -548,7 +548,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Break bond if force exceeds threshold - only cell_a thread writes to avoid races
         // Skip break check during grace period after bond creation (0.5s)
-        // Also skip if either cell recently mode-switched (1.5s grace) — prevents transient
+        // Also skip if either cell recently mode-switched (1.5s grace) - prevents transient
         // force spikes from maturation-triggered mode switches breaking ring bonds.
         // PERF: mode_switch_time reads are deferred inside the can_break check to avoid
         // two random buffer accesses per bond unconditionally (major cache thrash at 100k cells).

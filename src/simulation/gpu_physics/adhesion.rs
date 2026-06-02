@@ -115,7 +115,7 @@ impl GpuAdhesionConnection {
             is_active: 1,
             zone_a: 1, // Zone B (positive split direction)
             zone_b: 0, // Zone A (negative split direction)
-            bond_flags: 0, // division bond — not glueocyte-created
+            bond_flags: 0, // division bond - not glueocyte-created
             _align_pad: 0,
             anchor_direction_a: [anchor_a.x, anchor_a.y, anchor_a.z, 0.0],
             anchor_direction_b: [anchor_b.x, anchor_b.y, anchor_b.z, 0.0],

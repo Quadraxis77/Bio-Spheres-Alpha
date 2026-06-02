@@ -47,11 +47,11 @@ pub struct CellInsertionParams {
     
     // Cell type + initial reserve + initial nutrients (16 bytes)
     pub cell_type: u32,
-    /// Initial embryocyte reserve (×1000 fixed-point). 0 for normal cells.
+    /// Initial embryocyte reserve (x1000 fixed-point). 0 for normal cells.
     /// For Embryocytes created from normal insertion: set to 65535000 (full).
     /// For Embryocytes spawned from gamete merge: set to combined gamete reserve.
     pub initial_reserve: u32,
-    /// Initial nutrients (×1000 fixed-point). 0 = use default (100000 = full).
+    /// Initial nutrients (x1000 fixed-point). 0 = use default (100000 = full).
     /// Pass a non-zero value to cap starting nutrients (e.g. gamete merge where
     /// the combined reserve doesn't cover a full nutrient pool).
     pub initial_nutrients: u32,
@@ -195,7 +195,7 @@ pub struct CachedBindGroups {
     pub env_adhesion_force_accum: [wgpu::BindGroup; 3],
     /// Glueocyte env adhesion mode data bind group (same for all frames)
     pub env_adhesion_mode_data: wgpu::BindGroup,
-    /// Dummy cave collision bind group — used when glueocyte env adhesion runs without a cave
+    /// Dummy cave collision bind group - used when glueocyte env adhesion runs without a cave
     /// (e.g. boulder-only adhesion). Contains zeroed CaveParams with collision_enabled=0.
     pub dummy_cave_collision: wgpu::BindGroup,
 
@@ -248,7 +248,7 @@ pub struct CachedBindGroups {
     /// Boulder consume group 1: spatial grid (read-only)
     pub boulder_consume_spatial: wgpu::BindGroup,
     /// Boulder consume group 2: cell data (positions, types, nutrients, org_size, death_flags, thresholds, cell_count)
-    /// One per buffer index — positions rotate each frame.
+    /// One per buffer index - positions rotate each frame.
     pub boulder_consume_cell_data: [wgpu::BindGroup; 3],
     /// Boulder consume group 3: boulder buffers (state, moss, eat_dir, count)
     pub boulder_consume_buffers: wgpu::BindGroup,
@@ -695,7 +695,7 @@ impl GpuPhysicsPipelines {
         );
         
         // Adhesion constraint sub-step pipeline (iterative stiffening)
-        // Reuses physics, adhesion, and rotations layouts — no force accum needed
+        // Reuses physics, adhesion, and rotations layouts - no force accum needed
         let adhesion_substep = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/adhesion_substep.wgsl"),
@@ -991,7 +991,7 @@ impl GpuPhysicsPipelines {
             "Mode Switch",
         );
 
-        // ── Boulder bind group layouts ─────────────────────────────────────────
+        // -- Boulder bind group layouts -----------------------------------------
         let rw_storage = |b: u32| wgpu::BindGroupLayoutEntry {
             binding: b,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -1074,7 +1074,7 @@ impl GpuPhysicsPipelines {
 
         // Group 2 for boulder_consume: positions(ro), cell_types(ro), nutrients(rw),
         //   organism_size(ro), death_flags(ro), split_thresholds(ro)
-        // cell_count_buffer is NOT included — we use arrayLength() in the shader instead,
+        // cell_count_buffer is NOT included - we use arrayLength() in the shader instead,
         // avoiding a conflict with the physics group which binds it read-write.
         let boulder_consume_cell_data_layout = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
@@ -1094,7 +1094,7 @@ impl GpuPhysicsPipelines {
             },
         );
 
-        // Boulder consume params buffer: 16 bytes (4 × f32/i32)
+        // Boulder consume params buffer: 16 bytes (4 x f32/i32)
         let boulder_consume_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Boulder Consume Params"),
             size: 16,
@@ -1699,7 +1699,7 @@ impl GpuPhysicsPipelines {
             None,
         );
         
-        // Velocity update angular bind groups — one per rotation buffer index.
+        // Velocity update angular bind groups - one per rotation buffer index.
         // The shader reads/writes rotations[buffer_index] in-place, so we must
         // bind the correct buffer for whichever index is active this frame.
         let velocity_update_angular = [
@@ -1767,10 +1767,10 @@ impl GpuPhysicsPipelines {
         ];
         let env_adhesion_mode_data = self.create_env_adhesion_mode_data_bind_group(device, buffers, adhesion_buffers);
 
-        // Dummy cave collision bind group — used when glueocyte env adhesion runs without a cave.
+        // Dummy cave collision bind group - used when glueocyte env adhesion runs without a cave.
         // Contains a zeroed CaveParams buffer with collision_enabled=0 so cave wall checks are skipped.
         let dummy_cave_params_buf = {
-            // CaveParams is a large uniform — we only need collision_enabled=0 (offset 32, u32).
+            // CaveParams is a large uniform - we only need collision_enabled=0 (offset 32, u32).
             // Allocate the full size (matching the shader struct) filled with zeros.
             // The shader only reads collision_enabled and world_radius; both default to 0 safely.
             let size = 256u64; // CaveParams is padded to 256 bytes in the shader
@@ -1980,7 +1980,7 @@ impl GpuPhysicsPipelines {
             eat_ref = &eat_buf; count_ref = &count_buf; force_ref = &force_buf;
         }
 
-        // Water buffers — dummy when fluid system not initialized
+        // Water buffers - dummy when fluid system not initialized
         let dummy_water_params;
         let dummy_water_bitfield;
         let water_params_buf: &wgpu::Buffer = if let Some(b) = water_params_buffer {
@@ -2614,7 +2614,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Split ready frame (for nutrient transfer delay) — read_write so
+                    // Split ready frame (for nutrient transfer delay) - read_write so
                     // division_scan can mark deferred cells to freeze their nutrients
                     wgpu::BindGroupLayoutEntry {
                         binding: 4,
@@ -2881,7 +2881,7 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
-                    // Genome mode data v0-v4 (child orientations, split quat — 5 sub-buffers)
+                    // Genome mode data v0-v4 (child orientations, split quat - 5 sub-buffers)
                     wgpu::BindGroupLayoutEntry { binding: 15, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     wgpu::BindGroupLayoutEntry { binding: 16, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
                     wgpu::BindGroupLayoutEntry { binding: 17, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
@@ -3179,7 +3179,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 6: mode_switch_time (read-only) — used to extend grace period after mode switch
+                // Binding 6: mode_switch_time (read-only) - used to extend grace period after mode switch
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3761,7 +3761,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 8: Boulder state (read-only — position and radius for cell-boulder collision)
+                // Binding 8: Boulder state (read-only - position and radius for cell-boulder collision)
                 wgpu::BindGroupLayoutEntry {
                     binding: 8,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3783,7 +3783,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 10: Boulder force accumulator (read-write atomic — cells push boulders)
+                // Binding 10: Boulder force accumulator (read-write atomic - cells push boulders)
                 wgpu::BindGroupLayoutEntry {
                     binding: 10,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -5622,7 +5622,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 4: Boulder state (read-only — position and radius for glueocyte attachment)
+                // Binding 4: Boulder state (read-only - position and radius for glueocyte attachment)
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -5901,10 +5901,10 @@ impl GpuPhysicsPipelines {
 
     /// Signal propagate flags bind group layout (Group 0 for signal_propagate only).
     /// Uses a double-buffer design to eliminate the read-write hazard:
-    ///   binding 0: signal_flags      (read-only  — source for this hop)
+    ///   binding 0: signal_flags      (read-only  - source for this hop)
     ///   binding 1: cell_count_buffer (read-only)
-    ///   binding 2: signal_flags_next (read_write — destination for this hop)
-    /// After each dispatch the caller copies signal_flags_next → signal_flags.
+    ///   binding 2: signal_flags_next (read_write - destination for this hop)
+    /// After each dispatch the caller copies signal_flags_next -> signal_flags.
     fn create_signal_propagate_flags_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Signal Propagate Flags Bind Group Layout"),
@@ -6085,7 +6085,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 5: boulder_state_sense (read-only) — for sense_type 5 (Boulder)
+                // Binding 5: boulder_state_sense (read-only) - for sense_type 5 (Boulder)
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -6238,9 +6238,9 @@ impl GpuPhysicsPipelines {
     }
 
     /// Create signal propagate flags bind group (Group 0 for signal_propagate).
-    /// binding 0: signal_flags (read) — source for this hop
+    /// binding 0: signal_flags (read) - source for this hop
     /// binding 1: cell_count_buffer (read)
-    /// binding 2: signal_flags_next (read_write) — destination for this hop
+    /// binding 2: signal_flags_next (read_write) - destination for this hop
     fn create_signal_propagate_flags_bind_group(
         &self,
         device: &wgpu::Device,

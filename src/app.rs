@@ -9,12 +9,12 @@
 //! - Manages wgpu resources (device, queue, surface)
 //! - Handles window events and input routing
 //! - Coordinates between simulation scenes and UI
-//! - Orchestrates the render pipeline (3D scene → egui UI → present)
+//! - Orchestrates the render pipeline (3D scene -> egui UI -> present)
 //! 
 //! ## Event Flow
 //! 
 //! ```text
-//! Window Event → egui Input Check → Scene Input → Camera Update → Render
+//! Window Event -> egui Input Check -> Scene Input -> Camera Update -> Render
 //! ```
 //! 
 //! 1. **Input Routing**: Events are first offered to egui, then to scene/camera if not consumed
@@ -79,7 +79,7 @@ enum MenuAction {
 /// Action deferred until after the current frame is presented to the screen.
 ///
 /// Save/load operations involve blocking GPU readbacks or large data uploads.
-/// Running them before `output.present()` means the "Saving…" / "Loading…"
+/// Running them before `output.present()` means the "Saving..." / "Loading..."
 /// popup never appears on screen.  By deferring to post-present we guarantee
 /// the user sees the overlay for at least one frame.
 enum DeferredAction {
@@ -127,7 +127,7 @@ pub struct App {
     test_signal_emissions: Vec<crate::simulation::signal_system::SignalEmission>,
     /// Flag to trigger resimulation when test signals change
     test_signals_changed: bool,
-    /// Deferred post-present action (save/load sphere — runs after frame is on screen)
+    /// Deferred post-present action (save/load sphere - runs after frame is on screen)
     deferred_action: Option<DeferredAction>,
     /// Timestamp of the last left-click for double-click detection
     last_left_click_time: Option<std::time::Instant>,
@@ -342,7 +342,7 @@ impl App {
                                 self.editor_state.selected_mode_index = mode_idx;
                                 self.editor_state.selected_mode_indices = vec![mode_idx];
                                 // Sync quaternion ball orientations from the selected mode's genome
-                                // data — same sync that happens when clicking a mode button directly.
+                                // data - same sync that happens when clicking a mode button directly.
                                 if let Some(mode) = self.working_genome.modes.get(mode_idx) {
                                     self.editor_state.child_a_orientation = mode.child_a.orientation;
                                     self.editor_state.child_b_orientation = mode.child_b.orientation;
@@ -693,7 +693,7 @@ impl App {
                 if !self.ui.wants_pointer_input() && self.editor_state.radial_menu.dragging_cell.is_none() {
                     camera.handle_mouse_move(*position);
                 } else if camera.is_dragging() {
-                    // Camera is mid-drag but cursor drifted over a panel — keep feeding
+                    // Camera is mid-drag but cursor drifted over a panel - keep feeding
                     // move events so the orbit doesn't freeze until re-entering the viewport.
                     camera.handle_mouse_move(*position);
                 }
@@ -774,7 +774,7 @@ impl App {
                             &mut self.ui.renderer,
                         ));
                         self.app_phase = AppPhase::MainMenu;
-                        // Restore cursor — tools and right-drag don't apply on the main menu.
+                        // Restore cursor - tools and right-drag don't apply on the main menu.
                         let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
                         self.window.set_cursor_visible(true);
                         self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
@@ -810,7 +810,7 @@ impl App {
         true
     }
     
-    // ─── Main menu ────────────────────────────────────────────────────────────
+    // --- Main menu ------------------------------------------------------------
 
     /// Full render pass for a single main-menu frame.
     fn render_main_menu_frame(&mut self, dt: f32) {
@@ -1019,7 +1019,7 @@ impl App {
                 ui.painter().add(egui::Shape::from(Self::gradient_mesh(left_half,  bg, bg_centre)));
                 ui.painter().add(egui::Shape::from(Self::gradient_mesh(right_half, bg_centre, bg)));
 
-                // ── genome panel images ───────────────────────────────────────
+                // -- genome panel images ---------------------------------------
                 let display_panel_w = w / 3.0;
                 let left_rect  = Rect::from_min_size(rect.min, Vec2::new(display_panel_w, h));
                 let right_rect = Rect::from_min_size(
@@ -1030,7 +1030,7 @@ impl App {
                 ui.painter().image(left_id,  left_rect,  full_uv, Color32::WHITE);
                 ui.painter().image(right_id, right_rect, full_uv, Color32::WHITE);
 
-                // ── edge fades ────────────────────────────────────────────────
+                // -- edge fades ------------------------------------------------
                 let fade_w = 90.0_f32;
                 let lr = Rect::from_min_size(
                     Pos2::new(rect.min.x + display_panel_w - fade_w, rect.min.y),
@@ -1043,7 +1043,7 @@ impl App {
                 );
                 ui.painter().add(egui::Shape::from(Self::gradient_mesh(rr, fade_dark, fade_clear)));
 
-                // ── genome name labels ────────────────────────────────────────
+                // -- genome name labels ----------------------------------------
                 let label_y = rect.max.y - 20.0;
                 let label_font = FontId::new(11.0, FontFamily::Proportional);
                 let label_color = Color32::from_rgb(47, 110, 84);
@@ -1056,18 +1056,18 @@ impl App {
                     Align2::CENTER_CENTER, right_name.to_uppercase(), label_font, label_color,
                 );
 
-                // ── centre hex grid pattern ───────────────────────────────────
+                // -- centre hex grid pattern -----------------------------------
                 // Flat-top hexagons tiled across the centre column.
                 // Each hex is stroked with a faint cyan that fades to transparent
                 // at the left/right edges of the centre column.
                 {
-                    let hex_r = 22.0_f32;          // circumradius (centre → vertex)
+                    let hex_r = 22.0_f32;          // circumradius (centre -> vertex)
                     let hex_w = hex_r * 2.0;       // flat-top: width = 2r
-                    let hex_h = hex_r * 3.0_f32.sqrt(); // flat-top: height = r√3
+                    let hex_h = hex_r * 3.0_f32.sqrt(); // flat-top: height = r3
                     let col_step = hex_w * 0.75;   // horizontal step between column centres
                     let row_step = hex_h;           // vertical step between row centres
 
-                    // Centre column bounds — the region between the two side panels
+                    // Centre column bounds - the region between the two side panels
                     let col_left  = rect.min.x + display_panel_w;
                     let col_right = rect.max.x - display_panel_w;
                     let col_cx    = (col_left + col_right) * 0.5;
@@ -1110,7 +1110,7 @@ impl App {
 
                             // Build the 6 vertices of a flat-top hexagon
                             let verts: Vec<Pos2> = (0..6).map(|i| {
-                                // Flat-top: vertex angles are 0°, 60°, 120°, 180°, 240°, 300°
+                                // Flat-top: vertex angles are 0 deg, 60 deg, 120 deg, 180 deg, 240 deg, 300 deg
                                 let angle = std::f32::consts::PI / 3.0 * i as f32;
                                 Pos2::new(hx + hex_r * angle.cos(), hy + hex_r * angle.sin())
                             }).collect();
@@ -1123,7 +1123,7 @@ impl App {
                     }
                 }
 
-                // ── centre column ─────────────────────────────────────────────
+                // -- centre column ---------------------------------------------
                 let btn_w = 240.0_f32;
                 let btn_h = 44.0_f32;
                 let gap   = 12.0_f32;
@@ -1187,7 +1187,7 @@ impl App {
                     action = MenuAction::GenomeEditor;
                 }
 
-                // Tutorial button — always present; highlighted with a pulsing
+                // Tutorial button - always present; highlighted with a pulsing
                 // accent ring on first launch to guide new players.
                 {
                     let tut_fill   = Color32::from_rgba_premultiplied(0, 180, 140, 22);
@@ -1225,7 +1225,7 @@ impl App {
                             Stroke::new(1.5, Color32::from_rgba_unmultiplied(0, 220, 175, ring_alpha)),
                             egui::StrokeKind::Outside,
                         );
-                        // "New? Start here →" label to the right of the button
+                        // "New? Start here ->" label to the right of the button
                         let label_x = r.right() + 12.0;
                         let label_y = r.center().y;
                         let label_alpha = (140.0 + pulse * 115.0) as u8;
@@ -1310,7 +1310,7 @@ impl App {
         // Schedule next frame for 60fps (16.67ms)
         self.next_frame_time = now + std::time::Duration::from_micros(16_667);
 
-        // ── Main menu fast path ───────────────────────────────────────────────
+        // -- Main menu fast path -----------------------------------------------
         if self.app_phase == AppPhase::MainMenu {
             self.render_main_menu_frame(dt);
             return;
@@ -1328,7 +1328,7 @@ impl App {
         }
         self.scene_manager.active_scene_mut().camera_mut().update(dt);
 
-        // ── Per-frame cursor visibility ───────────────────────────────────────
+        // -- Per-frame cursor visibility ---------------------------------------
         // In GPU mode with a tool active: hide the cursor over the viewport so
         // the tool crosshair is unobstructed, but restore it when the cursor
         // drifts over a UI panel so panels remain fully interactive.
@@ -1357,7 +1357,7 @@ impl App {
                     if params.collision_enabled != 0 {
                         use crate::rendering::cave_sdf_push_out;
                         const CAMERA_RADIUS: f32 = 3.0;
-                        // `camera` is a public field on GpuScene — no trait import needed.
+                        // `camera` is a public field on GpuScene - no trait import needed.
                         gpu_scene.camera.center = cave_sdf_push_out(
                             gpu_scene.camera.center,
                             params,
@@ -1438,7 +1438,7 @@ impl App {
                     surface_nets.update_render_params(&self.queue, &params);
                 }
 
-                // ── Organism skin sync ─────────────────────────────────────
+                // -- Organism skin sync -------------------------------------
                 let os = &self.ui.state.fluid_settings.organism_skin;
                 if os.enabled && gpu_scene.organism_skin_renderer.is_none() {
                     gpu_scene.initialize_organism_skin(&self.device, self.config.format, os);
@@ -1644,14 +1644,14 @@ impl App {
                 && !self.editor_state.genome_just_loaded
             {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
-                    // Preserve the name the user has typed — it's display-only and
+                    // Preserve the name the user has typed - it's display-only and
                     // must not be overwritten by the scene sync every frame.
                     let preserved_name = self.working_genome.name.clone();
                     self.working_genome = preview_scene.genome.clone();
                     self.working_genome.name = preserved_name;
                     
                     // One-way sync: read simulation's actual time for progress bar display only
-                    // Never write back to time_value — the slider is purely user-driven
+                    // Never write back to time_value - the slider is purely user-driven
                     self.editor_state.resim_display_time = preview_scene.get_time_for_ui();
                 }
             } else if current_mode == crate::ui::types::SimulationMode::Preview {
@@ -1770,7 +1770,7 @@ impl App {
                         let prioritize_when_low = mode.map(|m| m.prioritize_when_low).unwrap_or(false);
 
                         // Read actual flow rates recorded by the physics step.
-                        // connection_flow_rates[i] = nutrients/sec, positive = A→B, negative = B→A.
+                        // connection_flow_rates[i] = nutrients/sec, positive = A->B, negative = B->A.
                         // Sum up in/out for this cell from all its active connections.
                         let mut transport_out_rate: f32 = 0.0;
                         let mut transport_in_rate: f32 = 0.0;
@@ -1784,7 +1784,7 @@ impl App {
                             let flow = display_state.adhesion_connections.connection_flow_rates
                                 .get(conn_idx).copied().unwrap_or(0.0);
 
-                            // flow is positive = A→B. Flip sign if we are cell_b.
+                            // flow is positive = A->B. Flip sign if we are cell_b.
                             let flow_from_my_perspective = if cell_a == cell_idx { flow } else { -flow };
 
                             if flow_from_my_perspective > 0.0 {
@@ -2073,7 +2073,7 @@ impl App {
                         self.editor_state.time_slider_dragging,
                     );
                     
-                    // Bidirectional sync: genome panel selection → preview highlight
+                    // Bidirectional sync: genome panel selection -> preview highlight
                     preview_scene.selected_mode_indices = self.editor_state.selected_mode_indices.clone();
                     
                     // Sync test signals to preview scene (must happen before resimulation trigger)
@@ -2102,7 +2102,7 @@ impl App {
             
             // In GPU mode, push physics parameter changes (stiffness, damping, rest length,
             // break force, etc.) to the GPU settings buffers so existing cells pick them up
-            // immediately. update_genome only rewrites the per-mode settings arrays — it does
+            // immediately. update_genome only rewrites the per-mode settings arrays - it does
             // not touch cell positions, velocities, mode_indices, or adhesion connections, so
             // existing cells are unaffected structurally. New cells spawned after the edit
             output
@@ -2267,12 +2267,12 @@ impl App {
                 }
                 crate::ui::panel_context::SceneModeRequest::SaveSnapshot => {
                     // Defer the actual work until after output.present() so the
-                    // "Saving…" popup is visible on screen before we block.
+                    // "Saving..." popup is visible on screen before we block.
                     self.deferred_action = Some(DeferredAction::SaveSphere);
                 }
                 crate::ui::panel_context::SceneModeRequest::LoadSnapshot(path) => {
                     // Defer the actual work until after output.present() so the
-                    // "Loading…" popup is visible on screen before we block.
+                    // "Loading..." popup is visible on screen before we block.
                     self.deferred_action = Some(DeferredAction::LoadSphere(path));
                 }
                 _ => {
@@ -2396,8 +2396,8 @@ impl App {
 
         output.present();
 
-        // ── Process screenshot readback ────────────────────────────────────────
-        // Runs after present() — the staging buffer is already populated.
+        // -- Process screenshot readback ----------------------------------------
+        // Runs after present() - the staging buffer is already populated.
         if let Some((staging, w, h, padded_bpr, unpadded_bpr)) = screenshot_staging {
             self.deferred_action = Some(DeferredAction::TakeScreenshot {
                 staging,
@@ -2409,7 +2409,7 @@ impl App {
             });
         }
 
-        // Check for GIF capture request — deferred to after present().
+        // Check for GIF capture request - deferred to after present().
         if self.editor_state.request_gif_capture {
             self.editor_state.request_gif_capture = false;
             if self.deferred_action.is_none() {
@@ -2423,8 +2423,8 @@ impl App {
             }
         }
 
-        // ── Execute deferred save/load action ─────────────────────────────────
-        // This runs AFTER present() so the "Saving…" / "Loading…" popup is
+        // -- Execute deferred save/load action ---------------------------------
+        // This runs AFTER present() so the "Saving..." / "Loading..." popup is
         // already visible on screen before the blocking work begins.
         if let Some(action) = self.deferred_action.take() {
             match action {
@@ -2492,7 +2492,7 @@ impl App {
                     }
 
                     let mapped = slice.get_mapped_range();
-                    // Strip row padding and convert BGRA→RGBA if needed.
+                    // Strip row padding and convert BGRA->RGBA if needed.
                     let is_bgra = matches!(
                         format,
                         wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
@@ -2584,7 +2584,7 @@ impl App {
             }
         }
 
-        // ── Drive incremental GIF capture ─────────────────────────────────────
+        // -- Drive incremental GIF capture -------------------------------------
         if let Some(ref mut capture) = self.editor_state.gif_capture {
             let cell_type_visuals = self.editor_state.cell_type_visuals.clone();
             capture.step(&self.device, &self.queue, Some(&cell_type_visuals));
@@ -2786,7 +2786,7 @@ impl ApplicationHandler for AppState {
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
                     // Cell state write bind group uses up to 40 storage buffers on Vulkan/DX12.
-                    // Metal (macOS) hard-caps at 31 — requesting 40 panics request_device on Metal.
+                    // Metal (macOS) hard-caps at 31 - requesting 40 panics request_device on Metal.
                     // Use backend to pick the right value; never use adapter.limits() as the
                     // requested value since some drivers report low numbers that would cause
                     // wgpu to validate every bind group against that cap, dropping FPS.
@@ -2794,7 +2794,7 @@ impl ApplicationHandler for AppState {
                         wgpu::Backend::Metal => 31,
                         _ => 40,
                     },
-                    // Clamp to what the adapter actually supports — requesting more than the
+                    // Clamp to what the adapter actually supports - requesting more than the
                     // adapter limit causes request_device to fail (panic on .unwrap()).
                     max_storage_buffer_binding_size: storage_binding_limit,
                     max_buffer_size: buffer_size_limit,
@@ -2810,7 +2810,7 @@ impl ApplicationHandler for AppState {
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
         // Prefer Bgra8UnormSrgb (AMD/Vulkan native) then any sRGB, then driver default.
-        // Do NOT search for sRGB generically — on AMD, formats[0] may be Bgra8UnormSrgb
+        // Do NOT search for sRGB generically - on AMD, formats[0] may be Bgra8UnormSrgb
         // while the search finds Rgba8UnormSrgb first, causing a pipeline/pass mismatch
         // because all pipelines compile with the chosen format but the swapchain images
         // come back as the driver's native format.
@@ -2842,7 +2842,7 @@ impl ApplicationHandler for AppState {
             format: surface_format,
             width,
             height,
-            // Immediate (no vsync) is not guaranteed on all drivers — fall back to Fifo.
+            // Immediate (no vsync) is not guaranteed on all drivers - fall back to Fifo.
             present_mode: if surface_caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
                 wgpu::PresentMode::Immediate
             } else {
@@ -2900,13 +2900,13 @@ impl ApplicationHandler for AppState {
 }
 
 pub fn run() {
-    // ── Self-replace (update) ─────────────────────────────────────────────────
+    // -- Self-replace (update) -------------------------------------------------
     // If the user ran a new bio-spheres.exe from a different location than the
     // previous install, this copies it to the canonical path and relaunches.
     // Must run before logging so it can exit cleanly if a relaunch happens.
     crate::updater::run_self_replace();
 
-    // ── Logging setup ────────────────────────────────────────────────────────
+    // -- Logging setup --------------------------------------------------------
     // Write logs to the AppData config directory so they're always findable
     // regardless of where the exe is launched from.
     let log_path = crate::app_dirs::log_file();
@@ -2928,7 +2928,7 @@ pub fn run() {
         .format_timestamp_secs()
         .init();
 
-    // ── Panic hook ───────────────────────────────────────────────────────────
+    // -- Panic hook -----------------------------------------------------------
     // Capture panics into the log file and show a message box so the tester
     // knows the crash happened and where to find the log.
     let log_path_for_hook = log_path.clone();
@@ -2940,7 +2940,7 @@ pub fn run() {
         );
         log::error!("{}", msg);
 
-        // Flush by dropping — env_logger flushes on drop but we can't drop it here,
+        // Flush by dropping - env_logger flushes on drop but we can't drop it here,
         // so write directly to the file as a fallback.
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .append(true)

@@ -1,7 +1,7 @@
 // Adhesion Constraint Sub-step Shader
 // Runs N additional iterations AFTER the main physics pass to stiffen joints.
 // Each thread handles ONE cell, reads/writes positions_out & velocities_out directly.
-// No atomic accumulators needed — each cell is processed by exactly one thread.
+// No atomic accumulators needed - each cell is processed by exactly one thread.
 //
 // Bind groups reuse existing layouts:
 //   Group 0: physics (params, pos_in, vel_in, pos_out, vel_out, cell_count)
@@ -81,7 +81,7 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 @group(1) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 
-// Adhesion settings split into 3 × vec4 sub-buffers (16 bytes each per mode).
+// Adhesion settings split into 3 x vec4 sub-buffers (16 bytes each per mode).
 // v0: [can_break(f32), break_force, rest_length, linear_spring_stiffness]
 // v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
 // v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint(f32), _padding]
@@ -213,7 +213,7 @@ fn load_adhesion_settings(mode_idx: u32) -> AdhesionSettings {
 }
 
 // Compute adhesion forces for one cell from one connection.
-// Same math as adhesion_physics.wgsl — kept in sync.
+// Same math as adhesion_physics.wgsl - kept in sync.
 fn compute_substep_forces(
     pos_a: vec3<f32>,
     pos_b: vec3<f32>,
@@ -453,7 +453,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             max(params.current_time - connection.birth_time, 0.0)
         );
 
-        // Cap per-bond force before accumulating — matches adhesion_physics.wgsl
+        // Cap per-bond force before accumulating - matches adhesion_physics.wgsl
         let bond_force = result[0];
         let max_bond_force = 500.0;
         let bond_force_sq = dot(bond_force, bond_force);
@@ -465,7 +465,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         total_torque += result[1];
     }
 
-    // Clamp total per-cell forces and torques — matches adhesion_physics.wgsl
+    // Clamp total per-cell forces and torques - matches adhesion_physics.wgsl
     let max_force = 5000.0;
     let max_torque = 1000.0;
     let force_sq = dot(total_force, total_force);
@@ -478,14 +478,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         total_torque = total_torque * (max_torque / sqrt(torque_sq));
     }
 
-    // Integrate directly — each iteration uses full dt for maximum stiffness
+    // Integrate directly - each iteration uses full dt for maximum stiffness
     let dt = params.delta_time;
     let safe_mass = max(my_mass, 0.001);
     let acceleration = total_force / safe_mass;
 
     var new_vel = my_vel + acceleration * dt;
 
-    // Clamp velocity — matches position_update.wgsl
+    // Clamp velocity - matches position_update.wgsl
     let speed = length(new_vel);
     if (speed > 150.0) {
         new_vel = (new_vel / speed) * 150.0;

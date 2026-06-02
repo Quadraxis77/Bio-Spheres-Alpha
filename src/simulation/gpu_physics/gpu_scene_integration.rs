@@ -29,7 +29,7 @@
 //! - Cached bind groups (created once, not per-frame)
 //! - NO CPU readback during simulation
 //! - Triple buffering for lock-free GPU computation
-//! - 128³ spatial grid for collision acceleration
+//! - 128^3 spatial grid for collision acceleration
 
 use super::{CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
 // MAX_ADHESION_CONNECTIONS is now dynamic (adhesion_buffers.max_connections)
@@ -53,7 +53,7 @@ struct PhysicsParams {
     acceleration_damping: f32,
     
     // Grid settings (16 bytes)
-    grid_resolution: i32,      // 64 for 64³ grid
+    grid_resolution: i32,      // 64 for 64^3 grid
     grid_cell_size: f32,       // world_size / 64
     max_cells_per_grid: i32,
     enable_thrust_force: i32,
@@ -68,7 +68,7 @@ struct PhysicsParams {
     _padding: [f32; 47],
 }
 
-/// Grid resolution: 128³ = 2,097,152 grid cells
+/// Grid resolution: 128^3 = 2,097,152 grid cells
 const GRID_RESOLUTION: u32 = 128;
 
 /// Workgroup size for cell operations (unified for optimal GPU occupancy)
@@ -104,6 +104,7 @@ pub fn execute_gpu_physics_step(
     solo_metabolism_multiplier: f32,
     boulder_count: u32,
     boulder_force_accum: Option<&wgpu::Buffer>,
+    has_glueocytes: bool,
 ) {
     let current_index = triple_buffers.rotate_buffers();
 
@@ -170,7 +171,7 @@ pub fn execute_gpu_physics_step(
     // PERFORMANCE: Dispatch based on actual cell count, not full capacity.
     // At 100K cells, this reduces dispatch from 1024 to ~390 workgroups (2.6x reduction).
     // CRITICAL: Must use the HIGH WATER MARK (total slots used), not the live count.
-    // Dead cells can be at any index — they're not compacted to the end. Using the
+    // Dead cells can be at any index - they're not compacted to the end. Using the
     // live count would skip cells at higher indices, preventing their metabolism from
     // running, so they'd never lose nutrients and never die.
     let effective_cell_count = (_cell_count_hint + 255) / 256 * 256; // Round up to workgroup boundary
@@ -273,19 +274,21 @@ pub fn execute_gpu_physics_step(
         // bond_create could re-form them in the same step.
         // bond_create then forms new bonds for active glueocytes that are in contact.
         // Both passes run unconditionally (no cave dependency).
-        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_release);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        if has_glueocytes {
+            compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_release);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_create);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_create);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
         // Now reads accumulated forces and applies them with proper integration
         // Also handles buoyancy (cells float in water when fluid system is enabled)
         compute_pass.set_pipeline(&pipelines.position_update);
@@ -383,7 +386,7 @@ pub fn execute_gpu_physics_step(
     // Boulder physics runs in the same pass immediately after consume.
     if boulder_count > 0 {
         let boulder_workgroups = (boulder_count + 63) / 64;
-        // Use the input position buffer (previous frame's output) — it's idle this frame.
+        // Use the input position buffer (previous frame's output) - it's idle this frame.
         let input_index = (current_index + 2) % 3;
 
         // Write the minimal boulder consume params (no storage buffers, no conflicts).
@@ -414,7 +417,7 @@ pub fn execute_gpu_physics_step(
                 timestamp_writes: None,
             });
 
-            // Boulder consume: size-gated moss → cell nutrients
+            // Boulder consume: size-gated moss -> cell nutrients
             boulder_pass.set_pipeline(&pipelines.boulder_consume);
             boulder_pass.set_bind_group(0, &cached_bind_groups.boulder_consume_params, &[]);
             boulder_pass.set_bind_group(1, &cached_bind_groups.boulder_consume_spatial, &[]);
@@ -425,14 +428,14 @@ pub fn execute_gpu_physics_step(
             // Boulder physics: gravity, cave SDF, integration, death, moss_dir update.
             // Runs in the same pass so eat_dir_accum written by consume is visible here
             // (storage writes are ordered within a single compute pass).
-            // Boulder physics always runs — cave SDF collision is skipped if no cave.
+            // Boulder physics always runs - cave SDF collision is skipped if no cave.
             boulder_pass.set_pipeline(&pipelines.boulder_physics);
             boulder_pass.set_bind_group(0, physics_bind_group, &[]);
             boulder_pass.set_bind_group(1, &cached_bind_groups.boulder_physics_buffers, &[]);
             if let Some(cave_renderer) = cave_renderer {
                 boulder_pass.set_bind_group(2, cave_renderer.collision_bind_group(), &[]);
             } else {
-                // Use a dummy cave bind group — the shader checks collision_enabled == 0
+                // Use a dummy cave bind group - the shader checks collision_enabled == 0
                 // which is set in the dummy buffer, so SDF code is skipped.
                 boulder_pass.set_bind_group(2, &cached_bind_groups.boulder_dummy_cave, &[]);
             }
@@ -443,7 +446,7 @@ pub fn execute_gpu_physics_step(
 
 /// Execute a mechanics-only physics step (no nutrient transport, no mass accumulation).
 ///
-/// Runs stages 1–7 of the physics pipeline (spatial grid, clear forces, collision,
+/// Runs stages 1-7 of the physics pipeline (spatial grid, clear forces, collision,
 /// adhesion, swim force, position integration, angular velocity integration) but
 /// **skips** mass accumulation (stage 8), nutrient transport (stage 9), and the
 /// lifecycle pipeline entirely.
@@ -470,6 +473,7 @@ pub fn execute_gpu_mechanics_step(
     adhesion_buffers: &super::AdhesionBuffers,
     _cell_count_hint: u32,
     constraint_iterations: u32,
+    has_glueocytes: bool,
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
@@ -604,19 +608,21 @@ pub fn execute_gpu_mechanics_step(
         }
 
         // Stage 5.7: Glueocyte cell-to-cell adhesion (mechanics step)
-        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_release);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        if has_glueocytes {
+            compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_release);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_create);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            compute_pass.set_pipeline(&pipelines.glueocyte_cell_adhesion_create);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.cell_adhesion_adhesion, &[]);
+            compute_pass.set_bind_group(2, &cached_bind_groups.cell_adhesion_spatial, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.cell_adhesion_mode, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
         // Stage 6: Position integration
         compute_pass.set_pipeline(&pipelines.position_update);
@@ -691,12 +697,12 @@ pub fn execute_lifecycle_pipeline(
     let cell_state_write_bind_group = &cached_bind_groups.cell_state_write[current_index];
     
     // Dispatch lifecycle based on the high-water mark (total_cell_slots), not full capacity.
-    // total_cell_slots is the highest slot index ever used — dead cells can be at any index
+    // total_cell_slots is the highest slot index ever used - dead cells can be at any index
     // up to this mark, so we must cover all of them. Using full capacity when only a fraction
     // of slots are occupied wastes GPU time iterating empty slots. The lifecycle shaders
     // early-exit on empty slots, but the dispatch overhead and memory bandwidth for reading
     // death_flags across unused slots is still real.
-    // When total_cell_slots == 0 there is nothing to scan — skip all lifecycle work.
+    // When total_cell_slots == 0 there is nothing to scan - skip all lifecycle work.
     if total_cell_slots == 0 {
         return;
     }
@@ -778,8 +784,8 @@ pub fn execute_lifecycle_pipeline(
     // Division writes new child cells only to positions_out (output_idx). The third buffer
     // (stale_idx) still holds old dead-cell data at recycled slot indices. Two physics steps
     // later that stale buffer rotates back into positions_in, causing ghost flickering.
-    // Copying output → stale keeps all 3 triple buffers consistent after every division.
-    // MUST use full capacity — divided cells land at recycled slot indices scattered
+    // Copying output -> stale keeps all 3 triple buffers consistent after every division.
+    // MUST use full capacity - divided cells land at recycled slot indices scattered
     // throughout the buffer, not at the front. Truncating by total_cell_slots would leave
     // stale data at higher indices, causing explosive teleportation when those slots rotate
     // back into positions_in two steps later.
@@ -828,7 +834,7 @@ pub fn rebuild_spatial_grid_after_lifecycle(
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
     
-    // Dispatch over live cell slots only — shaders check cell_count_buffer[0] internally.
+    // Dispatch over live cell slots only - shaders check cell_count_buffer[0] internally.
     let effective_slots = _cell_count_hint.min(triple_buffers.capacity).max(1);
     let cell_workgroups = (effective_slots + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
@@ -855,7 +861,7 @@ pub fn rebuild_spatial_grid_after_lifecycle(
     }
 }
 
-/// Execute the signal system (clear → sense → propagate)
+/// Execute the signal system (clear -> sense -> propagate)
 /// 
 /// This runs ONCE PER FRAME, not per physics step, to avoid 4x over-dispatch.
 /// Should be called after lifecycle pipeline so adhesion state is up-to-date.
@@ -908,11 +914,11 @@ pub fn execute_signal_system(
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
 
-    // Step 3: Double-buffered pull propagation — one hop per dispatch.
+    // Step 3: Double-buffered pull propagation - one hop per dispatch.
     //
     // The propagate shader reads from signal_flags (binding 0, read-only) and writes
     // to signal_flags_next (binding 2, read_write).  After each dispatch we copy
-    // signal_flags_next → signal_flags so the next hop sees the freshly propagated
+    // signal_flags_next -> signal_flags so the next hop sees the freshly propagated
     // values.  This eliminates the read-write hazard that existed when both reads and
     // writes targeted the same buffer (where thread scheduling order determined whether
     // a relay cell's output was visible to its own neighbors in the same dispatch).
@@ -932,7 +938,7 @@ pub fn execute_signal_system(
             compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
             compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
         }
-        // Copy signal_flags_next → signal_flags so the next hop reads the updated values.
+        // Copy signal_flags_next -> signal_flags so the next hop reads the updated values.
         encoder.copy_buffer_to_buffer(
             &adhesion_buffers.signal_flags_next,
             0,
@@ -942,7 +948,7 @@ pub fn execute_signal_system(
         );
     }
 
-    // Step 4: Mode switch — change cell mode_index based on received signal
+    // Step 4: Mode switch - change cell mode_index based on received signal
     // Runs after propagation so all cells have their final signal values for this frame.
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

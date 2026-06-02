@@ -60,7 +60,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
-        // When hide_ui is active, only render the viewport — all other panels
+        // When hide_ui is active, only render the viewport - all other panels
         // are skipped entirely so their content doesn't appear on screen.
         if self.context.hide_ui {
             if matches!(tab, Panel::Viewport) {
@@ -118,7 +118,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
-        // Don't close immediately — show a confirmation dialog first.
+        // Don't close immediately - show a confirmation dialog first.
         // Store which panel is pending and return Focus to keep it open.
         self.state.pending_close_panel = Some(*tab);
         OnCloseResponse::Focus
@@ -240,7 +240,7 @@ fn render_viewport(ui: &mut Ui, viewport_rect: &mut Option<egui::Rect>, _draw_br
     let rect = ui.available_rect_before_wrap();
     *viewport_rect = Some(rect);
 
-    // Allocate the full space — the 3D scene renders behind this
+    // Allocate the full space - the 3D scene renders behind this
     let _response = ui.allocate_rect(rect, egui::Sense::hover());
 }
 
@@ -249,7 +249,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
     // Record panel rect for the tutorial pointer.
     context.editor_state.panel_rects.insert("SceneManager".to_string(), ui.max_rect());
 
-    // The mode-switch button lives in the top bar — this panel only hosts
+    // The mode-switch button lives in the top bar - this panel only hosts
     // playback controls. In Preview mode there's nothing to do here.
     if !context.is_gpu_mode() {
         ui.add_space(4.0);
@@ -261,7 +261,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
         return;
     }
 
-    // ── GPU mode: simulation playback controls ──────────────────────────────
+    // -- GPU mode: simulation playback controls ------------------------------
     section_header(ui, "SIMULATION CONTROLS");
 
     ui.horizontal(|ui| {
@@ -335,7 +335,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
 /// Render the CellInspector panel.
 fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
-    // ── Header row ──────────────────────────────────────────────────────────
+    // -- Header row ----------------------------------------------------------
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new("CELL INSPECTOR")
@@ -367,11 +367,11 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     let data_valid = extraction_result.data.is_valid();
                     Some((is_extracting, Some(extraction_result), Some(data_valid)))
                 } else {
-                    // Have a result but for a different cell — show spinner until ours arrives
+                    // Have a result but for a different cell - show spinner until ours arrives
                     Some((true, None, None))
                 }
             } else {
-                // No result yet at all — show spinner
+                // No result yet at all - show spinner
                 Some((true, None, None))
             }
         } else {
@@ -380,12 +380,12 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
         
         // Now use the extracted data without borrowing context
         if let Some((_is_extracting, extraction_result, data_valid)) = gpu_extraction_data {
-            // While a new extraction is in flight we still show the last known data —
+            // While a new extraction is in flight we still show the last known data -
             // no spinner needed since updates are continuous and near-instant.
 
             if let (Some(extraction_result), Some(data_valid)) = (extraction_result, data_valid) {                let data = &extraction_result.data;
 
-                // ── Invalid / dead cell ──────────────────────────────────────
+                // -- Invalid / dead cell --------------------------------------
                 if !data_valid {
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
@@ -408,7 +408,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     return;
                 }
 
-                // ── Cell type & identity ─────────────────────────────────────
+                // -- Cell type & identity -------------------------------------
                 let cell_type_names = crate::cell::types::CellType::names();
                 let type_name = cell_type_names
                     .get(data.cell_type as usize)
@@ -453,7 +453,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(6.0);
 
-                // ── Action buttons ───────────────────────────────────────────
+                // -- Action buttons -------------------------------------------
                 ui.horizontal(|ui| {
                     if ui.add(
                         egui::Button::new(
@@ -479,10 +479,10 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(8.0);
 
-                // ── NUTRIENTS section ────────────────────────────────────────
+                // -- NUTRIENTS section ----------------------------------------
                 section_header(ui, "NUTRIENTS");
 
-                // Nutrient bar — same style as preview context menu
+                // Nutrient bar - same style as preview context menu
                 let split_never = data.max_splits == 0 && data.nutrient_threshold <= 0.0;
                 let nutrient_max = if split_never || data.nutrient_threshold <= 0.0 {
                     100.0_f32
@@ -565,7 +565,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(4.0);
 
-                // ── PHYSICS section ──────────────────────────────────────────
+                // -- PHYSICS section ------------------------------------------
                 section_header(ui, "PHYSICS");
 
                 let pos = data.position_vec3();
@@ -608,7 +608,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(4.0);
 
-                // ── ADHESIONS section ────────────────────────────────────────
+                // -- ADHESIONS section ----------------------------------------
                 section_header(ui, "ADHESIONS");
 
                 let adhesion_color = if data.adhesion_count == 0 {
@@ -624,7 +624,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 return;
             } else {
-                // First frame — extraction not yet complete, show a brief spinner
+                // First frame - extraction not yet complete, show a brief spinner
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -638,7 +638,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             }
         }
     } else {
-        // ── Empty state ──────────────────────────────────────────────────────
+        // -- Empty state ------------------------------------------------------
         ui.add_space(24.0);
         ui.vertical_centered(|ui| {
             ui.label(egui::RichText::new("🔍").size(28.0));
@@ -860,7 +860,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             ui.end_row();
         });
     
-    // Memory bar — scaled to a fixed reference (4 GB) so the bar is meaningful
+    // Memory bar - scaled to a fixed reference (4 GB) so the bar is meaningful
     ui.add_space(3.0);
     let reference_gb = 4.0_f64;
     let usage_percent = ((mem_used_gb / reference_gb) * 100.0).min(100.0) as f32;
@@ -1229,7 +1229,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
         }
     }
 
-    // ── Boulder Section ──────────────────────────────────────────────────────
+    // -- Boulder Section ------------------------------------------------------
     ui.add_space(10.0);
     ui.separator();
     ui.heading("🪨 Mossrocks");
@@ -1415,7 +1415,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.heading("Fluid Spawning");
     ui.separator();
 
-    // Toggle button — same as the 🌊 rail button in the side bar.
+    // Toggle button - same as the  rail button in the side bar.
     let water_active = context.editor_state.fluid_continuous_spawn;
     let label = if water_active { "🌊  Water Fill: ON" } else { "🌊  Water Fill: OFF" };
     let p = crate::ui::ui_system::palette();
@@ -1531,7 +1531,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label(egui::RichText::new("Tangential smoothing strength for radial fluid mode").small());
     }
 
-    // Lateral flow probability — advanced only
+    // Lateral flow probability - advanced only
     if state.show_advanced_options {
         let selected_fluid_type = context.editor_state.selected_fluid_type;
         
@@ -1812,7 +1812,7 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
 
     ui.add_space(6.0);
 
-    // ── Geometry ──────────────────────────────────────────────────────────────
+    // -- Geometry --------------------------------------------------------------
     ui.label("Skin Offset (gap from cell surface, world units):")
         .on_hover_text("How far the skin mesh extends beyond the cell surfaces. Larger values create a more inflated, blobby appearance");
     ui.add(egui::Slider::new(&mut organism_skin.radius_scale, 0.0..=5.0)
@@ -1851,7 +1851,7 @@ fn render_organism_skin_settings(ui: &mut Ui, context: &mut PanelContext, organi
         ui.add(egui::Slider::new(&mut organism_skin.min_cells, 1u32..=50u32));
     });
 
-    // ── Material ──────────────────────────────────────────────────────────────
+    // -- Material --------------------------------------------------------------
     ui.add_space(6.0);
     ui.separator();
     ui.label("Skin Colour:");
@@ -2055,7 +2055,7 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             }
             context.editor_state.save_light_settings();
         }
-    } // temporary close — rest of advanced below
+    } // temporary close - rest of advanced below
 
     if state.show_advanced_options {
         // Light Field
@@ -2097,7 +2097,7 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.separator();
         ui.heading("Volumetric Fog");
         ui.add_space(4.0);
-        // Fog is toggled via the 🌫 rail button. Sliders shown when active.
+        // Fog is toggled via the  rail button. Sliders shown when active.
         if context.editor_state.show_volumetric_fog {
             ui.add_space(4.0);
             ui.label("Fog Density:")
@@ -2220,7 +2220,7 @@ fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-/// Render the ThemeEditor panel — full custom theme color editor.
+/// Render the ThemeEditor panel - full custom theme color editor.
 fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
     use crate::ui::types::{UiTheme, ThemeColor};
 
@@ -2229,7 +2229,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
 
-            // ── Theme selector ────────────────────────────────────────────────
+            // -- Theme selector ------------------------------------------------
             ui.label(egui::RichText::new("Active Theme").strong());
             ui.add_space(4.0);
             egui::ComboBox::from_id_salt("theme_editor_selector")
@@ -2286,7 +2286,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
                 return;
             }
 
-            // ── Dark mode toggle ──────────────────────────────────────────────
+            // -- Dark mode toggle ----------------------------------------------
             ui.label(egui::RichText::new("Mode").strong());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -2307,7 +2307,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
                 }};
             }
 
-            // ── Backgrounds ───────────────────────────────────────────────────
+            // -- Backgrounds ---------------------------------------------------
             ui.label(egui::RichText::new("Backgrounds").strong());
             ui.add_space(4.0);
             color_row!("Darkest Background",  "Deepest background — window chrome, gutters",          state.custom_theme.bg_darkest);
@@ -2321,7 +2321,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Accents ───────────────────────────────────────────────────────
+            // -- Accents -------------------------------------------------------
             ui.label(egui::RichText::new("Accents").strong());
             ui.add_space(4.0);
             color_row!("Primary Accent",   "Main accent — active tabs, highlights, rail buttons",     state.custom_theme.accent_primary);
@@ -2331,7 +2331,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Text ──────────────────────────────────────────────────────────
+            // -- Text ----------------------------------------------------------
             ui.label(egui::RichText::new("Text").strong());
             ui.add_space(4.0);
             color_row!("Primary Text",   "Main body text color",                                      state.custom_theme.text_primary);
@@ -2342,7 +2342,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Borders ───────────────────────────────────────────────────────
+            // -- Borders -------------------------------------------------------
             ui.label(egui::RichText::new("Borders").strong());
             ui.add_space(4.0);
             color_row!("Subtle Border",  "Faint dividers, panel edges",                               state.custom_theme.border_subtle);
@@ -2353,7 +2353,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Top bar ───────────────────────────────────────────────────────
+            // -- Top bar -------------------------------------------------------
             ui.label(egui::RichText::new("Top Bar").strong());
             ui.add_space(4.0);
             color_row!("Top Bar Background", "Background of the top menu bar",                        state.custom_theme.topbar_bg);
@@ -2363,7 +2363,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Status colors ─────────────────────────────────────────────────
+            // -- Status colors -------------------------------------------------
             ui.label(egui::RichText::new("Status Colors").strong());
             ui.add_space(4.0);
             color_row!("Status OK",   "Success indicators, healthy state",                            state.custom_theme.status_ok);
@@ -2375,7 +2375,7 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
             ui.separator();
             ui.add_space(4.0);
 
-            // ── Reset ─────────────────────────────────────────────────────────
+            // -- Reset ---------------------------------------------------------
             if ui.button("Reset to Defaults").on_hover_text("Reset custom theme to Biotech Dark defaults").clicked() {
                 state.custom_theme = crate::ui::types::CustomThemePalette::default();
             }
@@ -2432,11 +2432,11 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         .min(context.genome.modes.len().saturating_sub(1));
     context.editor_state.selected_mode_index = selected_index;
 
-    // ── Type + Make Adhesion at the very top ─────────────────────────────
+    // -- Type + Make Adhesion at the very top -----------------------------
     if selected_index < context.genome.modes.len() {
         let cell_types = crate::cell::types::CellType::all();
 
-        // Type dropdown — full width
+        // Type dropdown - full width
         let type_before = context.genome.modes[selected_index].cell_type;
         let combo_resp = egui::ComboBox::from_id_salt("modes_panel_cell_type")
             .selected_text(
@@ -2455,7 +2455,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 }
             });
         // Propagate cell type change to all selected modes.
-        // Don't rely on combo_resp.response.changed() — it reflects the button widget,
+        // Don't rely on combo_resp.response.changed() - it reflects the button widget,
         // not the inner selectable_value. Compare before/after instead.
         let type_after = context.genome.modes[selected_index].cell_type;
         if type_after != type_before {
@@ -2469,7 +2469,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             "cell_type_dropdown".to_string(), combo_resp.response.rect,
         );
 
-        // Make Adhesion toggle — full width, teal when active
+        // Make Adhesion toggle - full width, teal when active
         let on = context.genome.modes[selected_index].parent_make_adhesion;
         let (fill, text_col, stroke_col) = if on {
             let accent = palette().accent_primary;
@@ -2500,7 +2500,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         ui.add_space(4.0);
     }
 
-    // ── Mode list controls ────────────────────────────────────────────────
+    // -- Mode list controls ------------------------------------------------
     let mut selected_index = context.editor_state.selected_mode_index;
     let mut initial_mode = context.genome.initial_mode as usize;
 
@@ -2516,7 +2516,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
         context.genome.initial_mode = 0;
     }
     
-    // Control buttons row: Copy Into, Reset, Add (+), Remove (−)
+    // Control buttons row: Copy Into, Reset, Add (+), Remove (-)
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let (copy_into_clicked, reset_clicked) = modes_buttons(
@@ -2738,7 +2738,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     
     ui.add_space(4.0);
 
-    // Show copy into mode indicator — pinned above the scrollable list
+    // Show copy into mode indicator - pinned above the scrollable list
     if context.editor_state.copy_into_dialog_open {
         ui.colored_label(palette().status_warn, "Select target mode to copy into:");
         if ui.small_button("Cancel").clicked() {
@@ -2763,7 +2763,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     let available_width = ui.available_width();
     let copy_into_mode = context.editor_state.copy_into_dialog_open;
 
-    // Scrollable mode list — buttons above stay pinned
+    // Scrollable mode list - buttons above stay pinned
     let mut selection_changed = false;
     let mut initial_changed = false;
     let mut rename_completed: Option<(usize, String)> = None;
@@ -3471,7 +3471,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.checkbox(&mut mode.glueocyte_boulder_adhesion, "Boulder/Mossrock Adhesion")
                         .on_hover_text("Bond to floating mossrock boulders on contact");
 
-                    // Signal gate — shown whenever any adhesion type is enabled.
+                    // Signal gate - shown whenever any adhesion type is enabled.
                     // Gates all adhesion types simultaneously.
                     let any_adhesion = mode.glueocyte_cell_adhesion
                         || mode.glueocyte_env_adhesion
@@ -3966,7 +3966,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         "  ▸ Only merges with genomes of similar cell-type structure.");
                     ui.separator();
 
-                    // Release triggers — identical to Embryocyte
+                    // Release triggers - identical to Embryocyte
                     ui.label("Release triggers (detach from organism when ALL enabled are satisfied):");
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut mode.embryocyte_use_timer, "Timer")
@@ -4319,7 +4319,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             });
 
-            // Developmental/Regulation Emit Group (Teal) — any cell type can emit on channels 8-15
+            // Developmental/Regulation Emit Group (Teal) - any cell type can emit on channels 8-15
             group_container(ui, "Regulation Emit", egui::Color32::from_rgb(80, 180, 170), |ui| {
                 let reg_channel_labels = ["Disabled", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
                 // Map regulation_emit_channel: -1 = Disabled (index 0), 8 = index 1, 9 = index 2, etc.
@@ -4364,9 +4364,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 let mode_count = mode_info_for_dropdowns.len();
                 // Signal conditionals only read from developmental/regulation channels 8-15
                 let channel_labels = ["Disabled", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
-                // Map dropdown index to channel value: 0 → -1 (disabled), 1 → 8, 2 → 9, ...
+                // Map dropdown index to channel value: 0 -> -1 (disabled), 1 -> 8, 2 -> 9, ...
                 let idx_to_channel = |idx: usize| -> i32 { if idx == 0 { -1 } else { idx as i32 + 7 } };
-                // Map channel value to dropdown index: -1 → 0, 8 → 1, 9 → 2, ... (invalid → 0)
+                // Map channel value to dropdown index: -1 -> 0, 8 -> 1, 9 -> 2, ... (invalid -> 0)
                 let channel_to_idx = |ch: i32| -> usize { if ch < 8 { 0 } else { (ch - 7).clamp(0, 8) as usize } };
 
                 // --- Division Gating ---
@@ -4677,7 +4677,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         .speed(0.1)
                         .range(-1.0..=20.0);
 
-                    // Custom formatter to show ∞ for -1
+                    // Custom formatter to show  for -1
                     drag_value = drag_value.custom_formatter(|n, _| {
                         if n == -1.0 {
                             "∞".to_owned()
@@ -4686,7 +4686,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     });
 
-                    // Custom parser to handle ∞ input
+                    // Custom parser to handle  input
                     drag_value = drag_value.custom_parser(|s| {
                         if s == "∞" || s == "inf" || s == "infinity" {
                             Some(-1.0)
@@ -5053,17 +5053,17 @@ fn sync_mode_changes_to_others(
         if (updated.regulation_emit_value - snapshot.regulation_emit_value).abs() > f32::EPSILON { other.regulation_emit_value = updated.regulation_emit_value; }
         if updated.regulation_emit_hops != snapshot.regulation_emit_hops { other.regulation_emit_hops = updated.regulation_emit_hops; }
 
-        // Signal conditions — division
+        // Signal conditions - division
         if updated.division_signal_channel != snapshot.division_signal_channel { other.division_signal_channel = updated.division_signal_channel; }
         if (updated.division_signal_threshold - snapshot.division_signal_threshold).abs() > f32::EPSILON { other.division_signal_threshold = updated.division_signal_threshold; }
         if updated.division_signal_invert != snapshot.division_signal_invert { other.division_signal_invert = updated.division_signal_invert; }
 
-        // Signal conditions — apoptosis
+        // Signal conditions - apoptosis
         if updated.apoptosis_signal_channel != snapshot.apoptosis_signal_channel { other.apoptosis_signal_channel = updated.apoptosis_signal_channel; }
         if (updated.apoptosis_signal_threshold - snapshot.apoptosis_signal_threshold).abs() > f32::EPSILON { other.apoptosis_signal_threshold = updated.apoptosis_signal_threshold; }
         if updated.apoptosis_signal_invert != snapshot.apoptosis_signal_invert { other.apoptosis_signal_invert = updated.apoptosis_signal_invert; }
 
-        // Signal conditions — child routing
+        // Signal conditions - child routing
         if updated.signal_child_a_channel != snapshot.signal_child_a_channel { other.signal_child_a_channel = updated.signal_child_a_channel; }
         if (updated.signal_child_a_threshold - snapshot.signal_child_a_threshold).abs() > f32::EPSILON { other.signal_child_a_threshold = updated.signal_child_a_threshold; }
         if updated.signal_child_a_mode_above != snapshot.signal_child_a_mode_above { other.signal_child_a_mode_above = updated.signal_child_a_mode_above; }
@@ -5073,7 +5073,7 @@ fn sync_mode_changes_to_others(
         if updated.signal_child_b_mode_above != snapshot.signal_child_b_mode_above { other.signal_child_b_mode_above = updated.signal_child_b_mode_above; }
         if updated.signal_child_b_mode_below != snapshot.signal_child_b_mode_below { other.signal_child_b_mode_below = updated.signal_child_b_mode_below; }
 
-        // Signal conditions — mode switch
+        // Signal conditions - mode switch
         if updated.mode_switch_signal_channel != snapshot.mode_switch_signal_channel { other.mode_switch_signal_channel = updated.mode_switch_signal_channel; }
         if (updated.mode_switch_signal_threshold - snapshot.mode_switch_signal_threshold).abs() > f32::EPSILON { other.mode_switch_signal_threshold = updated.mode_switch_signal_threshold; }
         if updated.mode_switch_target != snapshot.mode_switch_target { other.mode_switch_target = updated.mode_switch_target; }
@@ -5177,7 +5177,7 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-        // Reset button — clears both child orientations back to identity
+        // Reset button - clears both child orientations back to identity
         ui.horizontal(|ui| {
             if ui.add(egui::Button::new(
                 egui::RichText::new("↺ Reset Orientations").size(11.0))
@@ -5646,7 +5646,7 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                 ui.style_mut().spacing.slider_width = slider_width;
 
                 // Slider range is 0 to max_preview_duration (in seconds)
-                // The slider is purely user-driven — simulation never writes to time_value
+                // The slider is purely user-driven - simulation never writes to time_value
                 let slider_response = ui.add_enabled(
                     is_preview_mode,
                     egui::Slider::new(&mut context.editor_state.time_value, 0.0..=context.editor_state.max_preview_duration)
@@ -6651,7 +6651,7 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
 /// Render the WorldSettings panel for simulation parameters and physics.
 fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     // Set slider width to fill the panel, leaving room for value + suffix labels.
-    // Use a more conservative margin (80px) to account for suffixes like " units", "k", "×".
+    // Use a more conservative margin (80px) to account for suffixes like " units", "k", "x".
     let sw = (ui.available_width() - 80.0).max(60.0);
     ui.style_mut().spacing.slider_width = sw;
 
@@ -6790,7 +6790,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         let mut log_slider = if world.radiation_level <= 0.0 {
             0.0f32
         } else {
-            // Map [1e-5, 1.0] → [0.0, 1.0]
+            // Map [1e-5, 1.0] -> [0.0, 1.0]
             let normalized = (world.radiation_level.log10() as f64 + DECADES) / DECADES;
             normalized.clamp(0.0, 1.0) as f32
         };

@@ -10,18 +10,18 @@
 //! renderer with dedicated pipelines and resources:
 //! 
 //! ```
-//! ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-//! │   Cell Renderer │    │ Adhesion Lines  │    │    Skybox       │
-//! │   (instanced)   │    │   (line strips) │    │  (cube map)     │
-//! └─────────────────┘    └─────────────────┘    └─────────────────┘
-//!          │                       │                       │
-//!          ▼                       ▼                       ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                    Render Pass Coordinator                     │
-//! │  1. Clear depth/color  4. Adhesion lines  7. Debug overlays    │
-//! │  2. Skybox (optional)  5. Split rings     8. UI (egui)         │
-//! │  3. Cells (instanced)  6. Gizmos                               │
-//! └─────────────────────────────────────────────────────────────────┘
+//! +-----------------+    +-----------------+    +-----------------+
+//! |   Cell Renderer |    | Adhesion Lines  |    |    Skybox       |
+//! |   (instanced)   |    |   (line strips) |    |  (cube map)     |
+//! +-----------------+    +-----------------+    +-----------------+
+//!          |                       |                       |
+//!          v                       v                       v
+//! +-----------------------------------------------------------------+
+//! |                    Render Pass Coordinator                     |
+//! |  1. Clear depth/color  4. Adhesion lines  7. Debug overlays    |
+//! |  2. Skybox (optional)  5. Split rings     8. UI (egui)         |
+//! |  3. Cells (instanced)  6. Gizmos                               |
+//! +-----------------------------------------------------------------+
 //! ```
 //! 
 //! ## Key Design Principles

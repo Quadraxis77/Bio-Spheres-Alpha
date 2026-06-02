@@ -32,10 +32,10 @@ pub mod math_utils {
             return (0.0, 0.0);
         }
         
-        // Latitude: angle from XY plane to point (-π/2 to π/2)
+        // Latitude: angle from XY plane to point (-pi/2 to pi/2)
         let lat = v.z.clamp(-1.0, 1.0).asin();
         
-        // Longitude: angle in XY plane from X axis (-π to π)
+        // Longitude: angle in XY plane from X axis (-pi to pi)
         let lon = if v.x.abs() < f32::EPSILON && v.y.abs() < f32::EPSILON {
             // Handle pole case: longitude is undefined, use 0
             0.0
@@ -220,7 +220,7 @@ pub mod response_utils {
 pub mod grid_utils {
     use super::*;
 
-    /// Snap angle to grid increments (15 degrees = π/12 radians)
+    /// Snap angle to grid increments (15 degrees = pi/12 radians)
     pub fn snap_angle_to_grid(angle: f32) -> f32 {
         let grid_increment = PI / 12.0; // 15 degrees
         (angle / grid_increment).round() * grid_increment
@@ -432,7 +432,7 @@ pub fn quaternion_ball(
     // Draw grid lines (only if snapping is enabled) - match reference implementation
     if enable_snapping {
         let col_grid = Color32::from_rgba_unmultiplied(100, 100, 120, 120);
-        let grid_divisions = 12; // 360° / 30° = 12 divisions
+        let grid_divisions = 12; // 360 deg / 30 deg = 12 divisions
         let angle_step = 360.0f32 / grid_divisions as f32;
         
         // Draw longitude lines
@@ -570,7 +570,7 @@ pub fn quaternion_ball(
         if base_alpha > 0 {
             let arc_color = egui::Color32::from_rgba_unmultiplied(200, 200, 220, base_alpha);
             let arc_r = radius + 4.5; // Just outside the rim stroke
-            let arc_half_angle: f32 = 0.55; // ~31° half-arc
+            let arc_half_angle: f32 = 0.55; // ~31 deg half-arc
             let arrow_size: f32 = 5.5;
             let segments = 16;
 
@@ -615,9 +615,9 @@ pub fn quaternion_ball(
                 ));
             };
 
-            // Top arc: CCW arrow at 270° (top of ball)
+            // Top arc: CCW arrow at 270 deg (top of ball)
             draw_arc_arrow(-std::f32::consts::FRAC_PI_2, 1.0);
-            // Bottom arc: CW arrow at 90° (bottom of ball)
+            // Bottom arc: CW arrow at 90 deg (bottom of ball)
             draw_arc_arrow(std::f32::consts::FRAC_PI_2, -1.0);
         }
     }
@@ -717,7 +717,7 @@ pub fn quaternion_ball(
                 let new_lon = new.y.atan2(new.x);
                 let mut lon_delta = (new_lon - prev_lon).to_degrees();
                 
-                // Normalize longitude delta to avoid jumps at ±180°
+                // Normalize longitude delta to avoid jumps at 180 deg
                 while lon_delta > 180.0 {
                     lon_delta -= 360.0;
                 }
@@ -940,7 +940,7 @@ pub fn modes_buttons(
             copy_into_clicked = true;
         }
         
-        // Reset button with "⟲" character - smaller
+        // Reset button with "" character - smaller
         if ui.small_button("⟲").on_hover_text("Reset mode").clicked() {
             reset_clicked = true;
         }
@@ -1160,7 +1160,7 @@ pub fn modes_list_items(
                     );
                 }
                 
-                // Draw text — marquee scroll on hover if text is too long, else truncate.
+                // Draw text - marquee scroll on hover if text is too long, else truncate.
                 let text_max_width = button_rect.width() - 6.0; // 3px padding each side
                 let font_id = egui::FontId::default();
                 let full_galley = ui.painter().layout_no_wrap(
@@ -1212,7 +1212,7 @@ pub fn modes_list_items(
                         }
                         ui.ctx().request_repaint();
                     } else {
-                        // Not hovered — reset smoothly (instant reset is fine)
+                        // Not hovered - reset smoothly (instant reset is fine)
                         offset = 0.0;
                         timer = 0.0;
                     }
@@ -1229,7 +1229,7 @@ pub fn modes_list_items(
                     );
                     painter.galley(text_pos, full_galley, text_color);
                 } else {
-                    // Text fits — draw centered, no truncation needed
+                    // Text fits - draw centered, no truncation needed
                     ui.painter().text(
                         button_rect.center(),
                         egui::Align2::CENTER_CENTER,
@@ -1296,7 +1296,7 @@ pub fn modes_list_items(
                     *color_picker_state = Some((index, hsva));
                 }
 
-                // Handle drag start — drag_started() already implies the threshold was crossed,
+                // Handle drag start - drag_started() already implies the threshold was crossed,
                 // so set has_moved = true immediately.
                 if !copy_into_mode && button_response.drag_started() {
                     ui.ctx().data_mut(|d| d.insert_temp(drag_state_id, (index, index, true)));
@@ -1308,7 +1308,7 @@ pub fn modes_list_items(
                     ui.ctx().request_repaint();
                 }
 
-                // Handle drag release — emit reorder (handled post-loop using complete row_rects)
+                // Handle drag release - emit reorder (handled post-loop using complete row_rects)
                 // drag_stopped on the button is not used; release is detected after all rows render.
             }
         });
@@ -1316,7 +1316,7 @@ pub fn modes_list_items(
     }
 
     // After all rows are rendered, update drop target using the complete row_rects.
-    // This is the only place where the target is computed — row_rects is now fully populated.
+    // This is the only place where the target is computed - row_rects is now fully populated.
     if let Some((src, _old_tgt, has_moved)) = drag_state {
         let mouse_down = ui.input(|i| i.pointer.primary_down());
         let mouse_released = ui.input(|i| i.pointer.primary_released());
@@ -1612,10 +1612,10 @@ mod tests {
     #[test]
     fn test_circular_slider_angle_calculation() {
         // Test angle calculation and normalization for circular slider
-        // The widget starts from top (-π/2) and goes clockwise
+        // The widget starts from top (-pi/2) and goes clockwise
         let test_cases = vec![
-            (0.0, 0.0, 1.0, 3.0 * PI / 2.0), // value=0 should give -π/2, normalized to 3π/2
-            (0.5, 0.0, 1.0, PI / 2.0), // value=0.5 should give π/2
+            (0.0, 0.0, 1.0, 3.0 * PI / 2.0), // value=0 should give -pi/2, normalized to 3pi/2
+            (0.5, 0.0, 1.0, PI / 2.0), // value=0.5 should give pi/2
             (1.0, 0.0, 1.0, 3.0 * PI / 2.0), // value=1 should wrap back to start
         ];
         
@@ -1624,7 +1624,7 @@ mod tests {
             let normalized_value = (value - v_min) / value_range;
             let angle = normalized_value * 2.0 * PI - PI / 2.0;
             
-            // Normalize to 0-2π range like the widget does
+            // Normalize to 0-2pi range like the widget does
             let mut normalized_angle = angle;
             while normalized_angle < 0.0 {
                 normalized_angle += 2.0 * PI;
@@ -1706,7 +1706,7 @@ mod tests {
             let m = quat_to_mat3(q);
             let q2 = mat3_to_quat(m);
             
-            // Quaternions q and -q represent the same rotation, so dot product should be ±1
+            // Quaternions q and -q represent the same rotation, so dot product should be 1
             let dot_product = q.dot(q2).abs();
             prop_assert!((dot_product - 1.0).abs() < 1e-5, 
                 "Quaternion-matrix round trip failed: dot={}, q={:?}, q2={:?}", dot_product, q, q2);

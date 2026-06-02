@@ -1,7 +1,7 @@
 //! Ciliocyte cell behavior implementation.
 //!
 //! Ciliocytes are contact-dependent surface propulsion cells whose surface cilia
-//! push against anything touching them — neighboring cells or solid surfaces —
+//! push against anything touching them - neighboring cells or solid surfaces -
 //! generating thrust along the cell's local forward axis (+Z). In open water
 //! with nothing to push against, the cell is completely inert.
 

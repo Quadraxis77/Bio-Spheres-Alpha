@@ -194,7 +194,7 @@ pub struct CellTypeVisuals {
     /// Base animation scroll rate for cilia rings (1.0-10.0, default 4.0)
     pub cilia_ring_speed: f32,
 
-    // Generic type params — packed into type_data_0.xyzw for types using the default branch.
+    // Generic type params - packed into type_data_0.xyzw for types using the default branch.
     // Interpretation depends on cell type (see build_instances.wgsl for mapping):
     //   Test:       ring_frequency, ring_sharpness, ring_brightness, unused
     //   Phagocyte:  nucleus_radius, nucleus_darkness, nucleus_sharpness, unused
@@ -237,7 +237,7 @@ impl Default for CellTypeVisuals {
             cilia_ring_frequency: 5.0,
             cilia_ring_depth: 0.1,
             cilia_ring_speed: 4.0,
-            // Generic type params — defaults match old hardcoded shader values per type.
+            // Generic type params - defaults match old hardcoded shader values per type.
             // Since one default covers all types, we use neutral/zero values here.
             // Per-type defaults are set in CellTypeVisualsStore::default_for_type().
             param_a: 0.0,
@@ -254,7 +254,7 @@ impl CellTypeVisuals {
         let mut v = Self::default();
         match cell_type {
             CellType::Test => {
-                // ring_frequency=0 → plain sphere (matches old no-pattern default)
+                // ring_frequency=0 -> plain sphere (matches old no-pattern default)
                 v.param_a = 0.0; // ring_frequency (0 = off)
                 v.param_b = 0.3; // ring_sharpness
                 v.param_c = 0.0; // ring_brightness (0 = off)
@@ -317,10 +317,10 @@ impl CellTypeVisuals {
             }
             CellType::Oculocyte => {
                 // Eye: pupil_size, iris_freq, iris_texture, pupil_dark
-                // goldberg_scale → pupil_size (type_data_0.x)
-                // goldberg_ridge_width → iris_freq (type_data_0.y)
-                // goldberg_meander → iris_texture (type_data_0.z)
-                // goldberg_ridge_strength → pupil_dark (type_data_0.w)
+                // goldberg_scale -> pupil_size (type_data_0.x)
+                // goldberg_ridge_width -> iris_freq (type_data_0.y)
+                // goldberg_meander -> iris_texture (type_data_0.z)
+                // goldberg_ridge_strength -> pupil_dark (type_data_0.w)
                 v.goldberg_scale = 0.25;          // pupil_size
                 v.goldberg_ridge_width = 8.0;     // iris_freq (striation count)
                 v.goldberg_meander = 0.3;          // iris_texture blend
@@ -1012,7 +1012,7 @@ impl CellType {
                 mode.nutrient_priority = 0.5;
                 mode.max_cell_size = 1.5;
                 mode.split_mass = 2.5;
-                // Sealed by default — outlets must be explicitly enabled
+                // Sealed by default - outlets must be explicitly enabled
                 mode.vascular_outlet = false;
                 mode.vascular_signal_transport = false;
                 mode.vascular_signal_capacity = 10.0;
@@ -1023,7 +1023,7 @@ impl CellType {
                 // They never split: reproduction happens only through gamete merge.
                 mode.nutrient_priority = 2.0;
                 mode.max_cell_size = 2.0;
-                mode.split_mass = 99.0; // Very high — Gametocytes never split on their own
+                mode.split_mass = 99.0; // Very high - Gametocytes never split on their own
                 mode.split_interval = 60.0; // Sentinel: never self-divide when free
                 mode.max_splits = 0; // Tooltip-visible rule: no Gametocyte division.
                 mode.gametocyte_merge_range = 0.5;

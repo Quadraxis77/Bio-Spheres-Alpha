@@ -289,7 +289,7 @@ impl GpuAdhesionLineRenderer {
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         render_pass.set_bind_group(1, data_bind_group, &[]);
 
-        // Draw: 12 vertices per instance (2 half-segments × 2 triangles × 3 verts)
+        // Draw: 12 vertices per instance (2 half-segments x 2 triangles x 3 verts)
         // The shader will skip inactive adhesions by outputting degenerate vertices
         render_pass.draw(0..12, 0..active_count);
     }

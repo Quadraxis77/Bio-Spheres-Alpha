@@ -133,7 +133,7 @@ struct ShadowFieldParams {
 @group(2) @binding(2) var<storage, read> water_density: array<f32>;
 @group(2) @binding(3) var<storage, read> moss_density: array<f32>;
 
-// Sample light field at world position — always trilinear.
+// Sample light field at world position - always trilinear.
 fn sample_light_field_lod(world_pos: vec3<f32>) -> f32 {
     if (shadow_params.shadow_enabled == 0u) {
         return 1.0;
@@ -348,7 +348,7 @@ fn sample_triplanar_texture(world_pos: vec3<f32>, normal: vec3<f32>) -> f32 {
     return tex_xz * normalized_weights.x + tex_xy * normalized_weights.y + tex_yz * normalized_weights.z;
 }
 
-// Moss density sampling — trilinear interpolation from 128³ grid.
+// Moss density sampling - trilinear interpolation from 128^3 grid.
 fn sample_moss_density(world_pos: vec3<f32>) -> f32 {
     let res = shadow_params.grid_resolution;
     let grid_origin = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
@@ -423,7 +423,7 @@ fn worley_noise(uv: vec2<f32>) -> f32 {
 }
 
 // ============================================================
-// Moss height — multi-octave for better detail
+// Moss height - multi-octave for better detail
 // ============================================================
 fn moss_height_lod(uv: vec2<f32>, octaves: i32) -> f32 {
     let freq = shadow_params.moss_noise_frequency;
@@ -440,10 +440,10 @@ fn moss_height_lod(uv: vec2<f32>, octaves: i32) -> f32 {
         h = noise(uv * freq);
     }
 
-    // Second octave — finer detail at 2× frequency, half amplitude
+    // Second octave - finer detail at 2x frequency, half amplitude
     let h2 = noise(uv * freq * lac) * 0.5;
 
-    // Third octave — micro detail at 4× frequency, quarter amplitude
+    // Third octave - micro detail at 4x frequency, quarter amplitude
     let h3 = noise(uv * freq * lac * lac) * 0.25;
 
     // Combine: base shape + fine detail + micro detail
@@ -453,7 +453,7 @@ fn moss_height_lod(uv: vec2<f32>, octaves: i32) -> f32 {
     return h;
 }
 
-// Full-quality wrapper kept for reference — all call sites use moss_height_lod directly.
+// Full-quality wrapper kept for reference - all call sites use moss_height_lod directly.
 
 // Moss color: varies from dark base to bright tips with per-position variation
 fn moss_color(uv: vec2<f32>, height_val: f32) -> vec3<f32> {
@@ -538,7 +538,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Blend with outer layer color only in bottom hemisphere
     var final_base_color = mix(cave_color, outer_color, red_factor);
 
-    // ── Moss rendering with parallax and normal perturbation ──────────────
+    // -- Moss rendering with parallax and normal perturbation --------------
     let moss_sample_pos = in.world_position + N * shadow_params.cell_size * 0.5;
     let cam_dist = length(camera.camera_pos - in.world_position);
     let moss_amount = sample_moss_density(moss_sample_pos);
@@ -547,7 +547,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (moss_amount > 0.01) {
         let base_uv = get_triplanar_uv(in.world_position, N);
 
-        // ── Parallax offset ───────────────────────────────────────────────
+        // -- Parallax offset -----------------------------------------------
         // Shift UV in the view direction projected onto the surface plane.
         // This makes moss tufts appear to have real depth.
         var pom_uv = base_uv;
@@ -576,7 +576,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let h       = moss_height_lod(pom_uv, 1);
         let m_color = moss_color(pom_uv, h);
 
-        // ── Normal perturbation from height gradient ──────────────────────
+        // -- Normal perturbation from height gradient ----------------------
         // Finite-difference gradient of the height map perturbs the shading normal,
         // giving moss tufts a 3D bumpy appearance.
         let bump = shadow_params.moss_bump_strength * moss_amount;

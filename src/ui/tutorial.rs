@@ -17,9 +17,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Gate system
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// A condition that must be true before the player can advance.
 pub enum StepGate {
@@ -125,9 +125,9 @@ impl StepGate {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Step data
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Which panel or element a tutorial step points at.
 pub enum TutorialTarget {
@@ -197,29 +197,29 @@ pub struct TutorialStepData {
     pub target_pos: [f32; 2],
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Tutorial steps
 //
 // Structure: 8 chapters, each teaching one mechanic through observation.
-// The player is never told to build a specific organism — they experiment
+// The player is never told to build a specific organism - they experiment
 // with settings and watch what changes.  Gates confirm they touched the
 // mechanic, not that they set it to a prescribed value.
 //
-// Chapter 1 — Orientation:    what you're looking at, how to observe
-// Chapter 2 — Division:       split nutrients and interval, watching timing
-// Chapter 3 — Cell types:     changing type, observing behavior
-// Chapter 4 — Adhesion:       bonding on/off, bodies vs solo cells
-// Chapter 5 — Body shape:     child routing and orientation
-// Chapter 6 — Lifecycle:      max splits, finite growth, after-splits
-// Chapter 7 — Signals:        brief intro to the signal system
-// Chapter 8 — Go live:        releasing into the full world
-// ─────────────────────────────────────────────────────────────────────────────
+// Chapter 1 - Orientation:    what you're looking at, how to observe
+// Chapter 2 - Division:       split nutrients and interval, watching timing
+// Chapter 3 - Cell types:     changing type, observing behavior
+// Chapter 4 - Adhesion:       bonding on/off, bodies vs solo cells
+// Chapter 5 - Body shape:     child routing and orientation
+// Chapter 6 - Lifecycle:      max splits, finite growth, after-splits
+// Chapter 7 - Signals:        brief intro to the signal system
+// Chapter 8 - Go live:        releasing into the full world
+// -----------------------------------------------------------------------------
 
 pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 1 — ORIENTATION
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 1 - ORIENTATION
+    // 
 
     TutorialStepData {
         title: "Chapter 1 — The Genome Editor",
@@ -273,9 +273,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 2 — DIVISION TIMING
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 2 - DIVISION TIMING
+    // 
 
     TutorialStepData {
         title: "Chapter 2 — Division Timing",
@@ -315,9 +315,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.3],
     },
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 3 — CELL TYPES
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 3 - CELL TYPES
+    // 
 
     TutorialStepData {
         title: "Chapter 3 — Cell Types",
@@ -354,9 +354,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 4 — ADHESION
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 4 - ADHESION
+    // 
 
     TutorialStepData {
         title: "Chapter 4 — Adhesion",
@@ -450,9 +450,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 5 — BODY SHAPE
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 5 - BODY SHAPE
+    // 
 
     TutorialStepData {
         title: "Chapter 5 — Body Shape",
@@ -503,9 +503,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.75, 0.75],
     },
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 6 — LIFECYCLE
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 6 - LIFECYCLE
+    // 
 
     TutorialStepData {
         title: "Chapter 6 — Lifecycle and Finite Growth",
@@ -564,9 +564,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.3],
     },
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 7 — SIGNALS
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 7 - SIGNALS
+    // 
 
     TutorialStepData {
         title: "Chapter 7 — Signals (Optional)",
@@ -653,9 +653,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // ════════════════════════════════════════════════════════════════════════
-    // CHAPTER 8 — GO LIVE
-    // ════════════════════════════════════════════════════════════════════════
+    // 
+    // CHAPTER 8 - GO LIVE
+    // 
 
     TutorialStepData {
         title: "Chapter 8 — Release Into the World",
@@ -703,9 +703,9 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // State
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Persistent tutorial playback state, stored inside [`GlobalUiState`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -750,9 +750,9 @@ impl TutorialState {
     pub fn close(&mut self) { self.active = false; }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Visual constants
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 const TEAL:        egui::Color32 = egui::Color32::from_rgb(0, 220, 175);
 const TEAL_DIM:    egui::Color32 = egui::Color32::from_rgb(0, 100, 80);
@@ -764,9 +764,9 @@ const DOT_R:       f32 = 3.5;
 const ARROW_LEN:   f32 = 11.0;
 const ARROW_HALF:  f32 = 5.0;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Public render entry point
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /// Render the tutorial overlay.  Call once per frame after the dock area
 /// renders (so panel rects are populated) and before `ctx.end_pass()`.
@@ -797,7 +797,7 @@ pub fn render_tutorial(
         )
     };
 
-    // ── Panel highlight ──────────────────────────────────────────────────────
+    // -- Panel highlight ------------------------------------------------------
     if let Some(ref key) = target_key {
         if let Some(&panel_rect) = panel_rects.get(key.as_str()) {
             let bg = ctx.layer_painter(egui::LayerId::new(
@@ -820,7 +820,7 @@ pub fn render_tutorial(
         }
     }
 
-    // ── Dialogue window ──────────────────────────────────────────────────────
+    // -- Dialogue window ------------------------------------------------------
     let mut dialogue_rect: Option<egui::Rect> = None;
     let mut next_clicked  = false;
     let mut prev_clicked  = false;
@@ -938,7 +938,7 @@ pub fn render_tutorial(
     if next_clicked  { state.next(); }
     else if prev_clicked { state.prev(); }
 
-    // ── Schematic pointer line ───────────────────────────────────────────────
+    // -- Schematic pointer line -----------------------------------------------
     if let (Some(d_rect), Some(ref key)) = (dialogue_rect, target_key) {
         if let Some(&p_rect) = panel_rects.get(key.as_str()) {
             let tip = if target_is_element {
@@ -961,9 +961,9 @@ pub fn render_tutorial(
     ctx.request_repaint();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Drawing helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 fn draw_schematic_pointer(
     painter: &egui::Painter,

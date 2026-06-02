@@ -174,14 +174,14 @@ impl CameraController {
         // Store gravity mode so orbit rotation can use it
         self.gravity_mode = gravity_mode;
 
-        // In radial mode, don't realign — there is no fixed "up" axis.
+        // In radial mode, don't realign - there is no fixed "up" axis.
         // Recomputing up from camera position every frame causes a feedback spin loop.
         if gravity_mode == 3 {
             return;
         }
 
         let new_up = if gravity.abs() < 0.001 {
-            Vec3::Y // no gravity → default Y up
+            Vec3::Y // no gravity -> default Y up
         } else {
             // For axial modes, up points along the positive axis direction
             // Camera doesn't flip when gravity magnitude changes sign
@@ -387,7 +387,7 @@ impl CameraController {
             
             if self.mode == CameraMode::Orbit {
                 if self.gravity_mode == 3 {
-                    // Radial mode: fully quaternion-based orbit — no fixed axis.
+                    // Radial mode: fully quaternion-based orbit - no fixed axis.
                     // Yaw around camera's local Y, pitch around camera's local X.
                     let local_y = self.target_rotation * Vec3::Y;
                     let local_x = self.target_rotation * Vec3::X;

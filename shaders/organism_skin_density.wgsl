@@ -1,4 +1,4 @@
-// Organism Skin Density — K=4 Overlapping Slots
+// Organism Skin Density - K=4 Overlapping Slots
 //
 // Each voxel has four slots. Each slot holds an organism_id (u32) and a
 // fixed-point density accumulator (atomic i32). Cells claim a slot via CAS
@@ -6,9 +6,9 @@
 // voxel; a fifth is dropped.
 //
 // Three entry points (same bind group):
-//   clear_density      — zero all slot data
-//   generate_density   — per-cell metaball splatting into slots
-//   normalize_density  — convert fixed-point i32 → f32 density per slot
+//   clear_density      - zero all slot data
+//   generate_density   - per-cell metaball splatting into slots
+//   normalize_density  - convert fixed-point i32 -> f32 density per slot
 
 struct OrganismDensityParams {
     grid_origin: vec3<f32>,
@@ -24,13 +24,13 @@ struct OrganismDensityParams {
 @group(0) @binding(2) var<storage, read>      death_flags: array<u32>;
 @group(0) @binding(3) var<storage, read>      cell_count: array<u32>;
 
-// K=4 slot buffers — organism IDs (atomic u32)
+// K=4 slot buffers - organism IDs (atomic u32)
 @group(0) @binding(4)  var<storage, read_write> slot_org_0: array<atomic<u32>>;
 @group(0) @binding(5)  var<storage, read_write> slot_org_1: array<atomic<u32>>;
 @group(0) @binding(6)  var<storage, read_write> slot_org_2: array<atomic<u32>>;
 @group(0) @binding(7)  var<storage, read_write> slot_org_3: array<atomic<u32>>;
 
-// K=4 slot buffers — fixed-point density accumulators (atomic i32)
+// K=4 slot buffers - fixed-point density accumulators (atomic i32)
 @group(0) @binding(8)  var<storage, read_write> slot_density_0: array<atomic<i32>>;
 @group(0) @binding(9)  var<storage, read_write> slot_density_1: array<atomic<i32>>;
 @group(0) @binding(10) var<storage, read_write> slot_density_2: array<atomic<i32>>;
@@ -59,11 +59,11 @@ fn voxel_index(x: u32, y: u32, z: u32) -> u32 {
     return x + y * r + z * r * r;
 }
 
-// Wyvill metaball kernel: f(r) = (1 - r²/R²)³
+// Wyvill metaball kernel: f(r) = (1 - r^2/R^2)^3
 // Peaks at 1.0 at the cell centre, falls to 0.0 at r = R.
-// Much sharper than smoothstep near the surface — the iso level sits
+// Much sharper than smoothstep near the surface - the iso level sits
 // close to the cell boundary for both isolated cells and dense clusters.
-// r2_over_R2 = (dist/radius)²  in [0, 1]
+// r2_over_R2 = (dist/radius)^2  in [0, 1]
 fn metaball_kernel(r2_over_R2: f32) -> f32 {
     let x = 1.0 - r2_over_R2;
     return x * x * x;
@@ -72,9 +72,9 @@ fn metaball_kernel(r2_over_R2: f32) -> f32 {
 // Slot claiming is inlined in generate_density because WGSL (naga) does not
 // allow passing storage pointers to functions.
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 1: clear all slot data
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn clear_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let total = params.grid_resolution * params.grid_resolution * params.grid_resolution;
@@ -90,9 +90,9 @@ fn clear_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&slot_density_3[gid.x], 0);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 2: per-cell metaball splatting with K=4 slot claiming
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(64, 1, 1)
 fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell_idx = gid.x;
@@ -109,7 +109,7 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     if skin_id == 0u { return; }
 
     // skin_radius_scale is now the tight skin offset in world units added on top
-    // of the cell radius.  A value of 1.2–1.5 gives a snug skin; 2.0 gives a
+    // of the cell radius.  A value of 1.2-1.5 gives a snug skin; 2.0 gives a
     // slightly looser one.  The Wyvill kernel peaks at 1.0 at the cell centre
     // and reaches 0.0 at influence_radius, so the iso level of ~0.5 sits
     // roughly at the cell surface for any cluster density.
@@ -146,7 +146,7 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let dist_sq = wyz2 + wx * wx;
                 if dist_sq >= radius_sq { continue; }
 
-                // Wyvill kernel: (1 - dist²/R²)³  — peaks at 1.0 at centre,
+                // Wyvill kernel: (1 - dist^2/R^2)^3  - peaks at 1.0 at centre,
                 // 0.0 at the influence boundary.  No sqrt needed.
                 let contrib = metaball_kernel(dist_sq * inv_radius_sq);
                 let fixed   = i32(contrib * FIXED_SCALE);
@@ -217,15 +217,15 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
                         }
                     }
                 }
-                // All 4 slots taken by other organisms — drop this contribution.
+                // All 4 slots taken by other organisms - drop this contribution.
             }
         }
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pass 3: normalize fixed-point → f32 and copy org IDs for surface nets
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Pass 3: normalize fixed-point -> f32 and copy org IDs for surface nets
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let total = params.grid_resolution * params.grid_resolution * params.grid_resolution;
@@ -241,7 +241,7 @@ fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let org3 = atomicLoad(&slot_org_3[idx]);
 
     if (org0 | org1 | org2 | org3) == 0u {
-        // All slots empty — write zeros and skip
+        // All slots empty - write zeros and skip
         density_out_0[idx] = 0.0;
         density_out_1[idx] = 0.0;
         density_out_2[idx] = 0.0;

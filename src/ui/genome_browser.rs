@@ -1,11 +1,11 @@
-//! Genome browser — a styled floating window for loading genomes.
+//! Genome browser - a styled floating window for loading genomes.
 
 use std::path::PathBuf;
 use egui::{Color32, Rect, Sense, Vec2};
 use crate::ui::ui_system::palette;
 
 const CARD_W: f32 = 180.0;
-/// Thumbnail is square — matches the 256×256 GIF aspect ratio exactly.
+/// Thumbnail is square - matches the 256x256 GIF aspect ratio exactly.
 const CARD_THUMB_H: f32 = CARD_W;
 /// Info area below the thumbnail: name (14px) + mode count (12px) + tags row (18px) + padding.
 const CARD_INFO_H: f32 = 60.0;
@@ -13,7 +13,7 @@ const CARD_H: f32 = CARD_THUMB_H + CARD_INFO_H;
 const CARD_GAP: f32 = 10.0;
 const GIF_FPS: f32 = 20.0;
 
-// ── Thumbnail ─────────────────────────────────────────────────────────────────
+// -- Thumbnail -----------------------------------------------------------------
 
 pub struct GenomeThumbnail {
     pub frames: Vec<egui::TextureHandle>,
@@ -82,7 +82,7 @@ impl GenomeThumbnail {
     pub fn current_tex(&self) -> egui::TextureId { self.frames[self.frame_idx].id() }
 }
 
-// ── Entry ─────────────────────────────────────────────────────────────────────
+// -- Entry ---------------------------------------------------------------------
 
 /// Pre-computed stats derived from the genome, shown on the card.
 pub struct GenomeStats {
@@ -108,7 +108,7 @@ impl GenomeStats {
 
         let mut tags: Vec<(&'static str, [u8; 3])> = Vec::new();
 
-        // ── Diet classification (always first) ───────────────────────────────
+        // -- Diet classification (always first) -------------------------------
         // All 8 combinations of photo / devour / phage:
         let diet_tag: (&'static str, [u8; 3]) = match (has_photo, has_devour, has_phage) {
             // photo + devour + phage
@@ -130,7 +130,7 @@ impl GenomeStats {
         };
         tags.push(diet_tag);
 
-        // ── Trait tags ───────────────────────────────────────────────────────
+        // -- Trait tags -------------------------------------------------------
         if has(10)  { tags.push(("🥚 Repro",    [100, 200, 120])); }
         if has(7)   { tags.push(("👁 Sense",    [120, 180, 240])); }
         if has(3)   { tags.push(("🏊 Swim",     [80,  160, 220])); }
@@ -176,7 +176,7 @@ impl GenomeEntry {
     }
 }
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// -- State ---------------------------------------------------------------------
 
 pub struct GenomeBrowserState {
     pub open: bool,
@@ -190,7 +190,7 @@ pub struct GenomeBrowserState {
     pub status_timer: f32,
     /// Current sort order.
     pub sort_mode: BrowserSort,
-    /// Active tag filter — empty string means no tag filter.
+    /// Active tag filter - empty string means no tag filter.
     pub tag_filter: String,
     /// Paths queued for incremental loading (one per frame).
     pending_load: std::collections::VecDeque<PathBuf>,
@@ -202,9 +202,9 @@ pub struct GenomeBrowserState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserSort {
-    /// Alphabetical A→Z (default).
+    /// Alphabetical A->Z (default).
     NameAsc,
-    /// Alphabetical Z→A.
+    /// Alphabetical Z->A.
     NameDesc,
     /// Most recently modified first.
     Recent,
@@ -291,7 +291,7 @@ impl GenomeBrowserState {
     }
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
+// -- Render --------------------------------------------------------------------
 
 pub fn render_genome_browser(
     ctx: &egui::Context,
@@ -460,7 +460,7 @@ pub fn render_genome_browser(
 
             ui.add(egui::Separator::default().spacing(0.0));
 
-            // Card grid — filter then sort
+            // Card grid - filter then sort
             let search_lower = state.search.to_lowercase();
             let tag_lower = state.tag_filter.to_lowercase();
             let mut vis: Vec<usize> = state.entries.iter().enumerate()
@@ -602,7 +602,7 @@ pub fn render_genome_browser(
                                 }
                             }
                             ui.add_space(8.0);
-                            // Delete button — left side of action strip (right-to-left layout, so add last)
+                            // Delete button - left side of action strip (right-to-left layout, so add last)
                             if ui.add_enabled(can, egui::Button::new(
                                 egui::RichText::new("🗑  Delete").size(12.0)
                                     .color(if can { Color32::from_rgb(220, 80, 80) } else { p.text_dim }))
@@ -684,7 +684,7 @@ pub fn render_genome_browser(
     result
 }
 
-// ── Card drawing ──────────────────────────────────────────────────────────────
+// -- Card drawing --------------------------------------------------------------
 
 fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool, hovered: bool, p: crate::ui::ui_system::ActivePalette) {
     let painter = ui.painter();
@@ -700,7 +700,7 @@ fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool,
         painter.rect_stroke(rect.expand(2.0), egui::CornerRadius::same(8), egui::Stroke::new(2.0, glow), egui::StrokeKind::Outside);
     }
 
-    // Thumbnail — square, fills the top of the card edge-to-edge (1px inset for border).
+    // Thumbnail - square, fills the top of the card edge-to-edge (1px inset for border).
     let thumb = Rect::from_min_size(
         rect.min + Vec2::new(1.0, 1.0),
         Vec2::splat(CARD_THUMB_H - 2.0),
@@ -734,7 +734,7 @@ fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool,
         if selected { p.accent_primary } else { p.text_primary },
     );
 
-    // Mode count — right-aligned on the same row as the name.
+    // Mode count - right-aligned on the same row as the name.
     let mode_str = format!("{} modes", entry.stats.mode_count);
     painter.text(
         egui::pos2(rect.right() - 8.0, iy),
@@ -744,7 +744,7 @@ fn draw_card(ui: &mut egui::Ui, rect: Rect, entry: &GenomeEntry, selected: bool,
         p.text_dim,
     );
 
-    // Tag pills — wrap across up to 2 rows.
+    // Tag pills - wrap across up to 2 rows.
     let tag_font = egui::FontId::proportional(8.5);
     let pill_h = 13.0;
     let pill_pad_x = 4.0;

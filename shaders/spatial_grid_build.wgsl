@@ -6,7 +6,7 @@
 // Each thread:
 // 1. Computes which grid cell its cell belongs to
 // 2. Stores the grid index in cell_grid_indices (needed by collision shader)
-// 3. Skips dead cells (mass < 0.5) — they don't participate in collisions
+// 3. Skips dead cells (mass < 0.5) - they don't participate in collisions
 // 4. Atomically claims a slot in the grid cell and inserts the cell index
 
 struct PhysicsParams {
@@ -93,7 +93,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let grid_idx = world_pos_to_grid_index(pos, params.world_size, params.grid_cell_size, params.grid_resolution);
     cell_grid_indices[cell_idx] = grid_idx;
     
-    // Skip dead cells — don't insert into spatial grid.
+    // Skip dead cells - don't insert into spatial grid.
     // This saves grid slots for live cells and avoids collision checks against dead cells.
     if (mass < 0.5) {
         return;

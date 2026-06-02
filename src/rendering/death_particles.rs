@@ -5,13 +5,13 @@
 //!
 //! # Pipeline per frame
 //!
-//! 1. **snapshot** — `copy_buffer_to_buffer(death_flags → prev_death_flags)` at the
+//! 1. **snapshot** - `copy_buffer_to_buffer(death_flags -> prev_death_flags)` at the
 //!    *start* of the frame, before physics runs, so `prev_death_flags` reflects last
-//!    frame's state and `spawn_new` can detect the alive→dead transition.
-//! 2. **spawn_new** compute pass — runs after physics; detects newly-dead cells and
+//!    frame's state and `spawn_new` can detect the alive->dead transition.
+//! 2. **spawn_new** compute pass - runs after physics; detects newly-dead cells and
 //!    appends particles to the ring buffer.
-//! 3. **age_particles** compute pass — advances ages, zeroes expired particles.
-//! 4. **render** — draws all `min(counter, MAX_PARTICLES)` instances as billboards.
+//! 3. **age_particles** compute pass - advances ages, zeroes expired particles.
+//! 4. **render** - draws all `min(counter, MAX_PARTICLES)` instances as billboards.
 //!
 //! # Design notes
 //!
@@ -99,7 +99,7 @@ impl DeathParticleRenderer {
     ) -> Self {
         let max_particles = Self::MAX_PARTICLES;
 
-        // ── Shaders ──────────────────────────────────────────────────────────────
+        // -- Shaders --------------------------------------------------------------
         let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Death Particle Render Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -114,7 +114,7 @@ impl DeathParticleRenderer {
             ),
         });
 
-        // ── Buffers ───────────────────────────────────────────────────────────────
+        // -- Buffers ---------------------------------------------------------------
         let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Death Particle Buffer"),
             size: (std::mem::size_of::<DeathParticle>() * max_particles as usize) as u64,
@@ -152,7 +152,7 @@ impl DeathParticleRenderer {
             mapped_at_creation: false,
         });
 
-        // ── Compute bind group layout ─────────────────────────────────────────────
+        // -- Compute bind group layout ---------------------------------------------
         let compute_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Death Extract Bind Group Layout"),
@@ -179,7 +179,7 @@ impl DeathParticleRenderer {
                         },
                         count: None,
                     },
-                    // 2: position_and_mass (read) — current triple-buffer slot
+                    // 2: position_and_mass (read) - current triple-buffer slot
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -226,7 +226,7 @@ impl DeathParticleRenderer {
                 ],
             });
 
-        // ── Compute pipelines ─────────────────────────────────────────────────────
+        // -- Compute pipelines -----------------------------------------------------
         let compute_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Death Extract Pipeline Layout"),
@@ -252,14 +252,14 @@ impl DeathParticleRenderer {
             cache: None,
         });
 
-        // ── Render bind group layout (empty — camera is group 0) ─────────────────
+        // -- Render bind group layout (empty - camera is group 0) -----------------
         let render_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Death Render Bind Group Layout"),
                 entries: &[],
             });
 
-        // ── Render pipeline ───────────────────────────────────────────────────────
+        // -- Render pipeline -------------------------------------------------------
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Death Particle Pipeline Layout"),
@@ -267,7 +267,7 @@ impl DeathParticleRenderer {
                 push_constant_ranges: &[],
             });
 
-        // Vertex buffer layout — instanced, one entry per DeathParticle (64 bytes)
+        // Vertex buffer layout - instanced, one entry per DeathParticle (64 bytes)
         let vertex_buffer_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<DeathParticle>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -296,7 +296,7 @@ impl DeathParticleRenderer {
                     format: surface_format,
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
-                            // Standard alpha blending — tissue is translucent, not glowing
+                            // Standard alpha blending - tissue is translucent, not glowing
                             src_factor: wgpu::BlendFactor::SrcAlpha,
                             dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                             operation: wgpu::BlendOperation::Add,
@@ -336,7 +336,7 @@ impl DeathParticleRenderer {
             cache: None,
         });
 
-        // ── Camera bind group layout (stored for bind group creation) ─────────────
+        // -- Camera bind group layout (stored for bind group creation) -------------
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Death Camera Bind Group Layout (stored)"),
@@ -375,7 +375,7 @@ impl DeathParticleRenderer {
     ///
     /// `position_and_mass_buffer` must be the **current** triple-buffer slot
     /// (i.e. `position_and_mass[current_index()]`), which holds the last
-    /// completed physics frame's positions — not the one being written this frame.
+    /// completed physics frame's positions - not the one being written this frame.
     pub fn create_compute_bind_group(
         &self,
         device: &wgpu::Device,
@@ -405,10 +405,10 @@ impl DeathParticleRenderer {
         })
     }
 
-    /// **Step 1 — snapshot** (call BEFORE physics runs this frame).
+    /// **Step 1 - snapshot** (call BEFORE physics runs this frame).
     ///
-    /// Copies `death_flags` → `prev_death_flags` so that `spawn_new` can detect
-    /// the alive→dead transition after physics completes.
+    /// Copies `death_flags` -> `prev_death_flags` so that `spawn_new` can detect
+    /// the alive->dead transition after physics completes.
     pub fn snapshot_death_flags(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -427,7 +427,7 @@ impl DeathParticleRenderer {
         );
     }
 
-    /// **Steps 2 & 3 — spawn + age** (call AFTER physics runs this frame).
+    /// **Steps 2 & 3 - spawn + age** (call AFTER physics runs this frame).
     ///
     /// `compute_bind_group` must have been built this frame with
     /// `create_compute_bind_group` using the current triple-buffer position slot.

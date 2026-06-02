@@ -1,6 +1,6 @@
 // Moss Consumption Shader
 //
-// Phagocytes eat moss on contact — instantly consuming whatever is at their voxel.
+// Phagocytes eat moss on contact - instantly consuming whatever is at their voxel.
 // After consumption, the voxel is set to a negative value representing a "grazed"
 // cooldown. The growth shader treats negative values as a timer that ticks back
 // toward zero before moss can regrow, preventing immediate regrowth.

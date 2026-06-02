@@ -5,7 +5,7 @@
 //! and expires them, and the render pass draws them as billboarded circles.
 //!
 //! The compute and render shaders share the same file (boulder_bubbles.wgsl) but
-//! use different bind group layouts — the compute pass uses group 0 with boulder
+//! use different bind group layouts - the compute pass uses group 0 with boulder
 //! and water data, while the render pass uses group 0 with just the camera uniform.
 
 use bytemuck::{Pod, Zeroable};
@@ -98,7 +98,7 @@ impl BoulderBubbleSystem {
         width: u32,
         height: u32,
     ) -> Self {
-        // ── Buffers ───────────────────────────────────────────────────────────
+        // -- Buffers -----------------------------------------------------------
         let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Bubble Particle Buffer"),
             size: MAX_BUBBLES as u64 * std::mem::size_of::<BubbleParticle>() as u64,
@@ -126,7 +126,7 @@ impl BoulderBubbleSystem {
             mapped_at_creation: false,
         });
 
-        // ── Shader ────────────────────────────────────────────────────────────
+        // -- Shader ------------------------------------------------------------
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Boulder Bubbles Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -208,7 +208,7 @@ impl BoulderBubbleSystem {
             cache: None,
         });
 
-        // ── Render bind group layout (camera only) ────────────────────────────
+        // -- Render bind group layout (camera only) ----------------------------
         let render_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Bubble Render BGL"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -232,7 +232,7 @@ impl BoulderBubbleSystem {
             }],
         });
 
-        // ── Render pipeline ───────────────────────────────────────────────────
+        // -- Render pipeline ---------------------------------------------------
         let render_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Bubble Render Layout"),
             bind_group_layouts: &[&render_bgl],
@@ -451,7 +451,7 @@ impl BoulderBubbleSystem {
         pass.set_pipeline(&self.render_pipeline);
         pass.set_bind_group(0, &self.render_bg, &[]);
         pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
-        // Draw all MAX_BUBBLES instances — dead ones collapse to degenerate triangles
+        // Draw all MAX_BUBBLES instances - dead ones collapse to degenerate triangles
         pass.draw(0..6, 0..MAX_BUBBLES);
     }
 

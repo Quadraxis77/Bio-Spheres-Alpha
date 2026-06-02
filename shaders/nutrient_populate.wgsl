@@ -1,9 +1,9 @@
-// Nutrient Population Shader — Epoch-based with gradual spawn
+// Nutrient Population Shader - Epoch-based with gradual spawn
 //
 // Instead of drifting a noise field continuously, nutrients appear in discrete
 // "epochs".  Each epoch has a fixed noise seed that determines WHERE nutrients
 // can appear.  Within an epoch, nutrients spawn gradually: a per-voxel random
-// spawn-time is compared against the epoch progress (0→1) so early voxels
+// spawn-time is compared against the epoch progress (0->1) so early voxels
 // appear first and the pattern fills in over the epoch duration.
 //
 // When phagocytes consume a voxel (state 2), it stays consumed for the rest
@@ -40,7 +40,7 @@ var<storage, read> fluid_state: array<u32>;
 @group(0) @binding(2)
 var<storage, read_write> nutrient_voxels: array<atomic<u32>>;
 
-// ── Noise helpers ──────────────────────────────────────────────
+// -- Noise helpers ----------------------------------------------
 
 fn smoothstep(t: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
@@ -53,10 +53,10 @@ fn smoothstep(t: f32) -> f32 {
 //   fract(sin(dot(pos + s, k)) * 43758.5453)
 // Because the epoch seed grows as  1337 + epoch * 7919,  by epoch ~17
 // (~119 simulated seconds, roughly 2 minutes) the sin() argument exceeds
-// ~3 × 10¹².  At that magnitude f32 has no sub-ULP precision left for
+// ~3 x 10^2.  At that magnitude f32 has no sub-ULP precision left for
 // trigonometric range reduction, so sin() returns the same garbage value
-// (often 0.0) for every voxel.  The fbm collapses to 0, noise ≤ threshold
-// becomes universally true, and nutrients never spawn again — permanently.
+// (often 0.0) for every voxel.  The fbm collapses to 0, noise <= threshold
+// becomes universally true, and nutrients never spawn again - permanently.
 //
 // Integer hashing (Murmur3 finalizer mix) is immune to input magnitude:
 // it operates purely in u32 modular arithmetic, guarantees uniform output
@@ -127,7 +127,7 @@ fn spawn_time_hash(voxel_index: u32, epoch: u32) -> f32 {
     return f32((h >> 8u) & 0xFFFFFFu) / 16777216.0;
 }
 
-// ── Helpers ────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------
 
 fn voxel_to_world(voxel_index: u32) -> vec3<f32> {
     let res = params.grid_resolution;
@@ -164,11 +164,11 @@ fn is_water_isolated(x: u32, y: u32, z: u32) -> bool {
     return water_neighbors == 0u;
 }
 
-// ── Epoch lifecycle ─────────────────────────────────────────────
+// -- Epoch lifecycle ---------------------------------------------
 //
 // Each epoch lasts params.epoch_duration seconds and follows this timeline:
 //
-//   0 ── spawn_end ── despawn_start ── epoch_duration
+//   0 -- spawn_end -- despawn_start -- epoch_duration
 //   | spawn ramp-up | fully active | despawn ramp-down |
 //
 // Epochs are spaced params.epoch_spacing apart (< epoch_duration), so the
@@ -221,7 +221,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let voxel_index = global_id.x + global_id.y * res + global_id.z * res * res;
 
-    // Non-water or isolated → clear and bail
+    // Non-water or isolated -> clear and bail
     if (!is_water_voxel(voxel_index) || is_water_isolated(global_id.x, global_id.y, global_id.z)) {
         atomicStore(&nutrient_voxels[voxel_index], 0u);
         return;
@@ -250,12 +250,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     if (any_wants) {
         // At least one epoch wants a nutrient here.
-        // Spawn only into empty voxels — don't overwrite consumed (2).
+        // Spawn only into empty voxels - don't overwrite consumed (2).
         if (current == 0u) {
             atomicStore(&nutrient_voxels[voxel_index], 1u);
         }
     } else {
-        // No epoch wants this voxel active — clear it.
+        // No epoch wants this voxel active - clear it.
         if (current != 0u) {
             atomicStore(&nutrient_voxels[voxel_index], 0u);
         }

@@ -309,7 +309,7 @@ impl GpuSurfaceNets {
             mapped_at_creation: false,
         });
         
-        // Shift grid origin back by 1 cell so the 128³ density data sits
+        // Shift grid origin back by 1 cell so the 128^3 density data sits
         // at padded cells [1..128], with 1 cell of empty padding on each side
         let padded_origin = grid_origin - Vec3::splat(cell_size);
         
@@ -614,7 +614,7 @@ impl GpuSurfaceNets {
             })
         };
         
-        // Create render pipeline — WBOIT accumulation pass (two render targets)
+        // Create render pipeline - WBOIT accumulation pass (two render targets)
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Surface Nets WBOIT Pipeline"),
             layout: Some(&render_pipeline_layout),
@@ -648,7 +648,7 @@ impl GpuSurfaceNets {
                 module: &render_shader,
                 entry_point: Some("fs_main"),
                 targets: &[
-                    // Target 0: Accumulation (Rgba16Float) — additive blend: src*1 + dst*1
+                    // Target 0: Accumulation (Rgba16Float) - additive blend: src*1 + dst*1
                     Some(wgpu::ColorTargetState {
                         format: wgpu::TextureFormat::Rgba16Float,
                         blend: Some(wgpu::BlendState {
@@ -665,7 +665,7 @@ impl GpuSurfaceNets {
                         }),
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    // Target 1: Revealage (R8Unorm) — multiplicative: dst * (1 - src_alpha)
+                    // Target 1: Revealage (R8Unorm) - multiplicative: dst * (1 - src_alpha)
                     Some(wgpu::ColorTargetState {
                         format: wgpu::TextureFormat::R8Unorm,
                         blend: Some(wgpu::BlendState {
@@ -1085,7 +1085,7 @@ impl GpuSurfaceNets {
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
         let buf_size = (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64;
         
-        // Compute: read raw density + prev smoothed → write to temp
+        // Compute: read raw density + prev smoothed -> write to temp
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Smooth Density Pass"),
@@ -1096,10 +1096,10 @@ impl GpuSurfaceNets {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
         
-        // Copy temp → smoothed (update temporal state for next frame)
+        // Copy temp -> smoothed (update temporal state for next frame)
         encoder.copy_buffer_to_buffer(&self.smooth_temp_buffer, 0, &self.smoothed_density_buffer, 0, buf_size);
         
-        // Copy smoothed → density_buffer (so surface nets extraction reads smoothed data)
+        // Copy smoothed -> density_buffer (so surface nets extraction reads smoothed data)
         encoder.copy_buffer_to_buffer(&self.smoothed_density_buffer, 0, &self.density_buffer, 0, buf_size);
     }
 
@@ -1148,7 +1148,7 @@ impl GpuSurfaceNets {
             return;
         }
         
-        // Procedural sky cubemap — each face has sky gradient + sun + atmospheric scattering
+        // Procedural sky cubemap - each face has sky gradient + sun + atmospheric scattering
         let size = CUBEMAP_FACE_SIZE as usize;
         let light_dir = glam::Vec3::new(0.5, 0.8, 0.3).normalize();
         
@@ -1430,7 +1430,7 @@ impl GpuSurfaceNets {
             let mut oit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Surface Nets WBOIT Pass"),
                 color_attachments: &[
-                    // Target 0: Accumulation — clear to (0,0,0,0)
+                    // Target 0: Accumulation - clear to (0,0,0,0)
                     Some(wgpu::RenderPassColorAttachment {
                         view: &self.oit_accum_view,
                         resolve_target: None,
@@ -1440,7 +1440,7 @@ impl GpuSurfaceNets {
                         },
                         depth_slice: None,
                     }),
-                    // Target 1: Revealage — clear to 1.0 (fully transparent = no fragments yet)
+                    // Target 1: Revealage - clear to 1.0 (fully transparent = no fragments yet)
                     Some(wgpu::RenderPassColorAttachment {
                         view: &self.oit_revealage_view,
                         resolve_target: None,
@@ -1469,7 +1469,7 @@ impl GpuSurfaceNets {
             if let Some(ref shadow_bg) = self.shadow_bind_group {
                 oit_pass.set_bind_group(1, shadow_bg, &[]);
             } else {
-                return; // Shadow bind group not yet ready — skip draw to avoid validation error
+                return; // Shadow bind group not yet ready - skip draw to avoid validation error
             }
             oit_pass.set_bind_group(2, &self.cubemap_bind_group, &[]);
             oit_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));

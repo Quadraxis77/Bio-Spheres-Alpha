@@ -7,7 +7,7 @@ use glam::{Vec2, Vec3, Quat};
 pub use serialization::{GenomeDeserializeError, GenomeSerializeError};
 
 /// Minimum genome similarity [0.0, 1.0] required for two Gametocytes to merge.
-/// Computed as: mode-count alignment × cell-type match fraction across the shared mode prefix.
+/// Computed as: mode-count alignment x cell-type match fraction across the shared mode prefix.
 /// At 0.5, organisms must share at least half their cell-type sequence (weighted by size alignment).
 pub const GAMETOCYTE_MIN_SIMILARITY: f32 = 0.5;
 
@@ -254,9 +254,9 @@ pub struct ModeSettings {
     /// 0.0 = never tracks input, 1.0 = instant snap. Steady-state converges to input - never amplifies.
     pub memorocyte_rate: f32,
     pub memorocyte_input_channel: i32,
-    /// Channel to emit the current memory value on (0–15).
+    /// Channel to emit the current memory value on (0-15).
     pub memorocyte_output_channel: i32,
-    /// How many adhesion hops the emitted memory propagates (1–20).
+    /// How many adhesion hops the emitted memory propagates (1-20).
     pub memorocyte_output_hops: i32,
 
     // Cognocyte settings
@@ -426,7 +426,7 @@ impl Default for Genome {
     /// Creates a genome with 10 default modes.
     ///
     /// All modes are Phagocyte. This is the serialization
-    /// baseline — `from_serializable` starts from this and applies diffs.
+    /// baseline - `from_serializable` starts from this and applies diffs.
     ///
     /// Old `.genome` files still load correctly because `from_serializable`
     /// extends or trims the vec to match the saved `mode_count`.
@@ -512,7 +512,7 @@ impl Genome {
 
     /// Create a new genome with a single mode and a random color.
     /// Use this for user-facing "new genome" creation.
-    /// Do NOT use this as a serialization baseline — `Default::default()` must stay deterministic.
+    /// Do NOT use this as a serialization baseline - `Default::default()` must stay deterministic.
     pub fn new_with_random_colors() -> Self {
         let mut genome = Self::default();
 
@@ -606,7 +606,7 @@ impl Genome {
             name: mode_name.clone(),
             default_name: mode_name,
             color: Vec3::new(r, g, b),
-            cell_type: 2, // Phagocyte — all modes after the first default to Phagocyte
+            cell_type: 2, // Phagocyte - all modes after the first default to Phagocyte
             ..Default::default()
         };
         mode.child_a.mode_number = idx as i32;
@@ -664,7 +664,7 @@ impl Genome {
         true
     }
     pub fn generate_procedural(seed: u64) -> Self {
-        // ── Seeded RNG (splitmix64 + LCG) ───────────────────────────────────
+        // -- Seeded RNG (splitmix64 + LCG) -----------------------------------
         struct Rng(u64);
         #[allow(dead_code)]
         impl Rng {
@@ -704,22 +704,22 @@ impl Genome {
         }
 
         let mut rng = Rng::new(seed);
-        // Pre-allocate exactly as many modes as the generator will use (8–12 roles).
+        // Pre-allocate exactly as many modes as the generator will use (8-12 roles).
         // We don't know num_roles yet, so allocate the maximum (13) and trim unused
         // slots at the end. This keeps the genome lean vs the old 80-mode allocation.
         let mut genome = Self::new_with_mode_count(13);
 
-        // ── Name ─────────────────────────────────────────────────────────────
+        // -- Name -------------------------------------------------------------
         let label = (rng.step() & 0xFFFF) as u16;
         genome.name = format!("Creature {:04X}", label);
 
-        // ══════════════════════════════════════════════════════════════════════
+        // 
         // STEP 1: ASSIGN ROLES TO RANDOM MODE SLOTS
         //
         // Roles are functional identities. Mode indices are just storage slots.
         // The generator picks which slot each role lives in, then wires them
         // together with signal channels. Nothing is locked to a fixed index.
-        // ══════════════════════════════════════════════════════════════════════
+        // 
         let num_roles: usize = rng.i32_range(8, 13) as usize;
         // Trim the genome to exactly num_roles modes (we pre-allocated 13 above)
         genome.modes.truncate(num_roles);
@@ -745,9 +745,9 @@ impl Genome {
 
         genome.initial_mode = r_stem as i32;
 
-        // ══════════════════════════════════════════════════════════════════════
+        // 
         // STEP 2: INDEPENDENT TRAIT SELECTION
-        // ══════════════════════════════════════════════════════════════════════
+        // 
 
         // Locomotion: 1=flagella  2=cilia  3=myocyte  4=buoyancy  5=none
         let loco_cell_type: i32 = *rng.pick(&[1i32, 1, 2, 3, 4, 5]);
@@ -766,21 +766,21 @@ impl Genome {
         let membrane  = 120.0 + stiffness * 280.0;
         let flex      = stiffness < 0.35;
 
-        // ── GEOMETRY ─────────────────────────────────────────────────────────
+        // -- GEOMETRY ---------------------------------------------------------
         // Body plans built via flat ring + axial extrusion:
         //
         //   STEM (1D chain)
         //     Splits forward in its own frame. Child A becomes perpendicular
-        //     to spine (rotated 90° around local X) to seed a ring. Child B
+        //     to spine (rotated 90 deg around local X) to seed a ring. Child B
         //     continues the spine identity.
         //
         //   STRUCT_A (2D ring around spine)
         //     Each cell is perpendicular to spine. Splits forward (outward
         //     from spine in its own frame). Child A is the next ring cell,
-        //     rotated by ring_angle around its local Y axis — which after the
-        //     90° X rotation from stem corresponds to the spine axis in world
+        //     rotated by ring_angle around its local Y axis - which after the
+        //     90 deg X rotation from stem corresponds to the spine axis in world
         //     space, so child A ends up rotated around the spine. Child B
-        //     redirects back to spine direction (rotated -90° around X) and
+        //     redirects back to spine direction (rotated -90 deg around X) and
         //     becomes the extrusion seed.
         //
         //   STRUCT_B (1D extrusion along spine)
@@ -816,17 +816,17 @@ impl Genome {
         let body_pitch = rng.f32(-30.0, 30.0);
         let body_yaw   = rng.f32(0.0, 360.0);
 
-        // Stem child A: 90° around local X — child becomes perpendicular to spine.
+        // Stem child A: 90 deg around local X - child becomes perpendicular to spine.
         let q_perpendicular = rng.quat_axis_angle(1.0, 0.0, 0.0, 90.0);
-        // Struct_a child A: ring_angle around local Y — rotates next ring cell
-        // around the spine axis (which after the 90° X rotation is the local Y).
+        // Struct_a child A: ring_angle around local Y - rotates next ring cell
+        // around the spine axis (which after the 90 deg X rotation is the local Y).
         let q_ring          = rng.quat_axis_angle(0.0, 1.0, 0.0, ring_angle);
         let q_ring_mirror   = rng.quat_axis_angle(0.0, 1.0, 0.0, -ring_angle);
-        // Struct_a child B: -90° around local X — redirects forward back along
+        // Struct_a child B: -90 deg around local X - redirects forward back along
         // the spine direction so struct_b can extrude axially.
         let q_extrude_seed  = rng.quat_axis_angle(1.0, 0.0, 0.0, -90.0);
 
-        // All split directions are ZERO — split along local forward.
+        // All split directions are ZERO - split along local forward.
         // Body orientation goes on the stem only as a starting rotation.
         let stem_split_dir     = Vec2::new(body_pitch, body_yaw);
         let struct_a_split_dir = Vec2::ZERO;
@@ -839,7 +839,7 @@ impl Genome {
         let struct_a_child_a_mirror_q  = q_ring_mirror;
         // Struct_a child B is the extrusion seed (redirects to spine direction)
         let struct_a_child_b_q         = q_extrude_seed;
-        // Struct_b children: identity — extrude straight along spine
+        // Struct_b children: identity - extrude straight along spine
         let struct_b_child_a_q         = Quat::IDENTITY;
         let struct_b_child_b_q         = Quat::IDENTITY;
 
@@ -853,13 +853,13 @@ impl Genome {
         let branch_ext:  i32 = extrude_segs;
         let spine_segs:  i32 = rng.i32_range(3, 9);
 
-        // Cell sizes — strict gradient: stem > spine > branch > spec
+        // Cell sizes - strict gradient: stem > spine > branch > spec
         let stem_size:   f32 = rng.f32(1.7, 2.0);
         let spine_size:  f32 = stem_size   * rng.f32(0.75, 0.90);
         let branch_size: f32 = spine_size  * rng.f32(0.70, 0.88);
         let spec_size:   f32 = branch_size * rng.f32(0.55, 0.75);
 
-        // Timing — axial tissue grows faster than lateral, lateral faster than terminal
+        // Timing - axial tissue grows faster than lateral, lateral faster than terminal
         let stem_mass:   f32 = rng.f32(1.2, 1.6);
         let stem_ivl:    f32 = rng.f32(0.3, 0.7);
         let spine_mass:  f32 = rng.f32(1.3, 1.7);
@@ -872,15 +872,15 @@ impl Genome {
         // Reproduction
         let num_eggs: i32 = rng.i32_range(2, 6);
 
-        // ══════════════════════════════════════════════════════════════════════
+        // 
         // STEP 3: SIGNAL CHANNEL ASSIGNMENTS
         //
-        // Channels 8–15 are developmental/regulation (any cell can emit/receive).
-        // Channels 0–7 are sensory (detection signals: oculocyte, photocyte, lipocyte, etc.).
+        // Channels 8-15 are developmental/regulation (any cell can emit/receive).
+        // Channels 0-7 are sensory (detection signals: oculocyte, photocyte, lipocyte, etc.).
         //
         // Shuffled so different creatures use different channels for the same
-        // roles — prevents cross-talk when multiple creatures share a world.
-        // ══════════════════════════════════════════════════════════════════════
+        // roles - prevents cross-talk when multiple creatures share a world.
+        // 
         let mut ch_pool: Vec<i32> = (8..=15).collect();
         for i in (1..ch_pool.len()).rev() {
             let j = rng.u32(i as u32 + 1) as usize;
@@ -889,15 +889,15 @@ impl Genome {
         let ch_anterior: i32 = ch_pool[0]; // emitted by stem, marks head end
         let ch_lateral:  i32 = ch_pool[1]; // emitted by spine, marks axis distance
         let ch_feeder:   i32 = ch_pool[2]; // emitted by feeder, gates stem division
-        let ch_maturity: i32 = ch_pool[3]; // emitted by gonad, triggers grow→adult
+        let ch_maturity: i32 = ch_pool[3]; // emitted by gonad, triggers grow->adult
         let _ch_repro:   i32 = ch_pool[4]; // reserved for future egg-shedding gate
 
-        // Sensory channel (0–7): detection cells emit here, locomotion cells read it
+        // Sensory channel (0-7): detection cells emit here, locomotion cells read it
         let ch_sense: i32 = rng.i32_range(0, 8);
 
-        // ══════════════════════════════════════════════════════════════════════
+        // 
         // STEP 4: HELPER CLOSURES
-        // ══════════════════════════════════════════════════════════════════════
+        // 
 
         // Apply shared adhesion parameters
         fn apply_adhesion(m: &mut ModeSettings, rest: f32, lin: f32, ang: f32, flex: bool) {
@@ -922,8 +922,8 @@ impl Genome {
                     m.flagellocyte_speed_b       = rng.f32(1.0, 2.5); // fast: signal detected
                     m.flagellocyte_threshold_c   = 1.0;
                 }
-                2 => {} // Phagocyte — no extra params
-                3 => {} // Photocyte — no extra params
+                2 => {} // Phagocyte - no extra params
+                3 => {} // Photocyte - no extra params
                 4 => { m.nutrient_priority = rng.f32(1.5, 3.0); } // Lipocyte
                 5 => { m.buoyancy_force    = rng.f32(0.3, 0.8); } // Buoyocyte
                 6 => { // Glueocyte
@@ -965,16 +965,16 @@ impl Genome {
         }
 
 
-        // ══════════════════════════════════════════════════════════════════════
+        // 
         // STEP 5: WIRE THE MODES
         //
         // Each mode is configured by its role. The mode index (r_stem, r_feeder,
-        // etc.) is whatever the shuffle assigned — the wiring uses those indices
+        // etc.) is whatever the shuffle assigned - the wiring uses those indices
         // directly, so the body plan is fully determined by the signal graph,
         // not by slot positions.
-        // ══════════════════════════════════════════════════════════════════════
+        // 
 
-        // ── ZYGOTE (repurposed as Struct-C) ──────────────────────────────────
+        // -- ZYGOTE (repurposed as Struct-C) ----------------------------------
         // The gonad now sheds stems directly, so the zygote slot is free.
         // Repurposed as a third structural tier: a smaller branch that struct_b
         // can optionally spawn as its child A, adding one more level of branching
@@ -1016,15 +1016,15 @@ impl Genome {
             m.child_b_after_split_keep_adhesion = true;
         }
 
-        // ── STEM ──────────────────────────────────────────────────────────────
+        // -- STEM --------------------------------------------------------------
         // Self-renewing growth engine. Emits ch_anterior (head gradient).
         // First split always produces a feeder (child A = feeder when ch_feeder
         // is absent). Once the feeder is alive and emitting ch_feeder, subsequent
-        // splits route child A to struct_a instead — bootstrapping is solved by
+        // splits route child A to struct_a instead - bootstrapping is solved by
         // signal-conditional child routing.
         // Child B always = stem (self-renewal, IDENTITY orientation = straight spine).
-        // After spine_segs splits → both children become gonad.
-        // On ch_maturity → switches to feeder role in the adult body.
+        // After spine_segs splits -> both children become gonad.
+        // On ch_maturity -> switches to feeder role in the adult body.
         {
             let m = &mut genome.modes[r_stem];
             m.name                             = "Stem".to_string();
@@ -1052,11 +1052,11 @@ impl Genome {
             m.child_a.mode_number              = r_feeder as i32;
             m.child_a.keep_adhesion            = true;
             m.child_a.orientation              = stem_child_a_q;
-            // Once feeder is alive (ch_feeder present), child A → struct_a instead
+            // Once feeder is alive (ch_feeder present), child A -> struct_a instead
             m.signal_child_a_channel           = ch_feeder;
             m.signal_child_a_threshold         = 0.5;
-            m.signal_child_a_mode_above        = r_struct_a as i32; // fed → grow structure
-            m.signal_child_a_mode_below        = r_feeder as i32;   // not fed → make feeder
+            m.signal_child_a_mode_above        = r_struct_a as i32; // fed -> grow structure
+            m.signal_child_a_mode_below        = r_feeder as i32;   // not fed -> make feeder
             // Child B = stem continues along spine axis (IDENTITY = straight)
             m.child_b.mode_number              = r_stem as i32;
             m.child_b.keep_adhesion            = true;
@@ -1069,16 +1069,16 @@ impl Genome {
         }
 
 
-        // ── STRUCT_A (flat ring around spine — Tier 2) ────────────────────────
+        // -- STRUCT_A (flat ring around spine - Tier 2) ------------------------
         // Each cell is perpendicular to the spine. Builds a flat ring/star/disc
         // by having child A continue around the spine (rotated by ring_angle).
-        // Child B is the extrusion seed — redirects forward back along the spine
+        // Child B is the extrusion seed - redirects forward back along the spine
         // direction and becomes struct_b for axial extrusion.
         // Division gated on ch_feeder. Emits ch_lateral so extrusion cells
         // know their distance from the axis.
         // After branch_segs (= ring_segments - 1) splits, the ring closes and
         // both children transition to struct_b for the extrusion phase.
-        // On ch_maturity → switches to locomotion role.
+        // On ch_maturity -> switches to locomotion role.
         {
             let m = &mut genome.modes[r_struct_a];
             m.name                             = "Struct-A".to_string();
@@ -1103,7 +1103,7 @@ impl Genome {
             m.mode_switch_signal_threshold     = 1.0;
             m.mode_switch_target               = r_loco as i32;
             apply_adhesion(m, adh_rest, adh_lin, adh_ang, flex);
-            // Child A = struct_a, rotated by ring_angle around spine — builds the ring
+            // Child A = struct_a, rotated by ring_angle around spine - builds the ring
             m.child_a.mode_number              = r_struct_a as i32;
             m.child_a.keep_adhesion            = true;
             m.child_a.orientation              = if struct_a_mirror {
@@ -1122,18 +1122,18 @@ impl Genome {
             m.child_b_after_split_keep_adhesion = true;
         }
 
-        // ── STRUCT_B (secondary structural / bilateral mirror) ────────────────
+        // -- STRUCT_B (secondary structural / bilateral mirror) ----------------
         // Branches off struct_a. Self-extends branch_ext times.
         // Child orientations: struct_a_mirror controls whether children fan
         // symmetrically (bilateral) or continue in the same direction (radial).
         // Division gated on ch_feeder.
         //
-        // FIX 5 — Positional specialist routing:
-        // Tips near the head (high ch_anterior) → r_specialist (primary function)
-        // Tips near the tail (low ch_anterior)  → r_extra_spec if present, else r_specialist
+        // FIX 5 - Positional specialist routing:
+        // Tips near the head (high ch_anterior) -> r_specialist (primary function)
+        // Tips near the tail (low ch_anterior)  -> r_extra_spec if present, else r_specialist
         // This gives the creature a head/tail functional distinction without
-        // any hardcoded positions — purely signal-derived.
-        // ── STRUCT_B (axial extrusion — Tier 3) ───────────────────────────────
+        // any hardcoded positions - purely signal-derived.
+        // -- STRUCT_B (axial extrusion - Tier 3) -------------------------------
         // Already oriented along the spine direction (via struct_a_child_b_q).
         // Splits forward in its own frame, sweeping each ring cell into a column
         // parallel to the spine. Both children = struct_b with IDENTITY orientation
@@ -1141,8 +1141,8 @@ impl Genome {
         // how many cells deep the extrusion goes.
         // Division gated on ch_feeder.
         //
-        // Positional routing at max_splits: head tips → r_specialist,
-        // tail tips → r_extra_spec (if present). Gives head/tail differentiation.
+        // Positional routing at max_splits: head tips -> r_specialist,
+        // tail tips -> r_extra_spec (if present). Gives head/tail differentiation.
         {
             let m = &mut genome.modes[r_struct_b];
             m.name                             = "Struct-B".to_string();
@@ -1185,12 +1185,12 @@ impl Genome {
         }
 
 
-        // ── FEEDER ────────────────────────────────────────────────────────────
+        // -- FEEDER ------------------------------------------------------------
         // Nutrient producer. Emits ch_feeder so struct_a/struct_b know food is
         // available and can divide. Splits a small cluster along the spine axis,
         // then self-renews. The stem transitions into this role on ch_maturity
         // so the adult body has more feeders than the juvenile.
-        // Devorocyte excluded — it can't bootstrap nutrients from nothing.
+        // Devorocyte excluded - it can't bootstrap nutrients from nothing.
         {
             let m = &mut genome.modes[r_feeder];
             m.name                             = "Feeder".to_string();
@@ -1209,7 +1209,7 @@ impl Genome {
             m.regulation_emit_value            = 20.0;
             m.regulation_emit_hops             = 15;
             apply_adhesion(m, adh_rest, adh_lin * 0.8, adh_ang * 0.7, flex);
-            // Exclude devorocyte — it can't produce nutrients independently
+            // Exclude devorocyte - it can't produce nutrients independently
             let safe_feed_type = if feed_cell_type == 11 { 2 } else { feed_cell_type };
             apply_type(m, safe_feed_type, ch_sense, &mut rng);
             m.child_a.mode_number              = r_feeder as i32;
@@ -1224,11 +1224,11 @@ impl Genome {
             m.child_b_after_split_keep_adhesion = true;
         }
 
-        // ── LOCOMOTION ────────────────────────────────────────────────────────
+        // -- LOCOMOTION --------------------------------------------------------
         // Active movement cell. Reads ch_sense so it speeds up when the sensor
         // detects food or a target. Structural cells transition into this role
-        // when ch_maturity floods the body — the whole body activates movement.
-        // Terminal: does not divide. No parent_make_adhesion needed — this role
+        // when ch_maturity floods the body - the whole body activates movement.
+        // Terminal: does not divide. No parent_make_adhesion needed - this role
         // is reached via mode_switch, not division, so bonds already exist.
         // Myocyte phase assigned from ch_anterior: high signal = near head = phase A.
         {
@@ -1248,7 +1248,7 @@ impl Genome {
             apply_type(m, effective_loco, ch_sense, &mut rng);
             // Myocyte: assign phase A to head-end cells via ch_anterior signal routing.
             // Cells receiving high anterior signal (near head) use phase A;
-            // cells with low signal (near tail) use phase B — creates peristaltic wave.
+            // cells with low signal (near tail) use phase B - creates peristaltic wave.
             if effective_loco == 9 {
                 m.myocyte_use_signal        = true;
                 m.myocyte_signal_channel    = ch_anterior;
@@ -1262,7 +1262,7 @@ impl Genome {
             m.mode_b_after_splits              = r_loco as i32;
         }
 
-        // ── SPECIALIST ────────────────────────────────────────────────────────
+        // -- SPECIALIST --------------------------------------------------------
         // Terminal body function. Reached via mode_switch on ch_maturity or
         // via max_splits exhaustion on struct_b. No division needed.
         {
@@ -1286,20 +1286,20 @@ impl Genome {
         }
 
 
-        // ── GONAD ─────────────────────────────────────────────────────────────
+        // -- GONAD -------------------------------------------------------------
         // Reproductive organ. The stem transitions here after spine_segs splits.
-        // Emits ch_maturity — floods the whole body, triggering all grow→adult
+        // Emits ch_maturity - floods the whole body, triggering all grow->adult
         // mode switches simultaneously. Sheds num_eggs free stems directly
         // (no zygote wrapper needed), then reverts to stem to rebuild.
         //
-        // FIX 4 — Gonad gated on min_adhesions:
+        // FIX 4 - Gonad gated on min_adhesions:
         // The gonad only starts dividing (shedding eggs) when it has enough
         // adhesion connections, meaning the body is structurally complete.
         // This prevents ch_maturity from firing mid-construction.
         {
             let m = &mut genome.modes[r_gonad];
             m.name                             = "Gonad".to_string();
-            m.cell_type                        = 2; // Phagocyte — auto-gains mass
+            m.cell_type                        = 2; // Phagocyte - auto-gains mass
             m.max_cell_size                    = stem_size;
             m.nutrient_priority                = 2.0;
             m.nutrient_gain_rate               = 20.0;
@@ -1311,7 +1311,7 @@ impl Genome {
             m.enable_parent_angle_snapping     = false;
             m.split_ratio                      = 0.5;
             m.membrane_stiffness               = membrane;
-            // Emit maturity signal: floods body, triggers all grow→adult switches
+            // Emit maturity signal: floods body, triggers all grow->adult switches
             m.regulation_emit_channel          = ch_maturity;
             m.regulation_emit_value            = 50.0;
             m.regulation_emit_hops             = 20;
@@ -1324,14 +1324,14 @@ impl Genome {
             m.child_b.mode_number              = r_gonad as i32;
             m.child_b.keep_adhesion            = true;
             m.child_b.orientation              = Quat::IDENTITY;
-            // After num_eggs: gonad reverts to stem → organism rebuilds
+            // After num_eggs: gonad reverts to stem -> organism rebuilds
             m.mode_a_after_splits              = r_stem as i32;
             m.mode_b_after_splits              = r_stem as i32;
             m.child_a_after_split_keep_adhesion = false;
             m.child_b_after_split_keep_adhesion = true;
         }
 
-        // ── SENSOR (optional) ─────────────────────────────────────────────────
+        // -- SENSOR (optional) -------------------------------------------------
         // Oculocyte. Senses food or cells along its forward axis and fires
         // ch_sense into the adhesion network. Locomotion cells read ch_sense
         // and speed up. Only present if the creature has locomotion.
@@ -1360,9 +1360,9 @@ impl Genome {
             m.mode_b_after_splits              = idx as i32;
         }
 
-        // ── ADULT STRUCT (optional) ───────────────────────────────────────────
+        // -- ADULT STRUCT (optional) -------------------------------------------
         // An alternative adult form for structural cells. When present, struct_a
-        // switches to this instead of r_loco on ch_maturity — giving the creature
+        // switches to this instead of r_loco on ch_maturity - giving the creature
         // a distinct adult structural identity (e.g. vasculocyte transport network).
         if let Some(idx) = r_adult_struct {
             let m = &mut genome.modes[idx];
@@ -1386,7 +1386,7 @@ impl Genome {
             genome.modes[r_struct_a].mode_switch_target = idx as i32;
         }
 
-        // ── EXTRA SPECIALIST (optional) ───────────────────────────────────────
+        // -- EXTRA SPECIALIST (optional) ---------------------------------------
         // A second specialist type. Struct_b switches to this on ch_maturity
         // instead of r_specialist, giving branch tips a different function
         // from spine tips. Creates functional differentiation along the axis.
@@ -1412,7 +1412,7 @@ impl Genome {
             genome.modes[r_struct_b].mode_switch_target = idx as i32;
         }
 
-        // ── ANCHOR (optional) ─────────────────────────────────────────────────
+        // -- ANCHOR (optional) -------------------------------------------------
         // Glueocyte. Present in sessile creatures (no locomotion). Struct_b
         // switches to this on ch_maturity, anchoring branch tips to the
         // environment. Bonding is gated on ch_maturity so the creature finishes
@@ -1432,7 +1432,7 @@ impl Genome {
             m.membrane_stiffness               = membrane * 1.2;
             m.glueocyte_env_adhesion           = true;
             m.glueocyte_cell_adhesion          = false;
-            // Only bond after maturity signal arrives — prevents premature anchoring
+            // Only bond after maturity signal arrives - prevents premature anchoring
             m.glueocyte_cell_adhesion_signal_channel   = ch_maturity;
             m.glueocyte_cell_adhesion_signal_threshold = 1.0;
             apply_adhesion(m, adh_rest, adh_lin * 1.2, adh_ang * 1.2, false); // always rigid
@@ -1450,7 +1450,7 @@ impl Genome {
     /// Compute a similarity score [0.0, 1.0] between two genomes based on their mode sequences.
     ///
     /// The score is the product of two factors:
-    /// 1. **Mode-count alignment**: `min(len_a, len_b) / max(len_a, len_b)` — penalises very
+    /// 1. **Mode-count alignment**: `min(len_a, len_b) / max(len_a, len_b)` - penalises very
     ///    different genome sizes (a genome with 4 modes vs one with 16 scores only 0.25 here).
     /// 2. **Cell-type match fraction**: for the overlapping prefix of modes (up to `min(len_a, len_b)`),
     ///    the proportion of positions where both genomes have the same cell_type.

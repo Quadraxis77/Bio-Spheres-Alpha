@@ -1,6 +1,6 @@
 //! Voxel-based fluid simulation system
 //!
-//! GPU-only fluid simulation on a 128³ grid featuring:
+//! GPU-only fluid simulation on a 128^3 grid featuring:
 //! - Water falling and spreading with atomic operations
 //! - Double-buffered compute shaders
 //! - Checkered processing to prevent race conditions

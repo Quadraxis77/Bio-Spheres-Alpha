@@ -264,8 +264,8 @@ impl GenomeBufferGroup {
             // We send the full quaternion rather than just the direction vector so the GPU
             // shader can use it directly. Previously the shader reconstructed a quaternion
             // from the direction vector via quat_from_z_to_dir(), which produces the
-            // shortest-arc rotation (zero roll) — a different quaternion from the YXZ Euler
-            // one even though both map Z to the same direction. That difference caused 20°+
+            // shortest-arc rotation (zero roll) - a different quaternion from the YXZ Euler
+            // one even though both map Z to the same direction. That difference caused 20 deg+
             // errors in child orientations and adhesion anchor directions.
             let pitch = mode.parent_split_direction.x.to_radians();
             let yaw = mode.parent_split_direction.y.to_radians();
@@ -278,7 +278,7 @@ impl GenomeBufferGroup {
                 // Split orientations (8 floats)
                 child_a_split_orientation.x, child_a_split_orientation.y, child_a_split_orientation.z, child_a_split_orientation.w,
                 child_b_split_orientation.x, child_b_split_orientation.y, child_b_split_orientation.z, child_b_split_orientation.w,
-                // Split rotation quaternion (4 floats) — XYZW order matching glam convention
+                // Split rotation quaternion (4 floats) - XYZW order matching glam convention
                 split_quat.x, split_quat.y, split_quat.z, split_quat.w,
             ]
         }).collect();

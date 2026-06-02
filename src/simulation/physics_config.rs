@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// All values are deterministic and produce identical results across runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicsConfig {
-    /// Fixed timestep for physics integration (64 Hz ≈ 15.6ms)
+    /// Fixed timestep for physics integration (64 Hz ~= 15.6ms)
     pub fixed_timestep: f32,
     
     /// Spherical boundary radius for active simulation

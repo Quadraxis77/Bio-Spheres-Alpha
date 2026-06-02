@@ -1,6 +1,6 @@
 //! GPU-based fluid simulation using pair-based swapping
 //!
-//! 6 directional passes (±X, ±Y, ±Z), each with 2 checkered phases.
+//! 6 directional passes (X, Y, Z), each with 2 checkered phases.
 //! Simple rule: swap neighbors unless it's air-above-water (anti-gravity).
 //! Single buffer - no double buffering needed.
 
@@ -160,7 +160,7 @@ pub struct GpuFluidSimulator {
     // Bind group layout
     bind_group_layout: wgpu::BindGroupLayout,
 
-    // Water velocity field for cell drag (128³ packed u32 per voxel, ~8MB)
+    // Water velocity field for cell drag (128^3 packed u32 per voxel, ~8MB)
     // Each u32 encodes the last movement direction of water at that voxel
     water_velocity_buffer: wgpu::Buffer,
 
@@ -250,7 +250,7 @@ impl GpuFluidSimulator {
             usage: wgpu::BufferUsages::COPY_SRC,
         });
 
-        // Create water velocity buffer (128³ * 4 bytes = ~8MB)
+        // Create water velocity buffer (128^3 * 4 bytes = ~8MB)
         // Each u32 encodes the last movement direction of water at that voxel
         let water_velocity_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Water Velocity Buffer"),
@@ -457,7 +457,7 @@ impl GpuFluidSimulator {
         });
 
         // === Water Bitfield for fast cell-water detection ===
-        // 128³ / 32 = 65536 u32 values (256KB instead of 8MB)
+        // 128^3 / 32 = 65536 u32 values (256KB instead of 8MB)
         let bitfield_size = (TOTAL_VOXELS / 32) as u64 * std::mem::size_of::<u32>() as u64;
         let water_bitfield_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Water Bitfield Buffer"),
@@ -919,7 +919,7 @@ impl GpuFluidSimulator {
         }
 
         // Update time for wave animations.
-        // Wrap at 65536s to prevent f32 precision loss in long runs — once the
+        // Wrap at 65536s to prevent f32 precision loss in long runs - once the
         // raw time exceeds ~8M seconds, adding dt has no effect on a f32.
         let current_time = (self.time.get() + dt) % 65536.0;
         self.time.set(current_time);
@@ -927,13 +927,13 @@ impl GpuFluidSimulator {
         
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
-        // Update parameters for GPU (required for shader logic) — sub_step starts at 0
+        // Update parameters for GPU (required for shader logic) - sub_step starts at 0
         self.update_params(queue, 3, current_time, gravity_magnitude, gravity_dir, lateral_flow_probabilities, condensation_probability, vaporization_probability);
 
         // Clear water velocity field before simulation (DMA zero-fill)
         encoder.clear_buffer(&self.water_velocity_buffer, 0, None);
 
-        // Byte offset of sub_step field in GpuFluidParams (20 fields × 4 bytes each, last field)
+        // Byte offset of sub_step field in GpuFluidParams (20 fields x 4 bytes each, last field)
         const SUB_STEP_OFFSET: u64 = 76;
         const NUM_FLUID_SUB_STEPS: u32 = 4;
 
@@ -1181,13 +1181,13 @@ impl GpuFluidSimulator {
     }
 }
 
-// ── Snapshot support ──────────────────────────────────────────────────────────
+// -- Snapshot support ----------------------------------------------------------
 
 impl GpuFluidSimulator {
     /// Read back the fluid voxel state and nutrient voxels from the GPU.
     ///
-    /// Returns `(fluid_voxels, nutrient_voxels)` — each a `Vec<u32>` of length
-    /// `TOTAL_VOXELS` (128³ = 2,097,152 elements, 8 MB each).
+    /// Returns `(fluid_voxels, nutrient_voxels)` - each a `Vec<u32>` of length
+    /// `TOTAL_VOXELS` (128^3 = 2,097,152 elements, 8 MB each).
     ///
     /// This is a **blocking** operation: it submits a copy command, polls the
     /// device until complete, and maps the staging buffers synchronously.
@@ -1212,7 +1212,7 @@ impl GpuFluidSimulator {
             mapped_at_creation: false,
         });
 
-        // Copy GPU → staging.
+        // Copy GPU -> staging.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Fluid Snapshot Encoder"),
         });

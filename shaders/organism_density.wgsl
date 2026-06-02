@@ -12,7 +12,7 @@ struct OrganismDensityParams {
     // vec3 + f32 = 16 bytes (matches [f32;3] + f32 in Rust repr(C))
     grid_origin: vec3<f32>,
     cell_size: f32,
-    // 4 × u32/f32 = 16 bytes
+    // 4 x u32/f32 = 16 bytes
     grid_resolution: u32,
     skin_radius_scale: f32,
     max_cells: u32,
@@ -45,11 +45,11 @@ fn metaball_kernel(t: f32) -> f32 {
     return t * t * (3.0 - 2.0 * t);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 1: clear_density
 // Each thread zeros one element of density_accum.
 // Dispatch: ceil(grid_resolution^3 / 256) workgroups of (256, 1, 1)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn clear_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Clear original resolution buffer like water surface nets
@@ -58,12 +58,12 @@ fn clear_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&density_accum[gid.x], 0);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 2: generate_density
 // One thread per cell slot up to max_cells.
 // Each thread iterates over its voxel bounding box and atomicAdds contributions.
 // Dispatch: ceil(max_cells / 64) workgroups of (64, 1, 1)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(64, 1, 1)
 fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell_idx = gid.x;
@@ -122,11 +122,11 @@ fn generate_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 3: normalize_density
 // Converts the fixed-point i32 accumulator to a normalised f32 [0,N] density.
 // Dispatch: ceil(grid_resolution / 4)^3 workgroups of (4, 4, 4)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(4, 4, 4)
 fn normalize_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;

@@ -7,7 +7,7 @@
 //! The fix is the rename-then-replace trick:
 //!
 //!   1. Rename the OLD exe to `bio-spheres.exe.old`  (works on a running file)
-//!   2. The NEW exe is already running — it IS the new version
+//!   2. The NEW exe is already running - it IS the new version
 //!   3. Copy the new exe to the canonical path (where the old one was)
 //!   4. Delete the `.old` file
 //!   5. Relaunch from the canonical path and exit
@@ -26,7 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
-// ── Public entry points ───────────────────────────────────────────────────────
+// -- Public entry points -------------------------------------------------------
 
 /// Call this at the very start of `run()`, before logging is set up.
 ///
@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 /// function never returns in that case.  Otherwise it returns normally and
 /// startup continues.
 pub fn run_self_replace() {
-    // Only meaningful on Windows — on Linux/macOS the OS allows overwriting
+    // Only meaningful on Windows - on Linux/macOS the OS allows overwriting
     // a running exe directly, so no dance is needed.
     #[cfg(target_os = "windows")]
     {
@@ -67,14 +67,14 @@ pub fn migrate_config_files() {
         let path = crate::app_dirs::config_file(filename);
 
         if !path.exists() {
-            // First run — just write the default wholesale.
+            // First run - just write the default wholesale.
             if let Err(e) = std::fs::write(&path, default_content) {
                 log::warn!("Failed to write default {}: {}", filename, e);
             }
             continue;
         }
 
-        // File exists — merge missing keys.
+        // File exists - merge missing keys.
         match merge_ron_keys(&path, default_content) {
             Ok(true)  => log::info!("Config migration: added new keys to {}", filename),
             Ok(false) => {} // nothing to do
@@ -83,7 +83,7 @@ pub fn migrate_config_files() {
     }
 }
 
-// ── Self-replace ──────────────────────────────────────────────────────────────
+// -- Self-replace --------------------------------------------------------------
 
 #[cfg(target_os = "windows")]
 fn try_self_replace() -> Result<(), String> {
@@ -94,12 +94,12 @@ fn try_self_replace() -> Result<(), String> {
 
     match canonical_path {
         None => {
-            // First run — record this path as canonical and continue normally.
+            // First run - record this path as canonical and continue normally.
             write_canonical_path(&current_exe);
             Ok(())
         }
         Some(canonical) if canonical == current_exe => {
-            // Running from the canonical path — nothing to do.
+            // Running from the canonical path - nothing to do.
             Ok(())
         }
         Some(canonical) => {
@@ -184,7 +184,7 @@ fn cleanup_old_exe() {
     }
 }
 
-// ── RON config migration ──────────────────────────────────────────────────────
+// -- RON config migration ------------------------------------------------------
 
 /// Merge keys from `default_content` into the RON file at `path`.
 ///

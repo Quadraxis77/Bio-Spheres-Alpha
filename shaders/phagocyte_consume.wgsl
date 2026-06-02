@@ -127,7 +127,7 @@ fn has_nutrient(voxel_index: u32) -> bool {
 // Try to consume nutrient from voxel (atomic compare-exchange)
 // Returns true if successfully consumed
 // Sets voxel to 2 (consumed/depleted) instead of 0 (empty) so the populate
-// shader won't immediately refill it — the nutrient stays gone until the
+// shader won't immediately refill it - the nutrient stays gone until the
 // noise pattern drifts away and resets the voxel back to 0.
 fn try_consume_nutrient(voxel_index: u32) -> bool {
     if (voxel_index == 0xFFFFFFFFu) {
@@ -195,7 +195,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // overwrite those writes, permanently destroying transported nutrients.
         //
         // Instead, clamp the gain so we don't exceed max_nutrients. We compute the
-        // headroom from the stale read — this is a slight over-estimate if transport
+        // headroom from the stale read - this is a slight over-estimate if transport
         // added nutrients between the read and now, but the worst case is a tiny
         // overshoot that the next frame's cap check will correct. That is far better
         // than the previous behaviour of discarding all transport income.

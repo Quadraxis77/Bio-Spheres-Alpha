@@ -1,7 +1,7 @@
 // Procedural Starfield Skybox
 //
 // Simple black background with procedural stars.
-// Stars are placed using 3D Voronoi cell noise directly on the unit sphere —
+// Stars are placed using 3D Voronoi cell noise directly on the unit sphere -
 // no longitude/latitude mapping, no seams, no poles.
 
 struct CameraUniforms {
@@ -26,7 +26,7 @@ struct SkyboxParams {
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(1) @binding(0) var<uniform> params: SkyboxParams;
 
-// ── Vertex shader ─────────────────────────────────────────────────────────────
+// -- Vertex shader -------------------------------------------------------------
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -43,7 +43,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
-// ── Hash helpers ──────────────────────────────────────────────────────────────
+// -- Hash helpers --------------------------------------------------------------
 
 fn hash3(p: vec3<f32>) -> vec3<f32> {
     var q = vec3<f32>(
@@ -58,14 +58,14 @@ fn hash1(p: vec3<f32>) -> f32 {
     return fract(sin(dot(p, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453123);
 }
 
-// ── Stars via 3D Voronoi on the unit sphere ───────────────────────────────────
+// -- Stars via 3D Voronoi on the unit sphere -----------------------------------
 //
 // Divide space into a regular grid of cubes. Each cube may contain one star
-// at a random position inside it. We check the 3×3×3 neighborhood of the
+// at a random position inside it. We check the 3x3x3 neighborhood of the
 // cube the ray passes through.
 //
 // Because we normalize the star position to the unit sphere before measuring
-// angular distance, there are no seams or poles — the grid is in Cartesian
+// angular distance, there are no seams or poles - the grid is in Cartesian
 // space, not angular space.
 
 fn stars(dir: vec3<f32>, scale: f32, density: f32, time: f32) -> vec3<f32> {
@@ -88,12 +88,12 @@ fn stars(dir: vec3<f32>, scale: f32, density: f32, time: f32) -> vec3<f32> {
 
         // Cosine of the angle between view ray and star direction
         let cos_a = dot(dir, star_pos);
-        if (cos_a < 0.9995) { continue; } // outside a ~2° cone — early out
+        if (cos_a < 0.9995) { continue; } // outside a ~2 deg cone - early out
 
         // Convert to angular distance in radians
         let angle = acos(clamp(cos_a, -1.0, 1.0));
 
-        // Star angular radius — sharp pinpoint
+        // Star angular radius - sharp pinpoint
         let radius = 0.0006 + rnd.y * 0.0008;
         if (angle > radius) { continue; }
 
@@ -123,12 +123,12 @@ fn stars(dir: vec3<f32>, scale: f32, density: f32, time: f32) -> vec3<f32> {
     return color;
 }
 
-// ── Fragment shader ───────────────────────────────────────────────────────────
+// -- Fragment shader -----------------------------------------------------------
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Reconstruct view direction from rotation-only inverse view-proj.
-    // No camera_pos subtraction — no precision loss, no shaking.
+    // No camera_pos subtraction - no precision loss, no shaking.
     let ndc    = vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 1.0, 1.0);
     let wh     = camera.inv_view_rot_proj * ndc;
     let dir    = normalize(wh.xyz / wh.w);
@@ -136,7 +136,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Black background
     var color = vec3<f32>(0.0);
 
-    // Single star layer — the 3×3×3 neighbor search is expensive per pixel,
+    // Single star layer - the 3x3x3 neighbor search is expensive per pixel,
     // so one layer at moderate density gives a good starfield without tanking FPS.
     color += stars(dir, 8.0, params.star_density * 0.3, camera.time);
 

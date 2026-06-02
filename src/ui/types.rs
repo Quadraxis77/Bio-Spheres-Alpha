@@ -11,24 +11,24 @@ use crate::ui::tutorial::TutorialState;
 /// Available UI themes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum UiTheme {
-    /// Dark navy + teal accents — the original Bio-Spheres look.
+    /// Dark navy + teal accents - the original Bio-Spheres look.
     #[default]
     BiotechDark,
-    /// Clean white panels with deep blue accents — clinical / lab notebook.
+    /// Clean white panels with deep blue accents - clinical / lab notebook.
     Arctic,
-    /// Warm cream paper with ink-brown text and rust accents — parchment.
+    /// Warm cream paper with ink-brown text and rust accents - parchment.
     Parchment,
-    /// Soft lavender panels with rose-gold accents — pastel studio.
+    /// Soft lavender panels with rose-gold accents - pastel studio.
     Blossom,
-    /// Rich dark burgundy panels with gold accents — deep wine.
+    /// Rich dark burgundy panels with gold accents - deep wine.
     Crimson,
-    /// Hot pink + electric cyan on deep purple-black — synthwave.
+    /// Hot pink + electric cyan on deep purple-black - synthwave.
     NeonSynthwave,
-    /// Acid green + electric yellow on pure black — toxic matrix.
+    /// Acid green + electric yellow on pure black - toxic matrix.
     NeonToxic,
-    /// Electric purple + hot magenta on near-black — ultraviolet.
+    /// Electric purple + hot magenta on near-black - ultraviolet.
     NeonUltraviolet,
-    /// Near-black with bright white text — maximum contrast.
+    /// Near-black with bright white text - maximum contrast.
     HighContrast,
     /// Fully user-defined colors, edited in the Theme Editor panel.
     Custom,
@@ -416,7 +416,7 @@ pub struct OrganismSkinSettings {
     #[serde(default = "default_organism_grid_resolution")]
     pub grid_resolution: u32,
 
-    /// Skin offset — gap between the mesh surface and cell surfaces (world units)
+    /// Skin offset - gap between the mesh surface and cell surfaces (world units)
     #[serde(default = "default_skin_radius_scale")]
     pub radius_scale: f32,
 
@@ -424,23 +424,23 @@ pub struct OrganismSkinSettings {
     #[serde(default = "default_iso_level")]
     pub iso_level: f32,
 
-    /// Shrink speed — fraction of remaining gap closed per iteration (0.05–0.5)
+    /// Shrink speed - fraction of remaining gap closed per iteration (0.05-0.5)
     #[serde(default = "default_shrink_speed")]
     pub shrink_speed: f32,
 
-    /// Smooth factor — Laplacian blend weight per smooth iteration (0.0–0.6)
+    /// Smooth factor - Laplacian blend weight per smooth iteration (0.0-0.6)
     #[serde(default = "default_smooth_factor")]
     pub smooth_factor: f32,
 
-    /// Number of shrink iterations per frame (1–8)
+    /// Number of shrink iterations per frame (1-8)
     #[serde(default = "default_shrink_iters")]
     pub shrink_iters: u32,
 
-    /// Number of smooth iterations per frame (0–4)
+    /// Number of smooth iterations per frame (0-4)
     #[serde(default = "default_smooth_iters")]
     pub smooth_iters: u32,
 
-    /// Minimum cells for an organism to get a skin (1–20)
+    /// Minimum cells for an organism to get a skin (1-20)
     #[serde(default = "default_min_cells_for_skin")]
     pub min_cells: u32,
 
@@ -703,7 +703,7 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub selected_theme: UiTheme,
 
-    /// Custom theme palette — used when `selected_theme == UiTheme::Custom`.
+    /// Custom theme palette - used when `selected_theme == UiTheme::Custom`.
     #[serde(default)]
     pub custom_theme: CustomThemePalette,
 
@@ -725,16 +725,16 @@ pub struct GlobalUiState {
 
     /// Whether the adhesion expansion tool is active.
     /// When true, all adhesion rest_lengths are temporarily set to the genome
-    /// maximum (5.0) so bonds appear fully stretched — useful for inspecting
+    /// maximum (5.0) so bonds appear fully stretched - useful for inspecting
     /// creature structure. Does not affect the genome; purely a visual editing aid.
     #[serde(skip)]
     pub adhesion_expansion_active: bool,
 
-    /// Whether the "Saving…" progress popup is shown
+    /// Whether the "Saving..." progress popup is shown
     #[serde(skip)]
     pub show_saving_popup: bool,
 
-    /// Whether the "Loading…" progress popup is shown
+    /// Whether the "Loading..." progress popup is shown
     #[serde(skip)]
     pub show_loading_popup: bool,
 

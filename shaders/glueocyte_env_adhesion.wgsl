@@ -255,7 +255,7 @@ fn is_touching_surface(pos: vec3<f32>, contact_threshold: f32, mode_idx: u32) ->
         }
     }
 
-    // Boulder surface contact — only when boulder adhesion is enabled for this mode
+    // Boulder surface contact - only when boulder adhesion is enabled for this mode
     let boulder_adhesion_enabled = mode_idx < arrayLength(&glueocyte_boulder_adhesion_flags)
         && glueocyte_boulder_adhesion_flags[mode_idx] != 0u;
     if (boulder_adhesion_enabled) {
@@ -293,7 +293,7 @@ fn is_signal_gate_active(mode_idx: u32, cell_idx: u32) -> bool {
     let base = mode_idx * 4u;
     if (base + 2u >= arrayLength(&glueocyte_cell_adhesion_flags)) { return true; }
     let channel = glueocyte_cell_adhesion_flags[base + 1u];
-    if (channel == 0xFFFFFFFFu) { return true; } // no gate — always active
+    if (channel == 0xFFFFFFFFu) { return true; } // no gate - always active
     let threshold_bits = glueocyte_cell_adhesion_flags[base + 2u];
     let threshold = bitcast<f32>(threshold_bits);
     let raw = signal_flags[cell_idx * SIGNAL_CHANNELS + clamp(channel, 0u, 7u)];

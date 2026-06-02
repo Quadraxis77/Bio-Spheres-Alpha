@@ -167,7 +167,7 @@ impl SceneManager {
         // Initialize cave system automatically
         let _cave_initialized = gpu_scene.initialize_cave_system(device, queue, config.format, world_diameter);
         
-        // Transfer fluid simulator from old scene if it exists — preserves water state
+        // Transfer fluid simulator from old scene if it exists - preserves water state
         // across cells-only resets. Only initialize fresh if there was no prior fluid.
         let had_fluid = self.gpu_scene.as_ref().map(|s| s.fluid_simulator.is_some()).unwrap_or(false);
         if had_fluid {
@@ -189,7 +189,7 @@ impl SceneManager {
                 }
             }
         } else {
-            // No prior fluid — initialize fresh
+            // No prior fluid - initialize fresh
             let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Voxel Camera Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -494,7 +494,7 @@ impl SceneManager {
     }
 
     /// Poll the organism follow readback and update the camera center (GPU scene only).
-    /// No-op — follow camera is updated inside GpuScene::render() which has device+queue.
+    /// No-op - follow camera is updated inside GpuScene::render() which has device+queue.
     pub fn poll_organism_follow(&mut self, _device: &wgpu::Device, _dt: f32) {
         // Follow camera update happens inside GpuScene::render() via update_follow_camera().
     }

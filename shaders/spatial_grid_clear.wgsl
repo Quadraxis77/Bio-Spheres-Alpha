@@ -25,7 +25,7 @@ var<storage, read> stiffnesses: array<f32>;
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let grid_idx = global_id.x;
-    let total_grid_cells = 128u * 128u * 128u; // 128³ = 2,097,152 grid cells
+    let total_grid_cells = 128u * 128u * 128u; // 128^3 = 2,097,152 grid cells
     
     if (grid_idx >= total_grid_cells) {
         return;

@@ -59,7 +59,7 @@ fn grid_to_world(x: f32, y: f32, z: f32) -> vec3<f32> {
 }
 
 // Map from padded grid coords to density buffer index.
-// Padded grid [0..129] maps to density [−1..128]; valid density range is [0..127].
+// Padded grid [0..129] maps to density [-1..128]; valid density range is [0..127].
 fn density_index(dx: u32, dy: u32, dz: u32) -> u32 {
     let dres = params.density_resolution; // 128
     return dx + dy * dres + dz * dres * dres;
@@ -164,7 +164,7 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let iz = i32(gid.z);
 
     // Early-out: skip cells with no nearby density.
-    // Fast mode (organism skin): check only the 8 corners — density is dense so this is safe.
+    // Fast mode (organism skin): check only the 8 corners - density is dense so this is safe.
     // Wide mode (water): check a 4x4x4 neighborhood to account for the 3x3x3 filter kernel bleed.
     var has_density = false;
     if params.use_fast_early_out != 0u {

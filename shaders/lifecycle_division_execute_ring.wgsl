@@ -316,7 +316,7 @@ const ZONE_A: u32 = 0u;  // Negative dot (opposite to split)
 const ZONE_B: u32 = 1u;  // Positive dot (same as split)
 const ZONE_C: u32 = 2u;  // Equatorial (perpendicular to split)
 
-// Dynamic equatorial zone: 3° at split_ratio=0.5, 22° at split_ratio=0.3 or 0.7
+// Dynamic equatorial zone: 3 deg at split_ratio=0.5, 22 deg at split_ratio=0.3 or 0.7
 // Matches CPU EQUATORIAL_THRESHOLD_DEGREES_MIN/MAX in adhesion_zones.rs
 const EQUATORIAL_DEG_MIN: f32 = 3.0;
 const EQUATORIAL_DEG_MAX: f32 = 22.0;
@@ -392,7 +392,7 @@ fn quat_from_z_to_dir(dir: vec3<f32>) -> vec4<f32> {
     // cross((0,0,1), dir) = (-dir.y, dir.x, 0)
     let w_scalar = dir.z + 1.0;
     if (w_scalar < 0.0001) {
-        // Nearly opposite: 180° rotation around Y axis
+        // Nearly opposite: 180 deg rotation around Y axis
         return vec4<f32>(0.0, 1.0, 0.0, 0.0);
     }
     return normalize(vec4<f32>(-dir.y, dir.x, 0.0, w_scalar));
@@ -485,7 +485,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // The recycled slot may have belonged to a cell that had division_flags=1 set
     // (it was about to divide when it died). If left stale, division_scan would
     // see division_flags[child_b_slot]==1 on the very next frame and try to
-    // allocate another slot for the newborn child — before it has any nutrients —
+    // allocate another slot for the newborn child - before it has any nutrients -
     // producing a phantom grandchild that flickers for one frame then dies.
     // Clearing here (before any child B writes) is safe: this thread owns child_b_slot
     // exclusively because division_scan already popped it from the free-slot ring.
@@ -513,7 +513,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Layout: [child_a (vec4), child_b (vec4), child_a_split (vec4), child_b_split (vec4),
     //          split_rotation_quat (vec4 XYZW)]
     // Slot 4 is the pre-computed split rotation quaternion from_euler(YXZ, yaw, pitch, 0).
-    // It is NOT a direction vector — do not reconstruct via quat_from_z_to_dir().
+    // It is NOT a direction vector - do not reconstruct via quat_from_z_to_dir().
     let child_a_orientation = genome_mode_data_v0[parent_mode_idx];
     let child_b_orientation = genome_mode_data_v1[parent_mode_idx];
     let child_a_split_orientation = genome_mode_data_v2[parent_mode_idx];
@@ -689,7 +689,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Split count: reset if mode changes OR if the after-splits routing fires with an
     // explicit mode_a/b_after_splits that is DIFFERENT from the normal child mode
-    // (lifecycle transition — stem cycling). Setting after-splits to the same mode
+    // (lifecycle transition - stem cycling). Setting after-splits to the same mode
     // as the normal child is identical to leaving it at default (-1): no reset.
     let parent_props_4_for_count = mode_properties_v4[parent_mode_idx];
     let normal_child_a_mode_idx = u32(max(child_mode_indices[parent_mode_idx].x, 0));
@@ -1146,7 +1146,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 // Add duplicate to neighbor's adhesion list.
                 // Use a retry loop with atomicCompareExchangeWeak to handle spurious
-                // failures — keep retrying the same slot until it either succeeds or
+                // failures - keep retrying the same slot until it either succeeds or
                 // we confirm the slot is occupied, then move to the next slot.
                 let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
                 var i = 0u;
@@ -1156,8 +1156,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     if (cas.exchanged) {
                         break; // Successfully registered
                     }
-                    // If old_value != -1, slot is occupied — move to next slot.
-                    // If old_value == -1 but not exchanged (spurious fail) — retry same slot.
+                    // If old_value != -1, slot is occupied - move to next slot.
+                    // If old_value == -1 but not exchanged (spurious fail) - retry same slot.
                     if (cas.old_value != -1) {
                         i++;
                     }

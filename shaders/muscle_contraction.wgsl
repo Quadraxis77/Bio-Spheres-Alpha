@@ -10,7 +10,7 @@
 // Two opposing myocytes on the same bond both pull inward independently.
 //
 // In Pulse mode: oscillates between contracted and relaxed using a sine wave timer.
-// Pulse A contracts when sin(time * rate * 2π) >= 0, Pulse B when < 0.
+// Pulse A contracts when sin(time * rate * 2pi) >= 0, Pulse B when < 0.
 // In Signal mode: reads a signal channel and contracts based on threshold.
 //
 // Must run BEFORE adhesion_physics.wgsl.
@@ -143,7 +143,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     } else {
         // Phased timer mode: oscillate based on current_time
-        // sin(time * rate * 2π) produces a wave from -1 to +1
+        // sin(time * rate * 2pi) produces a wave from -1 to +1
         // Pulse A contracts when sin >= 0, Pulse B contracts when sin < 0
         let wave = sin(params.current_time * pulse_rate * 2.0 * PI);
         let is_active_phase = select(wave < 0.0, wave >= 0.0, pulse_phase < 0.5);

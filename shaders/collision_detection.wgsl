@@ -109,7 +109,7 @@ var<storage, read> angular_velocities: array<vec4<f32>>;
 
 // Boulder state and count for cell-boulder collision (read-only).
 // Boulders are not in the cell slot system so they don't appear in the spatial grid.
-// Each cell thread checks all live boulders directly — with max 256 boulders this
+// Each cell thread checks all live boulders directly - with max 256 boulders this
 // is at most 256 extra reads per cell, which is negligible.
 struct GpuBoulder {
     position:         vec3<f32>,
@@ -123,7 +123,7 @@ struct GpuBoulder {
 }
 @group(2) @binding(8) var<storage, read> boulder_state: array<GpuBoulder>;
 @group(2) @binding(9) var<storage, read> boulder_count: array<u32>;
-// Boulder force accumulator — cells write reaction forces here so boulders can be pushed.
+// Boulder force accumulator - cells write reaction forces here so boulders can be pushed.
 // Cleared by DMA each frame before collision detection runs.
 @group(2) @binding(10) var<storage, read_write> boulder_force_accum: array<atomic<i32>>; // 3 per boulder
 
@@ -171,7 +171,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mass = positions_in[cell_idx].w;
 
     // Skip dead cells - they must not generate or receive collision forces
-    // No need to copy pos/vel to output — position_update handles that for all cells.
+    // No need to copy pos/vel to output - position_update handles that for all cells.
     if (mass < 0.5) {
         return;
     }
@@ -183,7 +183,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Overflow cells were not inserted into the spatial grid (their voxel was full).
     // If they queried the grid they would receive one-sided collision forces that
-    // their unaware neighbours can't react to — violating Newton's third law and
+    // their unaware neighbours can't react to - violating Newton's third law and
     // creating phantom momentum. Skip them entirely instead.
     if (my_grid_idx == 0xFFFFFFFFu) {
         return;
@@ -284,7 +284,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Early-out: if the only cell in the entire 3x3x3 neighbourhood is this cell
-    // itself, there is nothing to collide with — skip the inner loop entirely.
+    // itself, there is nothing to collide with - skip the inner loop entirely.
     // This is the common case for cells in sparse regions of a large cluster.
     if (total_neighbor_cells <= 1u) {
         // Still need to write boundary forces if any were accumulated above.
@@ -368,7 +368,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
-    // ── Cell-boulder collision ────────────────────────────────────────────────
+    // -- Cell-boulder collision ------------------------------------------------
     let num_boulders = boulder_count[0];
     for (var bi = 0u; bi < num_boulders; bi++) {
         let bld = boulder_state[bi];
@@ -427,6 +427,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
     atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
     
-    // No position/velocity copy needed — position_update writes positions_out/velocities_out
+    // No position/velocity copy needed - position_update writes positions_out/velocities_out
     // for all cells after forces are accumulated.
 }

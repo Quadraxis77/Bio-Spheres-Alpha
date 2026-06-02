@@ -145,7 +145,7 @@ var<storage, read> signal_settings_v1_read: array<vec4<f32>>;
 
 // Binding 19: Embryocyte reserve buffer (read-write atomic<u32> per cell).
 // death_scan: burns reserve for free Embryocytes and uses it for death detection.
-// reserve == 0 → Embryocyte dies (reserve is its sole energy source).
+// reserve == 0 -> Embryocyte dies (reserve is its sole energy source).
 @group(2) @binding(19)
 var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
 
@@ -285,7 +285,7 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Embryocyte reserve management:
-    // - Reserve burn rate: 10 units/sec when free (no adhesions — checked in division_scan).
+    // - Reserve burn rate: 10 units/sec when free (no adhesions - checked in division_scan).
     //   death_scan does not have adhesion data, so burn is applied in division_scan.
     // - Death: Embryocytes die when reserve == 0 (reserve is their sole energy source).
     // Non-Embryocyte cells: die when nutrients < threshold AND reserve == 0.
@@ -402,8 +402,8 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // division_flags = 2u which signals division_execute to drop all adhesions.
     // Gametocytes (13) share the full Embryocyte lifecycle: reserve storage, release
     // triggers, and free-cell reserve burn. The only difference is that a free Gametocyte
-    // should never self-hatch — split_interval is set to the >59 sentinel at default time,
-    // so the "free → divide" branch fires only when the user has configured it explicitly.
+    // should never self-hatch - split_interval is set to the >59 sentinel at default time,
+    // so the "free -> divide" branch fires only when the user has configured it explicitly.
     if (cell_type == 10u || cell_type == 13u) {
         // Count active adhesions
         let emb_adh_base = cell_idx * MAX_ADHESIONS_PER_CELL;
@@ -417,10 +417,10 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         if (emb_adh_count == 0u) {
             // Free (no connections): burn reserve at 10 units/sec, and divide when the
-            // split timer elapses. split_interval is the "hatch timer" — the embryocyte
+            // split timer elapses. split_interval is the "hatch timer" - the embryocyte
             // divides once it has been free for long enough (age >= split_interval).
             // split_interval > 59.0 is the sentinel for "never split".
-            // Reserve is stored ×1000 (fixed-point), so burn rate * 1000.
+            // Reserve is stored x1000 (fixed-point), so burn rate * 1000.
             let burn = u32(10.0 * params.delta_time * 1000.0 + 0.5);
             let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
             atomicStore(&embryocyte_reserves[cell_idx], cur_reserve - min(burn, cur_reserve));
@@ -454,7 +454,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         } else {
             // Attached: check AND-logic release triggers (timer + threshold + signal).
-            // All three run on GPU — birth_times and params.current_time are already bound here.
+            // All three run on GPU - birth_times and params.current_time are already bound here.
             // v9: [use_timer, release_timer, use_threshold, threshold_value]
             // v10: [use_signal, signal_channel, signal_value, 0.0]
             let v9 = embryocyte_mode_v9[mode_idx];
@@ -477,7 +477,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (v9.z > 0.5) {
                 any_trigger_enabled = true;
                 let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
-                // Reserve stored ×1000; threshold in whole units → compare cur_reserve/1000 < threshold
+                // Reserve stored x1000; threshold in whole units -> compare cur_reserve/1000 < threshold
                 if (f32(cur_reserve) < v9.w * 1000.0) {
                     all_triggers_met = false;
                 }
@@ -554,7 +554,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Check threshold: if invert=0, allow division when signal >= threshold
             //                   if invert=1, allow division when signal < threshold
             // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
-            // No separate has_signal guard — a zero signal simply fails a positive threshold.
+            // No separate has_signal guard - a zero signal simply fails a positive threshold.
             let above_threshold = signal_value >= div_threshold;
             let division_allowed = select(above_threshold, !above_threshold, div_invert > 0.5);
             
@@ -568,7 +568,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Count active adhesions for this cell (used for both max and min checks)
     // IMPORTANT: Must verify is_active on each referenced connection, not just
     // check for a non-negative index. Adhesion indices can become stale when
-    // bonds break due to force in adhesion_physics — the connection is marked
+    // bonds break due to force in adhesion_physics - the connection is marked
     // inactive but the per-cell index is not cleared.
     let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     var adhesion_count = 0u;
@@ -676,7 +676,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Also check neighbor's adhesion constraints (max/min adhesion gates).
         // Without this, we'd defer to a neighbor that passes nutrient/time/split
-        // checks but will fail the adhesion gate in its own thread — neither cell
+        // checks but will fail the adhesion gate in its own thread - neither cell
         // would divide.
         let neighbor_adhesion_base = neighbor_idx * MAX_ADHESIONS_PER_CELL;
         var neighbor_adhesion_count = 0u;

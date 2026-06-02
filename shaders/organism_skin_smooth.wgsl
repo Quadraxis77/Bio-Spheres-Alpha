@@ -1,4 +1,4 @@
-// Organism Skin Spatial Smoothing — K=4 per-slot 3x3x3 box blur
+// Organism Skin Spatial Smoothing - K=4 per-slot 3x3x3 box blur
 //
 // Each slot's density is blurred independently as a plain scalar field,
 // exactly like the water smooth_density shader. This spreads density into

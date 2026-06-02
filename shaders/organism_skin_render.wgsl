@@ -1,4 +1,4 @@
-// Organism Skin Render Shader — per-organism coloring
+// Organism Skin Render Shader - per-organism coloring
 //
 // Renders isosurface mesh extracted by organism_skin_surface_nets.wgsl.
 // Each vertex carries an organism_id (in the fluid_type/organism_id field).
@@ -51,9 +51,9 @@ fn vs_main(v: VertexInput) -> VertexOutput {
     return out;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Organism-specific color from ID
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 // Hash a u32 to a float in [0,1)
 fn hash_f(x: u32) -> f32 {
@@ -85,14 +85,14 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> vec3<f32> {
 fn organism_color(org_id: u32) -> vec3<f32> {
     let golden_ratio = 0.618033988749895;
     let hue = fract(f32(org_id) * golden_ratio);
-    let sat = 0.5 + hash_f(org_id * 7u + 3u) * 0.3;  // 0.5–0.8
-    let lit = 0.45 + hash_f(org_id * 13u + 7u) * 0.2; // 0.45–0.65
+    let sat = 0.5 + hash_f(org_id * 7u + 3u) * 0.3;  // 0.5-0.8
+    let lit = 0.45 + hash_f(org_id * 13u + 7u) * 0.2; // 0.45-0.65
     return hsl_to_rgb(hue, sat, lit);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Lighting (same as original organism_skin.wgsl)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 fn phong_diffuse(n: vec3<f32>, l: vec3<f32>) -> f32 {
     return max(dot(n, l), 0.0);

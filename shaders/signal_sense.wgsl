@@ -1,7 +1,7 @@
 // Signal Sense Compute Shader
 // Two-phase signal emission:
-//   Phase 1: Oculocyte cells detect targets along a forward ray → emit on channels 0-7
-//   Phase 2: ALL cells with regulation_emit_channel 8-15 → emit unconditionally
+//   Phase 1: Oculocyte cells detect targets along a forward ray -> emit on channels 0-7
+//   Phase 2: ALL cells with regulation_emit_channel 8-15 -> emit unconditionally
 //
 // 16 channels per cell: signal_flags[cell_idx * 16 + channel]
 // Each channel is a packed u32: bits 16+ = direction flag, bits 11-15 = hops, bits 0-10 = value
@@ -40,7 +40,7 @@ var<storage, read> oculocyte_params: array<vec4<u32>>;
 @group(1) @binding(5)
 var<storage, read> regulation_params: array<vec4<u32>>;
 
-// Oculocyte signal values: one f32 per mode — the value emitted when target is detected.
+// Oculocyte signal values: one f32 per mode - the value emitted when target is detected.
 // Kept separate from oculocyte_params to preserve the mutation system's vec4<u32> stride.
 @group(1) @binding(6)
 var<storage, read> oculocyte_signal_values: array<f32>;
@@ -73,12 +73,12 @@ var<storage, read> light_field: array<f32>;
 @group(2) @binding(3)
 var<storage, read> solid_mask: array<u32>;
 
-// binding 4: density field from surface nets — used for water surface detection
+// binding 4: density field from surface nets - used for water surface detection
 // Values are fluid density per voxel (f32); the isosurface threshold is 0.5
 @group(2) @binding(4)
 var<storage, read> density_field: array<f32>;
 
-// binding 5: boulder state — for sense_type 5 (Boulder detection)
+// binding 5: boulder state - for sense_type 5 (Boulder detection)
 struct SenseBoulder {
     position: vec3<f32>,
     radius:   f32,
@@ -204,7 +204,7 @@ fn dda_march_light(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bo
 }
 
 // sense_type 3: ray-sphere intersection against world boundary, then DDA for solid voxels
-// and water surface isosurface — all physical barriers an organism would bump into.
+// and water surface isosurface - all physical barriers an organism would bump into.
 const WATER_ISO_LEVEL: f32 = 0.5;
 
 fn sense_barrier(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool {
@@ -336,7 +336,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (detected) {
                 // Write signal to the correct channel slot.
                 // Format: bit16 = source flag, bits 11-15 = hops, bits 0-10 = value
-                // Use atomicStore — the clear pass already zeroed this slot, and only one
+                // Use atomicStore - the clear pass already zeroed this slot, and only one
                 // oculocyte thread owns each (cell, channel) pair, so there is no contention.
                 // atomicAdd on a packed bitfield would corrupt hops/value/source-flag if two
                 // threads ever wrote the same slot concurrently.
@@ -363,7 +363,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         if (clamped_value > 0u && reg_hops > 0u) {
             // Source flag + hops + value.
-            // Use atomicStore — the clear pass already zeroed this slot, and each cell
+            // Use atomicStore - the clear pass already zeroed this slot, and each cell
             // owns exactly one regulation channel, so there is no write contention.
             let signal_packed = (1u << 16u) | (reg_hops << 11u) | clamped_value;
             atomicStore(&signal_flags[idx * SIGNAL_CHANNELS + reg_channel], signal_packed);

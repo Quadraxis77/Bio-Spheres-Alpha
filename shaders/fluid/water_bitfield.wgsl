@@ -1,5 +1,5 @@
 // Water Bitfield Compression Shader
-// Compresses 128³ voxel grid into bitfield for fast water detection
+// Compresses 128^3 voxel grid into bitfield for fast water detection
 // Each u32 contains 32 consecutive voxels along X axis
 //
 // Input: 2,097,152 voxels (8MB as u32)

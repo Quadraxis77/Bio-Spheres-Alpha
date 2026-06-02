@@ -79,7 +79,7 @@
 //! 
 //! ### Capacity vs Count
 //! - `capacity` - Maximum number of cells (fixed at creation)
-//! - `cell_count` - Current active cells (≤ capacity)
+//! - `cell_count` - Current active cells (<= capacity)
 //! - All arrays are pre-allocated to `capacity` to avoid runtime allocations
 //! 
 //! ### Index Stability
@@ -192,7 +192,7 @@ pub struct DivisionEvent {
 /// data without gaps.
 #[derive(Clone)]
 pub struct CanonicalState {
-    /// Number of currently active cells (≤ capacity)
+    /// Number of currently active cells (<= capacity)
     /// 
     /// This is the authoritative count - only indices 0..cell_count contain valid data.
     pub cell_count: usize,
@@ -324,7 +324,7 @@ pub struct CanonicalState {
     
     /// Time interval between divisions (when mass threshold is met)
     /// 
-    /// Cells can only divide if both mass ≥ split_mass AND age ≥ split_interval.
+    /// Cells can only divide if both mass >= split_mass AND age >= split_interval.
     /// Prevents unrealistic rapid division.
     pub split_intervals: Vec<f32>,
     
@@ -370,7 +370,7 @@ pub struct CanonicalState {
     
     /// Spatial partitioning grid for efficient collision detection
     /// 
-    /// Divides 3D space into grid cells to avoid O(n²) collision checks.
+    /// Divides 3D space into grid cells to avoid O(n^2) collision checks.
     /// Only cells in the same or adjacent grid cells need collision testing.
     pub spatial_grid: DeterministicSpatialGrid,
     
@@ -421,7 +421,7 @@ pub struct CanonicalState {
     // === Adhesion Expansion Tool ===
     // When active, all adhesion rest_lengths are overridden to the maximum
     // allowed value (5.0) so bonds appear fully stretched.
-    // Does NOT affect the genome — purely a visual/editing aid.
+    // Does NOT affect the genome - purely a visual/editing aid.
 
     /// Whether the adhesion expansion tool is active.
     /// When true, all adhesion rest_lengths are overridden to 5.0 (the genome max)
@@ -463,9 +463,9 @@ pub struct CanonicalState {
     /// Each cell only controls its own half of the adhesion bond.
     pub muscle_contractions: Vec<f32>,
 
-    /// Per-cell reserve (u32, stored ×1000 fixed-point; 0–65,535,000 = 0–65535 whole units).
+    /// Per-cell reserve (u32, stored x1000 fixed-point; 0-65,535,000 = 0-65535 whole units).
     ///
-    /// Stored in fixed-point (×1000) so sub-unit drain rates (e.g. 1/sec at 64 Hz = 0.015/tick)
+    /// Stored in fixed-point (x1000) so sub-unit drain rates (e.g. 1/sec at 64 Hz = 0.015/tick)
     /// accumulate correctly without truncation.
     ///
     /// For Embryocytes (cell_type == 10): the reserve is the ONLY nutrient source.
@@ -505,7 +505,7 @@ pub struct CanonicalState {
 impl CanonicalState {
     /// Create a new canonical state with the specified capacity
     /// 
-    /// Uses a default spatial grid density of 64³ cells, which works well
+    /// Uses a default spatial grid density of 64^3 cells, which works well
     /// for most simulation scenarios.
     /// 
     /// # Arguments
@@ -527,7 +527,7 @@ impl CanonicalState {
     /// 
     /// # Arguments
     /// * `capacity` - Maximum number of cells this state can hold
-    /// * `grid_density` - Number of grid cells per dimension (creates density³ total cells)
+    /// * `grid_density` - Number of grid cells per dimension (creates density^3 total cells)
     /// 
     /// # Grid Density Guidelines
     /// - 32: Small simulations (<1000 cells)
@@ -536,7 +536,7 @@ impl CanonicalState {
     /// 
     /// # Memory Usage
     /// Each grid cell stores a list of cell indices, so memory usage scales
-    /// with grid_density³. A 64³ grid uses ~1MB for grid metadata.
+    /// with grid_density^3. A 64^3 grid uses ~1MB for grid metadata.
     pub fn with_grid_density(capacity: usize, grid_density: u32) -> Self {
         // Calculate adhesion connection capacity
         // Each cell can have up to MAX_ADHESIONS_PER_CELL connections
@@ -587,7 +587,7 @@ impl CanonicalState {
             genome_modes_hash: 0,
             
             // Spatial grid for collision detection
-            // Parameters: grid_density³ cells, 400.0 world size, 200.0 boundary radius
+            // Parameters: grid_density^3 cells, 400.0 world size, 200.0 boundary radius
             spatial_grid: DeterministicSpatialGrid::with_capacity(grid_density, 400.0, 200.0, capacity),
             
             // State tracking
@@ -600,33 +600,33 @@ impl CanonicalState {
             divisions_to_process_buffer: Vec::with_capacity(256),
             filtered_divisions_buffer: Vec::with_capacity(256),
 
-            // Sister immunity — no immunity by default
+            // Sister immunity - no immunity by default
             sister_cell_id: vec![u32::MAX; capacity],
             sister_expiry: vec![0.0; capacity],
 
-            // Adhesion break cooldown — no cooldowns initially
+            // Adhesion break cooldown - no cooldowns initially
             adhesion_break_cooldowns: Vec::new(),
 
-            // Adhesion expansion tool — off by default
+            // Adhesion expansion tool - off by default
             adhesion_expansion_active: false,
 
-            // Environment adhesion — no anchors by default
+            // Environment adhesion - no anchors by default
             env_anchor_pos: vec![Vec3::ZERO; capacity],
             env_anchor_active: vec![false; capacity],
 
-            // Signal system — all channels null by default
+            // Signal system - all channels null by default
             signal_channels: vec![None; capacity * 16],
             has_any_signal: false,
             muscle_contractions: vec![0.0; capacity],
             signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker::new(),
 
-            // Reserve — zero by default; set to 65535 for initial Embryocyte cells
+            // Reserve - zero by default; set to 65535 for initial Embryocyte cells
             reserves: vec![0u32; capacity],
 
-            // Embryocyte accumulation timer — 0.0 for all cells initially
+            // Embryocyte accumulation timer - 0.0 for all cells initially
             embryocyte_timers: vec![0.0f32; capacity],
 
-            // Memorocyte leaky-integrator state — 0.0 for all cells initially
+            // Memorocyte leaky-integrator state - 0.0 for all cells initially
             memo_state: vec![0.0f32; capacity],
         }
     }

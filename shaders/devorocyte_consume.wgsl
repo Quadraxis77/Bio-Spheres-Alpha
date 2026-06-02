@@ -37,7 +37,7 @@ struct DevorocyteParams {
     // [consume_range, consume_rate, 0, 0]
     // consume_range: extra contact distance beyond sum of radii (world units)
     // consume_rate:  nutrients stolen per second per victim
-    dummy: u32, // placeholder — actual params come from mode_properties buffers
+    dummy: u32, // placeholder - actual params come from mode_properties buffers
 }
 
 // Group 0: Standard physics bind group
@@ -173,9 +173,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Query spatial grid — 27-cell neighbourhood
+    // Query spatial grid - 27-cell neighbourhood
     let my_grid_idx = cell_grid_indices[cell_idx];
-    // Skip overflow cells — sentinel 0xFFFFFFFF means this cell wasn't inserted
+    // Skip overflow cells - sentinel 0xFFFFFFFF means this cell wasn't inserted
     // into the spatial grid. Computing coordinates from the sentinel produces garbage.
     if (my_grid_idx == 0xFFFFFFFFu) { return; }
     let res = params.grid_resolution;
@@ -215,7 +215,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         continue;
                     }
 
-                    // Skip same organism or same genome — Devorocytes only attack foreigners
+                    // Skip same organism or same genome - Devorocytes only attack foreigners
                     let other_org    = organism_labels[other_idx];
                     let other_genome = genome_ids[other_idx];
 

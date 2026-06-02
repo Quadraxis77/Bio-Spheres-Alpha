@@ -4,7 +4,7 @@
 // boulder-boulder collision with rolling contact friction, velocity/rotation
 // integration, death detection, and moss direction update.
 //
-// NOTE — architectural debt:
+// NOTE - architectural debt:
 // This shader reimplements gravity, boundary forces, cave SDF collision, and
 // velocity integration that already exist in position_update.wgsl and
 // collision_detection.wgsl. The correct design would have been to place boulders
@@ -20,7 +20,7 @@
 // collision would have worked automatically through collision_detection.wgsl.
 //
 // Bind groups:
-//   Group 0: physics params (reuses physics_layout — gravity, world_size, etc.)
+//   Group 0: physics params (reuses physics_layout - gravity, world_size, etc.)
 //   Group 1: boulder buffers (state, moss, moss_dir, eat_dir_accum, count)
 //   Group 2: cave params (reuses cave collision bind group)
 
@@ -41,7 +41,7 @@ struct PhysicsParams {
     gravity_mode: u32,
     angular_damping: f32,
     solo_metabolism_multiplier: f32,
-    // No explicit padding — WGSL uniform structs don't need to fill the full buffer size.
+    // No explicit padding - WGSL uniform structs don't need to fill the full buffer size.
     // The GPU buffer is 256 bytes; the struct only declares the fields it uses.
 }
 
@@ -52,7 +52,7 @@ struct GpuBoulder {
     dead:             u32,
     seed:             u32,
     _pad:             array<u32, 3>,
-    angular_velocity: vec4<f32>,  // xyz = ω rad/s, w = unused
+    angular_velocity: vec4<f32>,  // xyz = omega rad/s, w = unused
     orientation:      vec4<f32>,  // quaternion (x,y,z,w)
 }
 
@@ -88,20 +88,20 @@ struct CaveParams {
     _padding46: vec4<f32>, _padding47: vec4<f32>,
 }
 
-// ── Group 0: Physics params ───────────────────────────────────────────────────
+// -- Group 0: Physics params ---------------------------------------------------
 @group(0) @binding(0) var<uniform> params: PhysicsParams;
 
-// ── Group 1: Boulder buffers ──────────────────────────────────────────────────
+// -- Group 1: Boulder buffers --------------------------------------------------
 @group(1) @binding(0) var<storage, read_write> boulder_state:    array<GpuBoulder>;
 @group(1) @binding(1) var<storage, read_write> boulder_moss:     array<atomic<i32>>;
 @group(1) @binding(2) var<storage, read_write> boulder_moss_dir: array<vec4<f32>>;
 @group(1) @binding(3) var<storage, read_write> boulder_eat_dir:  array<atomic<i32>>; // 3 per boulder
 @group(1) @binding(4) var<storage, read>       boulder_count:    array<u32>;
-// Force accumulator written by collision_detection.wgsl — cells pushing the boulder.
+// Force accumulator written by collision_detection.wgsl - cells pushing the boulder.
 // Read and applied here, then the buffer is cleared by DMA next frame.
 @group(1) @binding(5) var<storage, read_write> boulder_force_accum: array<atomic<i32>>; // 3 per boulder
 
-// Water detection — same bitfield used by cells in position_update.wgsl.
+// Water detection - same bitfield used by cells in position_update.wgsl.
 // When grid_resolution == 0 the fluid system is not active; skip water checks.
 struct WaterGridParams {
     grid_resolution: u32,
@@ -126,12 +126,12 @@ struct BoulderBuoyancyParams {
 }
 @group(1) @binding(8) var<uniform> buoyancy_params: BoulderBuoyancyParams;
 
-// ── Group 2: Cave params ──────────────────────────────────────────────────────
+// -- Group 2: Cave params ------------------------------------------------------
 @group(2) @binding(0) var<uniform> cave_params: CaveParams;
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 const FIXED_POINT_SCALE: f32 = 1000.0;
-// Very high mass — boulders are heavy rock. Cells can push them but it takes
+// Very high mass - boulders are heavy rock. Cells can push them but it takes
 // many cells or sustained contact. A single cell barely moves a boulder.
 const BOULDER_MASS: f32 = 50.0;
 const BOULDER_DAMPING: f32 = 0.85;      // Velocity retained per second (air drag)
@@ -145,12 +145,12 @@ const RESTITUTION: f32 = 0.3;
 // Coulomb friction coefficient for rock-on-rock contact.
 // Higher = more grip, faster spin-up, quicker stop.
 const ROLLING_FRICTION_COEFF: f32 = 0.7;
-const ANGULAR_DAMPING: f32 = 0.70;  // Aggressive damping — kills unnatural spin quickly
+const ANGULAR_DAMPING: f32 = 0.70;  // Aggressive damping - kills unnatural spin quickly
 // Maximum angular speed (rad/s). Prevents spin from exceeding what rolling would produce.
 // For a sphere rolling without slip: omega_max = v / r. We use a generous multiple.
 const MAX_ANGULAR_SPEED: f32 = 8.0;
 
-// ── Cave SDF (copied from cave_collision.wgsl) ────────────────────────────────
+// -- Cave SDF (copied from cave_collision.wgsl) --------------------------------
 
 fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
     var h = seed;
@@ -219,7 +219,7 @@ fn sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     return g / len;
 }
 
-// ── Gravity direction ─────────────────────────────────────────────────────────
+// -- Gravity direction ---------------------------------------------------------
 
 fn gravity_vector(pos: vec3<f32>) -> vec3<f32> {
     let g = params.gravity;
@@ -235,7 +235,7 @@ fn gravity_vector(pos: vec3<f32>) -> vec3<f32> {
     }
 }
 
-// ── Water detection ───────────────────────────────────────────────────────────
+// -- Water detection -----------------------------------------------------------
 // Mirrors the is_in_water() function from position_update.wgsl.
 // Returns true if the given world position is inside a water voxel.
 const WATER_GRID_X_GROUPS: u32 = 4u; // 128 / 32
@@ -266,7 +266,7 @@ fn is_in_water(world_pos: vec3<f32>) -> bool {
     return (bits & (1u << bit_index)) != 0u;
 }
 
-// ── Quaternion helpers ────────────────────────────────────────────────────────
+// -- Quaternion helpers --------------------------------------------------------
 
 fn quat_mul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
@@ -278,7 +278,7 @@ fn quat_mul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
 }
 
 // Integrate angular velocity into orientation quaternion.
-// ω is in rad/s; dt in seconds.
+// omega is in rad/s; dt in seconds.
 fn integrate_rotation(q: vec4<f32>, omega: vec3<f32>, dt: f32) -> vec4<f32> {
     let angle = length(omega) * dt;
     if (angle < 0.0001) { return q; }
@@ -288,7 +288,7 @@ fn integrate_rotation(q: vec4<f32>, omega: vec3<f32>, dt: f32) -> vec4<f32> {
     return normalize(quat_mul(dq, q));
 }
 
-// ── Surface contact response ──────────────────────────────────────────────────
+// -- Surface contact response --------------------------------------------------
 
 struct ContactResult {
     vel:   vec3<f32>,
@@ -323,7 +323,7 @@ fn surface_contact(
     let v_contact2 = v + cross(w, r_contact);
     let vt = v_contact2 - dot(v_contact2, normal) * normal;
     let vt_len = length(vt);
-    // Only apply friction above a meaningful slip threshold — prevents spin from
+    // Only apply friction above a meaningful slip threshold - prevents spin from
     // numerical noise when the boulder is nearly stationary on a surface.
     if (vt_len > 0.05) {
         let t_dir = vt / vt_len;
@@ -339,7 +339,7 @@ fn surface_contact(
     return ContactResult(v, w);
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// -- Main ----------------------------------------------------------------------
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -355,7 +355,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dt = params.delta_time;
     let world_radius = params.world_size * 0.5;
 
-    // ── Death check ───────────────────────────────────────────────────────────
+    // -- Death check -----------------------------------------------------------
     // Only check moss on boulders that have actually been spawned (radius > 0).
     // Unspawned slots have radius = 0 and are skipped by the early-exit above,
     // but we guard here too to avoid marking them dead.
@@ -371,7 +371,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // ── Gravity ───────────────────────────────────────────────────────────────
+    // -- Gravity ---------------------------------------------------------------
     // Smooth buoyancy: sample 5 points (center + 4 cardinal offsets at radius/2)
     // to estimate what fraction of the boulder is submerged. This prevents the
     // instant gravity flip that caused boulders to oscillate at the water surface.
@@ -384,25 +384,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     submerged_count += select(0u, 1u, is_in_water(b.position + vec3<f32>(0.0, -r2, 0.0)));
     // immersion_frac: 0.0 = fully in air, 1.0 = fully submerged
     let immersion_frac = f32(submerged_count) / 5.0;
-    // Lerp gravity multiplier: 1.0 in air → buoyancy_params.gravity_multiplier fully submerged
+    // Lerp gravity multiplier: 1.0 in air -> buoyancy_params.gravity_multiplier fully submerged
     let gravity_multiplier = mix(1.0, buoyancy_params.gravity_multiplier, immersion_frac);
     let grav = gravity_vector(b.position) * gravity_multiplier;
     b.velocity += grav * dt;
 
-    // Viscous drag when submerged — scales with immersion fraction
+    // Viscous drag when submerged - scales with immersion fraction
     if (immersion_frac > 0.0 && water_params.water_viscosity > 0.0) {
         let drag = water_params.water_viscosity * buoyancy_params.drag_coeff * b.radius * immersion_frac;
         b.velocity -= b.velocity * drag * dt;
     }
 
-    // ── Cell-push forces (accumulated by collision_detection.wgsl) ────────────
+    // -- Cell-push forces (accumulated by collision_detection.wgsl) ------------
     let fx = f32(atomicLoad(&boulder_force_accum[idx * 3u + 0u])) / FIXED_POINT_SCALE;
     let fy = f32(atomicLoad(&boulder_force_accum[idx * 3u + 1u])) / FIXED_POINT_SCALE;
     let fz = f32(atomicLoad(&boulder_force_accum[idx * 3u + 2u])) / FIXED_POINT_SCALE;
-    // F = ma → a = F/m. High BOULDER_MASS means cells barely move the boulder.
+    // F = ma -> a = F/m. High BOULDER_MASS means cells barely move the boulder.
     b.velocity += vec3<f32>(fx, fy, fz) * (dt / BOULDER_MASS);
 
-    // ── World sphere boundary ─────────────────────────────────────────────────
+    // -- World sphere boundary -------------------------------------------------
     let dist_from_center = length(b.position);
     let boundary_dist = dist_from_center + b.radius - world_radius;
     if (boundary_dist > 0.0) {
@@ -413,7 +413,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         b.angular_velocity = vec4<f32>(cr.omega, 0.0);
     }
 
-    // ── Cave SDF collision ────────────────────────────────────────────────────
+    // -- Cave SDF collision ----------------------------------------------------
     if (cave_params.collision_enabled != 0u) {
         let density = sample_cave_density(b.position);
         let open_threshold = cave_params.threshold - 0.5 - 0.2;
@@ -423,7 +423,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let outward_normal = -sdf_gradient(b.position, grad_step);
                 let penetration = (density - cave_params.threshold) * cave_params.scale;
                 if (penetration > 0.0) {
-                    // Correct position exactly to the surface — no extra offset,
+                    // Correct position exactly to the surface - no extra offset,
                     // which would cause jitter when resting against a wall.
                     b.position += outward_normal * penetration;
                     let cr = surface_contact(b.velocity, b.angular_velocity.xyz, outward_normal, b.radius, dt);
@@ -434,7 +434,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // ── Boulder-boulder collision ─────────────────────────────────────────────
+    // -- Boulder-boulder collision ---------------------------------------------
     for (var j = 0u; j < count; j++) {
         if (j == idx) { continue; }
         let other = boulder_state[j];
@@ -454,7 +454,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // ── Velocity damping + position integration ───────────────────────────────
+    // -- Velocity damping + position integration -------------------------------
     b.velocity *= pow(BOULDER_DAMPING, dt);
     // Clamp angular speed before damping to prevent runaway spin
     let ang_speed = length(b.angular_velocity.xyz);
@@ -464,10 +464,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     b.angular_velocity *= pow(ANGULAR_DAMPING, dt);
     b.position += b.velocity * dt;
 
-    // ── Orientation integration ───────────────────────────────────────────────
+    // -- Orientation integration -----------------------------------------------
     b.orientation = integrate_rotation(b.orientation, b.angular_velocity.xyz, dt);
 
-    // ── Moss direction update from eat accumulator ────────────────────────────
+    // -- Moss direction update from eat accumulator ----------------------------
     let ex = f32(atomicLoad(&boulder_eat_dir[idx * 3u + 0u])) / FIXED_POINT_SCALE;
     let ey = f32(atomicLoad(&boulder_eat_dir[idx * 3u + 1u])) / FIXED_POINT_SCALE;
     let ez = f32(atomicLoad(&boulder_eat_dir[idx * 3u + 2u])) / FIXED_POINT_SCALE;

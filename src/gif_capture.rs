@@ -1,6 +1,6 @@
-//! GIF thumbnail capture for genomes — incremental, non-blocking.
+//! GIF thumbnail capture for genomes - incremental, non-blocking.
 //!
-//! Instead of blocking for 1–2 seconds, the capture runs one frame per app
+//! Instead of blocking for 1-2 seconds, the capture runs one frame per app
 //! frame. The caller drives it by calling `GifCaptureState::step()` each frame
 //! and checking `is_done()`. Progress is exposed so the UI can show a bar.
 //!
@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 use glam::{Quat, Vec3};
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants -----------------------------------------------------------------
 
 /// Resolution of the GIF thumbnail (square).
 pub const GIF_SIZE: u32 = 256;
@@ -25,10 +25,10 @@ pub const GIF_SIZE: u32 = 256;
 /// Number of frames in the GIF.
 pub const GIF_FRAMES: u32 = 120;
 
-/// Delay between frames in centiseconds (5cs = 50ms → 20fps playback).
+/// Delay between frames in centiseconds (5cs = 50ms -> 20fps playback).
 pub const FRAME_DELAY_CS: u16 = 5;
 
-/// Orbit speed in radians per second — matches the main menu exactly.
+/// Orbit speed in radians per second - matches the main menu exactly.
 const ORBIT_SPEED: f32 = 0.28;
 
 /// Pre-scan step size (seconds). Smaller = more accurate window, but slower begin().
@@ -47,7 +47,7 @@ const FALLBACK_WINDOW: f32 = 60.0;
 /// At SCAN_STEP=0.25s this is 20 steps = 5 seconds of no change.
 const STAGNATION_STEPS: usize = 20;
 
-// ── GifCaptureState ───────────────────────────────────────────────────────────
+// -- GifCaptureState -----------------------------------------------------------
 
 /// Incremental GIF capture state. Drive by calling `step()` once per app frame.
 pub struct GifCaptureState {
@@ -65,7 +65,7 @@ pub struct GifCaptureState {
     is_bgra: bool,
     /// Accumulated RGBA frames.
     frames: Vec<Vec<u8>>,
-    /// Current orbit angle (radians) — starts at the saved camera yaw.
+    /// Current orbit angle (radians) - starts at the saved camera yaw.
     orbit_angle: f32,
     /// Initial camera rotation from the preview (used to extract pitch/yaw).
     initial_rotation: Quat,
@@ -81,7 +81,7 @@ pub struct GifCaptureState {
     frame_interval: f32,
 }
 
-// Manual trait impls — GPU resources are not Clone or Debug.
+// Manual trait impls - GPU resources are not Clone or Debug.
 impl std::fmt::Debug for GifCaptureState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GifCaptureState")
@@ -125,7 +125,7 @@ impl GifCaptureState {
             desired_maximum_frame_latency: 2,
         };
 
-        // ── Pre-scan: find the capture window ────────────────────────────────
+        // -- Pre-scan: find the capture window --------------------------------
         // We run a lightweight CPU-only simulation (no rendering) to find when
         // the organism reaches SCAN_TARGET_CELLS or dies after being alive.
         let capture_window = {
@@ -169,7 +169,7 @@ impl GifCaptureState {
                 }
 
                 // Stop when the cell count has been completely flat for long enough.
-                // Only trigger stagnation once the organism has actually been alive —
+                // Only trigger stagnation once the organism has actually been alive -
                 // we don't want to stop immediately if the genome starts with 0 cells
                 // and takes a moment to spawn.
                 if ever_alive && stagnant_steps >= STAGNATION_STEPS {
@@ -192,7 +192,7 @@ impl GifCaptureState {
 
         let frame_interval = capture_window / GIF_FRAMES as f32;
 
-        // ── Render scene (starts fresh from t=0) ─────────────────────────────
+        // -- Render scene (starts fresh from t=0) -----------------------------
         let mut scene = crate::scene::PreviewScene::new(device, queue, &panel_config);
         scene.show_adhesion_lines = true;
         scene.show_skybox = false;
@@ -213,7 +213,7 @@ impl GifCaptureState {
 
         // Extract the yaw angle from the saved camera rotation so the orbit
         // starts at the same horizontal angle the user was looking from.
-        // We decompose the rotation into a yaw around Y and ignore pitch/roll —
+        // We decompose the rotation into a yaw around Y and ignore pitch/roll -
         // the orbit will re-apply pitch each frame from the saved rotation.
         let forward = cam_rotation * Vec3::NEG_Z;
         let initial_yaw = forward.x.atan2(-forward.z); // atan2(x, -z) = yaw around Y
@@ -225,7 +225,7 @@ impl GifCaptureState {
             0
         }.min(GIF_FRAMES.saturating_sub(1));
 
-        // ── Off-screen render target ──────────────────────────────────────────
+        // -- Off-screen render target ------------------------------------------
         let color_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("GIF Capture Color Texture"),
             size: wgpu::Extent3d { width: GIF_SIZE, height: GIF_SIZE, depth_or_array_layers: 1 },
@@ -286,7 +286,7 @@ impl GifCaptureState {
     /// Total frames to capture.
     pub fn frames_total(&self) -> u32 { GIF_FRAMES }
 
-    /// Progress 0.0–1.0.
+    /// Progress 0.0-1.0.
     pub fn progress(&self) -> f32 { self.frames_done() as f32 / GIF_FRAMES as f32 }
 
     /// Whether capture + encoding is complete.
@@ -308,7 +308,7 @@ impl GifCaptureState {
             self.scene.state.step_forward(self.frame_interval, &g, &c);
         }
 
-        // Set camera for this frame — orbit around the saved center point at
+        // Set camera for this frame - orbit around the saved center point at
         // the saved distance, starting from the saved yaw, with the saved pitch.
         let saved_forward = self.initial_rotation * Vec3::NEG_Z;
         let pitch_angle = saved_forward.y.asin();
@@ -344,7 +344,7 @@ impl GifCaptureState {
         );
         queue.submit(std::iter::once(encoder.finish()));
 
-        // Readback (blocking for this one frame — ~1ms).
+        // Readback (blocking for this one frame - ~1ms).
         let slice = self.staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
@@ -374,7 +374,7 @@ impl GifCaptureState {
         self.staging.unmap();
         self.frames.push(rgba);
 
-        // All frames captured — encode and save.
+        // All frames captured - encode and save.
         if self.frames.len() as u32 == GIF_FRAMES {
             self.result = Some(self.encode_and_save());
         }

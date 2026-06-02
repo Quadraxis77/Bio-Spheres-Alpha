@@ -56,7 +56,7 @@ pub struct PreviewScene {
     pub skybox_renderer: PreviewSkyboxRenderer,
     /// Whether to show the skybox background (disable for main menu panels)
     pub show_skybox: bool,
-    /// Background clear color (r, g, b in 0.0–1.0). Defaults to black.
+    /// Background clear color (r, g, b in 0.0-1.0). Defaults to black.
     pub clear_color: [f64; 3],
 }
 

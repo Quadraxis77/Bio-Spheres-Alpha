@@ -1,11 +1,11 @@
 // Boulder Render Shader
 //
-// Reads boulder state directly from GPU storage buffers — no CPU upload needed.
+// Reads boulder state directly from GPU storage buffers - no CPU upload needed.
 // The vertex shader indexes into boulder_state by instance_index.
 // Dead boulders are culled by outputting a degenerate triangle (all vertices at
 // the same clip position) so the rasterizer discards them with zero cost.
 //
-// Moss is purely visual — FBM noise in boulder-local space creates patchy coverage
+// Moss is purely visual - FBM noise in boulder-local space creates patchy coverage
 // with natural bare spots. No simulation data (nutrients, consumption) affects it.
 // The pattern is fixed to the boulder surface and rotates with the orientation
 // quaternion so it stays put as the rock spins.
@@ -35,18 +35,18 @@ struct GpuBoulder {
     dead:             u32,
     seed:             u32,
     _pad:             array<u32, 3>,
-    angular_velocity: vec4<f32>,  // xyz = ω rad/s, w = unused
+    angular_velocity: vec4<f32>,  // xyz = omega rad/s, w = unused
     orientation:      vec4<f32>,  // quaternion (x,y,z,w)
 }
 
 @group(0) @binding(0) var<uniform> camera:  Camera;
 @group(0) @binding(1) var<uniform> lighting: Lighting;
 
-// Boulder data read directly from GPU physics buffers — always current.
+// Boulder data read directly from GPU physics buffers - always current.
 @group(1) @binding(0) var<storage, read> boulder_state: array<GpuBoulder>;
 @group(1) @binding(1) var<storage, read> boulder_count: array<u32>;
 
-// ── Vertex output ─────────────────────────────────────────────────────────────
+// -- Vertex output -------------------------------------------------------------
 
 struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
@@ -58,7 +58,7 @@ struct VertexOutput {
     @location(5) @interpolate(flat) boulder_radius: f32,
 }
 
-// ── Hash helpers ──────────────────────────────────────────────────────────────
+// -- Hash helpers --------------------------------------------------------------
 
 fn hash_u32(v: u32) -> f32 {
     var h = v;
@@ -69,15 +69,15 @@ fn hash_u32(v: u32) -> f32 {
 }
 
 // Per-vertex displacement: signed, so vertices can move in OR out.
-// Range: [-0.25, +0.45] — asymmetric so boulders are more convex than concave.
+// Range: [-0.25, +0.45] - asymmetric so boulders are more convex than concave.
 fn vertex_displacement(vert_id: u32, seed: u32) -> f32 {
     let combined = vert_id * 2654435761u ^ seed * 1013904223u;
     let raw = hash_u32(combined); // [0, 1)
-    // Map [0,1) → [-0.25, 0.45]: inward up to 25%, outward up to 45%
+    // Map [0,1) -> [-0.25, 0.45]: inward up to 25%, outward up to 45%
     return raw * 0.70 - 0.25;
 }
 
-// 3D value noise for moss pattern — cheap, no texture needed.
+// 3D value noise for moss pattern - cheap, no texture needed.
 fn noise3(p: vec3<f32>) -> f32 {
     let i = floor(p);
     let f = fract(p);
@@ -102,7 +102,7 @@ fn noise3(p: vec3<f32>) -> f32 {
     return mix(y0, y1, u.z);
 }
 
-// ── Icosphere geometry ────────────────────────────────────────────────────────
+// -- Icosphere geometry --------------------------------------------------------
 
 const PHI: f32 = 1.6180339887498948482;
 
@@ -150,7 +150,7 @@ fn ico_face(f: u32) -> vec3<u32> {
     }
 }
 
-// ── Quaternion rotation ───────────────────────────────────────────────────────
+// -- Quaternion rotation -------------------------------------------------------
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let qv = q.xyz;
     let uv = cross(qv, v);
@@ -173,7 +173,7 @@ fn displaced_pos(dir: vec3<f32>, vert_id: u32, seed: u32, center: vec3<f32>, rad
     return center + rotated_dir * radius * (1.0 + disp);
 }
 
-// ── Vertex shader ─────────────────────────────────────────────────────────────
+// -- Vertex shader -------------------------------------------------------------
 
 @vertex
 fn vs_main(
@@ -183,7 +183,7 @@ fn vs_main(
     let b = boulder_state[instance_index];
 
     // Cull dead or unspawned boulders by outputting a degenerate triangle.
-    // All three vertices collapse to the same clip position → rasterizer discards.
+    // All three vertices collapse to the same clip position -> rasterizer discards.
     var out: VertexOutput;
     if (b.dead != 0u || b.radius <= 0.0) {
         out.clip_pos      = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -232,7 +232,7 @@ fn vs_main(
     let pb = displaced_pos(dir_b, id_b, b.seed, b.position, b.radius, b.orientation);
     let pc = displaced_pos(dir_c, id_c, b.seed, b.position, b.radius, b.orientation);
 
-    // Flat face normal from actual displaced geometry — gives hard faceted look.
+    // Flat face normal from actual displaced geometry - gives hard faceted look.
     let flat_normal = normalize(cross(pb - pa, pc - pa));
 
     // Select this vertex's world position.
@@ -253,7 +253,7 @@ fn vs_main(
     return out;
 }
 
-// ── Fragment shader ───────────────────────────────────────────────────────────
+// -- Fragment shader -----------------------------------------------------------
 
 const ROCK_COLOR_DARK:   vec3<f32> = vec3<f32>(0.18, 0.16, 0.14);
 const ROCK_COLOR_LIGHT:  vec3<f32> = vec3<f32>(0.45, 0.40, 0.35);
@@ -271,7 +271,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let diffuse = ndotl * lighting.light_color;
     let ambient = vec3<f32>(lighting.ambient);
 
-    // Blinn-Phong specular — rock is rough, keep it subtle
+    // Blinn-Phong specular - rock is rough, keep it subtle
     let h    = normalize(l + v);
     let spec = pow(max(dot(n, h), 0.0), 12.0) * 0.06;
 
@@ -279,7 +279,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let face_var   = abs(dot(n, normalize(vec3<f32>(0.577, 0.577, 0.577))));
     let rock_color = mix(ROCK_COLOR_DARK, ROCK_COLOR_LIGHT, face_var);
 
-    // ── Moss coverage ─────────────────────────────────────────────────────────
+    // -- Moss coverage ---------------------------------------------------------
     // Transform the fragment's world position into boulder-local space so the
     // noise pattern is fixed to the surface and rotates with the boulder.
     let local_pos = quat_rotate_inv(in.boulder_orient, in.world_pos - in.boulder_center);
@@ -293,7 +293,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     );
     let noise_pos = local_pos / max(in.boulder_radius, 0.5) + seed_offset;
 
-    // Four octaves of FBM — large patches from low frequency, fine detail from high.
+    // Four octaves of FBM - large patches from low frequency, fine detail from high.
     let n1 = noise3(noise_pos * 0.9);
     let n2 = noise3(noise_pos * 2.1  + vec3<f32>(17.3,  5.7, 11.1)) * 0.50;
     let n3 = noise3(noise_pos * 4.7  + vec3<f32>( 3.7, 22.4,  8.9)) * 0.25;
@@ -304,7 +304,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // smoothstep width of 0.08 gives soft patch edges.
     let moss_mask = smoothstep(0.42, 0.58, raw_noise);
 
-    // Two-tone moss colour from a finer noise layer — avoids flat green.
+    // Two-tone moss colour from a finer noise layer - avoids flat green.
     let detail_noise = noise3(noise_pos * 8.5 + vec3<f32>(5.1, 13.7, 2.3));
     let moss_color   = mix(MOSS_COLOR_DARK, MOSS_COLOR_BRIGHT, detail_noise);
 

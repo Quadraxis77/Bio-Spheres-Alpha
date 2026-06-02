@@ -9,7 +9,7 @@
 //! - `position_and_mass[3]`: Vec4(x, y, z, mass) per cell
 //! - `velocity[3]`: Vec4(x, y, z, 0) per cell
 //! 
-//! ### Spatial Grid (128³ = 2,097,152 grid cells)
+//! ### Spatial Grid (128^3 = 2,097,152 grid cells)
 //! - `spatial_grid_counts`: u32 per grid cell (how many cells in each grid cell)
 //! - `spatial_grid_offsets`: u32 per grid cell (prefix-sum for O(1) lookup)
 //! - `spatial_grid_cells`: u32 per cell (sorted cell indices by grid cell)
@@ -190,7 +190,7 @@ pub struct GpuTripleBufferSystem {
     /// Used to compute velocity_change = 0.5 * (old_accel + new_accel) * dt
     pub prev_accelerations: wgpu::Buffer,
     
-    /// Spatial grid cell counts (128³ = 2,097,152 grid cells)
+    /// Spatial grid cell counts (128^3 = 2,097,152 grid cells)
     /// spatial_grid_counts[grid_idx] = number of cells in that grid cell
     pub spatial_grid_counts: wgpu::Buffer,
     
@@ -348,7 +348,7 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v3: wgpu::Buffer,
     pub mode_properties_v4: wgpu::Buffer,
     
-    /// Mode properties v5–v6 for cilia parameters (16 bytes per mode each)
+    /// Mode properties v5-v6 for cilia parameters (16 bytes per mode each)
     /// v5: [cilia_speed, cilia_push_bonded as f32, cilia_use_signal as f32, cilia_signal_channel as f32]
     /// v6: [cilia_speed_below, cilia_speed_above, cilia_threshold, cilia_attract_force]
     pub mode_properties_v5: wgpu::Buffer,
@@ -360,7 +360,7 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v7: wgpu::Buffer,
     pub mode_properties_v8: wgpu::Buffer,
 
-    /// Mode properties v9–v10 for Embryocyte parameters (16 bytes per mode each)
+    /// Mode properties v9-v10 for Embryocyte parameters (16 bytes per mode each)
     /// v9:  [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
     /// v10: [use_signal as f32, signal_channel as f32, signal_value, 0.0]
     pub mode_properties_v9: wgpu::Buffer,
@@ -514,7 +514,7 @@ impl GpuTripleBufferSystem {
         // Previous accelerations for Verlet integration (single buffer, not triple buffered)
         let prev_accelerations = Self::create_storage_buffer(device, buffer_size, "Previous Accelerations");
         
-        // Create spatial grid buffers (128³ = 2,097,152 grid cells)
+        // Create spatial grid buffers (128^3 = 2,097,152 grid cells)
         let grid_size = 128 * 128 * 128;
         let spatial_grid_counts = Self::create_storage_buffer(
             device, 
@@ -534,7 +534,7 @@ impl GpuTripleBufferSystem {
             "Cell Grid Indices"
         );
         
-        // Sorted cell indices by grid cell (16 cells max per grid cell * 128³ grid cells)
+        // Sorted cell indices by grid cell (16 cells max per grid cell * 128^3 grid cells)
         // This enables O(1) neighbor lookup in collision detection
         let spatial_grid_cells = Self::create_storage_buffer(
             device,
@@ -631,7 +631,7 @@ impl GpuTripleBufferSystem {
 
         
         // Mode pool: start small and grow on demand via grow_mode_pool_if_needed().
-        // Initial size covers ~200 genomes × 80 modes = 16K modes (~26 MB total across all
+        // Initial size covers ~200 genomes x 80 modes = 16K modes (~26 MB total across all
         // sub-buffers), vs the old fixed 8M allocation (~4.8 GB).
         // The pool doubles when sync_genome_mode_data detects it is too small, up to
         // MAX_TOTAL_MODES (8_000_000) which is the hard cap used by the mutation ring buffer.
@@ -668,15 +668,15 @@ impl GpuTripleBufferSystem {
         let mode_properties_v3 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V3");
         let mode_properties_v4 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V4");
         
-        // Mode properties v5–v6 for cilia parameters (16 bytes per mode each)
+        // Mode properties v5-v6 for cilia parameters (16 bytes per mode each)
         let mode_properties_v5 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V5");
         let mode_properties_v6 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V6");
         
-        // Mode properties v7–v8 for myocyte parameters (16 bytes per mode each)
+        // Mode properties v7-v8 for myocyte parameters (16 bytes per mode each)
         let mode_properties_v7 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V7");
         let mode_properties_v8 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V8");
 
-        // Mode properties v9–v10 for Embryocyte parameters (16 bytes per mode each)
+        // Mode properties v9-v10 for Embryocyte parameters (16 bytes per mode each)
         let mode_properties_v9 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V9");
         let mode_properties_v10 = Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V10");
 
@@ -1207,7 +1207,7 @@ impl GpuTripleBufferSystem {
     ///
     /// Call this before any sync that writes genome data to the GPU. The pool doubles
     /// until it fits `total_modes`, capped at `MAX_TOTAL_MODES` (8,000,000).
-    /// All existing GPU data is lost on resize — callers must re-sync everything
+    /// All existing GPU data is lost on resize - callers must re-sync everything
     /// after calling this (which they do anyway, since this is called at sync time).
     ///
     /// Returns `true` if the pool was grown (bind groups that reference mode buffers
@@ -1237,8 +1237,8 @@ impl GpuTripleBufferSystem {
         // Reallocate every mode-indexed sub-buffer at the new capacity.
         // Buffers that are per-cell (position_and_mass, velocity, etc.) are NOT touched.
         let m16 = new_capacity * 16; // 16 bytes per mode (vec4)
-        let m8  = new_capacity * 8;  // 8 bytes per mode (2×i32)
-        let m4  = new_capacity * 4;  // 4 bytes per mode (1×u32)
+        let m8  = new_capacity * 8;  // 8 bytes per mode (2xi32)
+        let m4  = new_capacity * 4;  // 4 bytes per mode (1xu32)
 
         self.genome_mode_data_v0 = Self::create_storage_buffer(device, m16, "Genome Mode Data V0");
         self.genome_mode_data_v1 = Self::create_storage_buffer(device, m16, "Genome Mode Data V1");

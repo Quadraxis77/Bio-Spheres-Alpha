@@ -146,7 +146,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Skip zero-initialized slots (never allocated: both cell indices are 0 and inactive).
         // These appear at the tail of the buffer beyond the high-water mark.
         if (connection.is_active == 0u && connection.cell_a_index == 0u && connection.cell_b_index == 0u) {
-            // Not a real adhesion — skip entirely, do not touch live count or free stack.
+            // Not a real adhesion - skip entirely, do not touch live count or free stack.
         } else if (connection.is_active != 0u) {
             // === Active connection: check for dead cells or out-of-bounds ===
             let cell_a = connection.cell_a_index;
@@ -193,7 +193,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // clear cell_adhesion_indices, or free the slot. Detect this by checking
             // if either cell still references this adhesion in its per-cell indices.
             // Only process once: after cleanup, neither cell references it.
-            // IMPORTANT: Use cell_a_index as a sentinel — set to 0xFFFFFFFF after cleanup
+            // IMPORTANT: Use cell_a_index as a sentinel - set to 0xFFFFFFFF after cleanup
             // to prevent double-processing (and double-decrement of live count) if this
             // adhesion is visited again before the next full sync.
             let cell_a = connection.cell_a_index;

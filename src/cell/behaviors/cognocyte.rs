@@ -3,7 +3,7 @@
 //! Cognocytes are signal-processing cells. Each reads signals from two input
 //! channels, applies a configurable operation, and emits the result on an output
 //! channel. If either required input channel carries no signal, the cell emits
-//! nothing — misconfigured circuits go dark visibly rather than producing
+//! nothing - misconfigured circuits go dark visibly rather than producing
 //! plausible-looking garbage.
 //!
 //! # Operations
@@ -17,18 +17,18 @@
 //! - **Max** (5): `max(A, B)`
 //! - **Average** (6): `(A + B) / 2`
 //!
-//! ## Comparison — output 1.0 (true) or 0.0 (false)
+//! ## Comparison - output 1.0 (true) or 0.0 (false)
 //! - **GreaterThan** (7): `A > B`
 //! - **LessThan** (8): `A < B`
 //! - **Equal** (9): `|A - B| < epsilon`
 //!
-//! ## Boolean — truth test: value > 0
+//! ## Boolean - truth test: value > 0
 //! - **AND** (10): `A > 0 && B > 0`
 //! - **OR** (11): `A > 0 || B > 0`
-//! - **NOT** (12): `!(A > 0)` — unary, uses A only
+//! - **NOT** (12): `!(A > 0)` - unary, uses A only
 //!
 //! ## Control flow
-//! - **Select** (13): `if A > 0 { B } else { 0.0 }` — gate / mux
+//! - **Select** (13): `if A > 0 { B } else { 0.0 }` - gate / mux
 //!
 //! # Missing inputs
 //!
@@ -42,7 +42,7 @@
 //! downstream arithmetic or boolean cells. A chain like:
 //!
 //! ```text
-//! Oculocyte  →  GreaterThan(food, hunger)  →  AND(mature, hungry)  →  Embryocyte
+//! Oculocyte  ->  GreaterThan(food, hunger)  ->  AND(mature, hungry)  ->  Embryocyte
 //! ```
 //!
 //! lets organisms build threshold detectors, timers, state machines, and
@@ -85,10 +85,10 @@ impl CellBehavior for CognocyteBehavior {
 /// Evaluate a cognocyte operation.
 ///
 /// Both `a` and `b` are already-resolved signal values. The caller is
-/// responsible for not calling this function when a required input is absent —
+/// responsible for not calling this function when a required input is absent -
 /// in that case no emission should occur at all.
 ///
-/// For Select: `A > 0 → B`, `A <= 0 → 0.0`.
+/// For Select: `A > 0 -> B`, `A <= 0 -> 0.0`.
 pub fn evaluate(op: i32, a: f32, b: f32) -> f32 {
     match op {
         OP_ADD          => a + b,
@@ -172,8 +172,8 @@ mod tests {
 
     #[test]
     fn select_op() {
-        assert_eq!(evaluate(OP_SELECT, 1.0, 7.0), 7.0); // A true → B
-        assert_eq!(evaluate(OP_SELECT, 0.0, 7.0), 0.0); // A false → 0
+        assert_eq!(evaluate(OP_SELECT, 1.0, 7.0), 7.0); // A true -> B
+        assert_eq!(evaluate(OP_SELECT, 0.0, 7.0), 0.0); // A false -> 0
     }
 
     #[test]

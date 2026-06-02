@@ -57,7 +57,7 @@ struct FogParams {
 @group(0) @binding(0)
 var<uniform> camera: CameraUniforms;
 
-// Group 1: Fog parameters and data (solid_mask removed — light_field encodes solid as 0.0)
+// Group 1: Fog parameters and data (solid_mask removed - light_field encodes solid as 0.0)
 @group(1) @binding(0)
 var<uniform> fog_params: FogParams;
 
@@ -96,7 +96,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
     let g2 = g * g;
     let denom = 1.0 + g2 - 2.0 * g * cos_theta;
-    // Fast approximation: pow(x, 1.5) ≈ x * sqrt(x)
+    // Fast approximation: pow(x, 1.5) ~= x * sqrt(x)
     let denom_sqrt = sqrt(max(denom, 0.001));
     return (1.0 - g2) / (4.0 * 3.14159265 * denom * denom_sqrt);
 }
@@ -158,7 +158,7 @@ fn reconstruct_world_pos(uv: vec2<f32>, depth: f32) -> vec3<f32> {
     return world_h.xyz / world_h.w;
 }
 
-// Compute fog density at a given world position (no solid check — handled by caller via light_field)
+// Compute fog density at a given world position (no solid check - handled by caller via light_field)
 fn fog_density_at(world_pos: vec3<f32>) -> f32 {
     var density = fog_params.fog_density;
     
@@ -197,7 +197,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Intersect ray with world sphere (centered at origin)
     let sphere_hit = intersect_sphere(camera.camera_pos, ray_dir, fog_params.world_radius);
     if (sphere_hit.y < 0.0) {
-        // Ray misses sphere entirely — no fog
+        // Ray misses sphere entirely - no fog
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
     
@@ -246,7 +246,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let t = start_offset + f32(i) * step_size;
         let sample_pos = camera.camera_pos + ray_dir * t;
         
-        // Sample light field FIRST — also detects solid voxels (light = 0.0)
+        // Sample light field FIRST - also detects solid voxels (light = 0.0)
         // This single read replaces both the old solid_mask check and the light sample
         let light_intensity = sample_light_field(sample_pos);
         

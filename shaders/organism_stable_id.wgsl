@@ -1,21 +1,21 @@
 // Organism Stable ID Assignment
 //
-// Runs after organism_label.wgsl has converged.  Maps each root label (volatile —
+// Runs after organism_label.wgsl has converged.  Maps each root label (volatile -
 // changes when the minimum-index cell dies) to a stable sequential ID that persists
 // across label changes.
 //
 // ## Buffers
-//   label_buffer[cell_i]          — root label for cell i (from organism_label.wgsl)
-//   organism_size_buffer[label]   — cell count for root label (0 = dead organism)
-//   stable_id_map[label]          — label → stable ID (0 = unassigned)
-//   stable_id_counter[0]          — next available stable ID (atomic, starts at 1)
-//   stable_id_per_cell[cell_i]    — output: stable ID for each cell (0 = no skin)
+//   label_buffer[cell_i]          - root label for cell i (from organism_label.wgsl)
+//   organism_size_buffer[label]   - cell count for root label (0 = dead organism)
+//   stable_id_map[label]          - label -> stable ID (0 = unassigned)
+//   stable_id_counter[0]          - next available stable ID (atomic, starts at 1)
+//   stable_id_per_cell[cell_i]    - output: stable ID for each cell (0 = no skin)
 //
 // ## Algorithm (two passes)
 //
 // Pass 1 (assign_stable_ids): one thread per cell slot.
 //   For each live cell whose root label has no stable ID yet:
-//     CAS stable_id_map[root_label] from 0 → next_id (atomicAdd counter).
+//     CAS stable_id_map[root_label] from 0 -> next_id (atomicAdd counter).
 //   This is safe because multiple threads racing on the same root all try to
 //   claim slot 0; only one wins the CAS, the rest read the winner's ID.
 //
@@ -39,7 +39,7 @@ const MIN_CELLS:     u32 = 4u;
 @group(0) @binding(5) var<storage, read>       cell_count_buf:      array<u32>;
 @group(0) @binding(6) var<storage, read>       death_flags:         array<u32>;
 
-// ── Pass 1: assign stable IDs to root labels ─────────────────────────────────
+// -- Pass 1: assign stable IDs to root labels ---------------------------------
 // One thread per cell. Only the thread whose cell_i == root_label does the work
 // (i.e. only root cells assign IDs), avoiding races on the CAS.
 @compute @workgroup_size(256, 1, 1)
@@ -52,13 +52,13 @@ fn assign_stable_ids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if root == DEAD_LABEL { return; }
 
     // Only the root cell (cell_i == root) manages the stable ID for this organism.
-    // This eliminates all races — exactly one thread per organism runs this block.
+    // This eliminates all races - exactly one thread per organism runs this block.
     if cell_i != root { return; }
 
     let size = organism_size_buffer[root];
 
     if size < MIN_CELLS {
-        // Organism too small — clear any existing stable ID so the slot is recycled.
+        // Organism too small - clear any existing stable ID so the slot is recycled.
         atomicStore(&stable_id_map[root], 0u);
         return;
     }
@@ -74,7 +74,7 @@ fn assign_stable_ids(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&stable_id_map[root], new_id);
 }
 
-// ── Pass 2: broadcast stable IDs to every cell ───────────────────────────────
+// -- Pass 2: broadcast stable IDs to every cell -------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn broadcast_stable_ids(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell_i = gid.x;

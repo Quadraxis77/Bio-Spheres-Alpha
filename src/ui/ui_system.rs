@@ -13,7 +13,7 @@ use crate::ui::types::GlobalUiState;
 ///
 /// This struct coordinates between egui-winit for input handling and
 /// egui-wgpu for GPU rendering.
-// ── Bio-Spheres Biotech Theme Colors ─────────────────────────────────────────
+// -- Bio-Spheres Biotech Theme Colors -----------------------------------------
 pub mod theme {
     use egui::Color32;
 
@@ -58,11 +58,11 @@ pub mod theme {
     pub const BTN_EDITOR_HOVER: Color32 = Color32::from_rgb(40, 150, 100);
 }
 
-// ── Active theme palette ──────────────────────────────────────────────────────
+// -- Active theme palette ------------------------------------------------------
 // Stores the full resolved color palette for the currently active theme.
 // Updated by `apply_theme` every time the theme changes. All rendering code
 // reads from here instead of the static `theme::*` constants so that every
-// part of the UI — panels, dock, status bar, side rail — responds to theme
+// part of the UI - panels, dock, status bar, side rail - responds to theme
 // switches without needing to re-derive colors from the enum each frame.
 #[derive(Clone, Copy)]
 pub struct ActivePalette {
@@ -86,11 +86,11 @@ pub struct ActivePalette {
     pub status_warn:     egui::Color32,
     pub status_err:      egui::Color32,
     pub status_info:     egui::Color32,
-    /// Icon color for inactive rail buttons — always readable against the dark rail bg.
+    /// Icon color for inactive rail buttons - always readable against the dark rail bg.
     pub rail_icon:       egui::Color32,
     /// Icon color for active/toggled rail buttons (drawn on accent_primary bg).
     pub rail_icon_active: egui::Color32,
-    /// The active theme variant — available to any rendering code that needs per-theme logic.
+    /// The active theme variant - available to any rendering code that needs per-theme logic.
     pub theme: crate::ui::types::UiTheme,
 }
 
@@ -162,10 +162,10 @@ pub struct UiSystem {
     last_theme: crate::ui::types::UiTheme,
     /// Last applied custom theme palette for change detection
     last_custom_theme: crate::ui::types::CustomThemePalette,
-    /// Genome browser window state — lives here (not on GlobalUiState) so it
+    /// Genome browser window state - lives here (not on GlobalUiState) so it
     /// is never cloned and texture handles survive across frames.
     pub genome_browser: crate::ui::genome_browser::GenomeBrowserState,
-    /// Toast notification queue — short messages shown in the bottom-right corner.
+    /// Toast notification queue - short messages shown in the bottom-right corner.
     /// Also lives here to avoid being wiped by the GlobalUiState clone.
     pub toasts: Vec<crate::ui::toast::Toast>,
     /// App icon texture used as the brand glyph in the top bar.
@@ -196,10 +196,10 @@ impl UiSystem {
         // Install fallback fonts so every Unicode symbol, arrow, and emoji renders.
         //
         // Priority order (egui tries each font in order until a glyph is found):
-        //   1. Hack (egui built-in) — ASCII + common programming glyphs
-        //   2. NotoSans-Regular    — broad Unicode: arrows, math, box-drawing, etc.
-        //   3. Segoe UI Symbol     — Windows symbol font: geometric shapes, misc symbols
-        //   4. Segoe UI Emoji      — full colour emoji fallback
+        //   1. Hack (egui built-in) - ASCII + common programming glyphs
+        //   2. NotoSans-Regular    - broad Unicode: arrows, math, box-drawing, etc.
+        //   3. Segoe UI Symbol     - Windows symbol font: geometric shapes, misc symbols
+        //   4. Segoe UI Emoji      - full colour emoji fallback
         {
             let mut fonts = egui::FontDefinitions::default();
 
@@ -307,7 +307,7 @@ impl UiSystem {
             }
         } else {
             // No viewport rect yet (e.g. first frame after menu transition).
-            // Don't block camera input — the whole window is the viewport.
+            // Don't block camera input - the whole window is the viewport.
             return false;
         }
         
@@ -316,7 +316,7 @@ impl UiSystem {
     }
 
     /// Returns `true` if scroll/wheel input should be consumed by the UI rather
-    /// than passed to the camera. This is a superset of `wants_pointer_input` —
+    /// than passed to the camera. This is a superset of `wants_pointer_input` -
     /// it also blocks scroll when a floating window (e.g. genome browser) is open,
     /// because egui floating windows sit on top of the viewport rect but the
     /// pointer-over check doesn't catch them reliably for scroll events.
@@ -400,7 +400,7 @@ impl UiSystem {
     fn apply_theme(&self, theme_choice: crate::ui::types::UiTheme) {
         use crate::ui::types::UiTheme;
 
-        // ── Per-theme color palette ───────────────────────────────────────────
+        // -- Per-theme color palette -------------------------------------------
         // Each tuple: (bg_darkest, bg_panel, bg_widget, bg_hover, bg_active,
         //              bg_selected, accent_primary, accent_secondary,
         //              text_primary, text_secondary, text_dim,
@@ -423,7 +423,7 @@ impl UiSystem {
             egui::Color32, egui::Color32,
             egui::Color32, egui::Color32, egui::Color32, egui::Color32,
         ) = match theme_choice {
-            // ── BIOTECH DARK ─────────────────────────────────────────────────
+            // -- BIOTECH DARK -------------------------------------------------
             // Original. Navy backgrounds, bright teal accent, high-contrast white text.
             UiTheme::BiotechDark => (
                 egui::Color32::from_rgb(  6,   9,  18), // bg_darkest
@@ -432,9 +432,9 @@ impl UiSystem {
                 egui::Color32::from_rgb( 32,  44,  72), // bg_hover
                 egui::Color32::from_rgb( 42,  58,  95), // bg_active
                 egui::Color32::from_rgb( 18,  55,  85), // bg_selected
-                egui::Color32::from_rgb(  0, 220, 175), // accent_primary  — bright teal
-                egui::Color32::from_rgb( 60, 195, 240), // accent_secondary — cyan
-                egui::Color32::from_rgb(225, 235, 255), // text_primary    — bright white-blue
+                egui::Color32::from_rgb(  0, 220, 175), // accent_primary  - bright teal
+                egui::Color32::from_rgb( 60, 195, 240), // accent_secondary - cyan
+                egui::Color32::from_rgb(225, 235, 255), // text_primary    - bright white-blue
                 egui::Color32::from_rgb(155, 175, 210), // text_secondary
                 egui::Color32::from_rgb( 80, 100, 145), // text_dim
                 egui::Color32::from_rgb( 28,  42,  72), // border_subtle
@@ -447,7 +447,7 @@ impl UiSystem {
                 egui::Color32::from_rgb(225,  70,  70), // status_err
                 egui::Color32::from_rgb( 60, 150, 230), // status_info
             ),
-            // ── ARCTIC — light, dark status colors for readability on white ──
+            // -- ARCTIC - light, dark status colors for readability on white --
             UiTheme::Arctic => (
                 egui::Color32::from_rgb(255, 255, 255),
                 egui::Color32::from_rgb(240, 245, 255),
@@ -465,12 +465,12 @@ impl UiSystem {
                 egui::Color32::from_rgb( 10,  90, 200),
                 egui::Color32::from_rgb(220, 230, 248),
                 egui::Color32::from_rgb( 10,  90, 200),
-                egui::Color32::from_rgb( 20, 140,  55), // status_ok   — dark green
-                egui::Color32::from_rgb(155,  95,   0), // status_warn — dark amber (no yellow)
-                egui::Color32::from_rgb(185,  30,  30), // status_err  — dark red
-                egui::Color32::from_rgb( 15,  90, 175), // status_info — dark blue
+                egui::Color32::from_rgb( 20, 140,  55), // status_ok   - dark green
+                egui::Color32::from_rgb(155,  95,   0), // status_warn - dark amber (no yellow)
+                egui::Color32::from_rgb(185,  30,  30), // status_err  - dark red
+                egui::Color32::from_rgb( 15,  90, 175), // status_info - dark blue
             ),
-            // ── PARCHMENT — light, earthy dark status colors ─────────────────
+            // -- PARCHMENT - light, earthy dark status colors -----------------
             UiTheme::Parchment => (
                 egui::Color32::from_rgb(255, 252, 238),
                 egui::Color32::from_rgb(245, 235, 210),
@@ -488,35 +488,35 @@ impl UiSystem {
                 egui::Color32::from_rgb(165,  55,  15),
                 egui::Color32::from_rgb(235, 222, 192),
                 egui::Color32::from_rgb(145,  48,  12),
-                egui::Color32::from_rgb( 25, 120,  45), // status_ok   — forest green
-                egui::Color32::from_rgb(145,  80,   0), // status_warn — dark amber
-                egui::Color32::from_rgb(170,  30,  20), // status_err  — dark red
-                egui::Color32::from_rgb( 20,  80, 160), // status_info — dark blue
+                egui::Color32::from_rgb( 25, 120,  45), // status_ok   - forest green
+                egui::Color32::from_rgb(145,  80,   0), // status_warn - dark amber
+                egui::Color32::from_rgb(170,  30,  20), // status_err  - dark red
+                egui::Color32::from_rgb( 20,  80, 160), // status_info - dark blue
             ),
-            // ── BLOSSOM — light, deep jewel-tone status colors ───────────────
+            // -- BLOSSOM - light, deep jewel-tone status colors ---------------
             UiTheme::Blossom => (
-                egui::Color32::from_rgb(255, 235, 248), // bg_darkest  — hot pink tint
-                egui::Color32::from_rgb(252, 215, 238), // bg_panel    — vivid pink-white
-                egui::Color32::from_rgb(242, 185, 222), // bg_widget   — medium pink
-                egui::Color32::from_rgb(228, 155, 205), // bg_hover    — deeper pink
-                egui::Color32::from_rgb(212, 120, 185), // bg_active   — strong pink
-                egui::Color32::from_rgb(245, 160, 215), // bg_selected — bright pink highlight
-                egui::Color32::from_rgb(185,  10, 105), // accent_primary  — deep magenta-rose
-                egui::Color32::from_rgb(110,  15, 165), // accent_secondary — deep violet
-                egui::Color32::from_rgb( 55,   5,  35), // text_primary    — near-black plum
-                egui::Color32::from_rgb(120,  20,  80), // text_secondary  — dark rose
-                egui::Color32::from_rgb(175,  80, 140), // text_dim        — medium rose
+                egui::Color32::from_rgb(255, 235, 248), // bg_darkest  - hot pink tint
+                egui::Color32::from_rgb(252, 215, 238), // bg_panel    - vivid pink-white
+                egui::Color32::from_rgb(242, 185, 222), // bg_widget   - medium pink
+                egui::Color32::from_rgb(228, 155, 205), // bg_hover    - deeper pink
+                egui::Color32::from_rgb(212, 120, 185), // bg_active   - strong pink
+                egui::Color32::from_rgb(245, 160, 215), // bg_selected - bright pink highlight
+                egui::Color32::from_rgb(185,  10, 105), // accent_primary  - deep magenta-rose
+                egui::Color32::from_rgb(110,  15, 165), // accent_secondary - deep violet
+                egui::Color32::from_rgb( 55,   5,  35), // text_primary    - near-black plum
+                egui::Color32::from_rgb(120,  20,  80), // text_secondary  - dark rose
+                egui::Color32::from_rgb(175,  80, 140), // text_dim        - medium rose
                 egui::Color32::from_rgb(225, 160, 205), // border_subtle
                 egui::Color32::from_rgb(195, 110, 168), // border_normal
-                egui::Color32::from_rgb(185,  10, 105), // border_bright   — deep rose
+                egui::Color32::from_rgb(185,  10, 105), // border_bright   - deep rose
                 egui::Color32::from_rgb(248, 200, 232), // topbar_bg
                 egui::Color32::from_rgb(165,   8,  92), // topbar_border
-                egui::Color32::from_rgb( 15, 115,  45), // status_ok   — deep green
-                egui::Color32::from_rgb(130,  65,   0), // status_warn — dark amber
-                egui::Color32::from_rgb(160,  15,  40), // status_err  — deep crimson
-                egui::Color32::from_rgb( 45,  20, 155), // status_info — deep indigo
+                egui::Color32::from_rgb( 15, 115,  45), // status_ok   - deep green
+                egui::Color32::from_rgb(130,  65,   0), // status_warn - dark amber
+                egui::Color32::from_rgb(160,  15,  40), // status_err  - deep crimson
+                egui::Color32::from_rgb( 45,  20, 155), // status_info - deep indigo
             ),
-            // ── CRIMSON — dark, bright status colors ─────────────────────────
+            // -- CRIMSON - dark, bright status colors -------------------------
             UiTheme::Crimson => (
                 egui::Color32::from_rgb( 10,   2,   5),
                 egui::Color32::from_rgb( 28,   8,  15),
@@ -539,7 +539,7 @@ impl UiSystem {
                 egui::Color32::from_rgb(230,  75,  75), // status_err
                 egui::Color32::from_rgb( 80, 160, 235), // status_info
             ),
-            // ── NEON SYNTHWAVE ───────────────────────────────────────────────
+            // -- NEON SYNTHWAVE -----------------------------------------------
             UiTheme::NeonSynthwave => (
                 egui::Color32::from_rgb(  5,   2,  12),
                 egui::Color32::from_rgb( 12,   6,  24),
@@ -558,11 +558,11 @@ impl UiSystem {
                 egui::Color32::from_rgb(  3,   1,   8),
                 egui::Color32::from_rgb(210,  15, 148),
                 egui::Color32::from_rgb( 50, 255, 120), // status_ok
-                egui::Color32::from_rgb(255, 210,  30), // status_warn — amber not yellow
+                egui::Color32::from_rgb(255, 210,  30), // status_warn - amber not yellow
                 egui::Color32::from_rgb(255,  50,  80), // status_err
                 egui::Color32::from_rgb(  0, 245, 255), // status_info
             ),
-            // ── NEON TOXIC ───────────────────────────────────────────────────
+            // -- NEON TOXIC ---------------------------------------------------
             UiTheme::NeonToxic => (
                 egui::Color32::from_rgb(  1,   5,   1),
                 egui::Color32::from_rgb(  3,  12,   3),
@@ -581,11 +581,11 @@ impl UiSystem {
                 egui::Color32::from_rgb(  1,   4,   1),
                 egui::Color32::from_rgb( 28, 210,  28),
                 egui::Color32::from_rgb( 40, 255,  40), // status_ok
-                egui::Color32::from_rgb(215, 255,   0), // status_warn — electric yellow (fine on black)
+                egui::Color32::from_rgb(215, 255,   0), // status_warn - electric yellow (fine on black)
                 egui::Color32::from_rgb(255,  60,  60), // status_err
                 egui::Color32::from_rgb( 60, 200, 255), // status_info
             ),
-            // ── NEON ULTRAVIOLET ─────────────────────────────────────────────
+            // -- NEON ULTRAVIOLET ---------------------------------------------
             UiTheme::NeonUltraviolet => (
                 egui::Color32::from_rgb(  4,   1,  10),
                 egui::Color32::from_rgb(  8,   3,  20),
@@ -604,11 +604,11 @@ impl UiSystem {
                 egui::Color32::from_rgb(  2,   0,   7),
                 egui::Color32::from_rgb(145,  18, 215),
                 egui::Color32::from_rgb( 60, 255, 140), // status_ok
-                egui::Color32::from_rgb(255, 200,  30), // status_warn — amber not yellow
+                egui::Color32::from_rgb(255, 200,  30), // status_warn - amber not yellow
                 egui::Color32::from_rgb(255,  40, 100), // status_err
                 egui::Color32::from_rgb(255,  25, 195), // status_info
             ),
-            // ── HIGH CONTRAST ────────────────────────────────────────────────
+            // -- HIGH CONTRAST ------------------------------------------------
             UiTheme::HighContrast => (
                 egui::Color32::from_rgb(  0,   0,   0),
                 egui::Color32::from_rgb( 10,  10,  10),
@@ -627,11 +627,11 @@ impl UiSystem {
                 egui::Color32::from_rgb(  0,   0,   0),
                 egui::Color32::from_rgb(200, 180,   0),
                 egui::Color32::from_rgb( 50, 255,  50), // status_ok
-                egui::Color32::from_rgb(255, 230,   0), // status_warn — yellow fine on black
+                egui::Color32::from_rgb(255, 230,   0), // status_warn - yellow fine on black
                 egui::Color32::from_rgb(255,  60,  60), // status_err
                 egui::Color32::from_rgb(  0, 200, 255), // status_info
             ),
-            // ── CUSTOM ───────────────────────────────────────────────────────
+            // -- CUSTOM -------------------------------------------------------
             UiTheme::Custom => {
                 let c = &self.state.custom_theme;
                 (
@@ -882,7 +882,7 @@ impl UiSystem {
         let mut pending_browser_refresh = false;
         let mut pending_gif_capture: Option<std::path::PathBuf> = None;
 
-        // Read the active theme palette once — used throughout this frame.
+        // Read the active theme palette once - used throughout this frame.
         let p = palette();
         let (tb_bg, tb_border, tb_accent, tb_text_primary, tb_text_secondary, tb_text_dim, tb_border_normal) =
             (p.topbar_bg, p.topbar_border, p.accent_primary, p.text_primary, p.text_secondary, p.text_dim, p.border_normal);
@@ -911,7 +911,7 @@ impl UiSystem {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
 
-                        // Mode-switch button — far right (first in right-to-left)
+                        // Mode-switch button - far right (first in right-to-left)
                         let (btn_text, btn_bg) = if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview {
                             ("▶  LIVE SIMULATION", theme::BTN_LIVE_BG)
                         } else {
@@ -947,7 +947,7 @@ impl UiSystem {
 
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
 
-                        // Themes button — opens theme picker popup
+                        // Themes button - opens theme picker popup
                         let themes_resp = ui.add(
                             egui::Button::new(egui::RichText::new("🎨 Themes").size(11.5).color(tb_text_primary))
                                 .frame(false)
@@ -961,7 +961,7 @@ impl UiSystem {
 
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
 
-                        // Panels button — frameless, same style as Tutorial/Help
+                        // Panels button - frameless, same style as Tutorial/Help
                         let panels_resp = ui.add(
                             egui::Button::new(egui::RichText::new("Panels").size(11.5).color(tb_text_primary))
                                 .frame(false)
@@ -1048,7 +1048,7 @@ impl UiSystem {
 
                             ui.add_space(6.0); topbar_divider(ui); ui.add_space(6.0);
 
-                            // Name field — red tint if error
+                            // Name field - red tint if error
                             let name_color = if editor_state.name_field_error {
                                 egui::Color32::from_rgb(255, 100, 100)
                             } else {
@@ -1062,7 +1062,7 @@ impl UiSystem {
                                     .text_color(name_color),
                             );
                             // Only check for overwrite when the field loses focus or on hover,
-                            // not every frame — avoids blocking disk reads while typing.
+                            // not every frame - avoids blocking disk reads while typing.
                             if name_resp.hovered() && !name_resp.has_focus() {
                                 let current_name = genome.name.trim().to_string();
                                 if !current_name.is_empty() {
@@ -1292,7 +1292,7 @@ impl UiSystem {
             }
         }
 
-        // Side rail always renders — it contains the hide_ui toggle itself,
+        // Side rail always renders - it contains the hide_ui toggle itself,
         // so hiding it would trap the user with no way to restore the UI.
         #[allow(deprecated)]
         egui::Panel::left("side_rail")
@@ -1450,7 +1450,7 @@ impl UiSystem {
         }
 
         // When hide_ui is active, make the dock chrome invisible so only the
-        // viewport content shows. The dock layout is preserved — no panels are
+        // viewport content shows. The dock layout is preserved - no panels are
         // closed or moved.
         if ui_state_copy.hide_ui {
             let transparent = egui::Color32::TRANSPARENT;
@@ -1545,7 +1545,7 @@ impl UiSystem {
             // of background clearing (the Viewport).
             //
             // We then paint a black border around the dock's inset region
-            // (the area defined by `dock_area_padding`) by hand — this gives
+            // (the area defined by `dock_area_padding`) by hand - this gives
             // us the black gutter from the concept art around the panel
             // cluster without obscuring the viewport.
             const GUTTER: f32 = DOCK_GUTTER as f32;
@@ -1618,7 +1618,7 @@ impl UiSystem {
                     if current_mode == crate::ui::types::SimulationMode::Gpu {
                         // Only paint brackets when we have a rect from THIS frame's
                         // Viewport tab render. Never fall back to a stale rect from
-                        // a different scene — one missed frame is fine.
+                        // a different scene - one missed frame is fine.
                         if let Some(viewport_rect) = vp_rect {
                             let bracket_painter = ui.ctx().layer_painter(
                                 egui::LayerId::new(
@@ -1630,7 +1630,7 @@ impl UiSystem {
                         }
                     }
 
-                    // Paint rounded corners on the Preview viewport — black
+                    // Paint rounded corners on the Preview viewport - black
                     // quarter-circle fills at each corner make the viewport
                     // appear to have rounded corners against the black gutter.
                     // Hidden when UI is hidden so the full viewport is unobstructed.
@@ -1645,7 +1645,7 @@ impl UiSystem {
                 });
         }
         
-        // ── Genome browser window ─────────────────────────────────────────────
+        // -- Genome browser window ---------------------------------------------
         // Floats above the dock. Renders in Preview mode only.
         if current_mode == crate::ui::types::SimulationMode::Preview {
             // Process open requests from panels/buttons
@@ -1693,8 +1693,8 @@ impl UiSystem {
             );
         }
 
-        // ── Panel close confirmation dialog ───────────────────────────────────
-        // Shown when the user clicks the × on any panel tab.
+        // -- Panel close confirmation dialog -----------------------------------
+        // Shown when the user clicks the x on any panel tab.
         // Keeps the panel open until confirmed so accidental clicks don't lose layout.
         if let Some(panel_to_close) = ui_state_copy.pending_close_panel {
             let p = palette();
@@ -1800,7 +1800,7 @@ impl UiSystem {
             }
         }
 
-        // ── New Genome confirmation dialog ────────────────────────────────────
+        // -- New Genome confirmation dialog ------------------------------------
         if editor_state.confirm_new_genome {
             let p = palette();
             let mut do_new = false;
@@ -1855,7 +1855,7 @@ impl UiSystem {
             if cancel_new { editor_state.confirm_new_genome = false; }
         }
 
-        // ── Name dialog (shown when saving with an empty name) ────────────────
+        // -- Name dialog (shown when saving with an empty name) ----------------
         if editor_state.show_name_dialog {
             let p = palette();
             // Re-read from disk every frame so deleted genomes free up their names immediately.
@@ -2077,7 +2077,7 @@ impl UiSystem {
         if current_mode == crate::ui::types::SimulationMode::Gpu {
             crate::ui::radial_menu::show_radial_menu(&self.ctx, &mut editor_state.radial_menu);
             // Only show the tool cursor icon when the pointer is over the viewport,
-            // not over a panel — over panels the system cursor is visible instead.
+            // not over a panel - over panels the system cursor is visible instead.
             if !self.wants_pointer_input() {
                 crate::ui::radial_menu::show_tool_cursor(&self.ctx, &editor_state.radial_menu);
             }
@@ -2148,9 +2148,9 @@ impl UiSystem {
                     });
             }
 
-            // ── Saving popup ──────────────────────────────────────────────────
-            // Frame 1: popup renders, pending_save_ready is false — no request yet.
-            // Frame 2: popup still visible, pending_save_ready becomes true — fire request.
+            // -- Saving popup --------------------------------------------------
+            // Frame 1: popup renders, pending_save_ready is false - no request yet.
+            // Frame 2: popup still visible, pending_save_ready becomes true - fire request.
             // This guarantees the user sees the overlay before the blocking GPU work.
             if ui_state_copy.show_saving_popup {
                 egui::Window::new("💾 Saving Sphere…")
@@ -2166,7 +2166,7 @@ impl UiSystem {
                     });
 
                 if ui_state_copy.pending_save_ready {
-                    // Popup has already been painted once — now fire the work.
+                    // Popup has already been painted once - now fire the work.
                     *scene_request = crate::ui::panel_context::SceneModeRequest::SaveSnapshot;
                 } else {
                     // First frame: mark ready so the request fires next frame.
@@ -2174,7 +2174,7 @@ impl UiSystem {
                 }
             }
 
-            // ── Loading popup ─────────────────────────────────────────────────
+            // -- Loading popup -------------------------------------------------
             // The file path was already chosen in the menu item click.
             // Frame 1: popup renders with path stored in pending_load_path.
             // Frame 2: path is taken and LoadSnapshot request is fired.
@@ -2192,18 +2192,18 @@ impl UiSystem {
                     });
 
                 if let Some(path) = ui_state_copy.pending_load_path.take() {
-                    // Path present — fire the restore request.
+                    // Path present - fire the restore request.
                     *scene_request = crate::ui::panel_context::SceneModeRequest::LoadSnapshot(path);
                 }
                 // app.rs clears show_loading_popup once the work completes.
             }
         }
         
-        // ── Toast notifications ───────────────────────────────────────────────
+        // -- Toast notifications -----------------------------------------------
         crate::ui::toast::tick_toasts(&mut self.toasts, 1.0 / 60.0);
         crate::ui::toast::render_toasts(&self.ctx, &self.toasts);
 
-        // ── Loading GIF overlay (shown during GIF capture) ────────────────────
+        // -- Loading GIF overlay (shown during GIF capture) --------------------
         if editor_state.gif_capture.is_some() && !self.loading_gif_frames.is_empty() {
             // Advance loading animation at 20fps
             self.loading_gif_timer += 1.0 / 60.0;
@@ -2233,7 +2233,7 @@ impl UiSystem {
             self.loading_gif_timer = 0.0;
         }
 
-        // ── Tutorial overlay ──────────────────────────────────────────────────
+        // -- Tutorial overlay --------------------------------------------------
         // Auto-launch the tutorial the very first time the player opens the
         // Genome Editor, before they've ever seen it.
         if !ui_state_copy.tutorial.ever_shown
@@ -2377,7 +2377,7 @@ fn show_themes_menu(ui: &mut egui::Ui, state: &mut GlobalUiState, dock_manager: 
             let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             ui.painter().circle_filled(dot_rect.center(), 4.5, accent);
 
-            // Selectable label — clicking sets the theme
+            // Selectable label - clicking sets the theme
             if ui.selectable_label(is_selected, theme_choice.display_name()).clicked() {
                 state.selected_theme = theme_choice;
                 // When Custom is selected, open the Theme Editor panel automatically.
@@ -2736,7 +2736,7 @@ fn show_save_load_menu(
         .clicked()
     {
         ui.close_kind(egui::UiKind::Menu);
-        // Open the file picker here — it's a quick OS dialog and doesn't
+        // Open the file picker here - it's a quick OS dialog and doesn't
         // involve any GPU work, so blocking is fine at this point.
         if let Some(path) = rfd::FileDialog::new()
             .set_title("Load Sphere")
@@ -2753,11 +2753,11 @@ fn show_save_load_menu(
 }
 
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Top bar / status bar helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
-/// Draw the Bio-Spheres logo glyph — a hexagon with a small inner ring.
+/// Draw the Bio-Spheres logo glyph - a hexagon with a small inner ring.
 fn draw_logo_glyph(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let center = rect.center();
     let radius = rect.width() * 0.45;
@@ -2823,9 +2823,9 @@ fn topbar_divider(ui: &mut egui::Ui) {
 }
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Left side rail — quick access to mode-specific panels
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Left side rail - quick access to mode-specific panels
+// -----------------------------------------------------------------------------
 
 /// Render the left side rail with stacked icon buttons.
 fn render_side_rail(
@@ -3001,7 +3001,7 @@ fn rail_button_toggle(ui: &mut egui::Ui, icon: &str, tooltip: &str, active: bool
 ///
 /// The PNG bytes are embedded at compile time so the icon always ships with
 /// the binary regardless of the runtime working directory. Returns `None` if
-/// decoding fails — callers should fall back to a procedural glyph.
+/// decoding fails - callers should fall back to a procedural glyph.
 fn load_app_icon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     const ICON_BYTES: &[u8] = include_bytes!("../../assets/icon.png");
 
@@ -3025,7 +3025,7 @@ fn load_app_icon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
 
 
 /// Load the user-provided loading animation GIF from `assets/loading.gif`.
-/// Returns an empty Vec if the file doesn't exist — callers fall back to a
+/// Returns an empty Vec if the file doesn't exist - callers fall back to a
 /// text spinner. The file is loaded at runtime (not embedded) so the user can
 /// drop in their own GIF without recompiling.
 fn load_loading_gif_frames(ctx: &egui::Context) -> Vec<egui::TextureHandle> {
@@ -3089,7 +3089,7 @@ fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
         return;
     }
 
-    // Arm length: 4% of the smaller dimension, clamped 20–50px.
+    // Arm length: 4% of the smaller dimension, clamped 20-50px.
     let arm = (r.width().min(r.height()) * 0.04).clamp(20.0, 50.0);
 
     let color  = theme::ACCENT_TEAL;
@@ -3097,7 +3097,7 @@ fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
 
     // Each bracket is a single connected polyline (3 points forming an L).
     // Drawing as a polyline ensures the corner pixel is shared and the join
-    // looks clean — no gap, no overlap, no double-painted corner.
+    // looks clean - no gap, no overlap, no double-painted corner.
     let brackets: [&[egui::Pos2; 3]; 4] = [
         // Top-left
         &[
@@ -3132,14 +3132,14 @@ fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
 }
 
 /// Paint black corner pieces that make the viewport appear to have rounded
-/// corners — like the reference image showing a rounded rectangle.
+/// corners - like the reference image showing a rounded rectangle.
 ///
 /// At each corner we paint a black shape that fills the gap between the
 /// viewport's straight bounding-box corner and the rounded corner curve.
-/// The shape is: a `radius × radius` square with a quarter-circle notch
+/// The shape is: a `radius x radius` square with a quarter-circle notch
 /// cut from the inner corner (toward the viewport centre).
 ///
-/// Built as a polygon fan: corner → edge_x → arc[0..N] → edge_y → corner
+/// Built as a polygon fan: corner -> edge_x -> arc[0..N] -> edge_y -> corner
 fn paint_viewport_rounded_corners(
     painter: &egui::Painter,
     viewport_rect: egui::Rect,
@@ -3164,25 +3164,25 @@ fn paint_viewport_rounded_corners(
     //   (the arc bulges toward the corner, creating the concave notch)
     let r = viewport_rect;
     let corners: [(egui::Pos2, egui::Pos2, egui::Pos2, f32, f32); 4] = [
-        // top-left: arc centre (left+r, top+r), sweep 180°→270° (points toward corner)
+        // top-left: arc centre (left+r, top+r), sweep 180 deg->270 deg (points toward corner)
         (r.left_top(),
          egui::pos2(r.left() + radius, r.top()),          // along top edge
          egui::pos2(r.left(),          r.top() + radius), // along left edge
          std::f32::consts::PI,
          std::f32::consts::PI * 1.5),
-        // top-right: arc centre (right-r, top+r), sweep 270°→360°
+        // top-right: arc centre (right-r, top+r), sweep 270 deg->360 deg
         (r.right_top(),
          egui::pos2(r.right(),          r.top() + radius), // along right edge
          egui::pos2(r.right() - radius, r.top()),          // along top edge
          std::f32::consts::PI * 1.5,
          std::f32::consts::TAU),
-        // bottom-right: arc centre (right-r, bottom-r), sweep 0°→90°
+        // bottom-right: arc centre (right-r, bottom-r), sweep 0 deg->90 deg
         (r.right_bottom(),
          egui::pos2(r.right() - radius, r.bottom()),       // along bottom edge
          egui::pos2(r.right(),          r.bottom() - radius), // along right edge
          0.0_f32,
          std::f32::consts::FRAC_PI_2),
-        // bottom-left: arc centre (left+r, bottom-r), sweep 90°→180°
+        // bottom-left: arc centre (left+r, bottom-r), sweep 90 deg->180 deg
         (r.left_bottom(),
          egui::pos2(r.left(),          r.bottom() - radius), // along left edge
          egui::pos2(r.left() + radius, r.bottom()),          // along bottom edge
@@ -3201,7 +3201,7 @@ fn paint_viewport_rounded_corners(
 
         // Fan centre = the bounding-box corner.
         // The arc endpoints land exactly on edge_a and edge_b, so we don't
-        // need explicit spoke vertices — the arc itself closes the shape.
+        // need explicit spoke vertices - the arc itself closes the shape.
         mesh.vertices.push(vert(corner));
 
         // Arc sweeping from start_angle to end_angle

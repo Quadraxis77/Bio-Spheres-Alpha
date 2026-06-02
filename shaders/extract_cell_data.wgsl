@@ -159,7 +159,7 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 @group(2) @binding(15)
 var<storage, read> cell_adhesion_indices: array<i32>;
 
-// Organism label buffer — label[i] = min cell index in connected component
+// Organism label buffer - label[i] = min cell index in connected component
 // 0xFFFFFFFF means the cell is dead or isolated
 @group(2) @binding(16)
 var<storage, read> label_buffer: array<u32>;

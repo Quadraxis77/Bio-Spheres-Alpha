@@ -12,11 +12,11 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct PreviewSkyboxCamera {
-    /// Inverse of (proj × rotation-only view) — for direction reconstruction.
+    /// Inverse of (proj x rotation-only view) - for direction reconstruction.
     pub inv_view_rot_proj: [[f32; 4]; 4],
-    /// Full view-proj — used for grid floor projection.
+    /// Full view-proj - used for grid floor projection.
     pub view_proj: [[f32; 4]; 4],
-    /// Camera world position — needed for floor ray intersection.
+    /// Camera world position - needed for floor ray intersection.
     pub camera_pos: [f32; 3],
     pub time: f32,
 }
@@ -64,7 +64,7 @@ impl PreviewSkyboxThemeParams {
     pub fn from_palette(p: &crate::ui::ui_system::ActivePalette) -> Self {
         use crate::ui::types::UiTheme;
 
-        // Helper: rgb bytes → [f32; 3]
+        // Helper: rgb bytes -> [f32; 3]
         let rgb = |r: u8, g: u8, b: u8| -> [f32; 3] {
             [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
         };
@@ -186,7 +186,7 @@ impl PreviewSkyboxThemeParams {
                 floor_color:   [0.0, 0.0, 0.0],
                 _pad3: 0.0,
             },
-            // ── CUSTOM ───────────────────────────────────────────────────────
+            // -- CUSTOM -------------------------------------------------------
             // Derive from the active palette's bg and accent colors.
             UiTheme::Custom => {
                 let bg  = p.bg_darkest;
@@ -227,7 +227,7 @@ pub struct PreviewSkyboxRenderer {
     theme_layout:  wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     theme_buffer:  wgpu::Buffer,
-    /// Current theme params — update each frame via `set_theme_params`.
+    /// Current theme params - update each frame via `set_theme_params`.
     pub theme_params: PreviewSkyboxThemeParams,
 }
 

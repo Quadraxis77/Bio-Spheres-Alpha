@@ -1,4 +1,4 @@
-// Organism Skin Surface Nets — K=4 overlapping organism extraction
+// Organism Skin Surface Nets - K=4 overlapping organism extraction
 //
 // For each voxel cell, finds up to 4 unique organism IDs across the 8 corners
 // and generates an independent isosurface vertex for each organism present.
@@ -58,7 +58,7 @@ struct IndirectDraw {
 @group(0) @binding(9)  var<storage, read_write> vertices: array<Vertex>;
 @group(0) @binding(10) var<storage, read_write> indices: array<u32>;
 
-// 4 vertex maps — one per organism slot at each voxel cell
+// 4 vertex maps - one per organism slot at each voxel cell
 @group(0) @binding(11) var<storage, read_write> vertex_map_0: array<atomic<u32>>;
 @group(0) @binding(12) var<storage, read_write> vertex_map_1: array<atomic<u32>>;
 @group(0) @binding(13) var<storage, read_write> vertex_map_2: array<atomic<u32>>;
@@ -67,9 +67,9 @@ struct IndirectDraw {
 @group(0) @binding(15) var<storage, read_write> counters: Counter;
 @group(0) @binding(16) var<storage, read_write> indirect_draw: IndirectDraw;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     let res = params.grid_resolution;
@@ -193,9 +193,9 @@ fn emit_quad(v0: u32, v1: u32, v2: u32, v3: u32, inside: bool) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 1: Generate vertices
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(4, 4, 4)
 fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
@@ -303,9 +303,9 @@ fn generate_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 2: Generate indices
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(4, 4, 4)
 fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
@@ -369,9 +369,9 @@ fn generate_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 3: Reset counters and indirect draw buffer
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(1, 1, 1)
 fn reset_counters() {
     atomicStore(&counters.vertex_count, 0u);
@@ -383,9 +383,9 @@ fn reset_counters() {
     indirect_draw.first_instance = 0u;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 4: Finalize indirect draw buffer from counters
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(1, 1, 1)
 fn finalize_indirect() {
     let vc = atomicLoad(&counters.vertex_count);

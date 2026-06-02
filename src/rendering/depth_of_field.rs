@@ -170,7 +170,7 @@ impl DepthOfFieldRenderer {
             push_constant_ranges: &[],
         });
 
-        // Render pipeline — renders to half-res Rgba16Float offscreen texture
+        // Render pipeline - renders to half-res Rgba16Float offscreen texture
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("DoF Blur Pipeline"),
             layout: Some(&pipeline_layout),
@@ -243,7 +243,7 @@ impl DepthOfFieldRenderer {
                 push_constant_ranges: &[],
             });
 
-        // Composite writes directly — DoF replaces the entire scene color
+        // Composite writes directly - DoF replaces the entire scene color
         let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("DoF Composite Pipeline"),
             layout: Some(&composite_pipeline_layout),
@@ -258,7 +258,7 @@ impl DepthOfFieldRenderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: None, // Direct overwrite — DoF is the final color
+                    blend: None, // Direct overwrite - DoF is the final color
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -531,7 +531,7 @@ impl DepthOfFieldRenderer {
         }
     }
 
-    /// Render DoF effect: blur at half-res → composite back to swapchain
+    /// Render DoF effect: blur at half-res -> composite back to swapchain
     ///
     /// The scene must have already been rendered to `self.scene_copy_view` (the
     /// intermediate texture). This method reads from that texture, applies the
@@ -555,7 +555,7 @@ impl DepthOfFieldRenderer {
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
-        // Update DoF parameters — use half-res dimensions for the blur shader
+        // Update DoF parameters - use half-res dimensions for the blur shader
         let dof_params = DofParams {
             focal_distance: self.focal_distance,
             focal_range: self.focal_range,
@@ -571,7 +571,7 @@ impl DepthOfFieldRenderer {
         // Ensure cached bind group exists
         self.ensure_dof_data_bind_group(device, depth_view);
 
-        // Pass 1: Blur at half resolution → offscreen texture
+        // Pass 1: Blur at half resolution -> offscreen texture
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("DoF Blur Pass (half-res)"),

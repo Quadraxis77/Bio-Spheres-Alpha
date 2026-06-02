@@ -24,7 +24,7 @@ fn time_seeded_counter() -> u64 {
         .unwrap_or(0xdeadbeef_cafebabe)
 }
 
-// ── orbit constants ───────────────────────────────────────────────────────────
+// -- orbit constants -----------------------------------------------------------
 
 /// Radians-per-second for the auto-orbit.
 const ORBIT_SPEED: f32 = 0.28;
@@ -35,7 +35,7 @@ const ORBIT_DISTANCE: f32 = 40.0;
 /// Downward camera tilt in radians.
 const ORBIT_PITCH: f32 = 0.35;
 
-// ── MainMenuScene ─────────────────────────────────────────────────────────────
+// -- MainMenuScene -------------------------------------------------------------
 
 pub struct MainMenuScene {
     pub left_preview: crate::scene::PreviewScene,
@@ -90,7 +90,7 @@ impl MainMenuScene {
         let _ = MENU_COUNTER.compare_exchange(0, seed, Ordering::Relaxed, Ordering::Relaxed);
         let counter = MENU_COUNTER.fetch_add(2, Ordering::Relaxed);
 
-        // Left preview — load a saved genome, fall back to procedural generation
+        // Left preview - load a saved genome, fall back to procedural generation
         let left_genome = Genome::load_from_genomes_dir_at(counter)
             .unwrap_or_else(|| Genome::generate_procedural(counter));
         let left_name = left_genome.name.clone();
@@ -101,7 +101,7 @@ impl MainMenuScene {
         left_preview.camera.distance = ORBIT_DISTANCE;
         left_preview.camera.target_distance = ORBIT_DISTANCE;
         left_preview.update_genome(&left_genome);
-        // Disable gizmos and split rings — not appropriate for the menu backdrop
+        // Disable gizmos and split rings - not appropriate for the menu backdrop
         left_preview.gizmo_renderer.update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
             visible: false,
             ..Default::default()
@@ -111,7 +111,7 @@ impl MainMenuScene {
             ..Default::default()
         });
 
-        // Right preview — load a different saved genome (counter+1 ensures a different pick)
+        // Right preview - load a different saved genome (counter+1 ensures a different pick)
         let right_genome = Genome::load_from_genomes_dir_at(counter + 1)
             .unwrap_or_else(|| Genome::generate_procedural(counter + 1));
         let right_name = right_genome.name.clone();
@@ -122,7 +122,7 @@ impl MainMenuScene {
         right_preview.camera.distance = ORBIT_DISTANCE;
         right_preview.camera.target_distance = ORBIT_DISTANCE;
         right_preview.update_genome(&right_genome);
-        // Disable gizmos and split rings — not appropriate for the menu backdrop
+        // Disable gizmos and split rings - not appropriate for the menu backdrop
         right_preview.gizmo_renderer.update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
             visible: false,
             ..Default::default()
@@ -161,7 +161,7 @@ impl MainMenuScene {
         }
     }
 
-    // ── per-frame update ──────────────────────────────────────────────────────
+    // -- per-frame update ------------------------------------------------------
 
     pub fn update(&mut self, dt: f32) {
         self.left_orbit_angle += ORBIT_SPEED * dt;
@@ -177,7 +177,7 @@ impl MainMenuScene {
         self.right_preview.camera.rotation = right_rot;
         self.right_preview.camera.target_rotation = right_rot;
 
-        // Advance simulations forward by dt — no seeking, no checkpoints.
+        // Advance simulations forward by dt - no seeking, no checkpoints.
         let left_genome = self.left_preview.genome.clone();
         let left_config = self.left_preview.config.clone();
         self.left_preview.state.step_forward(dt, &left_genome, &left_config);
@@ -191,7 +191,7 @@ impl MainMenuScene {
         self.right_preview.update(dt);
     }
 
-    // ── render to off-screen textures ─────────────────────────────────────────
+    // -- render to off-screen textures -----------------------------------------
 
     pub fn render(
         &mut self,
@@ -207,7 +207,7 @@ impl MainMenuScene {
         // lod_scale_factor must match the editor default (500.0) so that cells at the
         // menu's orbit distance (~40 units) compute a screen_radius above lod_threshold_low
         // and render at LOD >= 1 (textured). With scale 1.0 every cell falls to LOD 0
-        // (plain sphere) because screen_radius = radius/distance * 1.0 ≈ 0.025 < 10.0.
+        // (plain sphere) because screen_radius = radius/distance * 1.0 ~= 0.025 < 10.0.
         self.left_preview.render(
             device,
             queue,
@@ -243,7 +243,7 @@ impl MainMenuScene {
         // resize() where the underlying texture actually changes.
     }
 
-    // ── resize ────────────────────────────────────────────────────────────────
+    // -- resize ----------------------------------------------------------------
 
     pub fn resize(
         &mut self,
@@ -283,7 +283,7 @@ impl MainMenuScene {
         );
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+    // -- helpers ---------------------------------------------------------------
 
     fn create_textures(
         device: &wgpu::Device,

@@ -253,7 +253,7 @@ impl CellRenderer {
     }
     
     /// Bake the Goldberg hex triplet pattern into an equirectangular texture via compute shader.
-    /// Returns (texture_view, sampler). Run once at init — the texture is static.
+    /// Returns (texture_view, sampler). Run once at init - the texture is static.
     
     /// Set the shadow bind group (called each frame from gpu_scene)
     pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
@@ -403,7 +403,7 @@ impl CellRenderer {
             push_constant_ranges: &[],
         });
         
-        // Create depth-only render pipeline — uses fs_depth which writes correct
+        // Create depth-only render pipeline - uses fs_depth which writes correct
         // sphere depth so the subsequent color pass can use LessEqual to skip overdraw.
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Cell Depth Pipeline"),
@@ -724,7 +724,7 @@ impl CellRenderer {
                 data.data[2] = visuals.cilia_ring_depth;
                 data.data[3] = visuals.cilia_ring_speed;
             } else if cell_type == CellType::Flagellocyte {
-                // Flagellocyte tail params already packed by its behavior module — leave data[0..3] alone
+                // Flagellocyte tail params already packed by its behavior module - leave data[0..3] alone
             } else if matches!(cell_type,
                 CellType::Test | CellType::Phagocyte | CellType::Lipocyte |
                 CellType::Buoyocyte | CellType::Devorocyte)
@@ -939,7 +939,7 @@ impl CellRenderer {
         // Depth prepass: populate correct sphere depths using fs_depth.
         // Must CLEAR depth first (this texture is private to the cell renderer).
         // The color pass then uses Load+LessEqual so each pixel only runs the
-        // full shader once — eliminates overdraw from the custom frag_depth write
+        // full shader once - eliminates overdraw from the custom frag_depth write
         // that otherwise disables GPU early-z entirely.
         {
             let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -979,7 +979,7 @@ impl CellRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Reuse prepass depths — don't clear!
+                        load: wgpu::LoadOp::Load, // Reuse prepass depths - don't clear!
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,

@@ -2,11 +2,11 @@
 //
 // Icosphere mesh per organism that contracts onto cell surfaces each frame.
 // Uses 5 passes:
-//   1. clear_org_state   — zero accumulators in org_state
-//   2. accumulate_cells  — one thread per cell, atomically adds to org centroid
-//   3. finalize_orgs     — divide centroid by count, place icosphere vertices
-//   4. shrink_step       — move each vertex toward nearest cell surface
-//   5. smooth_step       — Laplacian smooth + recompute normals
+//   1. clear_org_state   - zero accumulators in org_state
+//   2. accumulate_cells  - one thread per cell, atomically adds to org centroid
+//   3. finalize_orgs     - divide centroid by count, place icosphere vertices
+//   4. shrink_step       - move each vertex toward nearest cell surface
+//   5. smooth_step       - Laplacian smooth + recompute normals
 //
 // Icosphere (3 subdivisions): 642 vertices, 1280 triangles.
 // Vertex positions are stored in ico_unit_positions buffer (uploaded from CPU).
@@ -24,8 +24,8 @@ struct ShrinkParams {
     grid_resolution: i32,
     cell_count:      u32,
     skin_offset:     f32,   // gap between skin and cell surface (world units)
-    shrink_speed:    f32,   // fraction of gap to close per step (0.1–0.3)
-    smooth_factor:   f32,   // Laplacian blend weight (0.0–0.5)
+    shrink_speed:    f32,   // fraction of gap to close per step (0.1-0.3)
+    smooth_factor:   f32,   // Laplacian blend weight (0.0-0.5)
     min_cells:       u32,   // minimum cells for an organism to get a skin
 }
 
@@ -36,16 +36,16 @@ struct SkinVertex {
     _pad:        f32,
 }
 
-// Accumulator for centroid (fixed-point i32 × FIXED_SCALE) + bounding radius (f32 via atomic)
+// Accumulator for centroid (fixed-point i32 x FIXED_SCALE) + bounding radius (f32 via atomic)
 // Layout: [sum_x_fixed: i32, sum_y_fixed: i32, sum_z_fixed: i32, cell_count: u32,
-//          max_dist_sq_fixed: i32 (×FIXED_SCALE), is_used: u32, _pad0: u32, _pad1: u32]
+//          max_dist_sq_fixed: i32 (xFIXED_SCALE), is_used: u32, _pad0: u32, _pad1: u32]
 // Total: 32 bytes
 struct OrgAccum {
     sum_x:       atomic<i32>,
     sum_y:       atomic<i32>,
     sum_z:       atomic<i32>,
     cell_count:  atomic<u32>,
-    max_dist_sq: atomic<i32>,  // fixed-point ×FIXED_SCALE
+    max_dist_sq: atomic<i32>,  // fixed-point xFIXED_SCALE
     is_used:     u32,
     _pad0:       u32,
     _pad1:       u32,
@@ -70,7 +70,7 @@ struct OrgState {
 @group(0) @binding(7)  var<storage, read_write> org_accum:           array<OrgAccum>;
 @group(0) @binding(8)  var<storage, read_write> org_state:           array<OrgState>;
 @group(0) @binding(9)  var<storage, read_write> vertices:            array<SkinVertex>;
-// Stable organism ID per cell — use this instead of raw label_buffer.
+// Stable organism ID per cell - use this instead of raw label_buffer.
 // Assigned by organism_stable_id.wgsl; persists across label changes.
 // 0 = no skin, 1-512 = organism slot index + 1.
 @group(0) @binding(10) var<storage, read>       stable_id_per_cell:  array<u32>;
@@ -78,7 +78,7 @@ struct OrgState {
 // Used by finalize_orgs to place the initial sphere.
 @group(0) @binding(11) var<storage, read>       ico_unit_positions:  array<vec4<f32>>;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 // stable_id_per_cell[ci] is already the skin slot in [1, MAX_ORGANISMS].
 // 0 means no skin. This replaces the old label_to_skin_id hash.
@@ -136,14 +136,14 @@ fn nearest_cell(pos: vec3<f32>, skin_id: u32) -> vec4<f32> {
     return vec4<f32>(best_pos, best_radius);
 }
 
-// ── Icosphere vertex positions — read from buffer (162 verts, 2 subdivisions) ─
+// -- Icosphere vertex positions - read from buffer (162 verts, 2 subdivisions) -
 // ico_unit_positions[v].xyz is the unit-sphere position for vertex v.
 // Uploaded from CPU by build_icosphere(2) in organism_skin.rs.
 fn ico_pos(v: u32) -> vec3<f32> {
     return ico_unit_positions[v].xyz;
 }
 
-// ── Pass 1: clear_org_state ───────────────────────────────────────────────────
+// -- Pass 1: clear_org_state ---------------------------------------------------
 @compute @workgroup_size(64, 1, 1)
 fn clear_org_state(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -158,7 +158,7 @@ fn clear_org_state(@builtin(global_invocation_id) gid: vec3<u32>) {
     org_state[i].cell_count = 0u;
 }
 
-// ── Pass 2: accumulate_cells ──────────────────────────────────────────────────
+// -- Pass 2: accumulate_cells --------------------------------------------------
 // One thread per cell. Adds cell position to its organism's accumulator.
 @compute @workgroup_size(256, 1, 1)
 fn accumulate_cells(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -178,7 +178,7 @@ fn accumulate_cells(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicAdd(&org_accum[slot].cell_count, 1u);
 }
 
-// ── Pass 3: finalize_orgs ─────────────────────────────────────────────────────
+// -- Pass 3: finalize_orgs -----------------------------------------------------
 // One thread per organism slot. Computes centroid, then scans cells again
 // to find bounding radius, then places icosphere.
 // NOTE: bounding radius scan is done per-org by re-reading the cell list.
@@ -239,7 +239,7 @@ fn finalize_orgs(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// ── Pass 4: shrink_step ───────────────────────────────────────────────────────
+// -- Pass 4: shrink_step -------------------------------------------------------
 @compute @workgroup_size(64, 1, 1)
 fn shrink_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     let vert_idx = gid.x;
@@ -261,7 +261,7 @@ fn shrink_step(@builtin(global_invocation_id) gid: vec3<u32>) {
             pos += normalize(to_cell) * (dist - target_d) * params.shrink_speed;
         }
     } else {
-        // No nearby cell — drift toward centroid
+        // No nearby cell - drift toward centroid
         let to_c = state.centroid - pos;
         let d    = length(to_c);
         if d > 0.001 { pos += normalize(to_c) * d * 0.05; }
@@ -270,8 +270,8 @@ fn shrink_step(@builtin(global_invocation_id) gid: vec3<u32>) {
     vertices[vert_idx].position = pos;
 }
 
-// ── Icosphere adjacency (42 vertices, each has 5 or 6 neighbours) ────────────
-// ── Pass 5: smooth_step ───────────────────────────────────────────────────────
+// -- Icosphere adjacency (42 vertices, each has 5 or 6 neighbours) ------------
+// -- Pass 5: smooth_step -------------------------------------------------------
 // Laplacian smooth using the 6 nearest neighbours by unit-sphere angular distance.
 // This works for any icosphere resolution without a hardcoded adjacency table.
 @compute @workgroup_size(64, 1, 1)
@@ -290,7 +290,7 @@ fn smooth_step(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Find the 6 nearest neighbours by dot product on the unit sphere.
     // Neighbours are vertices whose unit directions are closest to ours.
-    // We scan all VERTS_PER_ORG vertices — expensive but correct for any resolution.
+    // We scan all VERTS_PER_ORG vertices - expensive but correct for any resolution.
     // With 162 verts this is 162 comparisons per thread, which is fast.
     var top6_dot: array<f32, 6>;
     var top6_idx: array<u32, 6>;

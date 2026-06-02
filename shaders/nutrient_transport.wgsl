@@ -152,7 +152,7 @@ var<storage, read> mode_properties_v12: array<vec4<f32>>;
 
 // Organism size buffer: organism_size_buffer[cell_i] == cell count for that organism.
 // Populated each frame by the clear/accumulate/broadcast passes in organism_label.wgsl.
-// Consumers index directly by cell_idx — no label lookup needed.
+// Consumers index directly by cell_idx - no label lookup needed.
 @group(3) @binding(14)
 var<storage, read> organism_size_buffer: array<u32>;
 
@@ -283,7 +283,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
     // Phagocytes (cell_type 2) and Photocytes (cell_type 3) use specialized shaders for gain
     // but still need base metabolism to starve when not consuming/absorbing
-    // Embryocytes (cell_type 10) skip ALL normal metabolism — energy comes only from reserve
+    // Embryocytes (cell_type 10) skip ALL normal metabolism - energy comes only from reserve
     // All other cells (including invalid mode cells) have base metabolism
     let is_embryocyte = mode_valid && cell_type == 10u;
     let auto_gain_cell = mode_valid && cell_type == 0u;
@@ -297,7 +297,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Kleiber's Law metabolic discount: larger organisms burn fewer nutrients per cell.
         // Discount = 1 / size^0.25, capped so organisms above KLEIBER_CAP cells get
         // the maximum discount. Solo cells (size == 1) pay full rate.
-        // Cap at 100 cells → discount = 1/100^0.25 ≈ 0.316 (saves ~68% per cell).
+        // Cap at 100 cells -> discount = 1/100^0.25 ~= 0.316 (saves ~68% per cell).
         const KLEIBER_CAP: f32 = 100.0;
         let org_size = f32(max(organism_size_buffer[cell_idx], 1u));
         let capped_size = min(org_size, KLEIBER_CAP);
@@ -340,8 +340,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         // Reserve-first metabolism: burn reserve before touching regular nutrients.
-        // Reserve is stored ×1000 (fixed-point), so burn float_to_fixed(nutrient_loss)
-        // milli-units per tick — exact, no truncation at sub-unit drain rates.
+        // Reserve is stored x1000 (fixed-point), so burn float_to_fixed(nutrient_loss)
+        // milli-units per tick - exact, no truncation at sub-unit drain rates.
         let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
         var remaining_loss = nutrient_loss;
         if (cur_reserve > 0u) {
@@ -393,7 +393,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Transfer is lerp-smoothed to prevent oscillation.
     //
     // Embryocyte rules (cell_type == 10):
-    //   - Embryocytes NEVER send nutrients out → skip all connections if cell_a is Embryocyte.
+    //   - Embryocytes NEVER send nutrients out -> skip all connections if cell_a is Embryocyte.
     //   - Incoming nutrients to an Embryocyte go to its reserve buffer, not nutrients_buffer.
     //
     // Two-pass approach (matches preview):
@@ -402,7 +402,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let adhesion_list = adhesion_indices[cell_idx];
     let mode_a_idx = mode_indices[cell_idx];
 
-    // Embryocytes never send — skip the entire transport loop for them.
+    // Embryocytes never send - skip the entire transport loop for them.
     if (is_embryocyte) {
         return;
     }
@@ -442,7 +442,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // This is what makes the myocyte+lipocyte pump work correctly: a myocyte squeezing
     // a lipocyte raises the lipocyte's max_compression_a, which then boosts the
     // lipocyte's outflow rate to ALL of its other connections (e.g. vasculocytes).
-    // Without this, the compression boost would only apply to the myocyte↔lipocyte
+    // Without this, the compression boost would only apply to the myocyte<->lipocyte
     // connection itself, not to the lipocyte's downstream connections.
     var max_compression_a: f32 = 0.0;
     for (var i = 0; i < 20; i++) {
@@ -471,7 +471,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let comp   = adhesion_compression(pos_a, mass_a, pos_n, mass_n);
         max_compression_a = max(max_compression_a, comp);
     }
-    // Global outflow multiplier for this cell — applied to all connections uniformly.
+    // Global outflow multiplier for this cell - applied to all connections uniformly.
     let cell_pump_mult = 1.0 + max_compression_a * PUMP_AMPLIFICATION;
 
     // Pass 1: compute desired flows and accumulate total outflow for this cell
@@ -499,7 +499,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         // Only block the sending cell (cell_a = cell_idx) if it is split-deferred.
-        // Never block a cell from *receiving* — a starving receiver must always be reachable.
+        // Never block a cell from *receiving* - a starving receiver must always be reachable.
         if (is_cell_blocked_from_nutrients(cell_idx)) {
             continue;
         }
@@ -510,7 +510,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
 
-        // Also skip if cell_b is split-deferred — don't let nutrients flow into a cell
+        // Also skip if cell_b is split-deferred - don't let nutrients flow into a cell
         // that is about to divide, so both cells in a deferred pair freeze at the same
         // nutrient level and divide with symmetric children.
         if (is_cell_blocked_from_nutrients(cell_b_idx)) {
@@ -544,7 +544,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Non-vascular sending to vasculocyte: no restriction (TRANSPORT_RATE unchanged).
 
         // Embryocyte receivers: scale rate by their nutrient_priority so the setting
-        // actually controls how fast the reserve fills. Priority 4.0 → 4× base rate.
+        // actually controls how fast the reserve fills. Priority 4.0 -> 4x base rate.
         let cell_b_is_embryocyte_check = cell_b_type == 10u;
         if (cell_b_is_embryocyte_check && mode_b_idx < arrayLength(&mode_properties_v1)) {
             let embryo_priority = mode_properties_v1[mode_b_idx].y;
@@ -554,7 +554,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // --- Compression-driven pump boost ---
         // Apply the cell-level pump multiplier derived from the pre-scan.
         // If any neighbor (e.g. a myocyte) is compressing cell_a, all of cell_a's
-        // outgoing connections benefit — so a lipocyte squeezed by a myocyte pushes
+        // outgoing connections benefit - so a lipocyte squeezed by a myocyte pushes
         // nutrients faster into every adjacent vasculocyte, not just back into the myocyte.
         effective_rate *= cell_pump_mult;
 
@@ -571,14 +571,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                                prioritize_b && nutrients_b < DANGER_NUTRIENTS);
 
         // For embryocyte receivers, bypass the pressure-equilibrium formula entirely.
-        // The embryocyte is a pure sink — the sender should push at the full effective_rate
+        // The embryocyte is a pure sink - the sender should push at the full effective_rate
         // as long as it has nutrients. The pressure-diff formula caps flow at
-        // nutrients_a / priority_a (e.g. 20/3.5 ≈ 5.7/sec), which is far too slow.
+        // nutrients_a / priority_a (e.g. 20/3.5 ~= 5.7/sec), which is far too slow.
         // Instead, use effective_rate directly as desired so the sender drains into
         // the embryocyte as fast as the rate cap allows.
         var desired: f32;
         if (cell_b_type == 10u) {
-            // Embryocyte receiver: always push at full effective_rate (A→B)
+            // Embryocyte receiver: always push at full effective_rate (A->B)
             desired = effective_rate;
         } else {
             // --- Myocyte directional pump bias ---
@@ -636,7 +636,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let target_per_sec = desired * scale;
         let nutrient_transfer = target_per_sec * lerp_t * params.delta_time;
 
-        // Determine if cell_b is an Embryocyte — incoming goes to reserve, not nutrients.
+        // Determine if cell_b is an Embryocyte - incoming goes to reserve, not nutrients.
         let mode_b_idx = mode_indices[cell_b_idx];
         var cell_b_is_embryocyte = false;
         if (mode_b_idx < arrayLength(&mode_cell_types)) {
@@ -650,7 +650,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // doesn't inflate the nutrient cap to an absurd value.
         let max_nutrients_a = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
 
-        // For Embryocyte receivers: capacity = space left in reserve (×1000 fixed-point)
+        // For Embryocyte receivers: capacity = space left in reserve (x1000 fixed-point)
         var max_recv_b: f32;
         if (cell_b_is_embryocyte) {
             let cur_reserve_b = atomicLoad(&embryocyte_reserves[cell_b_idx]);
@@ -665,7 +665,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let can_recv = max(max_recv_b - nutrients_b, 0.0);
             actual_transfer = min(nutrient_transfer, min(can_give, can_recv));
         } else {
-            // Reverse flow (B→A): Embryocyte cell_b cannot send, so block
+            // Reverse flow (B->A): Embryocyte cell_b cannot send, so block
             if (cell_b_is_embryocyte) {
                 actual_transfer = 0.0;
             } else {
@@ -678,7 +678,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Apply transfer using atomic operations (thread-safe).
         // If cell_b is an Embryocyte, incoming nutrients go to its reserve buffer.
         if (actual_transfer > 0.0 && cell_b_is_embryocyte) {
-            // A→B: deduct from A's nutrients, add to B's reserve (×1000 fixed-point)
+            // A->B: deduct from A's nutrients, add to B's reserve (x1000 fixed-point)
             let transfer_fixed = float_to_fixed(actual_transfer);
             atomicAdd(&nutrients_buffer[cell_idx], -transfer_fixed);
             let reserve_gain = u32(float_to_fixed(actual_transfer));

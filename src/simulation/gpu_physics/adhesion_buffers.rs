@@ -11,7 +11,7 @@
 //! ### Per-Cell Adhesion Indices (40 bytes each = 10 * i32)
 //! - `cell_adhesion_indices`: Array of 10 adhesion indices per cell (-1 = no connection)
 //!
-//! ### Adhesion Settings (split into 3 × 16-byte sub-buffers per mode)
+//! ### Adhesion Settings (split into 3 x 16-byte sub-buffers per mode)
 //! - `adhesion_settings_v0`: [can_break, break_force, rest_length, linear_spring_stiffness]
 //! - `adhesion_settings_v1`: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
 //! - `adhesion_settings_v2`: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding]
@@ -36,8 +36,8 @@ pub struct AdhesionBuffers {
     /// Per-cell adhesion indices (20 * i32 = 80 bytes per cell)
     pub cell_adhesion_indices: wgpu::Buffer,
     
-    /// Per-mode adhesion settings split into 3 × vec4 sub-buffers (16 bytes each).
-    /// Split to stay under wgpu's 256 MB/buffer limit at 8M modes × 16 bytes = 128 MB each.
+    /// Per-mode adhesion settings split into 3 x vec4 sub-buffers (16 bytes each).
+    /// Split to stay under wgpu's 256 MB/buffer limit at 8M modes x 16 bytes = 128 MB each.
     /// v0: [can_break, break_force, rest_length, linear_spring_stiffness]
     /// v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
     /// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding]
@@ -127,7 +127,7 @@ impl AdhesionBuffers {
             "Cell Adhesion Indices",
         );
         
-        // Per-mode adhesion settings split into 3 × vec4 sub-buffers (16 bytes each).
+        // Per-mode adhesion settings split into 3 x vec4 sub-buffers (16 bytes each).
         // Start with the same initial pool size as triple_buffer.rs (16K modes).
         // grow_adhesion_mode_pool_if_needed() doubles the pool on demand up to MAX_TOTAL_MODES.
         const INITIAL_MODE_POOL_SIZE: u64 = 16_384;
@@ -510,7 +510,7 @@ impl AdhesionBuffers {
         }
     }
     
-    // ── Snapshot support ──────────────────────────────────────────────────────
+    // -- Snapshot support ------------------------------------------------------
 
     /// Return a clone of the CPU-side connections cache for snapshot serialisation.
     ///

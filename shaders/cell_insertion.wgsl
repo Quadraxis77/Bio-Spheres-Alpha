@@ -62,10 +62,10 @@ struct CellInsertionParams {
     
     // Cell type + initial reserve + initial nutrients (16 bytes)
     cell_type: u32,
-    // Initial embryocyte reserve (×1000 fixed-point).
+    // Initial embryocyte reserve (x1000 fixed-point).
     // 0 means "use default for cell_type" (65535000 for Embryocyte/Gametocyte, 0 otherwise).
     initial_reserve: u32,
-    // Initial nutrients (×1000 fixed-point).
+    // Initial nutrients (x1000 fixed-point).
     // 0 means "use default" (100000 = full). Non-zero caps starting nutrients.
     initial_nutrients: u32,
     _pad4: u32,
@@ -187,7 +187,7 @@ var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
 @group(2) @binding(17)
 var<storage, read_write> genome_orientations: array<vec4<f32>>;
 
-// Embryocyte reserve buffer (one atomic<u32> per cell, ×1000 fixed-point)
+// Embryocyte reserve buffer (one atomic<u32> per cell, x1000 fixed-point)
 // Initialized to 65535000 for Embryocytes (cell_type == 10), 0 for all others.
 @group(2) @binding(18)
 var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;

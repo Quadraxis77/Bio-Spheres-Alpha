@@ -2,7 +2,7 @@
 // Pull-based signal propagation through adhesion connections.
 // Each cell reads its adhesion neighbors' signal values from signal_flags (read-only this
 // dispatch) and writes its own propagated value to signal_flags_next (write-only).
-// After each dispatch the caller copies signal_flags_next → signal_flags so the next
+// After each dispatch the caller copies signal_flags_next -> signal_flags so the next
 // hop iteration sees the freshly propagated values.
 //
 // This double-buffer design eliminates the read-write hazard that existed when both
@@ -35,9 +35,9 @@ const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop (matches CPU)
 
 // Group 0: signal buffers + cell count
-// binding 0: signal_flags      — read-only source for this hop (previous state)
-// binding 1: cell_count_buffer — live cell count
-// binding 2: signal_flags_next — write-only destination for this hop
+// binding 0: signal_flags      - read-only source for this hop (previous state)
+// binding 1: cell_count_buffer - live cell count
+// binding 2: signal_flags_next - write-only destination for this hop
 @group(0) @binding(0)
 var<storage, read> signal_flags: array<u32>;
 
@@ -79,10 +79,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Propagate each channel independently.
     for (var ch = 0u; ch < SIGNAL_CHANNELS; ch++) {
-        // Oculocytes are hard stops on all channels — they never relay signals.
+        // Oculocytes are hard stops on all channels - they never relay signals.
         if (is_oculocyte) {
             // Copy the source signal unchanged so the emitter's own value persists
-            // into signal_flags_next (the caller will copy next → current after this pass).
+            // into signal_flags_next (the caller will copy next -> current after this pass).
             signal_flags_next[my_base + ch] = signal_flags[my_base + ch];
             continue;
         }
@@ -136,7 +136,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Determine what to write to signal_flags_next for this cell/channel.
         if (best_value > 0u && best_hops > 0u) {
             // If the best signal comes from a direct source (bit 16 set on the neighbor),
-            // the relay cell receives full strength — no attenuation yet.
+            // the relay cell receives full strength - no attenuation yet.
             // Otherwise apply 50% attenuation per hop, matching the CPU BFS.
             let is_direct_source = (best_source_flag != 0u);
             let propagated_value = select(
@@ -150,7 +150,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let encoded      = (new_hops << 11u) | propagated_value;
             signal_flags_next[my_base + ch] = encoded;
         } else {
-            // No propagatable signal — preserve whatever this cell already had
+            // No propagatable signal - preserve whatever this cell already had
             // (e.g. its own emission from the sense pass).
             signal_flags_next[my_base + ch] = own_signal;
         }

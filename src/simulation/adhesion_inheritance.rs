@@ -166,7 +166,7 @@ pub fn inherit_adhesions_on_division(
         };
 
         if !give_to_a && !give_to_b {
-            // Neither child inherits — deactivate and clean up neighbor reference
+            // Neither child inherits - deactivate and clean up neighbor reference
             state.adhesion_connections.is_active[connection_idx] = 0;
             state.adhesion_manager.remove_adhesion_index(neighbor_idx, connection_idx as i32);
             continue;
@@ -185,7 +185,7 @@ pub fn inherit_adhesions_on_division(
         let relative_rotation = neighbor_genome_orientation.conjugate() * parent_genome_orientation;
 
         if give_to_a && !give_to_b {
-            // Child A inherits — geometric anchor accounts for child A's positional offset
+            // Child A inherits - geometric anchor accounts for child A's positional offset
             let child_anchor = calculate_child_anchor_direction(
                 child_a_pos_parent_frame, neighbor_pos_parent_frame, child_a_orientation_delta,
             );
@@ -214,7 +214,7 @@ pub fn inherit_adhesions_on_division(
             }
 
         } else if give_to_b && !give_to_a {
-            // Child B inherits — geometric anchor accounts for child B's positional offset
+            // Child B inherits - geometric anchor accounts for child B's positional offset
             let child_anchor = calculate_child_anchor_direction(
                 child_b_pos_parent_frame, neighbor_pos_parent_frame, child_b_orientation_delta,
             );
@@ -244,7 +244,7 @@ pub fn inherit_adhesions_on_division(
             }
 
         } else {
-            // Zone C: Both inherit — modify original for child A, duplicate for child B.
+            // Zone C: Both inherit - modify original for child A, duplicate for child B.
             // Each child's geometric anchor accounts for its positional offset, which
             // tilts the originally-perpendicular Zone C anchor toward Zone A (child A)
             // and Zone B (child B). This is the intermediate shift that prevents diagonals.

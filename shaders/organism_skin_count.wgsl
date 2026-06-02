@@ -1,12 +1,12 @@
-// Organism Skin Count — determine which cells get skins
+// Organism Skin Count - determine which cells get skins
 //
 // Two passes:
-//   1. count_organisms  — per-cell: atomicAdd into a histogram keyed by organism label
-//   2. assign_skin_ids  — per-cell: read histogram, assign 16-bit skin ID if count >= threshold
+//   1. count_organisms  - per-cell: atomicAdd into a histogram keyed by organism label
+//   2. assign_skin_ids  - per-cell: read histogram, assign 16-bit skin ID if count >= threshold
 //
 // The histogram is a fixed-size buffer indexed by (organism_label % HISTOGRAM_SIZE).
 // Collisions are possible but rare since labels are sparse cell indices.
-// A collision means two organisms share a skin ID — they merge visually, which is
+// A collision means two organisms share a skin ID - they merge visually, which is
 // acceptable as a rare edge case.
 
 struct SkinCountParams {
@@ -33,9 +33,9 @@ fn label_to_bin(label: u32) -> u32 {
     return (label % (params.histogram_size - 1u)) + 1u;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 0: clear histogram
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn clear_histogram(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x >= params.histogram_size { return; }
@@ -46,9 +46,9 @@ fn clear_histogram(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 1: count cells per organism
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn count_organisms(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell_idx = gid.x;
@@ -62,9 +62,9 @@ fn count_organisms(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicAdd(&histogram[bin], 1u);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Pass 2: assign skin IDs based on organism size
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 @compute @workgroup_size(256, 1, 1)
 fn assign_skin_ids(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell_idx = gid.x;
@@ -86,7 +86,7 @@ fn assign_skin_ids(@builtin(global_invocation_id) gid: vec3<u32>) {
     let count = atomicLoad(&histogram[bin]);
 
     if count >= params.min_cells {
-        // This organism is large enough — use the histogram bin as the skin ID.
+        // This organism is large enough - use the histogram bin as the skin ID.
         // The bin is in [1, histogram_size), which fits in 16 bits for histogram_size <= 65536.
         cell_skin_id[cell_idx] = bin;
         atomicAdd(&skinned_cell_counter[0], 1u);

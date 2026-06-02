@@ -8,7 +8,7 @@
 
 struct BlendParams {
     total_voxels: u32,
-    blend_factor: f32,  // 0.0 = keep previous, 1.0 = use new (typical: 0.3–0.5)
+    blend_factor: f32,  // 0.0 = keep previous, 1.0 = use new (typical: 0.3-0.5)
     _pad0: u32,
     _pad1: u32,
 }

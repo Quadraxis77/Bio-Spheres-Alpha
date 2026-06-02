@@ -28,7 +28,7 @@ pub struct GameteMergeEvent {
     pub spawn_x: f32,
     pub spawn_y: f32,
     pub spawn_z: f32,
-    /// Combined reserve from both gametes (×1000 fixed-point, capped at 65535000).
+    /// Combined reserve from both gametes (x1000 fixed-point, capped at 65535000).
     /// Passed as `initial_reserve` when spawning the offspring Embryocyte.
     pub combined_reserve: u32,
 }
@@ -98,7 +98,7 @@ impl GametocyteMergeSystem {
                     ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry { // 1: death_flags (read_write — marks cells dead)
+                wgpu::BindGroupLayoutEntry { // 1: death_flags (read_write - marks cells dead)
                     binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None },
                     count: None,

@@ -353,11 +353,11 @@ impl GpuCellInsertion {
         birth_time: f32,
         cell_id: u32,
         genomes: &[Genome],
-        // Initial embryocyte reserve (×1000 fixed-point). Pass 0 for normal cells;
+        // Initial embryocyte reserve (x1000 fixed-point). Pass 0 for normal cells;
         // the shader will use 65535000 for Embryocyte cell_type if this is 0.
         // Pass a non-zero value to override (e.g. combined gamete reserve).
         initial_reserve_override: Option<u32>,
-        // Initial nutrients (×1000 fixed-point). Pass 0 for default (100000 = full).
+        // Initial nutrients (x1000 fixed-point). Pass 0 for default (100000 = full).
         // Pass a non-zero value to cap starting nutrients (e.g. gamete merge where
         // the combined reserve doesn't cover a full nutrient pool).
         initial_nutrients_override: Option<u32>,

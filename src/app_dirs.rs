@@ -4,20 +4,20 @@
 //! run from any location without needing a hand-crafted folder next to the exe.
 //!
 //! Layout (all under Documents\Bio-Spheres\ or ~/Documents/Bio-Spheres/):
-//!   Genome files   →  Bio-Spheres\genomes\
-//!   Sphere files   →  Bio-Spheres\spheres\
-//!   Screenshots    →  Bio-Spheres\screenshots\
-//!   Videos         →  Bio-Spheres\videos\
+//!   Genome files   ->  Bio-Spheres\genomes\
+//!   Sphere files   ->  Bio-Spheres\spheres\
+//!   Screenshots    ->  Bio-Spheres\screenshots\
+//!   Videos         ->  Bio-Spheres\videos\
 //!
-//! Config / settings  →  %APPDATA%\Bio-Spheres\          (Windows)
+//! Config / settings  ->  %APPDATA%\Bio-Spheres\          (Windows)
 //!                        ~/.config/Bio-Spheres/          (Linux/macOS)
-//!   Log file           →  %APPDATA%\Bio-Spheres\bio_spheres.log
+//!   Log file           ->  %APPDATA%\Bio-Spheres\bio_spheres.log
 
 use std::path::PathBuf;
 
 const APP_NAME: &str = "Bio-Spheres";
 
-// ── Config directory ─────────────────────────────────────────────────────────
+// -- Config directory ---------------------------------------------------------
 
 /// Returns `%APPDATA%\Bio-Spheres` (Windows) or `~/.config/Bio-Spheres`
 /// (Linux/macOS), creating it if it doesn't exist.
@@ -37,7 +37,7 @@ pub fn config_file(filename: &str) -> PathBuf {
     config_dir().join(filename)
 }
 
-// ── Bio-Spheres documents root ───────────────────────────────────────────────
+// -- Bio-Spheres documents root -----------------------------------------------
 
 /// Returns `Documents\Bio-Spheres`, creating it if needed.
 pub fn biospheres_dir() -> PathBuf {
@@ -51,7 +51,7 @@ pub fn biospheres_dir() -> PathBuf {
     dir
 }
 
-// ── Sub-directories ──────────────────────────────────────────────────────────
+// -- Sub-directories ----------------------------------------------------------
 
 /// Returns `Documents\Bio-Spheres\genomes`, creating it if needed.
 pub fn genomes_dir() -> PathBuf {
@@ -81,14 +81,14 @@ pub fn videos_dir() -> PathBuf {
     dir
 }
 
-// ── Log file ─────────────────────────────────────────────────────────────────
+// -- Log file -----------------------------------------------------------------
 
 /// Returns the path for the application log file inside the config directory.
 pub fn log_file() -> PathBuf {
     config_file("bio_spheres.log")
 }
 
-// ── Utilities ────────────────────────────────────────────────────────────────
+// -- Utilities ----------------------------------------------------------------
 
 /// Strip characters that are invalid in filenames.
 /// Used when constructing genome save paths from user-entered names.
@@ -101,7 +101,7 @@ pub fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
-// ── Internal helpers ─────────────────────────────────────────────────────────
+// -- Internal helpers ---------------------------------------------------------
 
 fn ensure_dir(dir: &PathBuf) {
     if !dir.exists() {

@@ -1,11 +1,11 @@
 //! Mossrock GPU Buffer System
 //!
-//! Mossrocks are environmental physics objects — not cells, not part of the genome.
+//! Mossrocks are environmental physics objects - not cells, not part of the genome.
 //! They fall under gravity, collide with cave walls and the world sphere, carry a
 //! fixed moss store that depletes as phagocytes eat from them, and are removed when
 //! their moss reaches zero.
 //!
-//! ## Architectural note — why not reuse the cell physics pipeline?
+//! ## Architectural note - why not reuse the cell physics pipeline?
 //!
 //! The cell physics pipeline (position_update.wgsl, collision_detection.wgsl,
 //! velocity_update.wgsl) operates on flat arrays indexed by slot and is entirely
@@ -31,16 +31,16 @@
 //! `boulder_state`: array of `GpuBoulder` (80 bytes each, 16-byte aligned)
 //!   - position (vec3), radius (f32)
 //!   - velocity (vec3), dead flag (u32)
-//!   - seed (u32), _pad (u32 × 3)
-//!   - angular_velocity (vec4: xyz = ω rad/s, w unused)
+//!   - seed (u32), _pad (u32 x 3)
+//!   - angular_velocity (vec4: xyz = omega rad/s, w unused)
 //!   - orientation (vec4: quaternion x,y,z,w)
 //!
-//! `boulder_moss`: array<atomic<i32>> — fixed-point ×1000 moss store per boulder
+//! `boulder_moss`: array<atomic<i32>> - fixed-point x1000 moss store per boulder
 //!
-//! `boulder_moss_dir`: array<vec4<f32>> — world-space direction of remaining moss
+//! `boulder_moss_dir`: array<vec4<f32>> - world-space direction of remaining moss
 //!   (xyz = unit vector toward moss concentration, w = unused)
 //!
-//! `boulder_eat_dir_accum`: 3 × array<atomic<i32>> per boulder (x, y, z components)
+//! `boulder_eat_dir_accum`: 3 x array<atomic<i32>> per boulder (x, y, z components)
 //!   Accumulated each frame by boulder_consume, read and cleared by boulder_physics.
 //!
 //! `boulder_count`: [0] = active boulder count (written by CPU)
@@ -64,18 +64,18 @@ pub const BOULDER_INITIAL_MOSS: i32 = 10_000_000;
 pub struct GpuBoulder {
     /// World-space position (xyz)
     pub position: [f32; 3],
-    /// Current radius — shrinks toward 0 as boulder dies
+    /// Current radius - shrinks toward 0 as boulder dies
     pub radius: f32,
     /// Current velocity (xyz)
     pub velocity: [f32; 3],
     /// 1 = dead (skip all passes and rendering), 0 = alive
     pub dead: u32,
-    /// Shape seed — fixed at spawn, drives vertex displacement in render shader
+    /// Shape seed - fixed at spawn, drives vertex displacement in render shader
     pub seed: u32,
     pub _pad: [u32; 3],
-    /// Angular velocity (xyz = ω rad/s, w = unused)
+    /// Angular velocity (xyz = omega rad/s, w = unused)
     pub angular_velocity: [f32; 4],
-    /// Orientation quaternion (x, y, z, w) — starts as identity (0,0,0,1)
+    /// Orientation quaternion (x, y, z, w) - starts as identity (0,0,0,1)
     pub orientation: [f32; 4],
 }
 
@@ -94,10 +94,10 @@ pub struct BoulderSpawnRequest {
 /// All GPU buffers for the boulder system.
 pub struct BoulderBuffers {
     /// Per-boulder state: position, velocity, radius, dead, seed.
-    /// `array<GpuBoulder>` — written by boulder_physics, read by boulder_consume + render.
+    /// `array<GpuBoulder>` - written by boulder_physics, read by boulder_consume + render.
     pub boulder_state: wgpu::Buffer,
 
-    /// Per-boulder moss store: `array<atomic<i32>>` fixed-point ×1000.
+    /// Per-boulder moss store: `array<atomic<i32>>` fixed-point x1000.
     /// Decremented by boulder_consume, read by boulder_physics for death check.
     pub boulder_moss: wgpu::Buffer,
 
@@ -106,12 +106,12 @@ pub struct BoulderBuffers {
     /// Updated by boulder_physics from eat_dir_accum each frame.
     pub boulder_moss_dir: wgpu::Buffer,
 
-    /// Per-boulder eat direction accumulator: 3 × `atomic<i32>` per boulder (x, y, z).
+    /// Per-boulder eat direction accumulator: 3 x `atomic<i32>` per boulder (x, y, z).
     /// Accumulated by boulder_consume, read + cleared by boulder_physics.
     /// Stored as a flat array: boulder_eat_dir_accum[boulder_idx * 3 + component]
     pub boulder_eat_dir_accum: wgpu::Buffer,
 
-    /// Per-boulder force accumulator: 3 × atomic<i32> per boulder (x, y, z), fixed-point ×1000.
+    /// Per-boulder force accumulator: 3 x atomic<i32> per boulder (x, y, z), fixed-point x1000.
     /// Written by collision_detection.wgsl when cells push against boulders.
     /// Read and cleared by boulder_physics.wgsl each frame.
     pub boulder_force_accum: wgpu::Buffer,
@@ -150,7 +150,7 @@ impl BoulderBuffers {
     pub fn new(device: &wgpu::Device) -> Self {
         let n = MAX_BOULDERS as usize;
 
-        // Boulder state: MAX_BOULDERS × 80 bytes
+        // Boulder state: MAX_BOULDERS x 80 bytes
         // Initialize with identity quaternions (orientation w=1)
         let cpu_boulders: Vec<GpuBoulder> = (0..n).map(|_| GpuBoulder {
             orientation: [0.0, 0.0, 0.0, 1.0],
@@ -164,7 +164,7 @@ impl BoulderBuffers {
                 | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Boulder moss: MAX_BOULDERS × 4 bytes (atomic<i32>)
+        // Boulder moss: MAX_BOULDERS x 4 bytes (atomic<i32>)
         let cpu_moss = vec![0i32; n];
         let boulder_moss = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boulder Moss"),
@@ -174,8 +174,8 @@ impl BoulderBuffers {
                 | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Boulder moss direction: MAX_BOULDERS × 16 bytes (vec4<f32>)
-        // Default: (0, 1, 0, 0) — moss starts on top
+        // Boulder moss direction: MAX_BOULDERS x 16 bytes (vec4<f32>)
+        // Default: (0, 1, 0, 0) - moss starts on top
         let cpu_moss_dir: Vec<[f32; 4]> = vec![[0.0, 1.0, 0.0, 0.0]; n];
         let boulder_moss_dir = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boulder Moss Dir"),
@@ -185,7 +185,7 @@ impl BoulderBuffers {
                 | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Boulder eat direction accumulator: MAX_BOULDERS × 3 × 4 bytes (atomic<i32> × 3)
+        // Boulder eat direction accumulator: MAX_BOULDERS x 3 x 4 bytes (atomic<i32> x 3)
         let eat_dir_data = vec![0i32; n * 3];
         let boulder_eat_dir_accum = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boulder Eat Dir Accum"),
@@ -194,7 +194,7 @@ impl BoulderBuffers {
                 | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Boulder force accumulator: MAX_BOULDERS × 3 × 4 bytes (atomic<i32> × 3)
+        // Boulder force accumulator: MAX_BOULDERS x 3 x 4 bytes (atomic<i32> x 3)
         // Cleared each frame by boulder_physics before accumulating new forces.
         let force_accum_data = vec![0i32; n * 3];
         let boulder_force_accum = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -211,7 +211,7 @@ impl BoulderBuffers {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Boulder count: 16 bytes (4 × u32, only [0] used)
+        // Boulder count: 16 bytes (4 x u32, only [0] used)
         let boulder_count = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Boulder Count"),
             contents: bytemuck::cast_slice(&[0u32, 0u32, 0u32, 0u32]),
@@ -220,7 +220,7 @@ impl BoulderBuffers {
                 | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Dead flags readback: MAX_BOULDERS × 4 bytes
+        // Dead flags readback: MAX_BOULDERS x 4 bytes
         let dead_flags_readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Boulder Dead Flags Readback"),
             size: n as u64 * 4,
@@ -264,7 +264,7 @@ impl BoulderBuffers {
         self.spawn_with_moss(queue, req, gravity_dir, BOULDER_INITIAL_MOSS)
     }
 
-    /// Spawn a boulder with an explicit moss store (fixed-point ×1000).
+    /// Spawn a boulder with an explicit moss store (fixed-point x1000).
     /// Returns the slot index, or None if all slots are occupied.
     pub fn spawn_with_moss(
         &mut self,
@@ -330,7 +330,7 @@ impl BoulderBuffers {
         }
         // Copy dead field from each boulder. GpuBoulder layout offset of `dead` = 28 bytes.
         // We copy the full state buffer to a staging buffer and extract dead fields on CPU.
-        // The dead_flags_readback buffer is sized for MAX_BOULDERS × 4 (just the dead u32s),
+        // The dead_flags_readback buffer is sized for MAX_BOULDERS x 4 (just the dead u32s),
         // so we use a stride copy approach: copy each boulder's dead field individually.
         // For simplicity, copy the full state and extract in poll.
         let _ = encoder;

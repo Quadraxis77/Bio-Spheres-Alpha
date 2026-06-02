@@ -1,6 +1,6 @@
 // Moss Growth / Erosion / Decay Compute Shader
 //
-// Runs once per frame over the 128³ voxel grid.
+// Runs once per frame over the 128^3 voxel grid.
 // Growth conditions:
 //   - Solid-adjacent (cave surface)
 //   - Lit above threshold
@@ -22,7 +22,7 @@ struct MossParams {
     min_light: f32,
     delta_time: f32,
     world_radius: f32,
-    water_radius: f32,       // wetness diffusion spread strength (0–1 mapped from 0–25)
+    water_radius: f32,       // wetness diffusion spread strength (0-1 mapped from 0-25)
     wetness_evaporation: f32,
     slice_index: u32,        // unused, kept for struct compat
     _pad1: f32,
@@ -71,7 +71,7 @@ fn has_water_flow(idx: u32) -> bool {
     return water_velocity[idx] != 0u;
 }
 
-// Cheap per-voxel coverage hash — replaces 3-octave noise (24 hash calls → 1).
+// Cheap per-voxel coverage hash - replaces 3-octave noise (24 hash calls -> 1).
 // Returns a stable value in [0,1] for each voxel position.
 // The low-frequency variation comes from the voxel coordinates themselves;
 // the result is visually similar to noise at the scale of the moss grid.
@@ -113,7 +113,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let iz = i32(global_id.z);
     let dt = params.delta_time;
 
-    // ── Wetness update ──────────────────────────────────────────
+    // -- Wetness update ------------------------------------------
     var current_wetness = wetness[idx];
     let has_water_here = is_water_at(ix, iy, iz);
     let has_flow = has_water_flow(idx);
@@ -133,7 +133,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     current_wetness = clamp(current_wetness, 0.0, 1.0);
     wetness[idx] = current_wetness;
 
-    // ── Moss growth logic ────────────────────────────────────────
+    // -- Moss growth logic ----------------------------------------
     var current_moss = moss_density[idx];
 
     if (is_solid(ix, iy, iz)) {

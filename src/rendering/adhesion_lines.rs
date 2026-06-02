@@ -86,7 +86,7 @@ impl AdhesionLineRenderer {
             }],
         });
 
-        // Each connection needs 12 vertices (2 half-segments × 2 triangles × 3 vertices)
+        // Each connection needs 12 vertices (2 half-segments x 2 triangles x 3 vertices)
         let vertex_capacity = max_connections * 12;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Adhesion Line Vertex Buffer"),
@@ -316,10 +316,10 @@ impl AdhesionLineRenderer {
                 perp = Vec3::Y;
             }
 
-            // Half-segment 1: Cell A → Midpoint (zone A color)
+            // Half-segment 1: Cell A -> Midpoint (zone A color)
             Self::push_quad(&mut vertices, pos_a, midpoint, perp, zone_color_a, signal_color);
 
-            // Half-segment 2: Midpoint → Cell B (zone B color)
+            // Half-segment 2: Midpoint -> Cell B (zone B color)
             Self::push_quad(&mut vertices, midpoint, pos_b, perp, zone_color_b, signal_color);
         }
 

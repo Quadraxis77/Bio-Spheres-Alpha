@@ -33,7 +33,7 @@
 // After the hook pass, clear/accumulate/broadcast passes compute per-cell organism
 // size for the Kleiber metabolic discount. These run every frame alongside the hook.
 
-// ── Constants ────────────────────────────────────────────────────────────────
+// -- Constants ----------------------------------------------------------------
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
@@ -56,7 +56,7 @@ struct AdhesionConnection {
     _pad: u32,
 }
 
-// ── Bind group 0 ─────────────────────────────────────────────────────────────
+// -- Bind group 0 -------------------------------------------------------------
 
 struct LabelState {
     _pad0: u32,
@@ -80,7 +80,7 @@ struct LabelState {
 // Only the root slot is meaningful; all other slots are 0 after the count pass.
 @group(0) @binding(7) var<storage, read_write> organism_size_buffer:     array<atomic<u32>>;
 
-// ── label_controller ─────────────────────────────────────────────────────────
+// -- label_controller ---------------------------------------------------------
 // Sets run_hc = 1 unconditionally. run_init is set by the Rust side before
 // each periodic reset; the controller preserves it so init_labels can read it.
 
@@ -91,7 +91,7 @@ fn label_controller() {
     // We don't touch it here so init_labels sees the correct value.
 }
 
-// ── init_labels ──────────────────────────────────────────────────────────────
+// -- init_labels --------------------------------------------------------------
 // Periodic reset: label[i] = i for live cells, DEAD_LABEL for dead.
 // Only runs when run_init == 1 (set by Rust side on the reset frame).
 // After a reset the flood fill re-converges within diameter(organism) frames.
@@ -110,7 +110,7 @@ fn init_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// ── hook_labels ──────────────────────────────────────────────────────────────
+// -- hook_labels --------------------------------------------------------------
 // Continuous flood fill: each cell adopts the minimum label among itself and
 // all its bonded live neighbors. One dispatch per frame propagates the minimum
 // label one hop further through each connected component.
@@ -133,6 +133,10 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let base = i * MAX_ADHESIONS_PER_CELL;
+    if cell_adhesion_indices[base] < 0 {
+        atomicMin(&label_buffer[i], my_label);
+        return;
+    }
 
     for (var s = 0u; s < MAX_ADHESIONS_PER_CELL; s++) {
         let slot = cell_adhesion_indices[base + s];
@@ -146,7 +150,7 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (cell_a != i && cell_b != i) { continue; }
         let nb = select(cell_a, cell_b, cell_a == i);
 
-        // Skip dead neighbors — don't propagate through them.
+        // Skip dead neighbors - don't propagate through them.
         if death_flags[nb] != 0u { continue; }
 
         let nb_label = atomicLoad(&label_buffer[nb]);
@@ -158,7 +162,7 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicMin(&label_buffer[i], my_label);
 }
 
-// ── clear_organism_sizes ──────────────────────────────────────────────────────
+// -- clear_organism_sizes ------------------------------------------------------
 
 @compute @workgroup_size(256, 1, 1)
 fn clear_organism_sizes(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -167,7 +171,7 @@ fn clear_organism_sizes(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&organism_size_buffer[i], 0u);
 }
 
-// ── count_organism_sizes ──────────────────────────────────────────────────────
+// -- count_organism_sizes ------------------------------------------------------
 
 @compute @workgroup_size(256, 1, 1)
 fn count_organism_sizes_accumulate(@builtin(global_invocation_id) gid: vec3<u32>) {

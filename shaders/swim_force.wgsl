@@ -194,7 +194,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Calculate swim force vector.
     // Traction falloff: force tapers as the cell approaches its target speed.
     // This prevents many aligned flagellocytes from summing to unbounded aggregate
-    // force — each cell contributes less the faster the body is already moving.
+    // force - each cell contributes less the faster the body is already moving.
     let vel = velocities_in[cell_idx].xyz;
     let speed_along_forward = dot(vel, forward);
     let target_speed = effective_speed * 8.0;
@@ -208,7 +208,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicAdd(&force_accum_z[cell_idx], float_to_fixed(swim_force.z));
 }
 
-// Buoyancy pass — separate entry point so it runs for all cells regardless of swim force
+// Buoyancy pass - separate entry point so it runs for all cells regardless of swim force
 @compute @workgroup_size(256)
 fn buoyancy_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;

@@ -32,12 +32,12 @@ struct NutrientParticleCounter {
 @group(0) @binding(4) var<uniform> params: NutrientExtractParams;
 @group(0) @binding(5) var<storage, read> nutrient_voxels: array<u32>;  // 0 = empty, 1 = has nutrient, 2 = consumed
 
-// Atomic counter helper — returns the slot index, or max_particles if full.
+// Atomic counter helper - returns the slot index, or max_particles if full.
 // Checks capacity BEFORE incrementing so the counter never overflows past max_particles.
 fn try_allocate_particle() -> u32 {
     let current = atomicLoad(&counter.count);
     if (current >= params.max_particles) {
-        return params.max_particles;  // Full — signal caller to skip
+        return params.max_particles;  // Full - signal caller to skip
     }
     return atomicAdd(&counter.count, 1u);
 }
@@ -96,7 +96,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get world position for particle rendering
     let world_pos = voxel_to_world(voxel_index);
     
-    // Try to add a particle — check capacity before incrementing so the counter
+    // Try to add a particle - check capacity before incrementing so the counter
     // never wraps past max_particles (which would cause particle_count to read as
     // 0 after a u32 overflow, making all particles disappear permanently).
     let particle_count = try_allocate_particle();
@@ -118,7 +118,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         vec4<f32>(
             params.time + fract(sin(f32(voxel_index) * 12.9898)) * 6.28,  // Animation time offset
             2.0 + fract(sin(f32(voxel_index) * 13.7)),  // Rotation speed
-            f32(voxel_index % 4) * 1.570796,  // 4 distinct rotations (0°, 90°, 180°, 270°) for debugging
+            f32(voxel_index % 4) * 1.570796,  // 4 distinct rotations (0 deg, 90 deg, 180 deg, 270 deg) for debugging
             0.0
         )
     );
