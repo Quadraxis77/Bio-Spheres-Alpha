@@ -1381,6 +1381,13 @@ pub fn physics_step_with_genome(
                     let target = mode.mode_switch_target as usize;
                     if target < genome.modes.len() {
                         state.mode_indices[i] = target;
+                        // Reset split count and copy new mode's per-cell settings,
+                        // mirroring what mode_switch.wgsl does on the GPU side.
+                        state.split_counts[i] = 0;
+                        let new_mode = &genome.modes[target];
+                        state.split_intervals[i] = new_mode.split_interval;
+                        state.split_nutrient_thresholds[i] = (new_mode.split_mass - 1.0) * 100.0;
+                        state.stiffnesses[i] = new_mode.membrane_stiffness;
                     }
                 }
             }
