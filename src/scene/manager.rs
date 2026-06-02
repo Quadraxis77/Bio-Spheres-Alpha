@@ -171,10 +171,22 @@ impl SceneManager {
         // across cells-only resets. Only initialize fresh if there was no prior fluid.
         let had_fluid = self.gpu_scene.as_ref().map(|s| s.fluid_simulator.is_some()).unwrap_or(false);
         if had_fluid {
-            // Move the fluid simulator and related state from the old scene
+            // Move the fluid simulator and all visual renderers from the old scene.
+            // Without this, light field / fog / DOF / sun / voxel systems remain None
+            // on the new scene, causing them to disappear after a capacity/radius reset.
             if let Some(ref mut old_scene) = self.gpu_scene {
-                gpu_scene.fluid_simulator    = old_scene.fluid_simulator.take();
-                gpu_scene.fluid_buffers      = old_scene.fluid_buffers.take();
+                gpu_scene.fluid_simulator        = old_scene.fluid_simulator.take();
+                gpu_scene.fluid_buffers          = old_scene.fluid_buffers.take();
+                gpu_scene.light_field_system     = old_scene.light_field_system.take();
+                gpu_scene.volumetric_fog_renderer = old_scene.volumetric_fog_renderer.take();
+                gpu_scene.dof_renderer           = old_scene.dof_renderer.take();
+                gpu_scene.sun_renderer           = old_scene.sun_renderer.take();
+                gpu_scene.voxel_renderer         = old_scene.voxel_renderer.take();
+                gpu_scene.solid_mask_generator   = old_scene.solid_mask_generator.take();
+                gpu_scene.moss_system            = old_scene.moss_system.take();
+                gpu_scene.show_moss              = old_scene.show_moss;
+                gpu_scene.show_sun               = old_scene.show_sun;
+                gpu_scene.show_dof               = old_scene.show_dof;
                 // Rebuild bind groups that reference fluid buffers in the new scene
                 if let Some(ref simulator) = gpu_scene.fluid_simulator {
                     gpu_scene.cached_bind_groups.update_water_buffers(
@@ -212,6 +224,35 @@ impl SceneManager {
                 gpu_scene.update_solid_mask(queue);
             }
             gpu_scene.initialize_fluid_simulator(device, queue, config.format);
+        }
+
+        // Preserve user-configurable settings across scene resets (capacity/radius changes).
+        // These are independent of fluid state and must always be carried over.
+        if let Some(ref old_scene) = self.gpu_scene {
+            gpu_scene.show_adhesion_lines      = old_scene.show_adhesion_lines;
+            gpu_scene.show_world_sphere        = old_scene.show_world_sphere;
+            gpu_scene.constraint_iterations    = old_scene.constraint_iterations;
+            gpu_scene.gravity                  = old_scene.gravity;
+            gpu_scene.gravity_mode             = old_scene.gravity_mode;
+            gpu_scene.surface_pressure         = old_scene.surface_pressure;
+            gpu_scene.acceleration_damping     = old_scene.acceleration_damping;
+            gpu_scene.water_viscosity          = old_scene.water_viscosity;
+            gpu_scene.solo_metabolism_multiplier = old_scene.solo_metabolism_multiplier;
+            gpu_scene.radiation_level          = old_scene.radiation_level;
+            gpu_scene.subtle_mutations         = old_scene.subtle_mutations;
+            gpu_scene.lod_scale_factor         = old_scene.lod_scale_factor;
+            gpu_scene.lod_threshold_low        = old_scene.lod_threshold_low;
+            gpu_scene.lod_threshold_medium     = old_scene.lod_threshold_medium;
+            gpu_scene.lod_threshold_high       = old_scene.lod_threshold_high;
+            gpu_scene.lod_debug_colors         = old_scene.lod_debug_colors;
+            gpu_scene.lateral_flow_probabilities = old_scene.lateral_flow_probabilities;
+            gpu_scene.condensation_probability = old_scene.condensation_probability;
+            gpu_scene.vaporization_probability = old_scene.vaporization_probability;
+            gpu_scene.nutrient_density         = old_scene.nutrient_density;
+            gpu_scene.nutrient_epoch_duration  = old_scene.nutrient_epoch_duration;
+            gpu_scene.nutrient_epoch_spacing   = old_scene.nutrient_epoch_spacing;
+            gpu_scene.nutrient_spawn_end       = old_scene.nutrient_spawn_end;
+            gpu_scene.nutrient_despawn_start   = old_scene.nutrient_despawn_start;
         }
 
         // Initialize GPU surface nets for density mesh rendering (always needed)

@@ -430,12 +430,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let my_ang_vel = angular_velocities_in[cell_idx].xyz;
     let my_radius = calculate_radius_from_mass(my_mass);
     
-    // Fast-exit for isolated cells: first slot is -1 when the cell has no bonds.
-    // Skips the entire 20-slot loop for cells with no adhesion connections.
     let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
-    if (cell_adhesion_indices[adhesion_base] < 0) {
-        return;
-    }
 
     // Accumulate forces and torques from all adhesions
     var total_force = vec3<f32>(0.0);

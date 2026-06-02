@@ -241,9 +241,13 @@ impl AdhesionBuffers {
     
     /// Initialize buffers with default values
     pub fn initialize(&mut self, queue: &wgpu::Queue) {
-        // Clear adhesion counts
+        // Set total_adhesion_count to the full buffer capacity so that physics,
+        // cleanup, and render shaders iterate over all slots. GPU-side bond creation
+        // (division, glueocyte) never updates this field, so setting it to 0 causes
+        // every shader that uses it as an upper bound to silently skip all bonds.
+        // Individual slots are filtered by their is_active flag.
         let counts = AdhesionCounts {
-            total_adhesion_count: 0,
+            total_adhesion_count: self.max_connections,
             live_adhesion_count: 0,
             free_adhesion_top: 0,
             _padding: 0,

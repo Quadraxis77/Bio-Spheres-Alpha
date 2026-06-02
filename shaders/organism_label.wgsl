@@ -133,10 +133,6 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let base = i * MAX_ADHESIONS_PER_CELL;
-    if cell_adhesion_indices[base] < 0 {
-        atomicMin(&label_buffer[i], my_label);
-        return;
-    }
 
     for (var s = 0u; s < MAX_ADHESIONS_PER_CELL; s++) {
         let slot = cell_adhesion_indices[base + s];

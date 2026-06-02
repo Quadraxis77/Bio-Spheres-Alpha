@@ -367,11 +367,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Fast-exit for isolated cells: first slot is -1 when the cell has no bonds.
     let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
-    if (cell_adhesion_indices[adhesion_base] < 0) {
-        return;
-    }
 
     var total_force = vec3<f32>(0.0);
     var total_torque = vec3<f32>(0.0);

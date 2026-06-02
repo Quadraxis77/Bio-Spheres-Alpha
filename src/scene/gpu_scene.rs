@@ -102,8 +102,6 @@ pub struct GpuScene {
     pub(super) has_devorocytes: bool,
     /// Whether any genome has a gametocyte mode (for merge detection gating)
     pub(super) has_gametocytes: bool,
-    /// Whether any genome has a mode that can create or depend on adhesions.
-    pub(super) has_adhesion_work: bool,
     /// Per-cell physics feature flags used to skip irrelevant compute passes.
     pub(super) physics_features: PhysicsFeatureFlags,
     /// Maximum signal hops across all oculocyte modes in all genomes (for signal propagation dispatch count)
@@ -239,7 +237,7 @@ pub struct GpuScene {
     /// GPU fluid simulator for falling/stacking water
     pub fluid_simulator: Option<GpuFluidSimulator>,
     /// Solid mask generator for fluid system
-    solid_mask_generator: Option<SolidMaskGenerator>,
+    pub solid_mask_generator: Option<SolidMaskGenerator>,
     /// Steam particle system renderer
     pub steam_particle_renderer: Option<SteamParticleRenderer>,
     /// Whether to show steam particles
@@ -630,7 +628,6 @@ impl GpuScene {
             has_photocytes: false,
             has_devorocytes: false,
             has_gametocytes: false,
-            has_adhesion_work: false,
             physics_features: PhysicsFeatureFlags::default(),
             max_signal_hops: 0,
             genome_buffer_manager,
@@ -838,7 +835,6 @@ impl GpuScene {
         self.has_photocytes = false;
         self.has_devorocytes = false;
         self.has_gametocytes = false;
-        self.has_adhesion_work = false;
         self.physics_features = PhysicsFeatureFlags::default();
         self.max_signal_hops = 0;
         self.instance_builder.mark_all_dirty();
@@ -1535,7 +1531,6 @@ impl GpuScene {
         // Uses cached bind groups (no per-frame allocation!)
         let physics_features = if type_mutations_enabled {
             PhysicsFeatureFlags {
-                has_adhesion_work: true,
                 has_myocytes: true,
                 has_flagellocytes: true,
                 has_buoyocytes: true,
@@ -1578,7 +1573,6 @@ impl GpuScene {
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
         // Cell count is updated on GPU by division shader
-        let has_lifecycle_adhesion_work = self.has_adhesion_work || self.type_mutations_enabled();
         execute_lifecycle_pipeline(
             device,
             encoder,
@@ -1591,7 +1585,6 @@ impl GpuScene {
             // Use max(1) so lifecycle runs on the first cell even before the async
             // readback has reported total_cell_slots > 0 (lags 1-3 frames).
             self.total_cell_slots.max(1),
-            has_lifecycle_adhesion_work,
         );
 
         // Mutation pass: collect candidates from division results, then apply mutations.
@@ -2097,14 +2090,10 @@ impl GpuScene {
         self.has_photocytes = false;
         self.has_devorocytes = false;
         self.has_gametocytes = false;
-        self.has_adhesion_work = self.adhesion_buffers.adhesion_count() > 0;
         self.physics_features = PhysicsFeatureFlags::default();
         self.max_signal_hops = 0;
         for g in &self.genomes {
             for m in &g.modes {
-                if m.parent_make_adhesion || m.child_a.keep_adhesion || m.child_b.keep_adhesion {
-                    self.has_adhesion_work = true;
-                }
                 if m.cell_type == flagellocyte_type {
                     self.physics_features.has_flagellocytes = true;
                 }
@@ -2122,7 +2111,6 @@ impl GpuScene {
                 }
                 if m.cell_type == myocyte_type {
                     self.physics_features.has_myocytes = true;
-                    self.has_adhesion_work = true;
                 }
                 if m.cell_type == devorocyte_type {
                     self.has_devorocytes = true;
@@ -2132,7 +2120,6 @@ impl GpuScene {
                 }
                 if m.cell_type == glueocyte_type {
                     self.has_glueocytes = true;
-                    self.has_adhesion_work = true;
                 }
                 if m.cell_type == oculocyte_type {
                     self.has_oculocytes = true;
@@ -2148,7 +2135,6 @@ impl GpuScene {
                 }
             }
         }
-        self.physics_features.has_adhesion_work = self.has_adhesion_work;
         self.physics_features.has_glueocytes = self.has_glueocytes;
     }
     
@@ -6560,7 +6546,6 @@ impl Scene for GpuScene {
                     adhesion_data_bind_group,
                     self.camera.position(),
                     self.camera.rotation,
-                    self.adhesion_buffers.adhesion_count(),
                 );
             }
         }

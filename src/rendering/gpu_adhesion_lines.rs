@@ -16,7 +16,6 @@ pub struct GpuAdhesionLineRenderer {
     data_bind_group_layout: wgpu::BindGroupLayout,
     camera_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
     max_adhesions: u32,
     pub width: u32,
     pub height: u32,
@@ -264,7 +263,6 @@ impl GpuAdhesionLineRenderer {
         data_bind_group: &wgpu::BindGroup,
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
-        active_count: u32,
     ) {
         // Update camera uniform
         let forward = camera_rotation * Vec3::NEG_Z;
@@ -289,8 +287,8 @@ impl GpuAdhesionLineRenderer {
         render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
         render_pass.set_bind_group(1, data_bind_group, &[]);
 
-        // Draw: 12 vertices per instance (2 half-segments x 2 triangles x 3 verts)
-        // The shader will skip inactive adhesions by outputting degenerate vertices
-        render_pass.draw(0..12, 0..active_count);
+        // Draw all allocated slots; the shader reads adhesion_counts[0] from the GPU buffer
+        // and culls out-of-range or inactive instances via degenerate vertices.
+        render_pass.draw(0..12, 0..self.max_adhesions);
     }
 }
