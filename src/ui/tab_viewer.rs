@@ -725,19 +725,19 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             .show(ui, |ui| {
                 ui.label(egui::RichText::new("Scale").size(11.0).color(palette().text_secondary))
                     .on_hover_text("Higher = more aggressive LOD (switches to lower resolution sooner)");
-                ui.add(egui::Slider::new(&mut state.lod_scale_factor, 0.1..=5.0).fixed_decimals(2));
+                ui.add(egui::Slider::new(&mut state.lod_scale_factor, 50.0..=2000.0).fixed_decimals(0));
                 ui.end_row();
                 ui.label(egui::RichText::new("Low→Med").size(11.0).color(palette().text_secondary))
                     .on_hover_text("Distance threshold for 32→64 texture transition");
-                ui.add(egui::Slider::new(&mut state.lod_threshold_low, 1.0..=200.0).fixed_decimals(0));
+                ui.add(egui::Slider::new(&mut state.lod_threshold_low, 1.0..=1000.0).fixed_decimals(0));
                 ui.end_row();
                 ui.label(egui::RichText::new("Med→High").size(11.0).color(palette().text_secondary))
                     .on_hover_text("Distance threshold for 64→128 texture transition");
-                ui.add(egui::Slider::new(&mut state.lod_threshold_medium, 1.0..=200.0).fixed_decimals(0));
+                ui.add(egui::Slider::new(&mut state.lod_threshold_medium, 1.0..=1000.0).fixed_decimals(0));
                 ui.end_row();
                 ui.label(egui::RichText::new("High→Ultra").size(11.0).color(palette().text_secondary))
                     .on_hover_text("Distance threshold for 128→256 texture transition");
-                ui.add(egui::Slider::new(&mut state.lod_threshold_high, 1.0..=200.0).fixed_decimals(0));
+                ui.add(egui::Slider::new(&mut state.lod_threshold_high, 1.0..=1000.0).fixed_decimals(0));
                 ui.end_row();
                 ui.label(egui::RichText::new("Debug Colors").size(11.0).color(palette().text_secondary))
                     .on_hover_text("Tint cells by LOD level: green=ultra, yellow=high, orange=med, red=low");
@@ -3952,7 +3952,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 13 { // Gametocyte (cell_type == 13)
                 group_container(ui, "Gametocyte Functions", egui::Color32::from_rgb(200, 120, 200), |ui| {
-                    ui.label("Accumulates reserve while attached. When release triggers fire, it detaches and seeks a compatible partner. On contact, both gametes die and their combined reserve seeds a new Embryocyte with a crossover genome.");
+                    ui.label("Accumulates reserve while attached. When release triggers fire, it detaches and seeks a compatible partner. On contact, both gametes die and their combined reserve seeds a new Embryocyte with a crossover genome.")
+                        .on_hover_text("Gametocytes never split. Split mass, split interval, and max splits do not make this cell type divide.");
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("Merge Range:");

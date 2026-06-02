@@ -235,9 +235,10 @@ pub struct CachedBindGroups {
     pub signal_sense_world_data: wgpu::BindGroup,
     /// Signal propagate adhesion bind group (same for all frames)
     pub signal_propagate_adhesion: wgpu::BindGroup,
-    /// Mode switch bind groups (Group 0: cell state, Group 1: signal data)
+    /// Mode switch bind groups (Group 0: cell state, Group 1: signal data, Group 2: per-mode props)
     pub mode_switch_group0: wgpu::BindGroup,
     pub mode_switch_group1: wgpu::BindGroup,
+    pub mode_switch_group2: wgpu::BindGroup,
 
     // Boulder bind groups
     /// Boulder physics group 1: boulder_state, boulder_moss, boulder_moss_dir, boulder_eat_dir, boulder_count
@@ -439,6 +440,7 @@ pub struct GpuPhysicsPipelines {
     pub signal_propagate_adhesion_layout: wgpu::BindGroupLayout,
     pub mode_switch_layout0: wgpu::BindGroupLayout,
     pub mode_switch_layout1: wgpu::BindGroupLayout,
+    pub mode_switch_layout2: wgpu::BindGroupLayout,
 }
 
 impl GpuPhysicsPipelines {
@@ -943,32 +945,49 @@ impl GpuPhysicsPipelines {
         );
 
         // Mode switch bind group layouts and pipeline
+        let rw = |b: u32| wgpu::BindGroupLayoutEntry { binding: b, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None };
+        let ro = |b: u32| wgpu::BindGroupLayoutEntry { binding: b, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true  }, has_dynamic_offset: false, min_binding_size: None }, count: None };
+        let uni = |b: u32| wgpu::BindGroupLayoutEntry { binding: b, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None };
         let mode_switch_layout0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mode Switch Layout 0"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true  }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true  }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                // binding 4: mode_switch_time (read_write — shader writes current_time on switch)
-                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                // binding 5: physics_params uniform (for current_time)
-                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                rw(0),  // cell_count_buffer
+                ro(1),  // death_flags
+                rw(2),  // mode_indices
+                ro(3),  // mode_cell_types
+                rw(4),  // mode_switch_time
+                uni(5), // physics_params
+                rw(6),  // split_counts - reset to 0 on switch
+                rw(7),  // max_splits - updated to new mode's value
+                rw(8),  // split_intervals - updated to new mode's value
+                rw(9),  // split_nutrient_thresholds - updated to new mode's value
+                rw(10), // nutrient_gain_rates - updated to new mode's value
+                rw(11), // max_cell_sizes - updated to new mode's value
+                rw(12), // stiffnesses - updated to new mode's value
+                rw(13), // cell_types - updated to new mode's value
             ],
         });
         let mode_switch_layout1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mode Switch Layout 1"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                ro(0), // signal_flags
+                ro(1), // signal_settings_v3
+                ro(2), // signal_settings_v4
+            ],
+        });
+        let mode_switch_layout2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Mode Switch Layout 2"),
+            entries: &[
+                ro(0), // mode_properties_v0: [gain, max_size, stiffness, split_interval]
+                ro(1), // mode_properties_v1: [split_mass, nutrient_priority, swim_force, ...]
+                ro(2), // mode_properties_v2: [max_splits, split_ratio, ...]
             ],
         });
         let mode_switch = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/mode_switch.wgsl"),
             "main",
-            &[&mode_switch_layout0, &mode_switch_layout1],
+            &[&mode_switch_layout0, &mode_switch_layout1, &mode_switch_layout2],
             "Mode Switch",
         );
 
@@ -1194,6 +1213,7 @@ impl GpuPhysicsPipelines {
             signal_propagate_adhesion_layout,
             mode_switch_layout0,
             mode_switch_layout1,
+            mode_switch_layout2,
             boulder_physics,
             boulder_consume,
             boulder_physics_buffers_layout,
@@ -1819,6 +1839,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 3, resource: buffers.mode_cell_types.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: buffers.mode_switch_time.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: buffers.physics_params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: buffers.split_counts.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: buffers.max_splits.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: buffers.split_intervals.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: buffers.split_nutrient_thresholds.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: buffers.nutrient_gain_rates.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: buffers.max_cell_sizes.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 12, resource: buffers.stiffnesses.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 13, resource: buffers.cell_types.as_entire_binding() },
             ],
         });
         let mode_switch_group1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1828,6 +1856,15 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry { binding: 0, resource: adhesion_buffers.signal_flags.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: buffers.signal_settings_v3.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: buffers.signal_settings_v4.as_entire_binding() },
+            ],
+        });
+        let mode_switch_group2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Mode Switch Group 2"),
+            layout: &self.mode_switch_layout2,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffers.mode_properties_v0.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buffers.mode_properties_v1.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: buffers.mode_properties_v2.as_entire_binding() },
             ],
         });
 
@@ -1871,6 +1908,7 @@ impl GpuPhysicsPipelines {
             signal_propagate_adhesion,
             mode_switch_group0,
             mode_switch_group1,
+            mode_switch_group2,
             cell_adhesion_adhesion,
             cell_adhesion_spatial,
             cell_adhesion_mode,

@@ -425,6 +425,12 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
             atomicStore(&embryocyte_reserves[cell_idx], cur_reserve - min(burn, cur_reserve));
 
+            // Gametocytes never split. Release/merge is their only reproduction path.
+            if (cell_type == 13u) {
+                division_flags[cell_idx] = 0u;
+                return;
+            }
+
             // Timer-based division: fires when cell age >= split_interval and never-split
             // sentinel is not set. Uses the same split_interval field as normal cells.
             let birth_time = birth_times[cell_idx];

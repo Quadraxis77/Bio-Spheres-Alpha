@@ -240,6 +240,25 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
     },
 
     TutorialStepData {
+        title: "The Initial Mode",
+        body: "Each row in the Modes list has a small radio button on the left. \
+               This sets the Initial Mode — the mode the first cell is born into \
+               when the organism is spawned.\n\n\
+               Everything grows from that one seed cell. If M1 is initial, the \
+               organism starts as an M1 cell and divides according to M1's \
+               settings. Switch the radio to M2 and the seed is M2 instead — a \
+               completely different growth trajectory from the same genome.\n\n\
+               For most genomes you'll leave this on M1. It matters when you \
+               want a specific mode to act as the root — for example, a \
+               stem-cell mode that grows the body before handing off to \
+               specialised types.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::ModeRow(0),
+        target_pos: [0.0, 0.5],
+    },
+
+    TutorialStepData {
         title: "The Time Slider",
         body: "Drag the Time Slider to the right and watch the organism grow. \
                Drag it back to zero — everything rewinds. The same genome \

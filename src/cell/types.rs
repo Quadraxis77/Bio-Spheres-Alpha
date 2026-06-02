@@ -732,7 +732,8 @@ impl CellType {
             CellType::Gametocyte =>
                 "A reproductive gamete cell. When two Gametocytes from different \
                  organisms come into contact, their genomes are crossed over and a \
-                 new hybrid offspring organism is spawned. Both Gametocytes then die.",
+                 new hybrid offspring organism is spawned. Gametocytes never split; \
+                 they only detach and merge. Both Gametocytes then die.",
 
             CellType::Cognocyte =>
                 "A signal-processing cell. Reads signals from two input channels, \
@@ -786,7 +787,7 @@ impl CellType {
             CellType::Phagocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
                 applies_swim_force: 0,
-                uses_texture_atlas: 1,  // Phagocytes use texture atlas like Test cells
+                uses_texture_atlas: 0,
                 has_procedural_tail: 0,
                 gains_mass_from_light: 0,
                 is_storage_cell: 0,
@@ -822,7 +823,7 @@ impl CellType {
             CellType::Buoyocyte => GpuCellTypeBehaviorFlags {
                 ignores_split_interval: 0,
                 applies_swim_force: 0,
-                uses_texture_atlas: 1,
+                uses_texture_atlas: 0,
                 has_procedural_tail: 0,
                 gains_mass_from_light: 0,
                 is_storage_cell: 0,
@@ -1019,10 +1020,12 @@ impl CellType {
             CellType::Gametocyte => {
                 // Gametocytes behave like Embryocytes: nutrients go into reserve,
                 // release triggers control when they detach and seek a partner.
+                // They never split: reproduction happens only through gamete merge.
                 mode.nutrient_priority = 2.0;
                 mode.max_cell_size = 2.0;
                 mode.split_mass = 99.0; // Very high — Gametocytes never split on their own
                 mode.split_interval = 60.0; // Sentinel: never self-divide when free
+                mode.max_splits = 0; // Tooltip-visible rule: no Gametocyte division.
                 mode.gametocyte_merge_range = 0.5;
                 // Release trigger: detach after accumulating enough reserve
                 mode.embryocyte_use_timer = false;

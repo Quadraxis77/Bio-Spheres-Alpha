@@ -393,17 +393,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mode_index = mode_indices[idx];
     let cell_id = cell_ids[idx];
     
-    // Derive cell_type from cell's stored type (preserves original type)
-    // This prevents existing cells from changing when preview mode changes
+    // Derive visual cell_type from the current mode. The per-cell cell_types
+    // buffer is a physics cache and can lag behind mode edits or mode switches.
     var cell_type = 0u;
-    if (idx < arrayLength(&cell_types)) {
-        cell_type = cell_types[idx];
-    }
-    
-    // Fallback: if cell_types buffer is empty or invalid, use mode_cell_types
-    // This can happen for newly inserted cells before cell_types is updated
-    if (cell_type == 0u && mode_index < arrayLength(&mode_cell_types)) {
+    if (mode_index < arrayLength(&mode_cell_types)) {
         cell_type = mode_cell_types[mode_index];
+    } else if (idx < arrayLength(&cell_types)) {
+        cell_type = cell_types[idx];
     }
     
     // Increment total processed counter

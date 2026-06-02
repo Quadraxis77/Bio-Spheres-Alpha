@@ -952,6 +952,7 @@ pub fn execute_signal_system(
         compute_pass.set_pipeline(&pipelines.mode_switch);
         compute_pass.set_bind_group(0, &cached_bind_groups.mode_switch_group0, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.mode_switch_group1, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.mode_switch_group2, &[]);
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
 }

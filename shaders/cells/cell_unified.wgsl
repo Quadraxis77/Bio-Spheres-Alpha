@@ -1056,7 +1056,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Start with a uniform base color (no separate back-wall lighting to avoid disc artifact)
     var interior_result = base_color * 0.75;
 
-    if (lod >= 1u) {
+    {
         // Get cell index from instance data (assuming it's packed in w component)
         let cell_index = u32(in.instance_index);
         let internals = get_internals(cell_type, interior_pos, r, cell_index, in.type_data_0);
@@ -1074,7 +1074,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Glueocyte (type 6): Domain-warped Voronoi slime (LOD >= 1)
     // type_data_0: x=voro_scale, y=border_width, z=meander, w=border_dark
     // ====================================================================
-    if (cell_type == 6u && lod >= 1u) {
+    if (cell_type == 6u) {
         let surf_local = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
         let cell_seed = fract(f32(in.instance_index) * 0.6180339887); // golden ratio hash for per-cell variation
@@ -1098,7 +1098,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // The eye is centered on the cell's forward axis (local +Z).
     // type_data_0: x=pupil_size, y=iris_freq, z=iris_texture, w=pupil_dark
     // ====================================================================
-    if (cell_type == 7u && lod >= 1u) {
+    if (cell_type == 7u) {
         // Surface direction in cell-local space (rotation-aware, on the front shell)
         let surf_local = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
@@ -1173,7 +1173,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Lines run like meridians on a globe — converging at local +Z (forward)
     // and local -Z (rear). type_data_0: x=line_freq, y=bulge_str, z=warp, w=unused
     // ====================================================================
-    if (cell_type == 9u && lod >= 1u) {
+    if (cell_type == 9u) {
         let surf_local = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
 
@@ -1203,7 +1203,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Rings scroll along local Z axis proportional to effective_speed.
     // Static when effective_speed is 0.
     // ====================================================================
-    if (cell_type == 8u && lod >= 1u) {
+    if (cell_type == 8u) {
         // Get local-space direction on sphere surface (rotation-aware)
         let cilia_local_dir = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
@@ -1239,7 +1239,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // ====================================================================
     // Photocyte (type 3): Inner hex-patterned nucleus sphere (front + back)
     // ====================================================================
-    if (cell_type == 3u && lod >= 1u) {
+    if (cell_type == 3u) {
         let nucleus_radius = in.type_data_1.x;
         let inner_r2 = nucleus_radius * nucleus_radius;
         let hit_r2 = r2;
@@ -1316,7 +1316,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var perturbed_normal = world_normal_front;
 
     // Ciliocyte (type 8): Perturb membrane normal to create rolling ridge highlights
-    if (cell_type == 8u && lod >= 1u) {
+    if (cell_type == 8u) {
         let cilia_norm_local_dir = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
 
@@ -1335,7 +1335,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
 
     // Myocyte (type 9): Normal perturbation for both fiber bundles and sarcomere ridges
-    if (cell_type == 9u && lod >= 1u) {
+    if (cell_type == 9u) {
         let myo_surf   = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
         let line_freq  = clamp(in.type_data_0.x, 4.0, 20.0);
@@ -1367,7 +1367,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // ====================================================================
     // Cognocyte (type 14): Angular circuit-board surface facets (LOD >= 1)
     // ====================================================================
-    if (cell_type == 14u && lod >= 1u) {
+    if (cell_type == 14u) {
         let surf_local = normalize(quat_rotate_inverse(in.rotation,
             in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
 
@@ -1602,13 +1602,15 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     var output_color: vec3<f32>;
     if (debug_colors > 0.5 && highlight_flag < 0.5) {
+        var debug_color: vec3<f32>;
         switch (lod) {
-            case 0u: { output_color = vec3<f32>(1.0, 0.2, 0.2); }
-            case 1u: { output_color = vec3<f32>(0.2, 1.0, 0.2); }
-            case 2u: { output_color = vec3<f32>(0.2, 0.2, 1.0); }
-            case 3u: { output_color = vec3<f32>(1.0, 1.0, 0.2); }
-            default: { output_color = vec3<f32>(1.0, 0.2, 1.0); }
+            case 0u: { debug_color = vec3<f32>(1.0, 0.2, 0.2); }
+            case 1u: { debug_color = vec3<f32>(0.2, 1.0, 0.2); }
+            case 2u: { debug_color = vec3<f32>(0.2, 0.2, 1.0); }
+            case 3u: { debug_color = vec3<f32>(1.0, 1.0, 0.2); }
+            default: { debug_color = vec3<f32>(1.0, 0.2, 1.0); }
         }
+        output_color = mix(final_color, debug_color, 0.35);
     } else {
         output_color = final_color;
     }

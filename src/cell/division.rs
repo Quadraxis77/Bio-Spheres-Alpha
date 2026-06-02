@@ -110,6 +110,12 @@ pub fn division_step(
                 true
             };
             
+            // Gametocytes never split. They detach by release triggers and reproduce
+            // only by merging with a compatible Gametocyte.
+            if mode.map(|m| m.cell_type == 13).unwrap_or(false) {
+                continue;
+            }
+
             // Embryocytes (cell_type == 10) use a timer-based split condition instead of
             // nutrients. They divide only when they have NO active connections AND their
             // age has reached split_interval. This models the embryocyte "hatching" when
