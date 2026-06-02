@@ -10,8 +10,8 @@ use sysinfo::{Pid, System};
 const FRAME_TIME_SAMPLES: usize = 120;
 
 /// How often to refresh system info (in seconds).
-/// Set to 5 seconds to reduce CPU overhead from sysinfo calls.
-const SYSTEM_REFRESH_INTERVAL: f32 = 5.0;
+/// Keep this off the hot path: sysinfo refreshes can perturb frame pacing.
+const SYSTEM_REFRESH_INTERVAL: f32 = 300.0;
 
 /// Performance spike detection configuration.
 const SPIKE_THRESHOLD_MULTIPLIER: f32 = 2.5; // Spike if frame time > 2.5x average

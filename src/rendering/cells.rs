@@ -922,7 +922,7 @@ impl CellRenderer {
         queue: &wgpu::Queue,
         view: &wgpu::TextureView,
         instance_builder: &InstanceBuilder,
-        _visible_count: u32, // Deprecated: use indirect buffer instead
+        visible_count: u32,
         camera_pos: Vec3,
         camera_rotation: Quat,
         current_time: f32,
@@ -932,6 +932,10 @@ impl CellRenderer {
         lod_threshold_high: f32,
         outline_width: f32,
     ) {
+        if visible_count == 0 {
+            return;
+        }
+
         // Update uniforms with LOD settings from UI
         self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
         self.update_lighting(queue, outline_width);

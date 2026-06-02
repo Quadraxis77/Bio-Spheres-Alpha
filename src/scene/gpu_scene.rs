@@ -8,7 +8,7 @@ use crate::rendering::{CaveSystemRenderer, CellRenderer, CullingMode, DeathParti
 use crate::scene::Scene;
 use crate::simulation::{PhysicsConfig};
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
-use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem, BoulderSystem, GametocyteMergeSystem, GameteMergeEvent};
+use crate::simulation::gpu_physics::{execute_gpu_physics_step, execute_gpu_mechanics_step, execute_lifecycle_pipeline, execute_signal_system, CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem, AdhesionBuffers, GpuCellInspector, GpuCellInsertion, GpuToolOperations, AsyncReadbackManager, GenomeBufferManager, LightFieldSystem, PhagocyteConsumptionSystem, DevorocyteConsumptionSystem, MossSystem, BoulderSystem, GametocyteMergeSystem, GameteMergeEvent, PhysicsFeatureFlags};
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
@@ -94,6 +94,18 @@ pub struct GpuScene {
     pub(super) has_oculocytes: bool,
     /// Whether any genome has a glueocyte mode (for adhesion-system gating)
     pub(super) has_glueocytes: bool,
+    /// Whether any genome has a phagocyte mode (for nutrient consumption gating)
+    pub(super) has_phagocytes: bool,
+    /// Whether any genome has a photocyte mode (for light-field/photocyte gating)
+    pub(super) has_photocytes: bool,
+    /// Whether any genome has a devorocyte mode (for devorocyte consumption gating)
+    pub(super) has_devorocytes: bool,
+    /// Whether any genome has a gametocyte mode (for merge detection gating)
+    pub(super) has_gametocytes: bool,
+    /// Whether any genome has a mode that can create or depend on adhesions.
+    pub(super) has_adhesion_work: bool,
+    /// Per-cell physics feature flags used to skip irrelevant compute passes.
+    pub(super) physics_features: PhysicsFeatureFlags,
     /// Maximum signal hops across all oculocyte modes in all genomes (for signal propagation dispatch count)
     pub(super) max_signal_hops: u32,
     /// Genome buffer manager for per-genome GPU resources
@@ -614,6 +626,12 @@ impl GpuScene {
             genomes: Vec::new(),
             has_oculocytes: false,
             has_glueocytes: false,
+            has_phagocytes: false,
+            has_photocytes: false,
+            has_devorocytes: false,
+            has_gametocytes: false,
+            has_adhesion_work: false,
+            physics_features: PhysicsFeatureFlags::default(),
             max_signal_hops: 0,
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
@@ -816,6 +834,12 @@ impl GpuScene {
         self.parent_make_adhesion_flags.clear();
         self.has_oculocytes = false;
         self.has_glueocytes = false;
+        self.has_phagocytes = false;
+        self.has_photocytes = false;
+        self.has_devorocytes = false;
+        self.has_gametocytes = false;
+        self.has_adhesion_work = false;
+        self.physics_features = PhysicsFeatureFlags::default();
         self.max_signal_hops = 0;
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately
@@ -1413,6 +1437,10 @@ impl GpuScene {
         self.instance_builder.read_culling_stats_blocking(device)
     }
 
+    fn type_mutations_enabled(&self) -> bool {
+        self.radiation_level > 0.0 && !self.subtle_mutations
+    }
+
     /// Run physics step using GPU compute shaders with zero CPU involvement.
     fn run_physics(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, delta_time: f32, world_diameter: f32) {
         // Note: No CPU-side early-out on current_cell_count here.
@@ -1425,30 +1453,48 @@ impl GpuScene {
         // sim speed. At Nx speed the physics loop runs N steps per frame; phagocytes
         // consume voxel nutrients each step via atomic CAS (1->2), so populate must
         // also run each step to reset consumed voxels back to available.
-        if let Some(ref simulator) = self.fluid_simulator {
-            simulator.populate_nutrients(
-                device, queue, encoder,
-                self.nutrient_density, delta_time,
-                self.nutrient_epoch_duration,
-                self.nutrient_epoch_spacing,
-                self.nutrient_spawn_end,
-                self.nutrient_despawn_start,
-            );
+        let type_mutations_enabled = self.type_mutations_enabled();
+        let has_phagocytes = self.has_phagocytes || type_mutations_enabled;
+        let has_photocytes = self.has_photocytes || type_mutations_enabled;
+        let has_devorocytes = self.has_devorocytes || type_mutations_enabled;
+        let has_gametocytes = self.has_gametocytes || type_mutations_enabled;
+
+        if has_phagocytes || self.show_nutrient_particles {
+            if let Some(ref simulator) = self.fluid_simulator {
+                simulator.populate_nutrients(
+                    device, queue, encoder,
+                    self.nutrient_density, delta_time,
+                    self.nutrient_epoch_duration,
+                    self.nutrient_epoch_spacing,
+                    self.nutrient_spawn_end,
+                    self.nutrient_despawn_start,
+                );
+            }
         }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
-        self.run_phagocyte_consumption(device, encoder, queue);
+        if has_phagocytes {
+            self.run_phagocyte_consumption(device, encoder, queue);
+        }
         // Run devorocyte consumption - steals nutrients from and kills foreign cells
         // Must run AFTER the spatial grid is built (which happens inside execute_gpu_physics_step)
         // but BEFORE nutrient_transport so stolen nutrients are visible this frame.
         // We run it here (before the main physics step) using the grid from the previous frame,
         // which is a one-frame lag but avoids a second grid build pass.
-        self.run_devorocyte_consumption(device, encoder);
+        if has_devorocytes {
+            self.run_devorocyte_consumption(device, encoder);
+        }
         // Run gametocyte merge detection - detects contact between gametes from different organisms
-        self.run_gametocyte_merge(device, encoder, queue);
+        if has_gametocytes {
+            self.run_gametocyte_merge(device, encoder, queue);
+        }
         // Run moss consumption (phagocytes eating moss) alongside nutrient consumption
-        self.run_moss_consumption(device, encoder, queue);
+        if has_phagocytes {
+            self.run_moss_consumption(device, encoder, queue);
+        }
         // Run photocyte light consumption each physics step (reads pre-computed light field)
-        self.run_photocyte_light_consumption(device, encoder, queue);
+        if has_photocytes {
+            self.run_photocyte_light_consumption(device, encoder, queue);
+        }
 
         // Update boulder system: spawn new boulders, poll dead readback, update instance buffer.
         // Must run BEFORE execute_gpu_physics_step so active_count() is current and the
@@ -1487,6 +1533,19 @@ impl GpuScene {
 
         // Cell count is read from GPU buffer by shaders
         // Uses cached bind groups (no per-frame allocation!)
+        let physics_features = if type_mutations_enabled {
+            PhysicsFeatureFlags {
+                has_adhesion_work: true,
+                has_myocytes: true,
+                has_flagellocytes: true,
+                has_buoyocytes: true,
+                has_ciliocytes: true,
+                has_glueocytes: true,
+            }
+        } else {
+            self.physics_features
+        };
+
         execute_gpu_physics_step(
             device,
             encoder,
@@ -1509,7 +1568,7 @@ impl GpuScene {
             self.solo_metabolism_multiplier,
             self.boulder_system.as_ref().map(|bs| bs.active_count()).unwrap_or(0),
             self.boulder_system.as_ref().map(|bs| &bs.buffers.boulder_force_accum),
-            self.has_glueocytes,
+            physics_features,
         );
         
         // Increment frame counter for time-based shader logic
@@ -1519,6 +1578,7 @@ impl GpuScene {
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
         // Cell count is updated on GPU by division shader
+        let has_lifecycle_adhesion_work = self.has_adhesion_work || self.type_mutations_enabled();
         execute_lifecycle_pipeline(
             device,
             encoder,
@@ -1531,6 +1591,7 @@ impl GpuScene {
             // Use max(1) so lifecycle runs on the first cell even before the async
             // readback has reported total_cell_slots > 0 (lags 1-3 frames).
             self.total_cell_slots.max(1),
+            has_lifecycle_adhesion_work,
         );
 
         // Mutation pass: collect candidates from division results, then apply mutations.
@@ -1578,7 +1639,7 @@ impl GpuScene {
             &self.adhesion_buffers,
             self.total_cell_slots,
             self.constraint_iterations,
-            self.has_glueocytes,
+            self.physics_features,
         );
         
         // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
@@ -1723,7 +1784,7 @@ impl GpuScene {
         // is not shown. The ray-march dispatches 32,768 workgroups (128^3/64) every frame;
         // with no photocytes the result is a uniform dark field, so the work is wasted.
         // Volumetric fog reads the light field, so we must still run it when fog is on.
-        if self.current_cell_count == 0 && !self.show_volumetric_fog {
+        if !self.has_photocytes && !self.type_mutations_enabled() && !self.show_volumetric_fog {
             return;
         }
 
@@ -2022,13 +2083,56 @@ impl GpuScene {
         use crate::cell::types::CellType;
         let oculocyte_type = CellType::Oculocyte as u32 as i32;
         let glueocyte_type = CellType::Glueocyte as u32 as i32;
+        let flagellocyte_type = CellType::Flagellocyte as u32 as i32;
+        let phagocyte_type = CellType::Phagocyte as u32 as i32;
+        let photocyte_type = CellType::Photocyte as u32 as i32;
+        let buoyocyte_type = CellType::Buoyocyte as u32 as i32;
+        let ciliocyte_type = CellType::Ciliocyte as u32 as i32;
+        let myocyte_type = CellType::Myocyte as u32 as i32;
+        let devorocyte_type = CellType::Devorocyte as u32 as i32;
+        let gametocyte_type = CellType::Gametocyte as u32 as i32;
         self.has_oculocytes = false;
         self.has_glueocytes = false;
+        self.has_phagocytes = false;
+        self.has_photocytes = false;
+        self.has_devorocytes = false;
+        self.has_gametocytes = false;
+        self.has_adhesion_work = self.adhesion_buffers.adhesion_count() > 0;
+        self.physics_features = PhysicsFeatureFlags::default();
         self.max_signal_hops = 0;
         for g in &self.genomes {
             for m in &g.modes {
+                if m.parent_make_adhesion || m.child_a.keep_adhesion || m.child_b.keep_adhesion {
+                    self.has_adhesion_work = true;
+                }
+                if m.cell_type == flagellocyte_type {
+                    self.physics_features.has_flagellocytes = true;
+                }
+                if m.cell_type == phagocyte_type {
+                    self.has_phagocytes = true;
+                }
+                if m.cell_type == photocyte_type {
+                    self.has_photocytes = true;
+                }
+                if m.cell_type == buoyocyte_type {
+                    self.physics_features.has_buoyocytes = true;
+                }
+                if m.cell_type == ciliocyte_type {
+                    self.physics_features.has_ciliocytes = true;
+                }
+                if m.cell_type == myocyte_type {
+                    self.physics_features.has_myocytes = true;
+                    self.has_adhesion_work = true;
+                }
+                if m.cell_type == devorocyte_type {
+                    self.has_devorocytes = true;
+                }
+                if m.cell_type == gametocyte_type {
+                    self.has_gametocytes = true;
+                }
                 if m.cell_type == glueocyte_type {
                     self.has_glueocytes = true;
+                    self.has_adhesion_work = true;
                 }
                 if m.cell_type == oculocyte_type {
                     self.has_oculocytes = true;
@@ -2044,6 +2148,8 @@ impl GpuScene {
                 }
             }
         }
+        self.physics_features.has_adhesion_work = self.has_adhesion_work;
+        self.physics_features.has_glueocytes = self.has_glueocytes;
     }
     
     /// Incremental sync of a single genome's data to GPU buffers
@@ -4610,7 +4716,7 @@ impl GpuScene {
 
             if similarity < crate::genome::GAMETOCYTE_MIN_SIMILARITY {
                 log::debug!(
-                    "Gamete merge rejected: '{}' × '{}' similarity {:.2} < {:.2}",
+                    "Gamete merge rejected: '{}' x '{}' similarity {:.2} < {:.2}",
                     self.genomes[genome_a_id].name,
                     self.genomes[genome_b_id].name,
                     similarity,
@@ -4655,7 +4761,7 @@ impl GpuScene {
             };
 
             log::info!(
-                "Gamete merge: '{}' × '{}' → '{}' cell_type={} (similarity {:.2}, reserve {})",
+                "Gamete merge: '{}' x '{}' -> '{}' cell_type={} (similarity {:.2}, reserve {})",
                 self.genomes[genome_a_id].name,
                 self.genomes[genome_b_id].name,
                 offspring_genome.name,
@@ -6306,21 +6412,23 @@ impl Scene for GpuScene {
         // With dynamic instance allocation, flagellocytes are scattered throughout the buffer.
         // We use the main indirect buffer (total visible count) - the shader filters by cell_type
         // and outputs degenerate triangles for non-flagellocytes.
-        self.tail_renderer.render_from_gpu_buffer(
-            device,
-            queue,
-            &mut encoder,
-            scene_target,
-            &self.renderer.depth_view,
-            self.instance_builder.get_instance_buffer(),
-            self.instance_builder.get_indirect_buffer(),  // Use total visible count, not per-type
-            self.camera.position(),
-            self.camera.rotation,
-            self.current_time,
-            self.renderer.width,
-            self.renderer.height,
-            self.instance_builder.capacity(),
-        );
+        if visible_count > 0 {
+            self.tail_renderer.render_from_gpu_buffer(
+                device,
+                queue,
+                &mut encoder,
+                scene_target,
+                &self.renderer.depth_view,
+                self.instance_builder.get_instance_buffer(),
+                self.instance_builder.get_indirect_buffer(),  // Use total visible count, not per-type
+                self.camera.position(),
+                self.camera.rotation,
+                self.current_time,
+                self.renderer.width,
+                self.renderer.height,
+                self.instance_builder.capacity(),
+            );
+        }
 
         // Update light field time for caustic animation
         if let Some(ref mut light_field) = self.light_field_system {
@@ -6707,7 +6815,8 @@ impl Scene for GpuScene {
         
         // Start async cell count readback (copy to readback buffer)
         // Only start if no readback is pending
-        let should_start_readback = !self.gpu_triple_buffers.is_cell_count_read_pending();
+        let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
+        let should_start_readback = self.readbacks_enabled && !cell_count_read_pending;
         if should_start_readback {
             self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
         }
@@ -6746,18 +6855,20 @@ impl Scene for GpuScene {
         }
         
         // Poll for cell count readback completion and update current_cell_count
-        if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
-            self.current_cell_count = live;
-            self.total_cell_slots = total;
-            
-            // CRITICAL FIX: Reset high water mark when all cells are dead.
-            // cell_count_buffer[0] is a high water mark that never decreases when cells die.
-            // This causes all GPU shaders to iterate through slots 0-N even when live count is 0,
-            // resulting in massive GPU work for no benefit. Resetting to 0 when live=0 ensures
-            // shaders early-exit immediately, eliminating the frame drop after mass starvation.
-            if live == 0 && total > 0 {
-                log::info!("All cells dead - resetting high water mark from {} to 0", total);
-                queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&[0u32, 0u32]));
+        if self.readbacks_enabled || cell_count_read_pending {
+            if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
+                self.current_cell_count = live;
+                self.total_cell_slots = total;
+                
+                // CRITICAL FIX: Reset high water mark when all cells are dead.
+                // cell_count_buffer[0] is a high water mark that never decreases when cells die.
+                // This causes all GPU shaders to iterate through slots 0-N even when live count is 0,
+                // resulting in massive GPU work for no benefit. Resetting to 0 when live=0 ensures
+                // shaders early-exit immediately, eliminating the frame drop after mass starvation.
+                if live == 0 && total > 0 {
+                    log::info!("All cells dead - resetting high water mark from {} to 0", total);
+                    queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&[0u32, 0u32]));
+                }
             }
         }
 
