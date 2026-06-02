@@ -53,6 +53,27 @@ pub fn run_self_replace() {
 ///
 /// Merges new default keys into existing user config files without touching
 /// values the user has already set.
+/// Writes bundled example genomes to the user's genomes directory if they are
+/// not already present.  Only runs if the file is missing — never overwrites
+/// user edits.
+pub fn seed_default_genomes() {
+    const BUNDLED: &[(&str, &[u8])] = &[
+        ("Triangular Prism.genome", include_bytes!("../genomes/Triangular Prism.genome")),
+        ("Octo-Tube.genome",        include_bytes!("../genomes/Octo-Tube.genome")),
+        ("Octopus.genome",          include_bytes!("../genomes/Octopus.genome")),
+    ];
+
+    let dir = crate::app_dirs::genomes_dir();
+    for (filename, bytes) in BUNDLED {
+        let path = dir.join(filename);
+        if !path.exists() {
+            if let Err(e) = std::fs::write(&path, bytes) {
+                log::warn!("Failed to seed genome {}: {}", filename, e);
+            }
+        }
+    }
+}
+
 pub fn migrate_config_files() {
     const EMBEDDED_DEFAULTS: &[(&str, &str)] = &[
         ("cave_settings.ron",         include_str!("../cave_settings.ron")),

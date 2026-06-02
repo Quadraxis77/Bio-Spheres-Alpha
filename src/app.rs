@@ -2984,6 +2984,7 @@ pub fn run() {
     // Migrate config files: write defaults for first-time users, and add any
     // new keys introduced in this version without touching existing user values.
     crate::updater::migrate_config_files();
+    crate::updater::seed_default_genomes();
 
     let event_loop = EventLoop::new().unwrap();
     let mut state = AppState { app: None };
