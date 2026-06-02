@@ -16,6 +16,7 @@ pub struct GpuAdhesionLineRenderer {
     data_bind_group_layout: wgpu::BindGroupLayout,
     camera_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
     max_adhesions: u32,
     pub width: u32,
     pub height: u32,
