@@ -1125,6 +1125,7 @@ impl GpuPhysicsPipelines {
                     rw(11), // max_cell_sizes - updated to new mode's value
                     rw(12), // stiffnesses - updated to new mode's value
                     rw(13), // cell_types - updated to new mode's value
+                    rw(14), // birth_times - reset to current_time so new mode's split_interval starts fresh
                 ],
             });
         let mode_switch_layout1 =
@@ -2260,6 +2261,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 13,
                     resource: buffers.cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: buffers.birth_times.as_entire_binding(),
                 },
             ],
         });

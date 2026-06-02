@@ -418,8 +418,6 @@ impl CameraController {
                             self.target_rotation = proposed_rotation;
                         }
                     }
-                    let forward = self.target_rotation * Vec3::NEG_Z;
-                    self.target_rotation = Self::rotation_without_roll(forward, self.up_direction);
                 }
             } else {
                 // FreeFly mode: free rotation

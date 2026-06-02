@@ -35,6 +35,11 @@ var<storage, read_write> mode_switch_time: array<f32>;
 @group(0) @binding(5)
 var<uniform> params: PhysicsParamsMin;
 
+// Birth time reset: when a cell mode-switches, its age is reset so the new mode's
+// split_interval is counted from the moment of the switch, not from original birth.
+@group(0) @binding(14)
+var<storage, read_write> birth_times: array<f32>;
+
 @group(0) @binding(6)
 var<storage, read_write> split_counts: array<u32>;
 
@@ -144,8 +149,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    // Compare against threshold
-    let above = signal_value >= switch_threshold;
+    // Compare against threshold.
+    // Non-inverted: require signal_value > 0 in addition to >= threshold.
+    // This prevents threshold = 0 from firing unconditionally with no signal present
+    // (0 >= 0 would always be true).  Any threshold ≥ 1 is unaffected since
+    // signal_value >= 1 already implies signal_value > 0.
+    let has_signal = signal_value > 0.0;
+    let above = has_signal && (signal_value >= switch_threshold);
     let should_switch = select(above, !above, switch_invert > 0.5);
 
     if (!should_switch) { return; }
@@ -154,8 +164,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     mode_indices[cell_idx] = target_mode_idx;
     mode_switch_time[cell_idx] = params.current_time;
 
-    // Reset split count so the new mode starts fresh.
+    // Reset split count and birth time so the new mode's division timer and
+    // max_splits counter both start fresh from the moment of the switch.
     split_counts[cell_idx] = 0u;
+    birth_times[cell_idx]  = params.current_time;
 
     // Copy new mode's cached settings into per-cell buffers.
     // Without this the cell keeps old mode settings until it divides.

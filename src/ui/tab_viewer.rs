@@ -5714,9 +5714,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 0.0..=2047.0).show_value(false))
-                            .on_hover_text("Signal strength threshold for triggering the mode switch");
-                        ui.add(egui::DragValue::new(&mut mode.mode_switch_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                        ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 1.0..=2047.0).show_value(false))
+                            .on_hover_text("Signal strength threshold for triggering the mode switch. Minimum 1 — a threshold of 0 would fire unconditionally with no signal present");
+                        ui.add(egui::DragValue::new(&mut mode.mode_switch_signal_threshold).speed(1.0).range(1.0..=2047.0));
                     });
                     ui.checkbox(&mut mode.mode_switch_invert, "Invert (switch below threshold)")
                         .on_hover_text("Absence gating: when checked, the cell switches mode when the signal is BELOW the threshold. Use for starvation responses or dormancy when a support signal disappears");

@@ -2519,6 +2519,13 @@ impl GpuScene {
                         .max_signal_hops
                         .max(m.regulation_emit_hops.clamp(1, 20) as u32);
                 }
+                // Mode-switch listeners (channels 8-15) also need the signal system to run
+                // so that signal_clear + mode_switch dispatch execute each frame.
+                // max_signal_hops is not updated here — the emitter (regulation_emit or
+                // oculocyte) that sends the signal governs propagation distance.
+                if m.mode_switch_signal_channel >= 8 {
+                    self.has_oculocytes = true;
+                }
             }
         }
         self.physics_features.has_glueocytes = self.has_glueocytes;
