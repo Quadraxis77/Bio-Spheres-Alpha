@@ -367,10 +367,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
+    // Fast-exit for isolated cells: first slot is -1 when the cell has no bonds.
+    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    if (cell_adhesion_indices[adhesion_base] < 0) {
+        return;
+    }
+
     var total_force = vec3<f32>(0.0);
     var total_torque = vec3<f32>(0.0);
-
-    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     let total_adhesion_count = adhesion_counts[0];
 
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
@@ -449,21 +453,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             max(params.current_time - connection.birth_time, 0.0)
         );
 
-        total_force += result[0];
+        // Cap per-bond force before accumulating — matches adhesion_physics.wgsl
+        let bond_force = result[0];
+        let max_bond_force = 500.0;
+        let bond_force_sq = dot(bond_force, bond_force);
+        if (bond_force_sq > max_bond_force * max_bond_force) {
+            total_force += bond_force * (max_bond_force / sqrt(bond_force_sq));
+        } else {
+            total_force += bond_force;
+        }
         total_torque += result[1];
     }
 
-    // Clamp forces and torques
-    let max_force = 50000.0;
-    let max_torque = 5000.0;
-    let force_mag = length(total_force);
-    let torque_mag = length(total_torque);
+    // Clamp total per-cell forces and torques — matches adhesion_physics.wgsl
+    let max_force = 5000.0;
+    let max_torque = 1000.0;
+    let force_sq = dot(total_force, total_force);
+    let torque_sq = dot(total_torque, total_torque);
 
-    if (force_mag > max_force) {
-        total_force = total_force * (max_force / force_mag);
+    if (force_sq > max_force * max_force) {
+        total_force = total_force * (max_force / sqrt(force_sq));
     }
-    if (torque_mag > max_torque) {
-        total_torque = total_torque * (max_torque / torque_mag);
+    if (torque_sq > max_torque * max_torque) {
+        total_torque = total_torque * (max_torque / sqrt(torque_sq));
     }
 
     // Integrate directly — each iteration uses full dt for maximum stiffness
@@ -473,10 +485,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var new_vel = my_vel + acceleration * dt;
 
-    // Clamp velocity
+    // Clamp velocity — matches position_update.wgsl
     let speed = length(new_vel);
-    if (speed > 500.0) {
-        new_vel = (new_vel / speed) * 500.0;
+    if (speed > 150.0) {
+        new_vel = (new_vel / speed) * 150.0;
     }
 
     let new_pos = my_pos + (new_vel - my_vel) * dt;

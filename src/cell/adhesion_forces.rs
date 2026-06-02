@@ -9,6 +9,11 @@ const ANGLE_EPSILON: f32 = 0.001;
 const QUATERNION_EPSILON: f32 = 0.0001;
 const TWIST_CLAMP_LIMIT: f32 = 1.57; // ±90 degrees
 
+/// Per-bond force cap. Without this, large blobs accumulate phantom net forces
+/// because spring errors across many bonds don't cancel perfectly — the residual
+/// is enough to produce locomotion. Matches the GPU adhesion_physics.wgsl cap.
+const MAX_BOND_FORCE: f32 = 500.0;
+
 /// Compute adhesion forces for all active connections.
 /// Returns a list of connection indices whose spring force exceeded break_force
 /// (only when `can_break` is true). Caller is responsible for removing them.
@@ -87,9 +92,15 @@ pub fn compute_adhesion_forces(
             continue;
         }
 
-        // Apply forces
-        forces[cell_a_idx] += force_a;
-        forces[cell_b_idx] += force_b;
+        // Cap per-bond force before accumulating to prevent phantom locomotion
+        // in large blobs where spring errors across many bonds don't cancel.
+        let fa_mag = force_a.length();
+        let fb_mag = force_b.length();
+        let capped_a = if fa_mag > MAX_BOND_FORCE { force_a * (MAX_BOND_FORCE / fa_mag) } else { force_a };
+        let capped_b = if fb_mag > MAX_BOND_FORCE { force_b * (MAX_BOND_FORCE / fb_mag) } else { force_b };
+
+        forces[cell_a_idx] += capped_a;
+        forces[cell_b_idx] += capped_b;
         torques[cell_a_idx] += torque_a;
         torques[cell_b_idx] += torque_b;
     }
@@ -178,9 +189,15 @@ pub fn compute_adhesion_forces_parallel(
                 return vec![(Some(i), 0, Vec3::ZERO, Vec3::ZERO)];
             }
             
+            // Cap per-bond force before accumulating
+            let fa_mag = force_a.length();
+            let fb_mag = force_b.length();
+            let capped_a = if fa_mag > MAX_BOND_FORCE { force_a * (MAX_BOND_FORCE / fa_mag) } else { force_a };
+            let capped_b = if fb_mag > MAX_BOND_FORCE { force_b * (MAX_BOND_FORCE / fb_mag) } else { force_b };
+
             vec![
-                (None, cell_a_idx, force_a, torque_a),
-                (None, cell_b_idx, force_b, torque_b),
+                (None, cell_a_idx, capped_a, torque_a),
+                (None, cell_b_idx, capped_b, torque_b),
             ]
         })
         .collect();
@@ -768,13 +785,18 @@ pub fn compute_adhesion_forces_batched(
                 continue;
             }
 
-            // Apply forces
-            forces[cell_a_idx] += force_a;
-            forces[cell_b_idx] += force_b;
+            // Cap per-bond force before accumulating
+            let fa_mag = force_a.length();
+            let fb_mag = force_b.length();
+            let capped_a = if fa_mag > MAX_BOND_FORCE { force_a * (MAX_BOND_FORCE / fa_mag) } else { force_a };
+            let capped_b = if fb_mag > MAX_BOND_FORCE { force_b * (MAX_BOND_FORCE / fb_mag) } else { force_b };
+
+            forces[cell_a_idx] += capped_a;
+            forces[cell_b_idx] += capped_b;
             torques[cell_a_idx] += torque_a;
             torques[cell_b_idx] += torque_b;
         }
-        
+
         batch_start = batch_end;
     }
 }

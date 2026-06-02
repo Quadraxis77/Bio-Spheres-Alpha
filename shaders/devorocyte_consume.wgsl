@@ -175,6 +175,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Query spatial grid — 27-cell neighbourhood
     let my_grid_idx = cell_grid_indices[cell_idx];
+    // Skip overflow cells — sentinel 0xFFFFFFFF means this cell wasn't inserted
+    // into the spatial grid. Computing coordinates from the sentinel produces garbage.
+    if (my_grid_idx == 0xFFFFFFFFu) { return; }
     let res = params.grid_resolution;
     let gz_base = i32(my_grid_idx) / (res * res);
     let gy_base = (i32(my_grid_idx) - gz_base * res * res) / res;

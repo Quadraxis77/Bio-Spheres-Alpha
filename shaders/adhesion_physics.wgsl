@@ -430,12 +430,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let my_ang_vel = angular_velocities_in[cell_idx].xyz;
     let my_radius = calculate_radius_from_mass(my_mass);
     
+    // Fast-exit for isolated cells: first slot is -1 when the cell has no bonds.
+    // Skips the entire 20-slot loop for cells with no adhesion connections.
+    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    if (cell_adhesion_indices[adhesion_base] < 0) {
+        return;
+    }
+
     // Accumulate forces and torques from all adhesions
     var total_force = vec3<f32>(0.0);
     var total_torque = vec3<f32>(0.0);
-    
-    // Iterate through this cell's adhesion indices (up to 10)
-    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
     let total_adhesion_count = adhesion_counts[0];
     
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
@@ -558,21 +562,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         }
 
-        total_force += result[0];
+        // Cap each bond's force contribution before accumulating.
+        // Use dot() for the threshold check to avoid sqrt on the common case
+        // where the bond is within limits. Sqrt only runs when cap is exceeded.
+        let bond_force = result[0];
+        let max_bond_force = 500.0;
+        let bond_force_sq = dot(bond_force, bond_force);
+        if (bond_force_sq > max_bond_force * max_bond_force) {
+            total_force += bond_force * (max_bond_force / sqrt(bond_force_sq));
+        } else {
+            total_force += bond_force;
+        }
         total_torque += result[1];
     }
-    
-    // Clamp forces and torques to prevent instability
-    let max_force = 50000.0;
-    let max_torque = 5000.0;
-    let force_mag = length(total_force);
-    let torque_mag = length(total_torque);
-    
-    if (force_mag > max_force) {
-        total_force = total_force * (max_force / force_mag);
+
+    // Clamp total per-cell force and torque.
+    // 5000 is still large enough for strong springs but prevents runaway
+    // accumulation when many capped bonds all point the same direction.
+    let max_force = 5000.0;
+    let max_torque = 1000.0;
+    let force_sq = dot(total_force, total_force);
+    let torque_sq = dot(total_torque, total_torque);
+
+    if (force_sq > max_force * max_force) {
+        total_force = total_force * (max_force / sqrt(force_sq));
     }
-    if (torque_mag > max_torque) {
-        total_torque = total_torque * (max_torque / torque_mag);
+    if (torque_sq > max_torque * max_torque) {
+        total_torque = total_torque * (max_torque / sqrt(torque_sq));
     }
     
     // Accumulate forces to atomic force buffers (matching collision detection pattern)

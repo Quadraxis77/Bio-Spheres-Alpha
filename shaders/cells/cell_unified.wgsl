@@ -1616,3 +1616,34 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     out.color = vec4<f32>(output_color, in.color.a * edge_alpha);
     return out;
 }
+
+// ── Depth-only prepass entry point ───────────────────────────────────────────
+// Runs the minimum work needed to write correct sphere depth:
+//   - discard pixels outside the circle
+//   - project the sphere front face to clip space and write its depth
+// No lighting, no internals, no color output.
+// The color pass that follows uses LessEqual + no depth write to eliminate
+// all overdraw — every hidden fragment is rejected before its shader runs.
+struct DepthOnlyOutput {
+    @builtin(frag_depth) depth: f32,
+}
+
+@fragment
+fn fs_depth(in: VertexOutput) -> DepthOnlyOutput {
+    let local_pos = in.uv * 2.0 - 1.0;
+    let r2 = dot(local_pos, local_pos);
+
+    let cell_type = u32(round(in.cell_type_and_debug.x));
+    let is_devorocyte = (cell_type == 11u);
+    if (r2 > 1.0 && !is_devorocyte) {
+        discard;
+    }
+
+    let z_front = sqrt(max(1.0 - r2, 0.0));
+    let sphere_world_pos = in.center + in.to_camera * (z_front * in.radius);
+    let sphere_clip = camera.view_proj * vec4<f32>(sphere_world_pos, 1.0);
+
+    var out: DepthOnlyOutput;
+    out.depth = sphere_clip.z / sphere_clip.w;
+    return out;
+}

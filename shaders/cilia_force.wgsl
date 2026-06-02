@@ -454,6 +454,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let my_org = organism_labels[cell_idx];
     let push_bonded = v5.y >= 0.5; // cilia_push_bonded
     let my_grid_idx = cell_grid_indices[cell_idx];
+
+    // Skip overflow cells — same reason as collision_detection.wgsl.
+    // An overflow ciliocyte querying the grid would push neighbours one-sidedly.
+    if (my_grid_idx == 0xFFFFFFFFu) {
+        return;
+    }
+
     let my_grid_coords = grid_index_to_coords(my_grid_idx, params.grid_resolution);
 
     // Pre-compute all 27 neighbor grid indices and counts
@@ -523,15 +530,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // thrust above, so we apply this as a one-sided force on the cargo cell only.
                 // Applying an equal-opposite reaction on self would fight the wall thrust and
                 // stall the conveyor every time it touches cargo.
-                let force_mag = abs(effective_speed) * mass * CILIA_PUSH_MULTIPLIER;
 
                 // Convey direction follows the sign of effective_speed
                 var convey_dir: vec3<f32>;
                 if (effective_speed >= 0.0) {
-                    convey_dir = forward; // Carry neighbor forward along cilia direction
+                    convey_dir = forward;
                 } else {
-                    convey_dir = -forward; // Negative speed reverses convey direction
+                    convey_dir = -forward;
                 }
+
+                let force_mag = abs(effective_speed) * mass * CILIA_PUSH_MULTIPLIER;
 
                 // Apply convey force to cargo cell only
                 let convey_on_neighbor = convey_dir * force_mag;

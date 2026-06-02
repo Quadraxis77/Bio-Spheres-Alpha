@@ -191,8 +191,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let rotation = rotations[cell_idx];
     let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
     
-    // Calculate swim force vector
-    let force_magnitude = effective_speed * SWIM_FORCE_MULTIPLIER;
+    // Calculate swim force vector.
+    // Traction falloff: force tapers as the cell approaches its target speed.
+    // This prevents many aligned flagellocytes from summing to unbounded aggregate
+    // force — each cell contributes less the faster the body is already moving.
+    let vel = velocities_in[cell_idx].xyz;
+    let speed_along_forward = dot(vel, forward);
+    let target_speed = effective_speed * 8.0;
+    let traction = clamp(1.0 - speed_along_forward / max(target_speed, 0.001), 0.0, 1.0);
+    let force_magnitude = effective_speed * SWIM_FORCE_MULTIPLIER * traction;
     let swim_force = forward * force_magnitude;
     
     // Add to force accumulation buffers (atomic for thread safety)
@@ -219,8 +226,14 @@ fn buoyancy_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let buoyancy_force = mode_properties_v4[mode_idx].w;
     if (buoyancy_force <= 0.0) { return; }
 
-    // Apply upward force (world +Y)
+    // Apply upward force (world +Y).
+    // Traction falloff: buoyancy force tapers as the cell approaches its terminal
+    // rise speed, preventing large buoyocyte blobs from accumulating unlimited
+    // upward force that would fling them through the boundary.
     const BUOYANCY_MULTIPLIER: f32 = 120.0;
-    let fy = buoyancy_force * BUOYANCY_MULTIPLIER;
+    const BUOYANCY_TERMINAL_SPEED: f32 = 12.0;
+    let vel_y = velocities_in[cell_idx].y;
+    let traction = clamp(1.0 - vel_y / max(buoyancy_force * BUOYANCY_TERMINAL_SPEED, 0.001), 0.0, 1.0);
+    let fy = buoyancy_force * BUOYANCY_MULTIPLIER * traction;
     atomicAdd(&force_accum_y[cell_idx], float_to_fixed(fy));
 }

@@ -207,24 +207,19 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
-        // Stage 4: Collision detection (256 threads - optimized with pre-computed neighbors)
-        // Now accumulates forces to force_accum instead of applying directly
-        // Also applies boundary torque to rotate cells toward center
+        // Stage 4: Collision detection
         compute_pass.set_pipeline(&pipelines.collision_detection);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.collision_force_accum[current_index], &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        
-        // Stage 5: Adhesion physics (256 threads per workgroup, per-cell processing)
-        // Each thread handles ONE cell and iterates through its adhesion indices
-        // Forces are accumulated to force buffers (same as collision detection)
+
+        // Stage 5: Adhesion physics
         compute_pass.set_pipeline(&pipelines.adhesion_physics);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
         compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
-        // Dispatch based on cell count (per-cell processing)
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         
         // Stage 5.5: Swim force (256 threads) - applies thrust for Flagellocyte cells
@@ -833,8 +828,9 @@ pub fn rebuild_spatial_grid_after_lifecycle(
     let physics_bind_group = &cached_bind_groups.physics[current_index];
     let spatial_grid_bind_group = &cached_bind_groups.spatial_grid;
     
-    // Always dispatch at full capacity (see execute_gpu_physics_step comment)
-    let cell_workgroups = (triple_buffers.capacity + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    // Dispatch over live cell slots only — shaders check cell_count_buffer[0] internally.
+    let effective_slots = _cell_count_hint.min(triple_buffers.capacity).max(1);
+    let cell_workgroups = (effective_slots + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
     
     // Stage 1: Clear spatial grid counts using DMA zero-fill
     encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);

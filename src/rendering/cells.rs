@@ -403,7 +403,8 @@ impl CellRenderer {
             push_constant_ranges: &[],
         });
         
-        // Create depth-only render pipeline
+        // Create depth-only render pipeline — uses fs_depth which writes correct
+        // sphere depth so the subsequent color pass can use LessEqual to skip overdraw.
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Cell Depth Pipeline"),
             layout: Some(&pipeline_layout),
@@ -413,7 +414,12 @@ impl CellRenderer {
                 buffers: &[Self::instance_buffer_layout()],
                 compilation_options: Default::default(),
             },
-            fragment: None, // Depth-only, no fragment shader
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_depth"),
+                targets: &[], // No color output
+                compilation_options: Default::default(),
+            }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
                 strip_index_format: None,
@@ -831,16 +837,31 @@ impl CellRenderer {
             label: Some("Cell Renderer Encoder"),
         });
         
-        // Note: Depth pre-pass is skipped for ray-marched billboards because the
-        // fragment shader discards pixels outside the sphere. A depth-only pass
-        // would write depth for the full quad, causing the color pass to fail
-        // depth tests for valid sphere pixels.
-        //
-        // For proper depth pre-pass with ray-marched spheres, we would need a
-        // depth shader that also performs ray-sphere intersection and writes
-        // the correct sphere depth. For now, we render directly with depth write.
-        
-        // Single pass: Color with depth write (grouped by cell type)
+        // Depth prepass: fs_depth performs ray-sphere intersection and writes the
+        // correct sphere-surface depth, so the subsequent color pass can use
+        // LessEqual to reject occluded fragments via early-z.
+        {
+            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell Depth Prepass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            depth_pass.set_pipeline(&self.depth_pipeline);
+            depth_pass.set_bind_group(0, &self.bind_group, &[]);
+            depth_pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+            depth_pass.draw(0..4, 0..instance_count);
+        }
+
+        // Color pass: reuse prepass depths with LessEqual + no depth write.
         {
             let mut color_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Cell Color Pass"),
@@ -856,7 +877,7 @@ impl CellRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0), // Clear depth at start
+                        load: wgpu::LoadOp::Load, // Reuse prepass depths
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -864,7 +885,7 @@ impl CellRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            
+
             color_pass.set_bind_group(0, &self.bind_group, &[]);
             if let Some(ref shadow_bg) = self.shadow_bind_group {
                 color_pass.set_bind_group(1, shadow_bg, &[]);
@@ -915,10 +936,32 @@ impl CellRenderer {
         self.update_camera(queue, camera_pos, camera_rotation, current_time, lod_scale_factor, lod_threshold_low, lod_threshold_medium, lod_threshold_high);
         self.update_lighting(queue, outline_width);
         
-        // Note: Depth pre-pass is skipped for ray-marched billboards because the
-        // fragment shader discards pixels outside the sphere. See render_with_depth_prepass
-        // for detailed explanation.
-        
+        // Depth prepass: populate correct sphere depths using fs_depth.
+        // Must CLEAR depth first (this texture is private to the cell renderer).
+        // The color pass then uses Load+LessEqual so each pixel only runs the
+        // full shader once — eliminates overdraw from the custom frag_depth write
+        // that otherwise disables GPU early-z entirely.
+        {
+            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cell Depth Prepass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0), // Start fresh each frame
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            depth_pass.set_pipeline(&self.depth_pipeline);
+            depth_pass.set_bind_group(0, &self.bind_group, &[]);
+            depth_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(..));
+            depth_pass.draw_indirect(&instance_builder.indirect_buffer, 0);
+        }
+
         // Render each cell type with its appropriate pipeline
         // Instances are sorted by type: Test cells at [0, test_count), Flagellocytes at [capacity/2, capacity/2 + flagellocyte_count)
         {
@@ -929,14 +972,14 @@ impl CellRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+                                   store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0), // Clear depth at start
+                        load: wgpu::LoadOp::Load, // Reuse prepass depths — don't clear!
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -944,19 +987,19 @@ impl CellRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            
+
             color_pass.set_bind_group(0, &self.bind_group, &[]);
             if let Some(ref shadow_bg) = self.shadow_bind_group {
                 color_pass.set_bind_group(1, shadow_bg, &[]);
             }
 
-            // Render all cells with a single draw call
-            // Instance buffer is dynamically allocated (not partitioned by type)
-            // Cell type is stored in instance data (type_data_1.w) for shader to use
+            // Render all cells with a single draw call.
+            // Pipeline uses LessEqual+no-depth-write so fragments already behind
+            // the prepass depth are discarded by early-z, eliminating overdraw.
             let pipeline = self.type_registry.get_pipeline(CellType::Test);
             color_pass.set_pipeline(pipeline);
             color_pass.set_vertex_buffer(0, instance_builder.instance_buffer.slice(..));
-            
+
             // Use main indirect buffer which has total visible count
             color_pass.draw_indirect(&instance_builder.indirect_buffer, 0);
         }

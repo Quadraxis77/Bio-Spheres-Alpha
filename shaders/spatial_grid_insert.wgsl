@@ -82,10 +82,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Atomically get a slot in this grid cell
     let slot = atomicAdd(&spatial_grid_counts[grid_idx], 1u);
-    
-    // Only insert if we have room (max 16 cells per grid cell)
+
     if (slot < MAX_CELLS_PER_GRID) {
         let grid_base_offset = grid_idx * MAX_CELLS_PER_GRID;
         spatial_grid_cells[grid_base_offset + slot] = cell_idx;
+    } else {
+        // Voxel is full — mark this cell as an overflow cell by writing a sentinel
+        // into cell_grid_indices. The collision shader skips overflow cells entirely,
+        // preserving Newton's third law. Without this, overflow cells query the grid
+        // and receive one-sided collision forces that visible cells can't react to —
+        // the primary phantom force source in dense blobs.
+        cell_grid_indices[cell_idx] = 0xFFFFFFFFu;
     }
 }

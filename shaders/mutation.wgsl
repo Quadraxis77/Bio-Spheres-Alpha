@@ -1249,7 +1249,7 @@ fn apply_mutation(
                 // params, then points both children at itself (self-referential = dormant).
                 // Nothing in the existing graph points to it yet. Future CHAIN_EXTEND /
                 // LOOP_BRANCH mutations can wire it in; if they never do, MODE_TRIM removes it.
-                if (mode_count >= mutation_params.max_modes_per_genome) { return; }
+                if (mode_count >= mutation_params.max_modes_per_genome) { return param_idx; }
 
                 let last_abs  = dst_base + mode_count - 1u;
                 let new_abs   = dst_base + mode_count;
@@ -1312,18 +1312,18 @@ fn apply_mutation(
                 // If any child_a or child_b points to the last mode, abort.
                 // Also abort if a live cell is currently in the last mode — that check
                 // is deferred to CPU (rare; the cell will simply find mode_count shrunk).
-                if (mode_count <= 1u) { return; }
+                if (mode_count <= 1u) { return param_idx; }
 
                 let last_local = mode_count - 1u;
                 let last_abs_i = i32(dst_base + last_local);
 
                 // Check if the initial_mode points to the last mode
-                if (genome_meta[new_genome_id].z == last_local) { return; }
+                if (genome_meta[new_genome_id].z == last_local) { return param_idx; }
 
                 // Scan all modes except last for references
                 for (var m = 0u; m < last_local; m++) {
                     let idx = child_mode_indices_buf[dst_base + m];
-                    if (idx.x == last_abs_i || idx.y == last_abs_i) { return; }
+                    if (idx.x == last_abs_i || idx.y == last_abs_i) { return param_idx; }
                 }
 
                 // Unreferenced — safe to trim
@@ -1384,105 +1384,69 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let parent_base_offset = parent_meta.y;
 
     if (parent_mode_count == 0u) {
-        return; // Invalid genome
+        return;
     }
 
-    // Allocate a new genome slot
-    let new_genome_id = allocate_genome_slot();
-    if (new_genome_id == 0xFFFFFFFFu) {
-        return; // At capacity, skip mutation
-    }
+    // Allocate a new genome slot from the ring buffer
+    let head = atomicAdd(&genome_ring_state[0], 1u);
+    let ring_idx = head % mutation_params.genome_ring_capacity;
+    let new_genome_id = genome_free_ring[ring_idx];
 
-    // Determine the base mode offset for the new genome.
-    //
-    // If the slot came from the free ring (a recycled genome), its existing mode range
-    // is preserved in genome_meta[new_genome_id].y (base_mode_offset) with mode_count == 0.
-    // Reuse that range directly — no allocation from next_mode_offset needed.
-    //
-    // If the slot is brand-new (from the monotonic next_genome_id path), allocate a
-    // fresh range from next_mode_offset using CAS.
+    // Allocate mode data range for the new genome
     var new_base_offset = 0u;
     var allocated = false;
-
-    let recycled_meta = genome_meta[new_genome_id];
-    let recycled_mode_count = recycled_meta.x;  // 0 = free slot sentinel
-    let recycled_base_offset = recycled_meta.y;
-
-    if (recycled_mode_count == 0u && recycled_base_offset != 0u) {
-        // Recycled slot with a preserved mode range — reuse it directly.
-        // The range was sized for a genome with the same mode count (all mutations
-        // are clones of user genomes which all have the same mode count).
-        new_base_offset = recycled_base_offset;
-        allocated = true;
-    } else {
-        // Brand-new slot: allocate a fresh range from next_mode_offset.
-        for (var attempt = 0u; attempt < 100u; attempt++) {
-            let current_offset = atomicLoad(&genome_ring_state[3]);
-
-            // Check if allocation would exceed capacity
-            if (current_offset + parent_mode_count > mutation_params.total_mode_count) {
-                // Out of mode buffer space - return genome slot to ring
-                let tail = atomicAdd(&genome_ring_state[1], 1u);
-                let ring_idx = tail % mutation_params.genome_ring_capacity;
-                genome_free_ring[ring_idx] = new_genome_id;
-                return;
-            }
-
-            // Try to atomically claim this range
-            let old_offset = atomicCompareExchangeWeak(&genome_ring_state[3], current_offset, current_offset + parent_mode_count).old_value;
-            if (old_offset == current_offset) {
-                new_base_offset = current_offset;
-                allocated = true;
-                break;
-            }
-        }
-
-        if (!allocated) {
-            // Failed after 100 attempts (extreme contention) - return slot to ring
+    for (var attempt = 0u; attempt < 100u; attempt++) {
+        let current_offset = atomicLoad(&genome_ring_state[3]);
+        if (current_offset + parent_mode_count > mutation_params.total_mode_count) {
+            // No space — return slot to ring
             let tail = atomicAdd(&genome_ring_state[1], 1u);
-            let ring_idx = tail % mutation_params.genome_ring_capacity;
-            genome_free_ring[ring_idx] = new_genome_id;
+            let ring_idx2 = tail % mutation_params.genome_ring_capacity;
+            genome_free_ring[ring_idx2] = new_genome_id;
             return;
         }
+
+        // Try to atomically claim this range
+        let old_offset = atomicCompareExchangeWeak(&genome_ring_state[3], current_offset, current_offset + parent_mode_count).old_value;
+        if (old_offset == current_offset) {
+            new_base_offset = current_offset;
+            allocated = true;
+            break;
+        }
+    }
+
+    if (!allocated) {
+        // Failed after 100 attempts (extreme contention) - return slot to ring
+        let tail = atomicAdd(&genome_ring_state[1], 1u);
+        let ring_idx3 = tail % mutation_params.genome_ring_capacity;
+        genome_free_ring[ring_idx3] = new_genome_id;
+        return;
     }
 
     // Initialize new genome metadata — copy initial_mode_local (.z) from parent
     genome_meta[new_genome_id] = vec4<u32>(parent_mode_count, new_base_offset, parent_meta.z, 0u);
 
     // Update reference counts atomically
-    // Note: We only increment the new genome's ref_count. The parent genome's ref_count
-    // is NOT decremented because the parent cell is still alive and using it.
-    // Ref_counts are only decremented when cells die or switch genomes.
     atomicAdd(&genome_ref_counts[new_genome_id], 1u);
 
     // Clone all mode data from parent to new genome
     clone_genome_modes(parent_base_offset, new_base_offset, parent_mode_count);
 
-    // Apply one mutation — candidate_idx is the global invocation ID, unique per
-    // thread and uncorrelated with genome IDs or cell slot indices.
+    // Apply one mutation
     let param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u, new_genome_id);
 
     // Update cell's genome_id
     genome_ids[cell_idx] = new_genome_id;
 
     // Remap cell's mode_index from parent genome space to new genome space
-    // IMPORTANT: Validate bounds to prevent invalid mode indices
     let old_mode = mode_indices[cell_idx];
-    
-    // Check if old_mode is within parent genome's range
     if (old_mode < parent_base_offset || old_mode >= parent_base_offset + parent_mode_count) {
-        // Invalid mode index - clamp to first mode of new genome
         mode_indices[cell_idx] = new_base_offset;
     } else {
         let local_mode = old_mode - parent_base_offset;
         let new_mode = new_base_offset + local_mode;
-        
-        // CRITICAL: Ensure new mode index is within global mode_cell_types bounds
-        // This prevents cells from being marked as dead due to invalid mode indices
         if (new_mode < arrayLength(&mode_cell_types)) {
             mode_indices[cell_idx] = new_mode;
         } else {
-            // Fallback to first mode of new genome if out of bounds
             mode_indices[cell_idx] = new_base_offset;
         }
     }
@@ -1493,10 +1457,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         mutation_log[log_idx] = vec4<u32>(cell_idx, new_genome_id, param_idx, mutation_params.current_frame);
     }
 
-    // Sync per-cell cell_types from the (possibly mutated) mode_cell_types.
-    // Division already stamped the OLD type before the mutation ran, so we must
-    // overwrite it here for shaders that read the per-cell buffer (phagocyte_consume,
-    // photocyte_light, build_instances, etc.).
+    // Sync per-cell cell_types from the (possibly mutated) mode_cell_types
     let final_mode = mode_indices[cell_idx];
     if (final_mode < arrayLength(&mode_cell_types)) {
         cell_types[cell_idx] = mode_cell_types[final_mode];

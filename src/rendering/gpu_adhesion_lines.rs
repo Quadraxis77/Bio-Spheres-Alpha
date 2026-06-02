@@ -263,6 +263,7 @@ impl GpuAdhesionLineRenderer {
         data_bind_group: &wgpu::BindGroup,
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
+        active_count: u32,
     ) {
         // Update camera uniform
         let forward = camera_rotation * Vec3::NEG_Z;
@@ -289,6 +290,6 @@ impl GpuAdhesionLineRenderer {
 
         // Draw: 12 vertices per instance (2 half-segments × 2 triangles × 3 verts)
         // The shader will skip inactive adhesions by outputting degenerate vertices
-        render_pass.draw(0..12, 0..self.max_adhesions);
+        render_pass.draw(0..12, 0..active_count);
     }
 }

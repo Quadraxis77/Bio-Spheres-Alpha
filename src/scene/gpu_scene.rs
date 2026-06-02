@@ -1544,12 +1544,8 @@ impl GpuScene {
         // lifecycle and the next physics step reads the spatial grid. Removing this
         // saves 3 compute dispatches (clear 128³ grid + assign + insert) per step.
 
-        // Organism label pass: GPU union-find for connected-component labeling.
-        // Dispatches are sized to the high-water mark of used cell slots, not the
-        // full buffer capacity, so cost scales with actual cell count.
-        if let Some(label_system) = &mut self.organism_label_system {
-            label_system.encode_frame(encoder, self.total_cell_slots);
-        }
+        // Organism label pass intentionally moved out of run_physics —
+        // see the call site in the per-render-frame update loop.
 
         // NOTE: copy_buffers_to_instance_builder is called once per frame in render(),
         // after all physics steps complete. No need to copy after each step.
@@ -4458,8 +4454,8 @@ impl GpuScene {
             &self.devorocyte_cell_data_bind_group,
             &self.devorocyte_spatial_bind_group,
         ) {
-            // Dispatch at full capacity — the shader reads cell_count_buffer[0] internally.
-            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity);
+            // Dispatch over live cell slots only — avoids dispatching empty workgroups.
+            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.total_cell_slots.max(1));
         }
     }
 
@@ -4525,11 +4521,16 @@ impl GpuScene {
             &self.gametocyte_cell_data_bind_group,
             &self.gametocyte_spatial_bind_group,
         ) {
-            system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.gpu_triple_buffers.capacity as usize);
-            // Schedule async readback of events after dispatch
-            if !self.gamete_readback_in_flight {
-                system.schedule_readback(encoder);
-                self.gamete_readback_in_flight = true;
+            // Gametocyte merges are rare — run every 4 physics steps rather than every step.
+            // Dispatching over total_cell_slots (live count) rather than full capacity
+            // avoids dispatching twice as many workgroups as necessary.
+            if self.current_frame % 4 == 0 {
+                system.run(encoder, &physics_bgs[output_idx], cell_bg, spatial_bg, self.total_cell_slots.max(1) as usize);
+                // Schedule async readback of events after dispatch
+                if !self.gamete_readback_in_flight {
+                    system.schedule_readback(encoder);
+                    self.gamete_readback_in_flight = true;
+                }
             }
         }
     }
@@ -5937,10 +5938,9 @@ impl Scene for GpuScene {
         // For now, we skip the instance builder update since we don't have canonical state
         // The instance builder will be updated to read directly from GPU buffers
 
-        // On first frame, disable culling since we don't have depth data yet
-        if self.first_frame {
-            self.instance_builder.set_culling_mode(CullingMode::Disabled);
-        }
+        // Note: no first-frame culling override needed. The shader guards occlusion
+        // culling with `hiz_mip_count > 0`, so FrustumOnly (the default) is safe
+        // from frame 1 without any Hi-Z data.
 
         // Prepare organism label system for this frame (writes run_init flag to GPU
         // before the encoder is built, so the shader sees it in the same submit).
@@ -6010,10 +6010,9 @@ impl Scene for GpuScene {
         }
 
         // If a cell was inserted, copy buffers to instance builder before physics
-        // The Hi-Z buffer doesn't have valid depth data for the new cell's position yet
-        // (Hi-Z is generated at end of frame from the depth buffer)
         if cell_inserted {
-            self.instance_builder.set_culling_mode(CullingMode::FrustumOnly);
+            // Hi-Z won't include the new cell this frame, but the shader guards
+            // occlusion culling with `hiz_mip_count > 0`, so no mode override needed.
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
@@ -6086,6 +6085,15 @@ impl Scene for GpuScene {
             // If we hit max steps, discard remaining accumulated time
             if steps >= max_steps {
                 self.time_accumulator = 0.0;
+            }
+
+            // Organism label pass: runs ONCE per render frame after all physics steps
+            // complete, not inside run_physics. Previously it ran every physics step
+            // (up to 4×/frame), making it 5–7 dispatches × 4 steps = 20–28 dispatches
+            // per render frame. Labels change slowly (bonds form/break over many frames)
+            // so one update per render frame is sufficient.
+            if let Some(label_system) = &mut self.organism_label_system {
+                label_system.encode_frame(&mut encoder, self.total_cell_slots);
             }
         } else if is_dragging {
             // Paused but dragging: run mechanics-only physics step so adhesion-connected
@@ -6433,6 +6441,7 @@ impl Scene for GpuScene {
                     adhesion_data_bind_group,
                     self.camera.position(),
                     self.camera.rotation,
+                    self.adhesion_buffers.adhesion_count(),
                 );
             }
         }

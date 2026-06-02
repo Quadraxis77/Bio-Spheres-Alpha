@@ -684,8 +684,15 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     if context.current_mode == crate::ui::types::SimulationMode::Gpu {
         section_header(ui, "GPU RENDERING");
         
+        // Culling toggles
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut state.frustum_enabled, "Frustum").on_hover_text("Discard cells outside the camera frustum");
+            ui.checkbox(&mut state.occlusion_enabled, "Occlusion").on_hover_text("Discard cells hidden behind other geometry (requires Hi-Z)");
+        });
+        ui.add_space(4.0);
+
         let (total, visible, frustum_culled, occluded) = perf.culling_stats();
-        
+
         egui::Grid::new("gpu_stats_grid")
             .num_columns(2)
             .spacing([8.0, 2.0])
@@ -709,7 +716,35 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                     ui.end_row();
                 }
             });
-        
+
+        ui.add_space(6.0);
+        section_header(ui, "LOD");
+        egui::Grid::new("lod_grid")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Scale").size(11.0).color(palette().text_secondary))
+                    .on_hover_text("Higher = more aggressive LOD (switches to lower resolution sooner)");
+                ui.add(egui::Slider::new(&mut state.lod_scale_factor, 0.1..=5.0).fixed_decimals(2));
+                ui.end_row();
+                ui.label(egui::RichText::new("Low→Med").size(11.0).color(palette().text_secondary))
+                    .on_hover_text("Distance threshold for 32→64 texture transition");
+                ui.add(egui::Slider::new(&mut state.lod_threshold_low, 1.0..=200.0).fixed_decimals(0));
+                ui.end_row();
+                ui.label(egui::RichText::new("Med→High").size(11.0).color(palette().text_secondary))
+                    .on_hover_text("Distance threshold for 64→128 texture transition");
+                ui.add(egui::Slider::new(&mut state.lod_threshold_medium, 1.0..=200.0).fixed_decimals(0));
+                ui.end_row();
+                ui.label(egui::RichText::new("High→Ultra").size(11.0).color(palette().text_secondary))
+                    .on_hover_text("Distance threshold for 128→256 texture transition");
+                ui.add(egui::Slider::new(&mut state.lod_threshold_high, 1.0..=200.0).fixed_decimals(0));
+                ui.end_row();
+                ui.label(egui::RichText::new("Debug Colors").size(11.0).color(palette().text_secondary))
+                    .on_hover_text("Tint cells by LOD level: green=ultra, yellow=high, orange=med, red=low");
+                ui.checkbox(&mut state.lod_debug_colors, "");
+                ui.end_row();
+            });
+
         ui.add_space(6.0);
     }
     

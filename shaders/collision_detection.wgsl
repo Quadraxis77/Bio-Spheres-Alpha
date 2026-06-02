@@ -180,6 +180,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let radius = calculate_radius_from_mass(mass);
     let my_stiffness = stiffnesses[cell_idx];
     let my_grid_idx = cell_grid_indices[cell_idx];
+
+    // Overflow cells were not inserted into the spatial grid (their voxel was full).
+    // If they queried the grid they would receive one-sided collision forces that
+    // their unaware neighbours can't react to — violating Newton's third law and
+    // creating phantom momentum. Skip them entirely instead.
+    if (my_grid_idx == 0xFFFFFFFFu) {
+        return;
+    }
+
     let my_grid_coords = grid_index_to_coords(my_grid_idx, params.grid_resolution);
     
     // Get organism ID for self-collision filtering
@@ -348,41 +357,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 force += coll_normal * normal_force_mag;
 
-                // ---- Rolling / sliding friction ----
-                // Contact point vectors from each cell centre to the contact point.
-                // The contact point lies on the surface of cell A (self) toward cell B.
-                let r_a = -coll_normal * radius;          // from A centre to contact
-                let r_b =  coll_normal * other_radius;    // from B centre to contact
-
-                // Surface velocity at the contact point for each cell:
-                //   v_contact = v_linear + omega × r
-                let omega_a = angular_velocities[cell_idx].xyz;
-                let omega_b = angular_velocities[other_idx].xyz;
-                let v_contact_a = vel   + cross(omega_a, r_a);
-                let v_contact_b = other_vel + cross(omega_b, r_b);
-
-                // Relative slip velocity at the contact point
-                let v_slip = v_contact_a - v_contact_b;
-
-                // Remove the normal component — only the tangential part drives friction
-                let v_slip_tangential = v_slip - dot(v_slip, coll_normal) * coll_normal;
-                let slip_speed = length(v_slip_tangential);
-
-                if (slip_speed > 0.0001) {
-                    // Coulomb friction: magnitude capped at μ * |F_normal|
-                    let friction_dir = -v_slip_tangential / slip_speed;
-                    let friction_mag = min(
-                        FRICTION_COEFF * abs(normal_force_mag),
-                        slip_speed * combined_stiffness * 0.1  // viscous cap to prevent over-correction
-                    );
-                    let friction_force = friction_dir * friction_mag;
-
-                    // Apply tangential friction force to this cell's linear force
-                    force += friction_force;
-
-                    // Torque on this cell: τ = r_a × F_friction
-                    torque += cross(r_a, friction_force);
-                }
+                // Tangential damping: damp relative sliding between cells.
+                // Uses only linear velocities (no angular_velocities[other_idx] read)
+                // which avoids the cache-thrashing random memory access that made the
+                // full Coulomb friction 2x slower in dense clusters.
+                // Provides the same pool-settling effect at a fraction of the cost.
+                let rel_vel_tangential = relative_vel - dot(relative_vel, coll_normal) * coll_normal;
+                force -= rel_vel_tangential * (FRICTION_COEFF * combined_stiffness * 0.01);
             }
         }
     }

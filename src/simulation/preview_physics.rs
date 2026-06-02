@@ -1327,17 +1327,6 @@ pub fn physics_step_with_genome(
         state.remove_cells(&starved);
     }
 
-    // Out-of-bounds kill: remove any cell that has escaped the boundary sphere by
-    // more than 20%. Matches the GPU death_scan check. Runaway blobs that exploit
-    // spring force accumulation to break through the boundary wall are unrecoverable.
-    let boundary_radius = config.sphere_radius;
-    let escaped: Vec<usize> = (0..state.cell_count)
-        .filter(|&i| state.positions[i].length() > boundary_radius * 1.2)
-        .collect();
-    if !escaped.is_empty() {
-        state.remove_cells(&escaped);
-    }
-
     // Form contact adhesion bonds for Glueocyte cells
     form_glueocyte_contact_bonds(state, genome, current_time);
 

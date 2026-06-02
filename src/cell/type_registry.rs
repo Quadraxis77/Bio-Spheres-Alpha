@@ -333,10 +333,10 @@ impl CellTypeRegistry {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
-                depth_write_enabled: true,
-                // Use Less comparison - the shader outputs proper sphere surface depth
-                // which enables correct mutual overlap where spheres intersect
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: false, // Prepass owns depth writes; color pass is read-only
+                // LessEqual: passes fragments whose depth matches the prepass value (the
+                // sphere surface), discarding anything behind it via early-z.
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

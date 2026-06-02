@@ -85,6 +85,7 @@ pub struct OrganismLabelSystem {
 
     debug_staging: wgpu::Buffer,
     debug_copy_pending: bool,
+    debug_map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     debug_frame: u32,
 }
 
@@ -262,6 +263,7 @@ impl OrganismLabelSystem {
             cell_workgroups,
             debug_staging,
             debug_copy_pending: false,
+            debug_map_receiver: None,
             debug_frame: 0,
         }
     }
@@ -395,17 +397,31 @@ impl OrganismLabelSystem {
     }
 
     pub fn poll_debug_readback(&mut self, device: &wgpu::Device) {
-        if !self.debug_copy_pending { return; }
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        let slice = self.debug_staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).ok(); });
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        if let Ok(Ok(())) = rx.try_recv() {
-            let view = slice.get_mapped_range();
-            drop(view);
-            self.debug_staging.unmap();
+        // Start the map_async on the first poll after a copy was recorded.
+        if self.debug_copy_pending && self.debug_map_receiver.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.debug_staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                tx.send(r).ok();
+            });
+            self.debug_map_receiver = Some(rx);
             self.debug_copy_pending = false;
+        }
+
+        if let Some(ref rx) = self.debug_map_receiver {
+            let _ = device.poll(wgpu::PollType::Poll);
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    // Data is ready — read and discard (debug only).
+                    drop(self.debug_staging.slice(..).get_mapped_range());
+                    self.debug_staging.unmap();
+                    self.debug_map_receiver = None;
+                }
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.debug_staging.unmap();
+                    self.debug_map_receiver = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {} // still in flight
+            }
         }
     }
 
