@@ -1,7 +1,7 @@
 // Organism Label Shader
 //
 // Assigns each live cell a label equal to the minimum cell index in its connected
-// component (determined by active adhesion bonds).
+// component (determined by active non-structural developmental adhesion bonds).
 //
 // ## Algorithm: continuous flood fill (one hop per frame)
 //
@@ -38,6 +38,7 @@
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 
 const DEAD_LABEL: u32 = 0xFFFFFFFFu;
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 
 // Adhesion connection structure (104 bytes matching Rust GpuAdhesionConnection)
 struct AdhesionConnection {
@@ -47,7 +48,8 @@ struct AdhesionConnection {
     is_active: u32,
     zone_a: u32,
     zone_b: u32,
-    _align_pad: vec2<u32>,
+    bond_flags: u32,
+    _align_pad1: u32,
     anchor_direction_a: vec4<f32>,
     anchor_direction_b: vec4<f32>,
     twist_reference_a: vec4<f32>,
@@ -112,8 +114,8 @@ fn init_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // -- hook_labels --------------------------------------------------------------
 // Continuous flood fill: each cell adopts the minimum label among itself and
-// all its bonded live neighbors. One dispatch per frame propagates the minimum
-// label one hop further through each connected component.
+// all developmental bonded live neighbors. Structural barrier-ball bonds are
+// mechanical only and do not merge organism identity.
 
 @compute @workgroup_size(256, 1, 1)
 fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -140,6 +142,7 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let connection = adhesion_connections[u32(slot)];
         if connection.is_active == 0u { continue; }
+        if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) { continue; }
 
         let cell_a = connection.cell_a_index;
         let cell_b = connection.cell_b_index;
@@ -151,7 +154,9 @@ fn hook_labels(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let nb_label = atomicLoad(&label_buffer[nb]);
         if nb_label != DEAD_LABEL {
-            my_label = min(my_label, nb_label);
+            let pair_label = min(my_label, nb_label);
+            my_label = pair_label;
+            atomicMin(&label_buffer[nb], pair_label);
         }
     }
 

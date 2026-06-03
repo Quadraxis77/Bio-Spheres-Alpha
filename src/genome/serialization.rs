@@ -31,10 +31,20 @@ pub enum GenomeDeserializeError {
 #[serde(tag = "type")]
 pub enum SerializableCellAddressSelector {
     AnyCell,
-    ByModeIndex { mode_index: usize },
-    ByMorphologyHash { hash: u64 },
-    ByLineageHash { hash: u64 },
-    ByLineageHashOrMode { lineage_hash: u64, mode_index: usize, preferred_branch_slot: u16 },
+    ByModeIndex {
+        mode_index: usize,
+    },
+    ByMorphologyHash {
+        hash: u64,
+    },
+    ByLineageHash {
+        hash: u64,
+    },
+    ByLineageHashOrMode {
+        lineage_hash: u64,
+        mode_index: usize,
+        preferred_branch_slot: u16,
+    },
 }
 
 impl From<&super::CellAddressSelector> for SerializableCellAddressSelector {
@@ -44,13 +54,15 @@ impl From<&super::CellAddressSelector> for SerializableCellAddressSelector {
             super::CellAddressSelector::ByModeIndex(m) => Self::ByModeIndex { mode_index: *m },
             super::CellAddressSelector::ByMorphologyHash(h) => Self::ByMorphologyHash { hash: *h },
             super::CellAddressSelector::ByLineageHash(h) => Self::ByLineageHash { hash: *h },
-            super::CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
-                Self::ByLineageHashOrMode {
-                    lineage_hash: *lineage_hash,
-                    mode_index: *mode_index,
-                    preferred_branch_slot: *preferred_branch_slot,
-                }
-            }
+            super::CellAddressSelector::ByLineageHashOrMode {
+                lineage_hash,
+                mode_index,
+                preferred_branch_slot,
+            } => Self::ByLineageHashOrMode {
+                lineage_hash: *lineage_hash,
+                mode_index: *mode_index,
+                preferred_branch_slot: *preferred_branch_slot,
+            },
         }
     }
 }
@@ -59,12 +71,22 @@ impl From<SerializableCellAddressSelector> for super::CellAddressSelector {
     fn from(s: SerializableCellAddressSelector) -> Self {
         match s {
             SerializableCellAddressSelector::AnyCell => Self::AnyCell,
-            SerializableCellAddressSelector::ByModeIndex { mode_index } => Self::ByModeIndex(mode_index),
-            SerializableCellAddressSelector::ByMorphologyHash { hash } => Self::ByMorphologyHash(hash),
-            SerializableCellAddressSelector::ByLineageHash { hash } => Self::ByLineageHash(hash),
-            SerializableCellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
-                Self::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot }
+            SerializableCellAddressSelector::ByModeIndex { mode_index } => {
+                Self::ByModeIndex(mode_index)
             }
+            SerializableCellAddressSelector::ByMorphologyHash { hash } => {
+                Self::ByMorphologyHash(hash)
+            }
+            SerializableCellAddressSelector::ByLineageHash { hash } => Self::ByLineageHash(hash),
+            SerializableCellAddressSelector::ByLineageHashOrMode {
+                lineage_hash,
+                mode_index,
+                preferred_branch_slot,
+            } => Self::ByLineageHashOrMode {
+                lineage_hash,
+                mode_index,
+                preferred_branch_slot,
+            },
         }
     }
 }
@@ -75,6 +97,8 @@ pub struct SerializableScaffoldRule {
     pub id: u32,
     pub endpoint_a: SerializableCellAddressSelector,
     pub endpoint_b: SerializableCellAddressSelector,
+    #[serde(default)]
+    pub preferred_generation_delta: i16,
     pub rest_length: f32,
     pub max_formation_range: f32,
 }
@@ -473,6 +497,7 @@ impl Genome {
                 id: r.id,
                 endpoint_a: SerializableCellAddressSelector::from(&r.endpoint_a),
                 endpoint_b: SerializableCellAddressSelector::from(&r.endpoint_b),
+                preferred_generation_delta: r.preferred_generation_delta,
                 rest_length: r.rest_length,
                 max_formation_range: r.max_formation_range,
             })
@@ -544,6 +569,7 @@ impl Genome {
                 id: sr.id,
                 endpoint_a: super::CellAddressSelector::from(sr.endpoint_a),
                 endpoint_b: super::CellAddressSelector::from(sr.endpoint_b),
+                preferred_generation_delta: sr.preferred_generation_delta,
                 rest_length: sr.rest_length,
                 max_formation_range: sr.max_formation_range,
             });

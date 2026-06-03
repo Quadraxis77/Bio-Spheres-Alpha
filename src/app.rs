@@ -603,7 +603,9 @@ impl App {
     fn scaffold_selector_mode(s: &crate::genome::CellAddressSelector) -> Option<usize> {
         match s {
             crate::genome::CellAddressSelector::ByModeIndex(m) => Some(*m),
-            crate::genome::CellAddressSelector::ByLineageHashOrMode { mode_index, .. } => Some(*mode_index),
+            crate::genome::CellAddressSelector::ByLineageHashOrMode { mode_index, .. } => {
+                Some(*mode_index)
+            }
             _ => None,
         }
     }
@@ -611,7 +613,9 @@ impl App {
     fn scaffold_selector_lineage(s: &crate::genome::CellAddressSelector) -> Option<u64> {
         match s {
             crate::genome::CellAddressSelector::ByLineageHash(h) => Some(*h),
-            crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, .. } => Some(*lineage_hash),
+            crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, .. } => {
+                Some(*lineage_hash)
+            }
             _ => None,
         }
     }
@@ -666,6 +670,9 @@ impl App {
         // Pattern: ByModeIndex — connects all same-mode cells (nearest neighbour per cell).
         // Specific: ByLineageHash — connects only this exact pair.
         for target in valid_targets {
+            let preferred_generation_delta =
+                (state.lineage_depths[target] as i32 - state.lineage_depths[anchor] as i32)
+                    .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             let (sel_a, sel_b) = if match_pattern {
                 (
                     crate::genome::CellAddressSelector::ByModeIndex(anchor_mode),
@@ -692,16 +699,20 @@ impl App {
                 .find(|r| r.endpoint_a == sel_a && r.endpoint_b == sel_b)
             {
                 rule.rest_length = rest_length;
+                rule.preferred_generation_delta = preferred_generation_delta;
             } else {
                 let id = self.working_genome.next_scaffold_rule_id;
                 self.working_genome.next_scaffold_rule_id = id.saturating_add(1).max(1);
-                self.working_genome.scaffold_rules.push(crate::genome::ScaffoldRule {
-                    id,
-                    endpoint_a: sel_a,
-                    endpoint_b: sel_b,
-                    rest_length,
-                    max_formation_range: formation_range,
-                });
+                self.working_genome
+                    .scaffold_rules
+                    .push(crate::genome::ScaffoldRule {
+                        id,
+                        endpoint_a: sel_a,
+                        endpoint_b: sel_b,
+                        preferred_generation_delta,
+                        rest_length,
+                        max_formation_range: formation_range,
+                    });
             }
         }
 
@@ -769,13 +780,17 @@ impl App {
             if let (Some(ma), Some(mb)) = (a_mode, b_mode) {
                 let fwd = ma == anchor_mode && target_modes.contains(&mb);
                 let rev = mb == anchor_mode && target_modes.contains(&ma);
-                if fwd || rev { return false; }
+                if fwd || rev {
+                    return false;
+                }
             }
             // Specific rules: match by lineage in either direction.
             if let (Some(la), Some(lb)) = (a_lineage, b_lineage) {
                 let fwd = la == anchor_lineage && target_lineages.contains(&lb);
                 let rev = lb == anchor_lineage && target_lineages.contains(&la);
-                if fwd || rev { return false; }
+                if fwd || rev {
+                    return false;
+                }
             }
             true
         });
@@ -815,8 +830,12 @@ impl App {
         let mut already_attached_count = 0usize;
 
         for &target in &targets {
-            let (distance, in_range, same_organism) =
-                Self::scaffold_pair_status(preview_scene, anchor, target, selection_snapshot.formation_range);
+            let (distance, in_range, same_organism) = Self::scaffold_pair_status(
+                preview_scene,
+                anchor,
+                target,
+                selection_snapshot.formation_range,
+            );
             first_distance.get_or_insert(distance);
             if !same_organism {
                 wrong_organism_count += 1;
@@ -4190,14 +4209,14 @@ impl ApplicationHandler for AppState {
             label: Some("Bio-Spheres Device"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits {
-                // Cell state write bind group uses up to 40 storage buffers on Vulkan/DX12.
-                // Metal (macOS) hard-caps at 31 - requesting 40 panics request_device on Metal.
+                // Cell state write bind group uses up to 41 storage buffers on Vulkan/DX12.
+                // Metal (macOS) hard-caps at 31 - requesting 42 panics request_device on Metal.
                 // Use backend to pick the right value; never use adapter.limits() as the
                 // requested value since some drivers report low numbers that would cause
                 // wgpu to validate every bind group against that cap, dropping FPS.
                 max_storage_buffers_per_shader_stage: match adapter_info.backend {
                     wgpu::Backend::Metal => 31,
-                    _ => 40,
+                    _ => 42,
                 },
                 // Clamp to what the adapter actually supports - requesting more than the
                 // adapter limit causes request_device to fail (panic on .unwrap()).

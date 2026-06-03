@@ -35,18 +35,42 @@ const FORWARD_NEIGHBORS: [glam::IVec3; 13] = [
     glam::IVec3::new(1, 1, 1),
 ];
 
-/// Check if two cells are connected via adhesions
+/// Check if two cells share a normal developmental adhesion.
 #[inline]
 fn are_cells_in_same_organism(state: &CanonicalState, cell_a: usize, cell_b: usize) -> bool {
-    state
-        .adhesion_manager
-        .are_cells_connected(&state.adhesion_connections, cell_a, cell_b)
+    if cell_a >= state.adhesion_manager.cell_adhesion_indices.len() {
+        return false;
+    }
+
+    let connections = &state.adhesion_connections;
+    for &conn_idx in &state.adhesion_manager.cell_adhesion_indices[cell_a] {
+        if conn_idx < 0 {
+            continue;
+        }
+        let conn_idx = conn_idx as usize;
+        if conn_idx >= connections.active_count || connections.is_active[conn_idx] == 0 {
+            continue;
+        }
+        if (connections.bond_flags[conn_idx] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) != 0 {
+            continue;
+        }
+        let other = if connections.cell_a_index[conn_idx] == cell_a {
+            connections.cell_b_index[conn_idx]
+        } else {
+            connections.cell_a_index[conn_idx]
+        };
+
+        if other == cell_b {
+            return true;
+        }
+    }
+    false
 }
 
-/// Sync developmental organism scopes to the current adhesion connected components.
+/// Sync developmental organism scopes to current developmental adhesion components.
 ///
-/// This keeps `organism_ids` aligned with the simulation's existing organism
-/// boundary: a noncontiguous adhesion network becomes separate organisms.
+/// Structural barrier-ball bonds (glueocyte/scaffold mechanics) do not define
+/// ancestry and must not merge organism IDs.
 pub fn sync_development_organism_ids_from_adhesions(state: &mut CanonicalState) {
     let n = state.cell_count;
     if n == 0 {
@@ -56,6 +80,12 @@ pub fn sync_development_organism_ids_from_adhesions(state: &mut CanonicalState) 
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
     for conn_idx in 0..state.adhesion_connections.active_count {
         if state.adhesion_connections.is_active[conn_idx] == 0 {
+            continue;
+        }
+        if (state.adhesion_connections.bond_flags[conn_idx]
+            & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+            != 0
+        {
             continue;
         }
         let a = state.adhesion_connections.cell_a_index[conn_idx];
@@ -98,7 +128,9 @@ pub fn sync_development_organism_ids_from_adhesions(state: &mut CanonicalState) 
         }
     }
 
-    state.next_organism_id = state.next_organism_id.max(max_organism_id.saturating_add(1));
+    state.next_organism_id = state
+        .next_organism_id
+        .max(max_organism_id.saturating_add(1));
 }
 
 /// Instantiate and maintain scaffold bonds defined by a genome's `scaffold_rules`.
@@ -115,8 +147,8 @@ pub fn resolve_scaffold_rules(
     genome_idx: usize,
     current_time: f32,
 ) {
-    use std::collections::HashSet;
     use crate::cell::adhesion::BOND_FLAG_BARRIER_BALL;
+    use std::collections::HashSet;
 
     let live_rule_ids: HashSet<u32> = genome.scaffold_rules.iter().map(|r| r.id).collect();
 
@@ -140,48 +172,79 @@ pub fn resolve_scaffold_rules(
 
     // --- pass 2: create / update bonds from live rules ---
     for rule in &genome.scaffold_rules {
-        let is_structural = matches!(&rule.endpoint_a, crate::genome::CellAddressSelector::ByLineageHashOrMode { .. })
-            || matches!(&rule.endpoint_b, crate::genome::CellAddressSelector::ByLineageHashOrMode { .. });
+        let is_structural = matches!(
+            &rule.endpoint_a,
+            crate::genome::CellAddressSelector::ByLineageHashOrMode { .. }
+        ) || matches!(
+            &rule.endpoint_b,
+            crate::genome::CellAddressSelector::ByLineageHashOrMode { .. }
+        );
 
         if is_structural {
-            // ── Specific rule: find the single best structural match for each endpoint ──
-            // Exact lineage hash wins; otherwise the mode-match cell closest to the
-            // reference position (world pos at rule-creation time) is chosen.
-            // This produces at most ONE bond per rule and never mutates the genome.
-            let best_a = find_structural_match(state, genome_idx, &rule.endpoint_a);
-            let best_b = find_structural_match(state, genome_idx, &rule.endpoint_b);
+            // Specific rules repeat through the chosen lineage branches.
+            // Generation alignment is a preference, not a hard gate, so descendant
+            // pairs can still resolve when one side divided sooner than the other.
+            let matches_a = find_structural_matches(state, genome_idx, &rule.endpoint_a);
+            let matches_b = find_structural_matches(state, genome_idx, &rule.endpoint_b);
 
-            let (Some(ca), Some(cb)) = (best_a, best_b) else { continue };
-            if ca == cb { continue; }
-            if state.organism_ids[ca] != state.organism_ids[cb] { continue; }
+            if matches_a.is_empty() || matches_b.is_empty() {
+                continue;
+            }
 
-            let dist = state.positions[ca].distance(state.positions[cb]);
-            if dist > rule.max_formation_range { continue; }
+            let mut used_b: HashSet<usize> = HashSet::new();
+            for a_match in &matches_a {
+                let best_b = matches_b
+                    .iter()
+                    .copied()
+                    .filter(|b_match| {
+                        b_match.cell_idx != a_match.cell_idx
+                            && !used_b.contains(&b_match.cell_idx)
+                            && state.organism_ids[b_match.cell_idx]
+                                == state.organism_ids[a_match.cell_idx]
+                    })
+                    .min_by_key(|b_match| {
+                        let generation_delta =
+                            b_match.lineage_depth as i32 - a_match.lineage_depth as i32;
+                        (
+                            (generation_delta - rule.preferred_generation_delta as i32).abs(),
+                            a_match.generation.abs_diff(b_match.generation),
+                            b_match.generation,
+                            b_match.cell_idx,
+                        )
+                    });
 
-            if let Some(conn_idx) = state
-                .adhesion_manager
-                .find_connection_between(&state.adhesion_connections, ca, cb)
-            {
-                let flags = state.adhesion_connections.bond_flags[conn_idx];
-                if flags & BOND_FLAG_BARRIER_BALL != 0
-                    && state.adhesion_connections.scaffold_rule_id[conn_idx] == rule.id
-                {
-                    state.adhesion_connections.rest_length_overrides[conn_idx] =
-                        rule.rest_length.max(0.001);
-                }
-            } else {
-                let mode_index = state.mode_indices[ca];
-                let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
-                    &mut state.adhesion_connections,
+                let Some(b_match) = best_b else { continue };
+                used_b.insert(b_match.cell_idx);
+
+                let ca = a_match.cell_idx;
+                let cb = b_match.cell_idx;
+
+                if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
+                    &state.adhesion_connections,
                     ca,
                     cb,
-                    mode_index,
-                    current_time,
-                    BOND_FLAG_BARRIER_BALL,
-                    rule.rest_length,
-                );
-                if let Some(idx) = conn_idx {
-                    state.adhesion_connections.scaffold_rule_id[idx] = rule.id;
+                ) {
+                    let flags = state.adhesion_connections.bond_flags[conn_idx];
+                    if flags & BOND_FLAG_BARRIER_BALL != 0
+                        && state.adhesion_connections.scaffold_rule_id[conn_idx] == rule.id
+                    {
+                        state.adhesion_connections.rest_length_overrides[conn_idx] =
+                            rule.rest_length.max(0.001);
+                    }
+                } else {
+                    let mode_index = state.mode_indices[ca];
+                    let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
+                        &mut state.adhesion_connections,
+                        ca,
+                        cb,
+                        mode_index,
+                        current_time,
+                        BOND_FLAG_BARRIER_BALL,
+                        rule.rest_length,
+                    );
+                    if let Some(idx) = conn_idx {
+                        state.adhesion_connections.scaffold_rule_id[idx] = rule.id;
+                    }
                 }
             }
         } else {
@@ -210,28 +273,20 @@ pub fn resolve_scaffold_rules(
                     let best_cb = targets
                         .iter()
                         .copied()
-                        .filter(|&cb| {
-                            cb != ca && state.organism_ids[ca] == state.organism_ids[cb]
-                        })
+                        .filter(|&cb| cb != ca && state.organism_ids[ca] == state.organism_ids[cb])
                         .min_by(|&cb1, &cb2| {
-                            let d1 =
-                                state.positions[ca].distance_squared(state.positions[cb1]);
-                            let d2 =
-                                state.positions[ca].distance_squared(state.positions[cb2]);
+                            let d1 = state.positions[ca].distance_squared(state.positions[cb1]);
+                            let d2 = state.positions[ca].distance_squared(state.positions[cb2]);
                             d1.partial_cmp(&d2).unwrap_or(std::cmp::Ordering::Equal)
                         });
 
                     let Some(cb) = best_cb else { continue };
 
-                    let dist = state.positions[ca].distance(state.positions[cb]);
-                    if dist > rule.max_formation_range {
-                        continue;
-                    }
-
-                    if let Some(conn_idx) = state
-                        .adhesion_manager
-                        .find_connection_between(&state.adhesion_connections, ca, cb)
-                    {
+                    if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
+                        &state.adhesion_connections,
+                        ca,
+                        cb,
+                    ) {
                         let flags = state.adhesion_connections.bond_flags[conn_idx];
                         if flags & BOND_FLAG_BARRIER_BALL != 0
                             && state.adhesion_connections.scaffold_rule_id[conn_idx] == rule.id
@@ -274,11 +329,148 @@ pub(crate) fn selector_matches(
         crate::genome::CellAddressSelector::ByLineageHash(h) => {
             state.lineage_hashes[cell_idx] == *h
         }
-        crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, .. } => {
+        crate::genome::CellAddressSelector::ByLineageHashOrMode {
+            lineage_hash,
+            mode_index,
+            ..
+        } => {
             state.lineage_hashes[cell_idx] == *lineage_hash
                 || state.mode_indices[cell_idx] == *mode_index
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct StructuralMatch {
+    cell_idx: usize,
+    generation: usize,
+    lineage_depth: u16,
+}
+
+/// Find repeated structural matches for a `ByLineageHashOrMode` selector.
+///
+/// Generation 0 is the original selected cell if it still exists. Later
+/// generations follow the stored preferred branch slot through the division log,
+/// which lets a specific link repeat at the same developmental position in
+/// offspring instead of remaining a single original pair.
+fn find_structural_matches(
+    state: &CanonicalState,
+    genome_idx: usize,
+    selector: &crate::genome::CellAddressSelector,
+) -> Vec<StructuralMatch> {
+    use crate::genome::CellAddressSelector;
+    let CellAddressSelector::ByLineageHashOrMode {
+        lineage_hash,
+        mode_index,
+        preferred_branch_slot,
+    } = selector
+    else {
+        return Vec::new();
+    };
+
+    let mut matches = Vec::new();
+
+    for i in 0..state.cell_count {
+        if state.genome_ids[i] == genome_idx && state.lineage_hashes[i] == *lineage_hash {
+            matches.push(StructuralMatch {
+                cell_idx: i,
+                generation: 0,
+                lineage_depth: state.lineage_depths[i],
+            });
+            break;
+        }
+    }
+
+    let mut parent_to_live: std::collections::HashMap<u64, Vec<usize>> =
+        std::collections::HashMap::new();
+    for i in 0..state.cell_count {
+        if state.genome_ids[i] == genome_idx {
+            parent_to_live
+                .entry(state.parent_lineage_hashes[i])
+                .or_default()
+                .push(i);
+        }
+    }
+
+    let mut frontier: Vec<u64> = vec![*lineage_hash];
+    let mut visited: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    const MAX_GENERATIONS: usize = 24;
+
+    for generation in 1..=MAX_GENERATIONS {
+        if frontier.is_empty() {
+            break;
+        }
+
+        let mut next_frontier: Vec<u64> = Vec::new();
+        let mut preferred_results: Vec<usize> = Vec::new();
+        let mut fallback_results: Vec<usize> = Vec::new();
+
+        for ancestor_hash in frontier.drain(..) {
+            if !visited.insert(ancestor_hash) {
+                continue;
+            }
+
+            if let Some(children) = parent_to_live.get(&ancestor_hash) {
+                for &ci in children {
+                    if state.lineage_branch_slots[ci] == *preferred_branch_slot {
+                        preferred_results.push(ci);
+                    } else {
+                        fallback_results.push(ci);
+                    }
+                }
+            }
+
+            if let Some(&(child_a_hash, child_b_hash)) = state.division_log.get(&ancestor_hash) {
+                let preferred_hash = if *preferred_branch_slot == 2 {
+                    child_b_hash
+                } else {
+                    child_a_hash
+                };
+                let fallback_hash = if *preferred_branch_slot == 2 {
+                    child_a_hash
+                } else {
+                    child_b_hash
+                };
+                next_frontier.push(preferred_hash);
+                if preferred_results.is_empty() {
+                    next_frontier.push(fallback_hash);
+                }
+            }
+        }
+
+        let generation_results = if preferred_results.is_empty() {
+            fallback_results
+        } else {
+            preferred_results
+        };
+
+        for cell_idx in generation_results {
+            matches.push(StructuralMatch {
+                cell_idx,
+                generation,
+                lineage_depth: state.lineage_depths[cell_idx],
+            });
+            next_frontier.push(state.lineage_hashes[cell_idx]);
+        }
+
+        frontier = next_frontier;
+    }
+
+    if matches.is_empty() {
+        matches.extend((0..state.cell_count).filter_map(|i| {
+            if state.genome_ids[i] == genome_idx && state.mode_indices[i] == *mode_index {
+                Some(StructuralMatch {
+                    cell_idx: i,
+                    generation: 0,
+                    lineage_depth: state.lineage_depths[i],
+                })
+            } else {
+                None
+            }
+        }));
+    }
+
+    matches
 }
 
 /// Find the single best structural match for a `ByLineageHashOrMode` selector.
@@ -290,13 +482,19 @@ pub(crate) fn selector_matches(
 ///    by position or mode alone.
 /// 3. Mode fallback — if the lineage is completely untraceable (orphaned rule), find
 ///    the single nearest mode-matching cell to the organism's centroid as a last resort.
+#[allow(dead_code)]
 fn find_structural_match(
     state: &CanonicalState,
     genome_idx: usize,
     selector: &crate::genome::CellAddressSelector,
 ) -> Option<usize> {
     use crate::genome::CellAddressSelector;
-    let CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } = selector else {
+    let CellAddressSelector::ByLineageHashOrMode {
+        lineage_hash,
+        mode_index,
+        preferred_branch_slot,
+    } = selector
+    else {
         return None;
     };
 

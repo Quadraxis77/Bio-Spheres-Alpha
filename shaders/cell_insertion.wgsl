@@ -192,6 +192,63 @@ var<storage, read_write> genome_orientations: array<vec4<f32>>;
 @group(2) @binding(18)
 var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
 
+// Per-cell development address: [organism_id, lineage_hash_lo, lineage_hash_hi, depth_branch].
+// Root insertions use cell_id + 1 as organism_id so cell IDs 0 and 1 cannot collide.
+@group(2) @binding(19)
+var<storage, read_write> development_addresses: array<vec4<u32>>;
+
+struct U64 {
+    lo: u32,
+    hi: u32,
+};
+
+fn shr64(value: U64, amount: u32) -> U64 {
+    if (amount == 0u) {
+        return value;
+    }
+    if (amount < 32u) {
+        return U64((value.lo >> amount) | (value.hi << (32u - amount)), value.hi >> amount);
+    }
+    if (amount < 64u) {
+        return U64(value.hi >> (amount - 32u), 0u);
+    }
+    return U64(0u, 0u);
+}
+
+fn xor_shr64(value: U64, amount: u32) -> U64 {
+    let shifted = shr64(value, amount);
+    return U64(value.lo ^ shifted.lo, value.hi ^ shifted.hi);
+}
+
+fn mul_hi_u32(a: u32, b: u32) -> u32 {
+    var t = (a & 0xFFFFu) * (b & 0xFFFFu);
+    var k = t >> 16u;
+    t = (a >> 16u) * (b & 0xFFFFu) + k;
+    let w1 = t & 0xFFFFu;
+    let w2 = t >> 16u;
+    t = (a & 0xFFFFu) * (b >> 16u) + w1;
+    return (a >> 16u) * (b >> 16u) + w2 + (t >> 16u);
+}
+
+fn mul64_low(value: U64, mul_lo: u32, mul_hi: u32) -> U64 {
+    let lo = value.lo * mul_lo;
+    let hi = mul_hi_u32(value.lo, mul_lo) + value.lo * mul_hi + value.hi * mul_lo;
+    return U64(lo, hi);
+}
+
+fn mix_development_hash(value: U64) -> U64 {
+    var x = xor_shr64(value, 30u);
+    x = mul64_low(x, 0x1CE4E5B9u, 0xBF58476Du);
+    x = xor_shr64(x, 27u);
+    x = mul64_low(x, 0x133111EBu, 0x94D049BBu);
+    return xor_shr64(x, 31u);
+}
+
+fn development_root_hash(genome_id: u32, mode_index: u32) -> U64 {
+    let seed = U64(0x7F4A7C15u ^ (genome_id << 16u) ^ mode_index, 0x9E3779B9u ^ (genome_id >> 16u));
+    return mix_development_hash(seed);
+}
+
 @compute @workgroup_size(1, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Only thread 0 should execute (single workgroup dispatch)
@@ -315,11 +372,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Use provided cell_id or atomically generate new one
     let assigned_cell_id = insertion_params.cell_id;
+    var final_cell_id: u32;
     if (assigned_cell_id == 0u) {
         // Generate new cell ID atomically
-        cell_ids[slot] = atomicAdd(&next_cell_id[0], 1u);
+        final_cell_id = atomicAdd(&next_cell_id[0], 1u);
+        cell_ids[slot] = final_cell_id;
     } else {
         // Use provided cell ID
+        final_cell_id = assigned_cell_id;
         cell_ids[slot] = assigned_cell_id;
         // Update next_cell_id if necessary
         let current_next = atomicLoad(&next_cell_id[0]);
@@ -327,6 +387,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             atomicMax(&next_cell_id[0], assigned_cell_id + 1u);
         }
     }
+
+    let root_hash = development_root_hash(insertion_params.genome_id, insertion_params.mode_index);
+    development_addresses[slot] = vec4<u32>(final_cell_id + 1u, root_hash.lo, root_hash.hi, 0u);
     
     // Initialize cell properties from genome mode
     nutrient_gain_rates[slot] = insertion_params.nutrient_gain_rate;

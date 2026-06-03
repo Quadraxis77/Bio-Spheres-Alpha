@@ -442,6 +442,7 @@ impl PreviewState {
         // Scaffold rules affect bond topology during resim.
         for rule in &genome.scaffold_rules {
             rule.id.hash(&mut hasher);
+            rule.preferred_generation_delta.hash(&mut hasher);
             rule.rest_length.to_bits().hash(&mut hasher);
             rule.max_formation_range.to_bits().hash(&mut hasher);
             match &rule.endpoint_a {
@@ -458,7 +459,11 @@ impl PreviewState {
                     3u8.hash(&mut hasher);
                     h.hash(&mut hasher);
                 }
-                crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
+                crate::genome::CellAddressSelector::ByLineageHashOrMode {
+                    lineage_hash,
+                    mode_index,
+                    preferred_branch_slot,
+                } => {
                     4u8.hash(&mut hasher);
                     lineage_hash.hash(&mut hasher);
                     mode_index.hash(&mut hasher);
@@ -479,7 +484,11 @@ impl PreviewState {
                     3u8.hash(&mut hasher);
                     h.hash(&mut hasher);
                 }
-                crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
+                crate::genome::CellAddressSelector::ByLineageHashOrMode {
+                    lineage_hash,
+                    mode_index,
+                    preferred_branch_slot,
+                } => {
                     4u8.hash(&mut hasher);
                     lineage_hash.hash(&mut hasher);
                     mode_index.hash(&mut hasher);

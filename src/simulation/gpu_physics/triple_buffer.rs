@@ -26,6 +26,8 @@
 use crate::simulation::CanonicalState;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+const DEVELOPMENT_ROOT_LINEAGE_HASH: u64 = 0x9E37_79B9_7F4A_7C15;
+
 /// Deterministic slot allocation system for cell addition
 ///
 /// Maintains a sorted list of free slots and allocates them in deterministic order.
@@ -475,6 +477,10 @@ pub struct GpuTripleBufferSystem {
     /// so that structures are defined purely by genome data.
     pub genome_orientations: wgpu::Buffer,
 
+    /// Per-cell development address: [organism_id, lineage_hash_lo, lineage_hash_hi, depth_branch].
+    /// depth_branch packs lineage_depth in the high 16 bits and branch_slot in the low 16 bits.
+    pub development_addresses: wgpu::Buffer,
+
     /// Indirect dispatch buffer for GPU-driven workgroup counts
     /// Layout: [workgroup_count_x, workgroup_count_y, workgroup_count_z, padding]
     /// Written by compute shader based on cell_count, used for indirect dispatch
@@ -800,6 +806,12 @@ impl GpuTripleBufferSystem {
         let genome_orientations =
             Self::create_storage_buffer(device, buffer_size, "Genome Orientations");
 
+        let development_addresses = Self::create_zero_initialized_storage_buffer(
+            device,
+            buffer_size,
+            "Development Addresses",
+        );
+
         // Indirect dispatch buffer: 3 x u32 for workgroup counts + padding
         // Used for GPU-driven dispatch that scales with actual cell count
         let indirect_dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -888,6 +900,7 @@ impl GpuTripleBufferSystem {
             signal_settings_v3,
             signal_settings_v4,
             genome_orientations,
+            development_addresses,
             indirect_dispatch_buffer,
             current_index: AtomicUsize::new(0),
             capacity,
@@ -1062,6 +1075,8 @@ impl GpuTripleBufferSystem {
             0,
             bytemuck::cast_slice(&genome_orientation_data),
         );
+
+        self.sync_development_addresses(queue, state);
 
         // Sync cell state buffers for division system
         self.sync_cell_state_buffers(queue, state, genomes);
@@ -1281,6 +1296,64 @@ impl GpuTripleBufferSystem {
 
         // Sync behavior flags for all cell types (applies_swim_force, etc.)
         self.sync_behavior_flags(queue);
+    }
+
+    pub fn sync_development_addresses(&self, queue: &wgpu::Queue, state: &CanonicalState) {
+        if state.cell_count == 0 {
+            return;
+        }
+
+        let data: Vec<[u32; 4]> = (0..state.cell_count)
+            .map(|i| {
+                let lineage_hash = state.lineage_hashes[i];
+                [
+                    state.organism_ids[i],
+                    lineage_hash as u32,
+                    (lineage_hash >> 32) as u32,
+                    ((state.lineage_depths[i] as u32) << 16) | state.lineage_branch_slots[i] as u32,
+                ]
+            })
+            .collect();
+        queue.write_buffer(&self.development_addresses, 0, bytemuck::cast_slice(&data));
+    }
+
+    pub fn sync_single_development_address(
+        &self,
+        queue: &wgpu::Queue,
+        cell_idx: usize,
+        organism_id: u32,
+        lineage_hash: u64,
+        lineage_depth: u16,
+        branch_slot: u16,
+    ) {
+        let data = [
+            organism_id,
+            lineage_hash as u32,
+            (lineage_hash >> 32) as u32,
+            ((lineage_depth as u32) << 16) | branch_slot as u32,
+        ];
+        queue.write_buffer(
+            &self.development_addresses,
+            (cell_idx * 16) as u64,
+            bytemuck::bytes_of(&data),
+        );
+    }
+
+    fn mix_development_hash(mut x: u64) -> u64 {
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x ^= x >> 27;
+        x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^ (x >> 31)
+    }
+
+    fn development_root_hash(
+        seed: u64,
+        _organism_id: u32,
+        genome_id: usize,
+        mode_index: usize,
+    ) -> u64 {
+        Self::mix_development_hash(seed ^ ((genome_id as u64) << 16) ^ mode_index as u64)
     }
 
     /// Update cell_types buffer when genome mode cell_type settings change.
@@ -1906,10 +1979,22 @@ impl GpuTripleBufferSystem {
         for genome in genomes {
             for mode in &genome.modes {
                 v12.push([
-                    if mode.vascular_nutrient_transport { 1.0 } else { 0.0 },
+                    if mode.vascular_nutrient_transport {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     if mode.vascular_outlet { 1.0 } else { 0.0 },
-                    if mode.vascular_signal_transport { 1.0 } else { 0.0 },
-                    if mode.vascular_signal_exchange { 1.0 } else { 0.0 },
+                    if mode.vascular_signal_transport {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    if mode.vascular_signal_exchange {
+                        1.0
+                    } else {
+                        0.0
+                    },
                 ]);
             }
         }
@@ -1928,12 +2013,26 @@ impl GpuTripleBufferSystem {
         let v12: Vec<[f32; 4]> = genome
             .modes
             .iter()
-            .map(|mode| [
-                if mode.vascular_nutrient_transport { 1.0 } else { 0.0 },
-                if mode.vascular_outlet { 1.0 } else { 0.0 },
-                if mode.vascular_signal_transport { 1.0 } else { 0.0 },
-                if mode.vascular_signal_exchange { 1.0 } else { 0.0 },
-            ])
+            .map(|mode| {
+                [
+                    if mode.vascular_nutrient_transport {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    if mode.vascular_outlet { 1.0 } else { 0.0 },
+                    if mode.vascular_signal_transport {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    if mode.vascular_signal_exchange {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ]
+            })
             .collect();
         if !v12.is_empty() {
             let offset = (global_start_index * 16) as u64;
@@ -2598,6 +2697,14 @@ impl GpuTripleBufferSystem {
             request.stiffness,
             cell_type,
         );
+        let organism_id = cell_id.saturating_add(1);
+        let lineage_hash = Self::development_root_hash(
+            DEVELOPMENT_ROOT_LINEAGE_HASH,
+            organism_id,
+            request.genome_id,
+            request.mode_index,
+        );
+        self.sync_single_development_address(queue, slot as usize, organism_id, lineage_hash, 0, 0);
 
         // Update GPU cell count
         let new_count = self.slot_allocator.allocated_count();
@@ -3037,6 +3144,14 @@ impl GpuTripleBufferSystem {
                     max_cell_size,
                     stiffness,
                     cell_type,
+                );
+                self.sync_single_development_address(
+                    queue,
+                    cell_idx,
+                    state.organism_ids[cell_idx],
+                    state.lineage_hashes[cell_idx],
+                    state.lineage_depths[cell_idx],
+                    state.lineage_branch_slots[cell_idx],
                 );
             }
         }

@@ -550,26 +550,23 @@ impl CanonicalState {
     #[inline]
     fn development_root_hash(
         seed: u64,
-        organism_id: u32,
+        _organism_id: u32,
         genome_id: usize,
         mode_index: usize,
     ) -> u64 {
-        Self::mix_development_hash(
-            seed ^ ((organism_id as u64) << 32) ^ ((genome_id as u64) << 16) ^ mode_index as u64,
-        )
+        Self::mix_development_hash(seed ^ ((genome_id as u64) << 16) ^ mode_index as u64)
     }
 
     #[inline]
     fn derive_development_hash(
         parent_hash: u64,
-        organism_id: u32,
+        _organism_id: u32,
         parent_mode: usize,
         child_mode: usize,
         branch_slot: u16,
     ) -> u64 {
         Self::mix_development_hash(
             parent_hash
-                ^ ((organism_id as u64) << 32)
                 ^ ((parent_mode as u64) << 24)
                 ^ ((child_mode as u64) << 8)
                 ^ branch_slot as u64,

@@ -23,6 +23,7 @@ pub mod moss;
 pub mod mutation;
 pub mod organism_labels;
 pub mod phagocyte_consumption;
+pub mod scaffold;
 pub mod triple_buffer;
 
 pub use adhesion_buffers::AdhesionBuffers;
@@ -53,4 +54,5 @@ pub use mutation::GenomeMeta;
 pub use mutation::MutationSystem;
 pub use organism_labels::OrganismLabelSystem;
 pub use phagocyte_consumption::PhagocyteConsumptionSystem;
+pub use scaffold::GpuScaffoldSystem;
 pub use triple_buffer::GpuTripleBufferSystem;

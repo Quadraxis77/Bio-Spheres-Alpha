@@ -16,7 +16,7 @@ use crate::simulation::gpu_physics::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
     execute_signal_system, AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
     DevorocyteConsumptionSystem, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
-    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuToolOperations,
+    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
     GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
     PhysicsFeatureFlags,
 };
@@ -82,6 +82,8 @@ pub struct GpuScene {
     pub gpu_triple_buffers: GpuTripleBufferSystem,
     /// Adhesion buffer system for GPU adhesion physics
     pub adhesion_buffers: AdhesionBuffers,
+    /// GPU resolver for preview-authored scaffold links stored in genomes
+    pub scaffold_system: GpuScaffoldSystem,
     /// Cached bind groups (created once, not per-frame)
     pub cached_bind_groups: CachedBindGroups,
     /// GPU cell inspector for real-time cell data extraction
@@ -532,6 +534,8 @@ impl GpuScene {
         // Initialize adhesion buffers with default values
         adhesion_buffers.initialize(queue);
 
+        let scaffold_system = GpuScaffoldSystem::new(device);
+
         // Create signal sense world params uniform buffer (48 bytes = 12 floats)
         // Matches SignalSenseWorldParams in signal_sense.wgsl
         let signal_sense_world_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -649,6 +653,7 @@ impl GpuScene {
             gpu_physics_pipelines,
             gpu_triple_buffers,
             adhesion_buffers,
+            scaffold_system,
             cached_bind_groups,
             cell_inspector,
             cell_insertion,
@@ -1932,6 +1937,16 @@ impl GpuScene {
             self.total_cell_slots.max(1),
         );
 
+        self.scaffold_system.dispatch(
+            device,
+            encoder,
+            queue,
+            &self.gpu_triple_buffers,
+            &self.adhesion_buffers,
+            self.gpu_triple_buffers.output_buffer_index(),
+            self.total_cell_slots.max(self.current_cell_count).max(1),
+        );
+
         // Mutation pass: collect candidates from division results, then apply mutations.
         // Runs after division execute so division_flags and division_slot_assignments are set.
         if let Some(mutation_system) = &mut self.mutation_system {
@@ -2385,7 +2400,9 @@ impl GpuScene {
             Some(id) => id,
             None => {
                 // Add as new genome if not found
-                return self.add_genome(device, genome.clone()).map(|(id, _)| id);
+                return self
+                    .add_genome(device, queue, genome.clone())
+                    .map(|(id, _)| id);
             }
         };
 
@@ -2395,6 +2412,8 @@ impl GpuScene {
             && existing_genome.modes.len() == genome.modes.len()
             && existing_genome.initial_mode == genome.initial_mode
             && existing_genome.initial_orientation == genome.initial_orientation
+            && existing_genome.scaffold_rules == genome.scaffold_rules
+            && existing_genome.next_scaffold_rule_id == genome.next_scaffold_rule_id
             && Self::modes_are_identical(&existing_genome.modes, &genome.modes);
 
         if genome_unchanged {
@@ -2407,6 +2426,7 @@ impl GpuScene {
 
         // Perform incremental sync of only this genome's data
         self.incremental_sync_genome(device, queue, genome_id);
+        self.scaffold_system.sync_genomes(queue, &self.genomes);
 
         Some(genome_id)
     }
@@ -2415,13 +2435,20 @@ impl GpuScene {
     /// If an IDENTICAL genome exists (same name AND content), reuses it.
     /// If content differs, adds as a NEW genome to preserve existing cells' behavior.
     /// Returns (genome_id, needs_sync) where needs_sync is true if genome was added.
-    pub fn add_genome(&mut self, _device: &wgpu::Device, genome: Genome) -> Option<(usize, bool)> {
+    pub fn add_genome(
+        &mut self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        genome: Genome,
+    ) -> Option<(usize, bool)> {
         // Check if an identical genome already exists
         for (id, existing) in self.genomes.iter().enumerate() {
             if existing.name == genome.name
                 && existing.modes.len() == genome.modes.len()
                 && existing.initial_mode == genome.initial_mode
                 && existing.initial_orientation == genome.initial_orientation
+                && existing.scaffold_rules == genome.scaffold_rules
+                && existing.next_scaffold_rule_id == genome.next_scaffold_rule_id
                 && Self::modes_are_identical(&existing.modes, &genome.modes)
             {
                 // Genome is truly identical, reuse it
@@ -2442,6 +2469,7 @@ impl GpuScene {
 
         // Update has_oculocytes flag
         self.update_has_oculocytes();
+        self.scaffold_system.sync_genomes(queue, &self.genomes);
 
         log::info!("Added new genome {} (total: {})", id, self.genomes.len());
         Some((id, true)) // needs_sync = true because genome was added
@@ -3070,6 +3098,8 @@ impl GpuScene {
                     .push(mode.parent_make_adhesion);
             }
         }
+
+        self.scaffold_system.sync_genomes(queue, &self.genomes);
     }
 
     /// Get parent_make_adhesion flag for a specific mode index
@@ -3173,7 +3203,7 @@ impl GpuScene {
         }
 
         // Find or add the genome (add_genome now updates existing genomes with same name)
-        let (genome_id, needs_sync) = match self.add_genome(device, genome.clone()) {
+        let (genome_id, needs_sync) = match self.add_genome(device, queue, genome.clone()) {
             Some((id, sync)) => (id, sync),
             None => {
                 log::error!("Failed to add genome - at maximum capacity");

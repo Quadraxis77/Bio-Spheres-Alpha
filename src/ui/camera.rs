@@ -198,49 +198,30 @@ impl CameraController {
     /// Helper method to realign camera to a new up direction
     fn realign_camera_to_up(&mut self, new_up: Vec3) {
         let forward = self.rotation * Vec3::NEG_Z;
-
-        // Project forward onto plane perpendicular to new_up
-        let forward_projected = (forward - new_up * forward.dot(new_up)).normalize_or_zero();
-
-        let new_forward = if forward_projected.length_squared() < 0.001 {
-            // Forward is parallel to up, pick a default
-            if new_up.y.abs() < 0.9 {
-                Vec3::Y.cross(new_up).normalize()
-            } else {
-                Vec3::X.cross(new_up).normalize()
-            }
-        } else {
-            forward_projected
-        };
-
-        // Build rotation from forward and up
-        let new_right = new_forward.cross(new_up).normalize();
-        let corrected_forward = new_up.cross(new_right).normalize();
-
-        let rot_matrix = glam::Mat3::from_cols(new_right, new_up, -corrected_forward);
-        let new_rotation = Quat::from_mat3(&rot_matrix).normalize();
+        let new_rotation = Self::rotation_from_forward_and_up(forward, new_up);
 
         self.rotation = new_rotation;
         self.target_rotation = new_rotation;
     }
 
-    /// Remove roll while preserving the current look direction as much as possible.
-    fn rotation_without_roll(forward: Vec3, up: Vec3) -> Quat {
+    /// Build a camera rotation with no roll relative to the supplied up axis.
+    fn rotation_from_forward_and_up(forward: Vec3, up: Vec3) -> Quat {
+        let up = up.normalize_or_zero();
         let forward = forward.normalize_or_zero();
-        let projected_forward = (forward - up * forward.dot(up)).normalize_or_zero();
-        let stable_forward = if projected_forward.length_squared() < 0.001 {
-            if up.y.abs() < 0.9 {
-                Vec3::Y.cross(up).normalize()
+        let stable_forward =
+            if forward.length_squared() < 0.001 || forward.cross(up).length_squared() < 0.001 {
+                if up.y.abs() < 0.9 {
+                    Vec3::Y.cross(up).normalize()
+                } else {
+                    Vec3::X.cross(up).normalize()
+                }
             } else {
-                Vec3::X.cross(up).normalize()
-            }
-        } else {
-            forward
-        };
+                forward
+            };
 
         let right = stable_forward.cross(up).normalize();
-        let corrected_forward = up.cross(right).normalize();
-        let rot_matrix = glam::Mat3::from_cols(right, up, -corrected_forward);
+        let corrected_up = right.cross(stable_forward).normalize();
+        let rot_matrix = glam::Mat3::from_cols(right, corrected_up, -stable_forward);
         Quat::from_mat3(&rot_matrix).normalize()
     }
 
@@ -342,15 +323,9 @@ impl CameraController {
                 self.distance = orbit_distance;
                 self.target_distance = orbit_distance;
 
-                // Remove roll component when switching to Orbit mode
-                // Extract forward direction and create clean orbit rotation
                 let forward = (self.rotation * Vec3::NEG_Z).normalize();
-                let up = self.up_direction;
-                let right = forward.cross(up).normalize();
-                let corrected_forward = up.cross(right).normalize();
-
-                let rot_matrix = glam::Mat3::from_cols(right, up, -corrected_forward);
-                self.target_rotation = Quat::from_mat3(&rot_matrix).normalize();
+                self.target_rotation =
+                    Self::rotation_from_forward_and_up(forward, self.up_direction);
                 self.rotation = self.target_rotation;
 
                 self.mode = CameraMode::Orbit;
@@ -415,8 +390,21 @@ impl CameraController {
                         let proposed_forward = proposed_rotation * Vec3::NEG_Z;
                         const MAX_UP_DOT: f32 = 0.98;
                         if proposed_forward.dot(self.up_direction).abs() < MAX_UP_DOT {
-                            self.target_rotation = proposed_rotation;
+                            self.target_rotation = Self::rotation_from_forward_and_up(
+                                proposed_forward,
+                                self.up_direction,
+                            );
+                        } else {
+                            let current_forward = self.target_rotation * Vec3::NEG_Z;
+                            self.target_rotation = Self::rotation_from_forward_and_up(
+                                current_forward,
+                                self.up_direction,
+                            );
                         }
+                    } else {
+                        let current_forward = self.target_rotation * Vec3::NEG_Z;
+                        self.target_rotation =
+                            Self::rotation_from_forward_and_up(current_forward, self.up_direction);
                     }
                 }
             } else {

@@ -254,7 +254,8 @@ fn compute_adhesion_forces_for_cell(
     }
     
     let adhesion_dir = delta_pos / dist;
-    let rest_length = settings.rest_length;
+    let rest_length_override = bitcast<f32>(connection._pad);
+    let rest_length = select(settings.rest_length, rest_length_override, rest_length_override > 0.0);
     
     // Per-cell contraction: each cell's contraction reduces the total rest length by half.
     // One myocyte at full contraction (1.0) shortens the bond by 50%.

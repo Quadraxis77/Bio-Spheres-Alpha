@@ -239,6 +239,11 @@ var<storage, read> signal_settings_v3_read: array<vec4<f32>>;
 @group(2) @binding(39)
 var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
 
+// Per-cell development address: [organism_id, lineage_hash_lo, lineage_hash_hi, depth_branch].
+// depth_branch packs lineage_depth in the high 16 bits and branch_slot in the low 16 bits.
+@group(2) @binding(41)
+var<storage, read_write> development_addresses: array<vec4<u32>>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -405,6 +410,66 @@ fn quat_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
         a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
         a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
     );
+}
+
+struct U64 {
+    lo: u32,
+    hi: u32,
+};
+
+fn shr64(value: U64, amount: u32) -> U64 {
+    if (amount == 0u) {
+        return value;
+    }
+    if (amount < 32u) {
+        return U64((value.lo >> amount) | (value.hi << (32u - amount)), value.hi >> amount);
+    }
+    if (amount < 64u) {
+        return U64(value.hi >> (amount - 32u), 0u);
+    }
+    return U64(0u, 0u);
+}
+
+fn xor_shr64(value: U64, amount: u32) -> U64 {
+    let shifted = shr64(value, amount);
+    return U64(value.lo ^ shifted.lo, value.hi ^ shifted.hi);
+}
+
+fn mul_hi_u32(a: u32, b: u32) -> u32 {
+    var t = (a & 0xFFFFu) * (b & 0xFFFFu);
+    var k = t >> 16u;
+    t = (a >> 16u) * (b & 0xFFFFu) + k;
+    let w1 = t & 0xFFFFu;
+    let w2 = t >> 16u;
+    t = (a & 0xFFFFu) * (b >> 16u) + w1;
+    return (a >> 16u) * (b >> 16u) + w2 + (t >> 16u);
+}
+
+fn mul64_low(value: U64, mul_lo: u32, mul_hi: u32) -> U64 {
+    let lo = value.lo * mul_lo;
+    let hi = mul_hi_u32(value.lo, mul_lo) + value.lo * mul_hi + value.hi * mul_lo;
+    return U64(lo, hi);
+}
+
+fn mix_development_hash(value: U64) -> U64 {
+    var x = xor_shr64(value, 30u);
+    x = mul64_low(x, 0x1CE4E5B9u, 0xBF58476Du);
+    x = xor_shr64(x, 27u);
+    x = mul64_low(x, 0x133111EBu, 0x94D049BBu);
+    return xor_shr64(x, 31u);
+}
+
+fn derive_development_hash(
+    parent_hash: U64,
+    parent_mode: u32,
+    child_mode: u32,
+    branch_slot: u32
+) -> U64 {
+    let mixed = U64(
+        parent_hash.lo ^ (parent_mode << 24u) ^ (child_mode << 8u) ^ branch_slot,
+        parent_hash.hi ^ (parent_mode >> 8u) ^ (child_mode >> 24u)
+    );
+    return mix_development_hash(mixed);
 }
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
@@ -674,6 +739,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
+    let parent_development = development_addresses[cell_idx];
+    let parent_organism_id = select(parent_development.x, parent_cell_id, parent_development.x == 0u);
+    let parent_lineage_hash = U64(parent_development.y, parent_development.z);
+    let parent_lineage_depth = parent_development.w >> 16u;
+    let child_lineage_depth = min(parent_lineage_depth + 1u, 0xFFFFu);
+    let child_a_lineage_hash = derive_development_hash(
+        parent_lineage_hash,
+        parent_mode_idx,
+        child_a_mode_idx,
+        1u
+    );
+    let child_b_lineage_hash = derive_development_hash(
+        parent_lineage_hash,
+        parent_mode_idx,
+        child_b_mode_idx,
+        2u
+    );
+
     // === Create Child A (overwrites parent slot) ===
     let parent_velocity = velocities_in[cell_idx];
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
@@ -686,6 +769,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Physics rotation = genome rotation chain (no random perturbation for determinism)
     rotations_out[cell_idx] = child_a_rotation;
     genome_orientations[cell_idx] = child_a_genome_orientation;
+    development_addresses[cell_idx] = vec4<u32>(
+        parent_organism_id,
+        child_a_lineage_hash.lo,
+        child_a_lineage_hash.hi,
+        (child_lineage_depth << 16u) | 1u
+    );
     
     birth_times[cell_idx] = params.current_time;
     mode_indices[cell_idx] = child_a_mode_idx;
@@ -743,6 +832,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Physics rotation = genome rotation chain (no random perturbation for determinism)
     rotations_out[child_b_slot] = child_b_rotation;
     genome_orientations[child_b_slot] = child_b_genome_orientation;
+    development_addresses[child_b_slot] = vec4<u32>(
+        parent_organism_id,
+        child_b_lineage_hash.lo,
+        child_b_lineage_hash.hi,
+        (child_lineage_depth << 16u) | 2u
+    );
     
     let child_b_props_0 = mode_properties_v0[child_b_mode_idx];
     let child_b_props_1 = mode_properties_v1[child_b_mode_idx];

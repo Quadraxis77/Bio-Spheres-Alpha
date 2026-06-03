@@ -3678,7 +3678,11 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 selected_index = context.editor_state.selected_mode_index;
                 initial_mode = context.genome.initial_mode.max(0) as usize;
             }
-            log::info!("Removed modes {:?}, now {} modes", removed, context.genome.modes.len());
+            log::info!(
+                "Removed modes {:?}, now {} modes",
+                removed,
+                context.genome.modes.len()
+            );
         }
 
         if copy_into_clicked {

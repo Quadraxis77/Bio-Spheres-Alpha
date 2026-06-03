@@ -30,20 +30,28 @@ pub enum CellAddressSelector {
     /// division log and preferring the child that matches `preferred_branch_slot` (the branch
     /// slot the original cell occupied at each generation — 1 = child_a, 2 = child_b).
     /// Falls back to any descendant, then to nearest mode match.
-    ByLineageHashOrMode { lineage_hash: u64, mode_index: usize, preferred_branch_slot: u16 },
+    ByLineageHashOrMode {
+        lineage_hash: u64,
+        mode_index: usize,
+        preferred_branch_slot: u16,
+    },
 }
 
 /// A persistent scaffold rule stored in the genome.
 ///
-/// The resolver creates/maintains barrier-ball bonds between all same-organism cell
-/// pairs where `endpoint_a` matches one cell and `endpoint_b` matches the other,
-/// and the cells are within `max_formation_range` of each other.
-#[derive(Debug, Clone)]
+/// The preview uses `max_formation_range` to validate player-authored pairs.
+/// Runtime scenes then maintain the stored barrier-ball bond for matching same-organism cells.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScaffoldRule {
     /// Stable ID — used by bonds to track which rule created them.
     pub id: u32,
     pub endpoint_a: CellAddressSelector,
     pub endpoint_b: CellAddressSelector,
+    /// Preferred lineage-depth difference from endpoint A to endpoint B.
+    ///
+    /// This is a matching hint, not a hard requirement: runtime resolution can
+    /// still connect across generations when one side has divided sooner.
+    pub preferred_generation_delta: i16,
     pub rest_length: f32,
     pub max_formation_range: f32,
 }
@@ -283,7 +291,7 @@ pub struct ModeSettings {
     pub vascular_outlet: bool, // Nutrient exchange port: exchanges with non-vascular neighbors in both directions
     pub vascular_signal_transport: bool, // When true, this mode participates in vascular signal pipes
     pub vascular_signal_exchange: bool, // Signal exchange port: exchanges with non-vascular neighbors in both directions
-    pub vascular_signal_capacity: f32, // Node-level throughput cap prevents fan-in amplification
+    pub vascular_signal_capacity: f32,  // Node-level throughput cap prevents fan-in amplification
 
     // Gametocyte settings
     pub gametocyte_merge_range: f32, // Extra contact range for merge detection beyond cell radii (0.0 to 2.0)
@@ -796,8 +804,10 @@ impl Genome {
                 }
             };
 
-            mode.child_a.mode_number = child_remap(mode.child_a.mode_number).unwrap_or(new_self_idx);
-            mode.child_b.mode_number = child_remap(mode.child_b.mode_number).unwrap_or(new_self_idx);
+            mode.child_a.mode_number =
+                child_remap(mode.child_a.mode_number).unwrap_or(new_self_idx);
+            mode.child_b.mode_number =
+                child_remap(mode.child_b.mode_number).unwrap_or(new_self_idx);
 
             if let Some(target) = child_remap(mode.mode_a_after_splits) {
                 mode.mode_a_after_splits = target;

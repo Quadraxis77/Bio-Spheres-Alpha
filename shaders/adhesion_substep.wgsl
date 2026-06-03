@@ -242,7 +242,8 @@ fn compute_substep_forces(
     }
 
     let adhesion_dir = delta_pos / dist;
-    let rest_length = settings.rest_length;
+    let rest_length_override = bitcast<f32>(connection._pad);
+    let rest_length = select(settings.rest_length, rest_length_override, rest_length_override > 0.0);
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
     if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
         let spring = (dist - effective_rest_length) * settings.linear_spring_stiffness;

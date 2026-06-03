@@ -312,7 +312,8 @@ pub fn propagate_signals(
                         continue;
                     }
 
-                    let capped = cap_signal_at_mode(genome, mode_idx, signal_contribution[cell_idx]);
+                    let capped =
+                        cap_signal_at_mode(genome, mode_idx, signal_contribution[cell_idx]);
                     let outgoing = attenuate_signal(capped, edge_cost);
                     let next_budget = budget - edge_cost;
                     let budget_delta = next_budget - remaining_budget[neighbor];

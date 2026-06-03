@@ -219,6 +219,10 @@ impl GpuCellInsertion {
                     binding: 18,
                     resource: buffers.embryocyte_reserve_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 19,
+                    resource: buffers.development_addresses.as_entire_binding(),
+                },
             ],
         });
 

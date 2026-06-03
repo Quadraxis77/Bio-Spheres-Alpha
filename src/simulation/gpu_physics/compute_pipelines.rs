@@ -1784,6 +1784,10 @@ impl GpuPhysicsPipelines {
                     binding: 39,
                     resource: buffers.embryocyte_reserve_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 41,
+                    resource: buffers.development_addresses.as_entire_binding(),
+                },
             ],
         })
     }
@@ -3796,6 +3800,17 @@ impl GpuPhysicsPipelines {
                     // Binding 39: Embryocyte reserve buffer (read-write: halved on division, child_reserve = parent_reserve >> 1)
                     wgpu::BindGroupLayoutEntry {
                         binding: 39,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 41: Development address buffer (organism id + lineage hash), updated on division.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 41,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -5956,6 +5971,17 @@ impl GpuPhysicsPipelines {
                 // Initialized to 65535000 for Embryocytes, 0 for all others.
                 wgpu::BindGroupLayoutEntry {
                     binding: 18,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 19: Development address [organism_id, lineage_hash_lo, lineage_hash_hi, depth_branch]
+                wgpu::BindGroupLayoutEntry {
+                    binding: 19,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
