@@ -2,7 +2,7 @@
 
 use crate::genome::Genome;
 use crate::simulation::adhesion_inheritance::inherit_adhesions_on_division;
-use crate::simulation::canonical_state::{CanonicalState, DivisionEvent};
+use crate::simulation::canonical_state::{CanonicalState, CellDevelopmentAddress, DivisionEvent};
 use glam::{EulerRot, Quat, Vec3};
 
 /// Deterministic pseudo-random rotation for cell division
@@ -220,6 +220,8 @@ pub fn division_step(
             child_b_split_nutrient_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
+            child_a_development_address: CellDevelopmentAddress,
+            child_b_development_address: CellDevelopmentAddress,
         }
 
         let mut division_data_list = Vec::new();
@@ -466,6 +468,18 @@ pub fn division_step(
                     parent_rotation * split_rotation * child_a_orientation_for_genome;
                 let child_b_orientation =
                     parent_rotation * split_rotation * child_b_orientation_for_genome;
+                let child_a_development_address = state.derive_division_development_address(
+                    parent_idx,
+                    mode_index,
+                    child_a_mode_idx,
+                    1,
+                );
+                let child_b_development_address = state.derive_division_development_address(
+                    parent_idx,
+                    mode_index,
+                    child_b_mode_idx,
+                    2,
+                );
 
                 division_data_list.push(DivisionData {
                     parent_idx,
@@ -496,6 +510,8 @@ pub fn division_step(
                     child_b_split_nutrient_threshold,
                     child_a_split_count,
                     child_b_split_count,
+                    child_a_development_address,
+                    child_b_development_address,
                 });
             }
         }
@@ -513,6 +529,7 @@ pub fn division_step(
                 let child_a_id = state.next_cell_id;
                 state.cell_ids[data.child_a_slot] = child_a_id;
                 state.next_cell_id += 1;
+                state.set_development_address(data.child_a_slot, data.child_a_development_address);
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
@@ -551,6 +568,7 @@ pub fn division_step(
                 let child_b_id = state.next_cell_id;
                 state.cell_ids[data.child_b_slot] = child_b_id;
                 state.next_cell_id += 1;
+                state.set_development_address(data.child_b_slot, data.child_b_development_address);
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;
@@ -894,6 +912,8 @@ pub fn division_step_multi(
             child_b_split_nutrient_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
+            child_a_development_address: CellDevelopmentAddress,
+            child_b_development_address: CellDevelopmentAddress,
             split_direction_local: Vec3,
             parent_radius: f32,
         }
@@ -1081,6 +1101,18 @@ pub fn division_step_multi(
                 parent_rotation * split_rotation * child_a_orientation_for_genome;
             let child_b_orientation =
                 parent_rotation * split_rotation * child_b_orientation_for_genome;
+            let child_a_development_address = state.derive_division_development_address(
+                parent_idx,
+                mode_index,
+                child_a_mode_idx,
+                1,
+            );
+            let child_b_development_address = state.derive_division_development_address(
+                parent_idx,
+                mode_index,
+                child_b_mode_idx,
+                2,
+            );
 
             division_data_list.push(DivisionData {
                 parent_idx,
@@ -1110,6 +1142,8 @@ pub fn division_step_multi(
                 child_b_split_nutrient_threshold,
                 child_a_split_count,
                 child_b_split_count,
+                child_a_development_address,
+                child_b_development_address,
                 split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
                 parent_radius,
             });
@@ -1127,6 +1161,7 @@ pub fn division_step_multi(
                 let child_a_id = state.next_cell_id;
                 state.cell_ids[data.child_a_slot] = child_a_id;
                 state.next_cell_id += 1;
+                state.set_development_address(data.child_a_slot, data.child_a_development_address);
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
@@ -1161,6 +1196,7 @@ pub fn division_step_multi(
                 let child_b_id = state.next_cell_id;
                 state.cell_ids[data.child_b_slot] = child_b_id;
                 state.next_cell_id += 1;
+                state.set_development_address(data.child_b_slot, data.child_b_development_address);
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;

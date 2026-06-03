@@ -154,6 +154,9 @@ use crate::genome::AdhesionSettings;
 use crate::simulation::spatial_grid::DeterministicSpatialGrid;
 use glam::{Quat, Vec3};
 
+const DEVELOPMENT_ROOT_LINEAGE_HASH: u64 = 0x9E37_79B9_7F4A_7C15;
+const DEVELOPMENT_ROOT_MORPHOLOGY_HASH: u64 = 0xC2B2_AE3D_27D4_EB4F;
+
 /// Event describing a cell division that occurred during physics simulation
 ///
 /// Division events are collected during the physics step and processed afterwards
@@ -166,6 +169,19 @@ pub struct DivisionEvent {
     pub child_a_idx: usize,
     /// Index of the second child cell created
     pub child_b_idx: usize,
+}
+
+/// Compact developmental identity for a cell.
+///
+/// The lineage is intentionally bounded: `lineage_hash` is a rolling hash scoped
+/// by `organism_id`, not a stored path that grows with generation count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellDevelopmentAddress {
+    pub organism_id: u32,
+    pub lineage_hash: u64,
+    pub morphology_hash: u64,
+    pub lineage_depth: u16,
+    pub branch_slot: u16,
 }
 
 /// Central simulation state using Structure-of-Arrays (SoA) layout for optimal performance
@@ -208,6 +224,24 @@ pub struct CanonicalState {
     /// When cells are removed and indices are reused, cell_ids provide a way
     /// to track individual cells across their lifetime.
     pub cell_ids: Vec<u32>,
+
+    /// Developmental organism scope for each cell.
+    ///
+    /// Cells with the same organism ID belong to the same reproductive individual.
+    /// Lineage hashes are only meaningful inside this scope.
+    pub organism_ids: Vec<u32>,
+
+    /// Bounded rolling lineage hash for each cell, scoped by `organism_ids`.
+    pub lineage_hashes: Vec<u64>,
+
+    /// Bounded rolling morphology hash for each cell, derived from mode sequence.
+    pub morphology_hashes: Vec<u64>,
+
+    /// Saturating lineage depth for display/debug and selector specificity.
+    pub lineage_depths: Vec<u16>,
+
+    /// Last local branch slot used to derive this address.
+    pub lineage_branch_slots: Vec<u16>,
 
     // === Position and Motion (SoA) ===
     // These arrays are accessed together during physics integration
@@ -380,6 +414,9 @@ pub struct CanonicalState {
     /// that persist even when cell indices are reused.
     pub next_cell_id: u32,
 
+    /// Next developmental organism ID to assign to standalone roots.
+    pub next_organism_id: u32,
+
     // === Division Processing Buffers ===
     // Pre-allocated buffers to avoid per-frame allocations during division processing
     /// Buffer for collecting division events during physics step
@@ -491,6 +528,142 @@ pub struct CanonicalState {
 }
 
 impl CanonicalState {
+    #[inline]
+    fn mix_development_hash(mut x: u64) -> u64 {
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x ^= x >> 27;
+        x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^ (x >> 31)
+    }
+
+    #[inline]
+    fn development_root_hash(
+        seed: u64,
+        organism_id: u32,
+        genome_id: usize,
+        mode_index: usize,
+    ) -> u64 {
+        Self::mix_development_hash(
+            seed ^ ((organism_id as u64) << 32) ^ ((genome_id as u64) << 16) ^ mode_index as u64,
+        )
+    }
+
+    #[inline]
+    fn derive_development_hash(
+        parent_hash: u64,
+        organism_id: u32,
+        parent_mode: usize,
+        child_mode: usize,
+        branch_slot: u16,
+    ) -> u64 {
+        Self::mix_development_hash(
+            parent_hash
+                ^ ((organism_id as u64) << 32)
+                ^ ((parent_mode as u64) << 24)
+                ^ ((child_mode as u64) << 8)
+                ^ branch_slot as u64,
+        )
+    }
+
+    pub fn development_address(&self, cell_index: usize) -> Option<CellDevelopmentAddress> {
+        if cell_index >= self.cell_count {
+            return None;
+        }
+        Some(CellDevelopmentAddress {
+            organism_id: self.organism_ids[cell_index],
+            lineage_hash: self.lineage_hashes[cell_index],
+            morphology_hash: self.morphology_hashes[cell_index],
+            lineage_depth: self.lineage_depths[cell_index],
+            branch_slot: self.lineage_branch_slots[cell_index],
+        })
+    }
+
+    pub(crate) fn set_development_address(
+        &mut self,
+        cell_index: usize,
+        address: CellDevelopmentAddress,
+    ) {
+        if cell_index >= self.capacity {
+            return;
+        }
+        self.organism_ids[cell_index] = address.organism_id;
+        self.lineage_hashes[cell_index] = address.lineage_hash;
+        self.morphology_hashes[cell_index] = address.morphology_hash;
+        self.lineage_depths[cell_index] = address.lineage_depth;
+        self.lineage_branch_slots[cell_index] = address.branch_slot;
+        if address.organism_id >= self.next_organism_id {
+            self.next_organism_id = address.organism_id.saturating_add(1);
+        }
+    }
+
+    pub fn assign_development_root(
+        &mut self,
+        cell_index: usize,
+        genome_id: usize,
+        mode_index: usize,
+    ) {
+        let organism_id = self.next_organism_id.max(1);
+        self.next_organism_id = organism_id.saturating_add(1);
+        self.set_development_address(
+            cell_index,
+            CellDevelopmentAddress {
+                organism_id,
+                lineage_hash: Self::development_root_hash(
+                    DEVELOPMENT_ROOT_LINEAGE_HASH,
+                    organism_id,
+                    genome_id,
+                    mode_index,
+                ),
+                morphology_hash: Self::development_root_hash(
+                    DEVELOPMENT_ROOT_MORPHOLOGY_HASH,
+                    organism_id,
+                    genome_id,
+                    mode_index,
+                ),
+                lineage_depth: 0,
+                branch_slot: 0,
+            },
+        );
+    }
+
+    pub fn derive_division_development_address(
+        &self,
+        parent_index: usize,
+        parent_mode: usize,
+        child_mode: usize,
+        branch_slot: u16,
+    ) -> CellDevelopmentAddress {
+        let parent = self
+            .development_address(parent_index)
+            .unwrap_or(CellDevelopmentAddress {
+                organism_id: 0,
+                lineage_hash: DEVELOPMENT_ROOT_LINEAGE_HASH,
+                morphology_hash: DEVELOPMENT_ROOT_MORPHOLOGY_HASH,
+                lineage_depth: 0,
+                branch_slot: 0,
+            });
+        CellDevelopmentAddress {
+            organism_id: parent.organism_id,
+            lineage_hash: Self::derive_development_hash(
+                parent.lineage_hash,
+                parent.organism_id,
+                parent_mode,
+                child_mode,
+                branch_slot,
+            ),
+            morphology_hash: Self::derive_development_hash(
+                parent.morphology_hash,
+                parent.organism_id,
+                parent_mode,
+                child_mode,
+                branch_slot,
+            ),
+            lineage_depth: parent.lineage_depth.saturating_add(1),
+            branch_slot,
+        }
+    }
+
     /// Create a new canonical state with the specified capacity
     ///
     /// Uses a default spatial grid density of 64^3 cells, which works well
@@ -537,6 +710,11 @@ impl CanonicalState {
             // Initialize all arrays to capacity size with default values
             // This avoids allocations during simulation
             cell_ids: vec![0; capacity],
+            organism_ids: vec![0; capacity],
+            lineage_hashes: vec![0; capacity],
+            morphology_hashes: vec![0; capacity],
+            lineage_depths: vec![0; capacity],
+            lineage_branch_slots: vec![0; capacity],
 
             // Position and motion arrays - initialized to zero/identity
             positions: vec![Vec3::ZERO; capacity],
@@ -586,6 +764,7 @@ impl CanonicalState {
             // State tracking
             masses_changed: false,
             next_cell_id: 0,
+            next_organism_id: 1,
 
             // Pre-allocated buffers to avoid per-frame allocations
             division_events_buffer: Vec::with_capacity(256), // Expect <256 divisions/frame
@@ -675,6 +854,7 @@ impl CanonicalState {
 
         // Assign unique cell ID and increment for next cell
         self.cell_ids[index] = self.next_cell_id;
+        self.assign_development_root(index, genome_id, mode_index);
 
         // Initialize all cell properties in their respective arrays
         // Position and motion
@@ -795,6 +975,7 @@ impl CanonicalState {
 
         // Assign the specific cell ID (don't auto-increment)
         self.cell_ids[slot_index] = cell_id;
+        self.assign_development_root(slot_index, genome_id, mode_index);
 
         // Update next_cell_id if this ID is higher
         if cell_id >= self.next_cell_id {
@@ -889,6 +1070,11 @@ impl CanonicalState {
         if cell_index != last_index {
             // Copy all data from last cell to the removed cell's slot
             self.cell_ids[cell_index] = self.cell_ids[last_index];
+            self.organism_ids[cell_index] = self.organism_ids[last_index];
+            self.lineage_hashes[cell_index] = self.lineage_hashes[last_index];
+            self.morphology_hashes[cell_index] = self.morphology_hashes[last_index];
+            self.lineage_depths[cell_index] = self.lineage_depths[last_index];
+            self.lineage_branch_slots[cell_index] = self.lineage_branch_slots[last_index];
             self.positions[cell_index] = self.positions[last_index];
             self.prev_positions[cell_index] = self.prev_positions[last_index];
             self.velocities[cell_index] = self.velocities[last_index];

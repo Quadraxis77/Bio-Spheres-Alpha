@@ -78,6 +78,9 @@ enum MenuAction {
 
 const CELL_LINK_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(450);
 const CELL_LINK_HOLD_CANCEL_DISTANCE_PX: f32 = 8.0;
+const SCAFFOLD_MIN_REST_LENGTH: f32 = 0.4;
+const SCAFFOLD_MAX_REST_LENGTH: f32 = 3.0;
+const SCAFFOLD_MAX_FORMATION_RANGE: f32 = 3.0;
 
 #[derive(Debug, Clone, Copy)]
 struct PreviewCellHit {
@@ -96,6 +99,8 @@ struct CellLinkHold {
 struct CellLinkSelection {
     anchor_cell_index: usize,
     selected_cell_indices: Vec<usize>,
+    rest_length: f32,
+    rest_length_initialized: bool,
 }
 
 /// Action deferred until after the current frame is presented to the screen.
@@ -258,8 +263,7 @@ impl App {
         let ndc_x = (mx / w) * 2.0 - 1.0;
         let ndc_y = 1.0 - (my / h) * 2.0;
         let ray_dir_cam =
-            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0)
-                .normalize();
+            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0).normalize();
         let ray_dir = cam_rot * ray_dir_cam;
 
         let cell_count = preview_scene.state.display_state.cell_count;
@@ -350,6 +354,8 @@ impl App {
         self.cell_link_selection = Some(CellLinkSelection {
             anchor_cell_index: hold.hit.cell_index,
             selected_cell_indices: vec![hold.hit.cell_index],
+            rest_length: 1.0,
+            rest_length_initialized: false,
         });
         self.set_app_cursor(CursorIcon::Default);
         log::info!(
@@ -360,6 +366,30 @@ impl App {
     }
 
     fn update_cell_link_selection_from_hit(&mut self, hit: PreviewCellHit, ctrl_held: bool) {
+        let in_range = self.cell_link_selection.as_ref().is_some_and(|selection| {
+            hit.cell_index == selection.anchor_cell_index
+                || self
+                    .scene_manager
+                    .get_preview_scene()
+                    .map(|preview_scene| {
+                        let (distance, _, _) = Self::scaffold_pair_status(
+                            preview_scene,
+                            selection.anchor_cell_index,
+                            hit.cell_index,
+                        );
+                        distance <= SCAFFOLD_MAX_FORMATION_RANGE
+                    })
+                    .unwrap_or(false)
+        });
+        if !in_range {
+            log::info!(
+                "Cell link selection ignored preview cell {}: outside scaffold range {:.2}",
+                hit.cell_index,
+                SCAFFOLD_MAX_FORMATION_RANGE
+            );
+            return;
+        }
+
         let Some(selection) = self.cell_link_selection.as_mut() else {
             return;
         };
@@ -377,7 +407,9 @@ impl App {
             }
         } else {
             selection.selected_cell_indices.clear();
-            selection.selected_cell_indices.push(selection.anchor_cell_index);
+            selection
+                .selected_cell_indices
+                .push(selection.anchor_cell_index);
             if hit.cell_index != selection.anchor_cell_index {
                 selection.selected_cell_indices.push(hit.cell_index);
             }
@@ -400,6 +432,421 @@ impl App {
             self.complete_cell_link_hold();
         } else if self.cell_link_hold.is_some() {
             self.window.request_redraw();
+        }
+    }
+
+    fn preview_cells_are_same_organism(scene: &PreviewScene, cell_a: usize, cell_b: usize) -> bool {
+        let state = &scene.state.display_state;
+        if cell_a >= state.cell_count || cell_b >= state.cell_count {
+            return false;
+        }
+        state.organism_ids[cell_a] == state.organism_ids[cell_b]
+    }
+
+    fn scaffold_pair_status(
+        scene: &PreviewScene,
+        anchor: usize,
+        target: usize,
+    ) -> (f32, bool, bool) {
+        let state = &scene.state.display_state;
+        if anchor >= state.cell_count || target >= state.cell_count {
+            return (0.0, false, false);
+        }
+        let distance = state.positions[anchor].distance(state.positions[target]);
+        let in_range = distance <= SCAFFOLD_MAX_FORMATION_RANGE;
+        let same_organism = Self::preview_cells_are_same_organism(scene, anchor, target);
+        (distance, in_range, same_organism)
+    }
+
+    fn preview_world_to_screen(
+        scene: &PreviewScene,
+        world_pos: glam::Vec3,
+        viewport_size: (f32, f32),
+    ) -> Option<egui::Pos2> {
+        let (width, height) = viewport_size;
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+
+        let view_matrix = glam::Mat4::look_at_rh(
+            scene.camera.position(),
+            scene.camera.position() + scene.camera.rotation * glam::Vec3::NEG_Z,
+            scene.camera.rotation * glam::Vec3::Y,
+        );
+        let proj_matrix =
+            glam::Mat4::perspective_rh(45.0_f32.to_radians(), width / height, 0.1, 1000.0);
+        let clip = proj_matrix * view_matrix * world_pos.extend(1.0);
+        if clip.w <= 0.0 {
+            return None;
+        }
+
+        let ndc = clip.truncate() / clip.w;
+        if ndc.z < -1.0 || ndc.z > 1.0 {
+            return None;
+        }
+
+        Some(egui::pos2(
+            (ndc.x * 0.5 + 0.5) * width,
+            (0.5 - ndc.y * 0.5) * height,
+        ))
+    }
+
+    fn draw_cell_link_range_bubble(&self) {
+        let Some(selection) = self.cell_link_selection.as_ref() else {
+            return;
+        };
+        if self.scene_manager.current_mode() != crate::ui::types::SimulationMode::Preview {
+            return;
+        }
+        let Some(preview_scene) = self.scene_manager.get_preview_scene() else {
+            return;
+        };
+        let state = &preview_scene.state.display_state;
+        let anchor = selection.anchor_cell_index;
+        if anchor >= state.cell_count {
+            return;
+        }
+
+        let viewport_size = (self.config.width as f32, self.config.height as f32);
+        let center_world = state.positions[anchor];
+        let Some(center) =
+            Self::preview_world_to_screen(preview_scene, center_world, viewport_size)
+        else {
+            return;
+        };
+
+        let camera_right = preview_scene.camera.rotation * glam::Vec3::X;
+        let camera_up = preview_scene.camera.rotation * glam::Vec3::Y;
+        let radius_world = SCAFFOLD_MAX_FORMATION_RANGE;
+        let right_edge = Self::preview_world_to_screen(
+            preview_scene,
+            center_world + camera_right * radius_world,
+            viewport_size,
+        );
+        let up_edge = Self::preview_world_to_screen(
+            preview_scene,
+            center_world + camera_up * radius_world,
+            viewport_size,
+        );
+        let screen_radius = right_edge
+            .map(|edge| center.distance(edge))
+            .into_iter()
+            .chain(up_edge.map(|edge| center.distance(edge)))
+            .fold(0.0_f32, f32::max);
+        if screen_radius < 2.0 {
+            return;
+        }
+
+        let ctx = self.ui.ctx();
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("cell_link_range_bubble"),
+        ));
+        let fill = egui::Color32::from_rgba_premultiplied(80, 185, 255, 20);
+        let stroke = egui::Stroke::new(
+            1.5,
+            egui::Color32::from_rgba_premultiplied(95, 205, 255, 140),
+        );
+        painter.circle_filled(center, screen_radius, fill);
+        painter.circle_stroke(center, screen_radius, stroke);
+        painter.circle_stroke(
+            center,
+            screen_radius * 0.985,
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_premultiplied(255, 255, 255, 35),
+            ),
+        );
+    }
+
+    fn apply_preview_scaffolds(&mut self) {
+        let Some(selection) = self.cell_link_selection.clone() else {
+            return;
+        };
+        let Some(preview_scene) = self.scene_manager.preview_scene_mut() else {
+            return;
+        };
+
+        let anchor = selection.anchor_cell_index;
+        let rest_length = selection
+            .rest_length
+            .clamp(SCAFFOLD_MIN_REST_LENGTH, SCAFFOLD_MAX_REST_LENGTH);
+        let current_time = preview_scene.state.display_time;
+        let valid_targets: Vec<usize> = selection
+            .selected_cell_indices
+            .iter()
+            .copied()
+            .filter(|&target| {
+                target != anchor && {
+                    let (_, in_range, same_organism) =
+                        Self::scaffold_pair_status(preview_scene, anchor, target);
+                    let existing = preview_scene
+                        .state
+                        .display_state
+                        .adhesion_manager
+                        .find_connection_between(
+                            &preview_scene.state.display_state.adhesion_connections,
+                            anchor,
+                            target,
+                        );
+                    let can_use_pair = existing.is_none_or(|conn_idx| {
+                        (preview_scene
+                            .state
+                            .display_state
+                            .adhesion_connections
+                            .bond_flags[conn_idx]
+                            & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+                            != 0
+                    });
+                    in_range && same_organism && can_use_pair
+                }
+            })
+            .collect();
+        let state = &mut preview_scene.state.display_state;
+
+        if anchor >= state.cell_count {
+            return;
+        }
+
+        for target in valid_targets {
+            let mode_index = state.mode_indices[anchor];
+            if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
+                &state.adhesion_connections,
+                anchor,
+                target,
+            ) {
+                if (state.adhesion_connections.bond_flags[conn_idx]
+                    & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+                    != 0
+                {
+                    state.adhesion_connections.rest_length_overrides[conn_idx] = rest_length;
+                }
+            } else {
+                let _ = state.adhesion_manager.add_ball_joint_with_rest_length(
+                    &mut state.adhesion_connections,
+                    anchor,
+                    target,
+                    mode_index,
+                    current_time,
+                    crate::cell::adhesion::BOND_FLAG_BARRIER_BALL,
+                    rest_length,
+                );
+            }
+        }
+
+        crate::simulation::preview_physics::sync_development_organism_ids_from_adhesions(state);
+        preview_scene.state.work_state = preview_scene.state.display_state.clone();
+        preview_scene.state.work_time = preview_scene.state.display_time;
+        self.window.request_redraw();
+    }
+
+    fn remove_preview_scaffolds(&mut self) {
+        let Some(selection) = self.cell_link_selection.clone() else {
+            return;
+        };
+        let Some(preview_scene) = self.scene_manager.preview_scene_mut() else {
+            return;
+        };
+        let state = &mut preview_scene.state.display_state;
+        let anchor = selection.anchor_cell_index;
+
+        for &target in &selection.selected_cell_indices {
+            if target == anchor {
+                continue;
+            }
+            if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
+                &state.adhesion_connections,
+                anchor,
+                target,
+            ) {
+                if (state.adhesion_connections.bond_flags[conn_idx]
+                    & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+                    != 0
+                {
+                    state
+                        .adhesion_manager
+                        .remove_adhesion(&mut state.adhesion_connections, conn_idx);
+                }
+            }
+        }
+
+        crate::simulation::preview_physics::sync_development_organism_ids_from_adhesions(state);
+        preview_scene.state.work_state = preview_scene.state.display_state.clone();
+        preview_scene.state.work_time = preview_scene.state.display_time;
+        self.window.request_redraw();
+    }
+
+    fn show_cell_link_menu(&mut self) {
+        let Some(selection_snapshot) = self.cell_link_selection.clone() else {
+            return;
+        };
+        if self.scene_manager.current_mode() != crate::ui::types::SimulationMode::Preview {
+            return;
+        }
+
+        let Some(preview_scene) = self.scene_manager.get_preview_scene() else {
+            return;
+        };
+
+        let anchor = selection_snapshot.anchor_cell_index;
+        let targets: Vec<usize> = selection_snapshot
+            .selected_cell_indices
+            .iter()
+            .copied()
+            .filter(|&idx| idx != anchor)
+            .collect();
+
+        let mut first_distance = None;
+        let mut valid_count = 0usize;
+        let mut out_of_range_count = 0usize;
+        let mut wrong_organism_count = 0usize;
+        let mut existing_count = 0usize;
+        let mut already_attached_count = 0usize;
+
+        for &target in &targets {
+            let (distance, in_range, same_organism) =
+                Self::scaffold_pair_status(preview_scene, anchor, target);
+            first_distance.get_or_insert(distance);
+            if !same_organism {
+                wrong_organism_count += 1;
+            } else if !in_range {
+                out_of_range_count += 1;
+            } else {
+                valid_count += 1;
+            }
+
+            if let Some(conn_idx) = preview_scene
+                .state
+                .display_state
+                .adhesion_manager
+                .find_connection_between(
+                    &preview_scene.state.display_state.adhesion_connections,
+                    anchor,
+                    target,
+                )
+            {
+                if (preview_scene
+                    .state
+                    .display_state
+                    .adhesion_connections
+                    .bond_flags[conn_idx]
+                    & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+                    != 0
+                {
+                    existing_count += 1;
+                } else {
+                    already_attached_count += 1;
+                    valid_count = valid_count.saturating_sub(1);
+                }
+            }
+        }
+
+        if let Some(selection) = self.cell_link_selection.as_mut() {
+            if !selection.rest_length_initialized {
+                selection.rest_length = first_distance
+                    .unwrap_or(selection.rest_length)
+                    .clamp(SCAFFOLD_MIN_REST_LENGTH, SCAFFOLD_MAX_REST_LENGTH);
+                selection.rest_length_initialized = true;
+            }
+        }
+
+        let ctx = self.ui.ctx().clone();
+        let pos = egui::pos2(self.mouse_position.0 + 18.0, self.mouse_position.1 + 18.0);
+        let mut apply_clicked = false;
+        let mut remove_clicked = false;
+        let mut rest_changed = false;
+
+        egui::Area::new(egui::Id::new("cell_link_scaffold_menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(&ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(210.0);
+                    ui.label(egui::RichText::new("Scaffold").strong());
+                    ui.separator();
+
+                    if targets.is_empty() {
+                        ui.label("Select a second cell");
+                    } else {
+                        ui.label(format!(
+                            "{} target{}",
+                            targets.len(),
+                            if targets.len() == 1 { "" } else { "s" }
+                        ));
+                    }
+
+                    if let Some(selection) = self.cell_link_selection.as_mut() {
+                        ui.horizontal(|ui| {
+                            ui.label("Rest length");
+                            let response = ui.add(
+                                egui::DragValue::new(&mut selection.rest_length)
+                                    .speed(0.01)
+                                    .range(SCAFFOLD_MIN_REST_LENGTH..=SCAFFOLD_MAX_REST_LENGTH),
+                            );
+                            if response.changed() {
+                                selection.rest_length = selection
+                                    .rest_length
+                                    .clamp(SCAFFOLD_MIN_REST_LENGTH, SCAFFOLD_MAX_REST_LENGTH);
+                                rest_changed = true;
+                            }
+                        });
+                    }
+
+                    if let Some(distance) = first_distance {
+                        ui.label(format!(
+                            "Distance {:.2} / max {:.2}",
+                            distance, SCAFFOLD_MAX_FORMATION_RANGE
+                        ));
+                    }
+                    if out_of_range_count > 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 170, 60),
+                            format!("{out_of_range_count} out of range"),
+                        );
+                    }
+                    if wrong_organism_count > 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 90, 80),
+                            format!("{wrong_organism_count} not same organism"),
+                        );
+                    }
+                    if already_attached_count > 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 170, 60),
+                            format!("{already_attached_count} already attached"),
+                        );
+                    }
+
+                    ui.horizontal(|ui| {
+                        let label = if existing_count > 0 {
+                            "Update"
+                        } else {
+                            "Create"
+                        };
+                        if ui
+                            .add_enabled(valid_count > 0, egui::Button::new(label))
+                            .clicked()
+                        {
+                            apply_clicked = true;
+                        }
+                        if ui
+                            .add_enabled(existing_count > 0, egui::Button::new("Remove"))
+                            .clicked()
+                        {
+                            remove_clicked = true;
+                        }
+                    });
+                });
+            });
+
+        if rest_changed && valid_count > 0 {
+            self.apply_preview_scaffolds();
+        }
+        if apply_clicked {
+            self.apply_preview_scaffolds();
+        }
+        if remove_clicked {
+            self.remove_preview_scaffolds();
         }
     }
 
@@ -465,13 +912,16 @@ impl App {
                         self.ctrl_drag_selecting = true;
                     }
 
-                    let hit = self.scene_manager.preview_scene_mut().and_then(|preview_scene| {
-                        Self::pick_preview_cell_at(
-                            preview_scene,
-                            self.mouse_position,
-                            (self.config.width as f32, self.config.height as f32),
-                        )
-                    });
+                    let hit = self
+                        .scene_manager
+                        .preview_scene_mut()
+                        .and_then(|preview_scene| {
+                            Self::pick_preview_cell_at(
+                                preview_scene,
+                                self.mouse_position,
+                                (self.config.width as f32, self.config.height as f32),
+                            )
+                        });
 
                     if let Some(hit) = hit {
                         if self.cell_link_selection.is_some() {
@@ -2130,6 +2580,9 @@ impl App {
                     self.editor_state.resim_display_time = preview_scene.get_time_for_ui();
                 }
             }
+
+            self.draw_cell_link_range_bubble();
+            self.show_cell_link_menu();
 
             // In GPU mode, sync working_genome FROM GPU scene if it has genomes.
             // This ensures the UI always shows the GPU scene's genome, not a stale

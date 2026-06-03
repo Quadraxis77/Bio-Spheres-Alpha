@@ -191,6 +191,7 @@ impl AdhesionConnectionManager {
         connections.zone_a[connection_index] = zone_a as u8;
         connections.zone_b[connection_index] = zone_b as u8;
         connections.bond_flags[connection_index] = 0;
+        connections.rest_length_overrides[connection_index] = 0.0;
 
         // Set anchor directions (normalized)
         let normalized_anchor_a = if anchor_direction_a.length() > 0.001 {
@@ -263,6 +264,7 @@ impl AdhesionConnectionManager {
         connections.zone_a[connection_index] = 2;
         connections.zone_b[connection_index] = 2;
         connections.bond_flags[connection_index] = bond_flags;
+        connections.rest_length_overrides[connection_index] = 0.0;
         connections.anchor_direction_a[connection_index] = Vec3::ZERO;
         connections.anchor_direction_b[connection_index] = Vec3::ZERO;
         connections.twist_reference_a[connection_index] = Quat::IDENTITY;
@@ -279,6 +281,29 @@ impl AdhesionConnectionManager {
         if connection_index >= connections.active_count {
             connections.active_count = connection_index + 1;
         }
+        Some(connection_index)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_ball_joint_with_rest_length(
+        &mut self,
+        connections: &mut AdhesionConnections,
+        cell_a: usize,
+        cell_b: usize,
+        mode_index: usize,
+        current_time: f32,
+        bond_flags: u32,
+        rest_length: f32,
+    ) -> Option<usize> {
+        let connection_index = self.add_ball_joint(
+            connections,
+            cell_a,
+            cell_b,
+            mode_index,
+            current_time,
+            bond_flags,
+        )?;
+        connections.rest_length_overrides[connection_index] = rest_length.max(0.001);
         Some(connection_index)
     }
 

@@ -43,6 +43,64 @@ fn are_cells_in_same_organism(state: &CanonicalState, cell_a: usize, cell_b: usi
         .are_cells_connected(&state.adhesion_connections, cell_a, cell_b)
 }
 
+/// Sync developmental organism scopes to the current adhesion connected components.
+///
+/// This keeps `organism_ids` aligned with the simulation's existing organism
+/// boundary: a noncontiguous adhesion network becomes separate organisms.
+pub fn sync_development_organism_ids_from_adhesions(state: &mut CanonicalState) {
+    let n = state.cell_count;
+    if n == 0 {
+        return;
+    }
+
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for conn_idx in 0..state.adhesion_connections.active_count {
+        if state.adhesion_connections.is_active[conn_idx] == 0 {
+            continue;
+        }
+        let a = state.adhesion_connections.cell_a_index[conn_idx];
+        let b = state.adhesion_connections.cell_b_index[conn_idx];
+        if a < n && b < n {
+            adjacency[a].push(b);
+            adjacency[b].push(a);
+        }
+    }
+
+    let mut visited = vec![false; n];
+    let mut queue = std::collections::VecDeque::new();
+    let mut max_organism_id = state.next_organism_id.saturating_sub(1);
+
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+
+        visited[start] = true;
+        queue.push_back(start);
+        let mut members = Vec::new();
+        let mut min_cell_id = state.cell_ids[start];
+
+        while let Some(cell) = queue.pop_front() {
+            members.push(cell);
+            min_cell_id = min_cell_id.min(state.cell_ids[cell]);
+            for &neighbor in &adjacency[cell] {
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        let organism_id = min_cell_id.saturating_add(1).max(1);
+        max_organism_id = max_organism_id.max(organism_id);
+        for cell in members {
+            state.organism_ids[cell] = organism_id;
+        }
+    }
+
+    state.next_organism_id = state.next_organism_id.max(max_organism_id.saturating_add(1));
+}
+
 /// Detect collisions using the spatial grid
 pub fn detect_collisions(state: &CanonicalState) -> Vec<CollisionPair> {
     let mut collision_pairs = Vec::new();
@@ -1523,5 +1581,7 @@ pub fn physics_step_with_genome(
         }
     }
 
-    division::division_step(state, genome, current_time, max_cells, rng_seed)
+    let division_events = division::division_step(state, genome, current_time, max_cells, rng_seed);
+    sync_development_organism_ids_from_adhesions(state);
+    division_events
 }
