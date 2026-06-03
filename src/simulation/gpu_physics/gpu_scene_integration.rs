@@ -1028,7 +1028,7 @@ pub fn execute_signal_system(
     // The signal word's hop-count field naturally limits propagation: a cell with
     // hops == 0 writes nothing to its neighbors, so extra iterations are no-ops.
     let signal_buffer_size = adhesion_buffers.signal_flags.size();
-    let propagation_iterations = max_signal_hops.clamp(1, 20);
+    let propagation_iterations = max_signal_hops.saturating_mul(4).clamp(1, 80);
     for _ in 0..propagation_iterations {
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

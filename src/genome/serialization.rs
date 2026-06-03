@@ -279,9 +279,13 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub devorocyte_consume_rate: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub vascular_nutrient_transport: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub vascular_outlet: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vascular_signal_transport: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vascular_signal_exchange: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vascular_signal_capacity: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -744,10 +748,18 @@ fn mode_to_serializable(
             mode.devorocyte_consume_rate,
             default.devorocyte_consume_rate,
         ),
+        vascular_nutrient_transport: diff_bool(
+            mode.vascular_nutrient_transport,
+            default.vascular_nutrient_transport,
+        ),
         vascular_outlet: diff_bool(mode.vascular_outlet, default.vascular_outlet),
         vascular_signal_transport: diff_bool(
             mode.vascular_signal_transport,
             default.vascular_signal_transport,
+        ),
+        vascular_signal_exchange: diff_bool(
+            mode.vascular_signal_exchange,
+            default.vascular_signal_exchange,
         ),
         vascular_signal_capacity: diff_f32(
             mode.vascular_signal_capacity,
@@ -903,8 +915,10 @@ impl SerializableModeSettings {
             || self.embryocyte_signal_value.is_some()
             || self.devorocyte_consume_range.is_some()
             || self.devorocyte_consume_rate.is_some()
+            || self.vascular_nutrient_transport.is_some()
             || self.vascular_outlet.is_some()
             || self.vascular_signal_transport.is_some()
+            || self.vascular_signal_exchange.is_some()
             || self.vascular_signal_capacity.is_some()
             || self.gametocyte_merge_range.is_some()
             || self.memorocyte_rate.is_some()
@@ -1279,6 +1293,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.devorocyte_consume_rate {
         mode.devorocyte_consume_rate = v;
     }
+    if let Some(v) = ser.vascular_nutrient_transport {
+        mode.vascular_nutrient_transport = v;
+    }
     if let Some(v) = ser.vascular_outlet {
         mode.vascular_outlet = v;
     }
@@ -1323,6 +1340,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.vascular_signal_transport {
         mode.vascular_signal_transport = v;
+    }
+    if let Some(v) = ser.vascular_signal_exchange {
+        mode.vascular_signal_exchange = v;
     }
     if let Some(v) = ser.vascular_signal_capacity {
         mode.vascular_signal_capacity = v;

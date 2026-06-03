@@ -190,6 +190,7 @@ impl AdhesionConnectionManager {
 
         connections.zone_a[connection_index] = zone_a as u8;
         connections.zone_b[connection_index] = zone_b as u8;
+        connections.bond_flags[connection_index] = 0;
 
         // Set anchor directions (normalized)
         let normalized_anchor_a = if anchor_direction_a.length() > 0.001 {
@@ -229,6 +230,55 @@ impl AdhesionConnectionManager {
             connections.active_count = connection_index + 1;
         }
 
+        Some(connection_index)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_ball_joint(
+        &mut self,
+        connections: &mut AdhesionConnections,
+        cell_a: usize,
+        cell_b: usize,
+        mode_index: usize,
+        current_time: f32,
+        bond_flags: u32,
+    ) -> Option<usize> {
+        if cell_a == cell_b {
+            return None;
+        }
+        if let Some(existing_idx) = self.find_connection_between(connections, cell_a, cell_b) {
+            self.remove_adhesion(connections, existing_idx);
+        }
+        if connections.active_count >= connections.cell_a_index.len() {
+            return None;
+        }
+        let slot_a = self.find_free_adhesion_slot(cell_a)?;
+        let slot_b = self.find_free_adhesion_slot(cell_b)?;
+        let connection_index = self.find_free_connection_slot(connections)?;
+
+        connections.cell_a_index[connection_index] = cell_a;
+        connections.cell_b_index[connection_index] = cell_b;
+        connections.mode_index[connection_index] = mode_index;
+        connections.is_active[connection_index] = 1;
+        connections.zone_a[connection_index] = 2;
+        connections.zone_b[connection_index] = 2;
+        connections.bond_flags[connection_index] = bond_flags;
+        connections.anchor_direction_a[connection_index] = Vec3::ZERO;
+        connections.anchor_direction_b[connection_index] = Vec3::ZERO;
+        connections.twist_reference_a[connection_index] = Quat::IDENTITY;
+        connections.twist_reference_b[connection_index] = Quat::IDENTITY;
+        connections.birth_time[connection_index] = current_time;
+        connections.connection_flow_rates[connection_index] = 0.0;
+
+        if !self.set_adhesion_index(cell_a, slot_a, connection_index as i32)
+            || !self.set_adhesion_index(cell_b, slot_b, connection_index as i32)
+        {
+            connections.is_active[connection_index] = 0;
+            return None;
+        }
+        if connection_index >= connections.active_count {
+            connections.active_count = connection_index + 1;
+        }
         Some(connection_index)
     }
 

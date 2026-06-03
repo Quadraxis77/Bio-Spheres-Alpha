@@ -47,7 +47,8 @@ struct AdhesionConnection {
     is_active: u32,
     zone_a: u32,
     zone_b: u32,
-    _align_pad: vec2<u32>,
+    bond_flags: u32,
+    _align_pad1: u32,
     anchor_direction_a: vec4<f32>,
     anchor_direction_b: vec4<f32>,
     twist_reference_a: vec4<f32>,
@@ -151,6 +152,7 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;
@@ -258,6 +260,20 @@ fn compute_adhesion_forces_for_cell(
     // One myocyte at full contraction (1.0) shortens the bond by 50%.
     // Two myocytes at full contraction shorten it to zero.
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
+    if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
+        let settle_factor = clamp(bond_age * 3.3333, 0.0, 1.0);
+        let spring = (dist - effective_rest_length) * settings.linear_spring_stiffness * settle_factor;
+        let rel_vel = vel_b - vel_a;
+        let damping = settings.linear_spring_damping * dot(rel_vel, adhesion_dir);
+        let ball_force = adhesion_dir * (spring + damping);
+        *spring_force_mag_out = length(ball_force);
+        if (is_cell_a) {
+            force += ball_force;
+        } else {
+            force -= ball_force;
+        }
+        return array<vec3<f32>, 2>(force, torque);
+    }
     
     // Transform anchor directions to world space using physics rotations.
     // Both the geometric spring and orientation spring use the same (current) rotation

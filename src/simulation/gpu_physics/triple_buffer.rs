@@ -367,7 +367,7 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v11: wgpu::Buffer,
 
     /// Mode properties v12 for Vasculocyte parameters (16 bytes per mode each)
-    /// v12: [vascular_outlet as f32, 0.0, 0.0, 0.0]
+    /// v12: [nutrient_transport, nutrient_exchange, signal_transport, signal_exchange]
     pub mode_properties_v12: wgpu::Buffer,
 
     /// Mode properties v13 for Gametocyte parameters (16 bytes per mode each)
@@ -1895,8 +1895,8 @@ impl GpuTripleBufferSystem {
         }
     }
 
-    /// Sync Vasculocyte mode properties for the nutrient transport shader.
-    /// v12: [vascular_outlet as f32, 0.0, 0.0, 0.0]
+    /// Sync Vasculocyte mode properties for the nutrient/signal transport shaders.
+    /// v12: [nutrient_transport, nutrient_exchange, signal_transport, signal_exchange]
     pub fn sync_vasculocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -1905,7 +1905,12 @@ impl GpuTripleBufferSystem {
         let mut v12: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
-                v12.push([if mode.vascular_outlet { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
+                v12.push([
+                    if mode.vascular_nutrient_transport { 1.0 } else { 0.0 },
+                    if mode.vascular_outlet { 1.0 } else { 0.0 },
+                    if mode.vascular_signal_transport { 1.0 } else { 0.0 },
+                    if mode.vascular_signal_exchange { 1.0 } else { 0.0 },
+                ]);
             }
         }
         if !v12.is_empty() {
@@ -1923,7 +1928,12 @@ impl GpuTripleBufferSystem {
         let v12: Vec<[f32; 4]> = genome
             .modes
             .iter()
-            .map(|mode| [if mode.vascular_outlet { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0])
+            .map(|mode| [
+                if mode.vascular_nutrient_transport { 1.0 } else { 0.0 },
+                if mode.vascular_outlet { 1.0 } else { 0.0 },
+                if mode.vascular_signal_transport { 1.0 } else { 0.0 },
+                if mode.vascular_signal_exchange { 1.0 } else { 0.0 },
+            ])
             .collect();
         if !v12.is_empty() {
             let offset = (global_start_index * 16) as u64;

@@ -1048,9 +1048,11 @@ impl CellType {
                 mode.nutrient_priority = 0.5;
                 mode.max_cell_size = 1.5;
                 mode.split_mass = 2.5;
-                // Sealed by default - outlets must be explicitly enabled
+                // Sealed pipe by default - exchange ports must be explicitly enabled.
+                mode.vascular_nutrient_transport = true;
                 mode.vascular_outlet = false;
                 mode.vascular_signal_transport = false;
+                mode.vascular_signal_exchange = false;
                 mode.vascular_signal_capacity = 10.0;
             }
             CellType::Gametocyte => {

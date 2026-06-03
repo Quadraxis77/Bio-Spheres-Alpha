@@ -49,7 +49,8 @@ struct AdhesionConnection {
     is_active: u32,
     zone_a: u32,
     zone_b: u32,
-    _align_pad: vec2<u32>,
+    bond_flags: u32,
+    _align_pad1: u32,
     anchor_direction_a: vec4<f32>,
     anchor_direction_b: vec4<f32>,
     twist_reference_a: vec4<f32>,
@@ -125,6 +126,7 @@ var<storage, read> muscle_contraction: array<f32>;
 
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 
 fn quat_multiply(q1: vec4<f32>, q2: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
@@ -242,6 +244,18 @@ fn compute_substep_forces(
     let adhesion_dir = delta_pos / dist;
     let rest_length = settings.rest_length;
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
+    if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
+        let spring = (dist - effective_rest_length) * settings.linear_spring_stiffness;
+        let rel_vel = vel_b - vel_a;
+        let damping = settings.linear_spring_damping * dot(rel_vel, adhesion_dir);
+        let ball_force = adhesion_dir * (spring + damping);
+        if (is_cell_a) {
+            force += ball_force;
+        } else {
+            force -= ball_force;
+        }
+        return array<vec3<f32>, 2>(force, torque);
+    }
 
     // Transform anchor directions to world space using current physics rotations
     // so that adhesion structure rotates with the cells rather than being locked to world orientation.

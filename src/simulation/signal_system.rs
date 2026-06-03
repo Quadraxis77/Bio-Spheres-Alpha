@@ -15,8 +15,10 @@ use glam::Vec3;
 
 /// Number of signal channels (0-15)
 pub const SIGNAL_CHANNELS: usize = 16;
-/// Signal attenuation factor per hop (signals lose this fraction per hop)
-pub const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop
+/// Signal attenuation per normal travel point.
+pub const SIGNAL_LOSS_PER_TRAVEL_POINT: f32 = 0.05;
+pub const SIGNAL_NORMAL_STEP_COST: f32 = 1.0;
+pub const SIGNAL_VASCULAR_ROAD_COST: f32 = 0.25;
 
 /// Oculocyte sense type bitmask bits
 pub const SENSE_CELL: u32 = 1 << 0; // bit 0
@@ -172,34 +174,73 @@ fn sense_barrier_ray(pos: Vec3, forward: Vec3, ray_length: f32, boundary_radius:
     t > 0.0 && t <= ray_length
 }
 
-/// Compute the outgoing signal strength when a cell forwards to its neighbors.
-///
-/// Signal-transport vasculocytes route losslessly, capped at their node-level
-/// throughput capacity. This prevents fan-in amplification at junctions: no matter
-/// how many upstream paths converge, the forwarded value is at most `capacity`.
-///
-/// All other cells apply the standard 50% attenuation per hop.
-fn routing_outgoing(genome: &Genome, mode_idx: usize, incoming: f32) -> f32 {
-    if let Some(mode) = genome.modes.get(mode_idx) {
-        if mode.cell_type == VASCULOCYTE_TYPE && mode.vascular_signal_transport {
-            // Lossless routing, node-level throughput cap.
-            return incoming.min(mode.vascular_signal_capacity.max(0.0));
-        }
-    }
-    incoming * SIGNAL_ATTENUATION_PER_HOP
+fn is_signal_transport_vascular(genome: &Genome, mode_idx: usize) -> bool {
+    genome
+        .modes
+        .get(mode_idx)
+        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE && mode.vascular_signal_transport)
 }
 
-/// Propagate signal emissions through adhesion connections using BFS wave propagation.
+fn is_signal_exchange_vascular(genome: &Genome, mode_idx: usize) -> bool {
+    genome
+        .modes
+        .get(mode_idx)
+        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE && mode.vascular_signal_exchange)
+}
+
+fn can_signal_cross(genome: &Genome, from_mode_idx: usize, to_mode_idx: usize) -> bool {
+    let from_vascular = genome
+        .modes
+        .get(from_mode_idx)
+        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE);
+    let to_vascular = genome
+        .modes
+        .get(to_mode_idx)
+        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE);
+
+    match (from_vascular, to_vascular) {
+        (true, true) => {
+            is_signal_transport_vascular(genome, from_mode_idx)
+                && is_signal_transport_vascular(genome, to_mode_idx)
+        }
+        (true, false) => is_signal_exchange_vascular(genome, from_mode_idx),
+        (false, true) => is_signal_exchange_vascular(genome, to_mode_idx),
+        (false, false) => true,
+    }
+}
+
+fn signal_edge_cost(genome: &Genome, from_mode_idx: usize, to_mode_idx: usize) -> f32 {
+    if is_signal_transport_vascular(genome, from_mode_idx)
+        && is_signal_transport_vascular(genome, to_mode_idx)
+    {
+        SIGNAL_VASCULAR_ROAD_COST
+    } else {
+        SIGNAL_NORMAL_STEP_COST
+    }
+}
+
+fn cap_signal_at_mode(genome: &Genome, mode_idx: usize, value: f32) -> f32 {
+    if let Some(mode) = genome.modes.get(mode_idx) {
+        if mode.cell_type == VASCULOCYTE_TYPE
+            && (mode.vascular_signal_transport || mode.vascular_signal_exchange)
+        {
+            return value.min(mode.vascular_signal_capacity.max(0.0));
+        }
+    }
+    value
+}
+
+fn attenuate_signal(value: f32, edge_cost: f32) -> f32 {
+    let loss = (SIGNAL_LOSS_PER_TRAVEL_POINT * edge_cost).clamp(0.0, 1.0);
+    value * (1.0 - loss)
+}
+
+/// Propagate signal emissions through adhesion connections using travel-point budgets.
 ///
-/// Each cell tracks its own signal strength independently (per-cell, not per-hop-level).
-/// When expanding, the outgoing strength depends on the *source* cell type:
-///   - Normal cells: 50% attenuation per hop (SIGNAL_ATTENUATION_PER_HOP)
-///   - Signal-transport vasculocytes: lossless routing, capped at node capacity
-///
-/// Every edge traversal consumes exactly 1 hop regardless of cell type.
-/// This preserves spatial distance, timing gradients, and circuit depth.
-/// Fan-in amplification is prevented by taking max (not sum) for equal-length paths,
-/// and by the per-node capacity cap on vasculocyte forwarding.
+/// Normal tissue costs 1.0 point per edge. A signal road between two transport-enabled
+/// vasculocytes costs 0.25 points, so the same signal budget travels farther through
+/// the pipe. Exchange ports are bidirectional: they allow signals to enter or leave
+/// vascular tissue, while closed vascular sides remain sealed.
 pub fn propagate_signals(
     state: &mut CanonicalState,
     genome: &Genome,
@@ -212,9 +253,9 @@ pub fn propagate_signals(
     let cell_count = state.cell_count;
 
     // Per-emission scratch buffers, reused across emissions to avoid allocation.
-    // min_hop_distance[i]: shortest hop distance from emitter to cell i (-1 = unreached).
+    // remaining_budget[i]: best travel budget left after reaching cell i (-1.0 = unreached).
     // signal_contribution[i]: strongest signal reaching cell i across all equal-length paths.
-    let mut min_hop_distance = vec![-1i32; cell_count];
+    let mut remaining_budget = vec![-1.0f32; cell_count];
     let mut signal_contribution = vec![0.0f32; cell_count];
     let mut current_frontier: Vec<usize> = Vec::new();
     let mut next_frontier: Vec<usize> = Vec::new();
@@ -237,48 +278,61 @@ pub fn propagate_signals(
         }
 
         // Reset per-emission scratch state.
-        for v in min_hop_distance[..cell_count].iter_mut() {
-            *v = -1;
+        for v in remaining_budget[..cell_count].iter_mut() {
+            *v = -1.0;
         }
         for v in signal_contribution[..cell_count].iter_mut() {
             *v = 0.0;
         }
-        min_hop_distance[emission.source_cell] = 0;
-        // Seed source contribution so routing_outgoing can read it for hop 1.
+        remaining_budget[emission.source_cell] = emission.hops as f32;
         signal_contribution[emission.source_cell] = emission.value;
 
         current_frontier.clear();
         current_frontier.push(emission.source_cell);
 
-        for hop in 0..emission.hops {
-            let hop_number = (hop + 1) as i32;
-
+        let max_iterations = emission.hops.saturating_mul(4).max(1);
+        for _ in 0..max_iterations {
             next_frontier.clear();
             for &cell_idx in &current_frontier {
-                // Per-cell outgoing: vasculocytes route losslessly (capped), others attenuate.
                 let mode_idx = state.mode_indices.get(cell_idx).copied().unwrap_or(0);
-                let outgoing = routing_outgoing(genome, mode_idx, signal_contribution[cell_idx]);
+                let budget = remaining_budget[cell_idx];
 
                 let neighbors = get_adhesion_neighbors(state, cell_idx);
                 for neighbor in neighbors {
                     if neighbor >= cell_count {
                         continue;
                     }
-                    if min_hop_distance[neighbor] == -1 {
-                        // First path to reach this cell.
-                        min_hop_distance[neighbor] = hop_number;
+                    let neighbor_mode_idx = state.mode_indices.get(neighbor).copied().unwrap_or(0);
+                    if !can_signal_cross(genome, mode_idx, neighbor_mode_idx) {
+                        continue;
+                    }
+
+                    let edge_cost = signal_edge_cost(genome, mode_idx, neighbor_mode_idx);
+                    if budget + f32::EPSILON < edge_cost {
+                        continue;
+                    }
+
+                    let capped = cap_signal_at_mode(genome, mode_idx, signal_contribution[cell_idx]);
+                    let outgoing = attenuate_signal(capped, edge_cost);
+                    let next_budget = budget - edge_cost;
+                    let budget_delta = next_budget - remaining_budget[neighbor];
+
+                    if remaining_budget[neighbor] < 0.0 || budget_delta > f32::EPSILON {
+                        remaining_budget[neighbor] = next_budget;
                         signal_contribution[neighbor] = outgoing;
                         next_frontier.push(neighbor);
                         state.signal_flow_tracker.add_flow(cell_idx, neighbor);
-                    } else if min_hop_distance[neighbor] == hop_number {
-                        // Equal-length path: take max to prevent topology-based amplification.
+                    } else if budget_delta.abs() <= f32::EPSILON {
                         if outgoing > signal_contribution[neighbor] {
                             signal_contribution[neighbor] = outgoing;
+                            next_frontier.push(neighbor);
                         }
                         state.signal_flow_tracker.add_flow(cell_idx, neighbor);
                     }
-                    // Shorter path already won - signal does not flow backward.
                 }
+            }
+            if next_frontier.is_empty() {
+                break;
             }
             std::mem::swap(&mut current_frontier, &mut next_frontier);
         }
@@ -288,7 +342,7 @@ pub fn propagate_signals(
             if cell_idx == emission.source_cell {
                 continue;
             }
-            if min_hop_distance[cell_idx] < 0 {
+            if remaining_budget[cell_idx] < 0.0 {
                 continue;
             }
             if is_signal_sender(state, genome, cell_idx, emissions) {
@@ -350,6 +404,13 @@ fn get_adhesion_neighbors(state: &CanonicalState, cell_idx: usize) -> Vec<usize>
 
     let mut neighbors = Vec::with_capacity(connections.len());
     for conn_idx in connections {
+        if state.adhesion_connections.is_active[conn_idx] == 0
+            || (state.adhesion_connections.bond_flags[conn_idx]
+                & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+                != 0
+        {
+            continue;
+        }
         let cell_a = state.adhesion_connections.cell_a_index[conn_idx];
         let cell_b = state.adhesion_connections.cell_b_index[conn_idx];
         let neighbor = if cell_a == cell_idx { cell_b } else { cell_a };

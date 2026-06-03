@@ -1325,6 +1325,33 @@ pub fn modes_list_items(
         let mouse_down = ui.input(|i| i.pointer.primary_down());
         let mouse_released = ui.input(|i| i.pointer.primary_released());
 
+        if has_moved && mouse_down {
+            if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                let viewport = ui.clip_rect();
+                const AUTOSCROLL_EDGE: f32 = 36.0;
+                const AUTOSCROLL_MAX_SPEED: f32 = 360.0;
+
+                let top_zone = viewport.top() + AUTOSCROLL_EDGE;
+                let bottom_zone = viewport.bottom() - AUTOSCROLL_EDGE;
+                let dt = ui.input(|i| i.stable_dt).clamp(1.0 / 120.0, 1.0 / 20.0);
+
+                let scroll_delta_y = if pointer_pos.y < top_zone {
+                    let t = ((top_zone - pointer_pos.y) / AUTOSCROLL_EDGE).clamp(0.0, 1.0);
+                    AUTOSCROLL_MAX_SPEED * t * dt
+                } else if pointer_pos.y > bottom_zone {
+                    let t = ((pointer_pos.y - bottom_zone) / AUTOSCROLL_EDGE).clamp(0.0, 1.0);
+                    -AUTOSCROLL_MAX_SPEED * t * dt
+                } else {
+                    0.0
+                };
+
+                if scroll_delta_y.abs() > f32::EPSILON {
+                    ui.scroll_with_delta(egui::vec2(0.0, scroll_delta_y));
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+
         // Compute the current drop target from mouse position
         let mouse_y = ui.input(|i| i.pointer.hover_pos()).map(|p| p.y);
         if let Some(my) = mouse_y {

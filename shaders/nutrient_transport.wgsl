@@ -16,11 +16,10 @@
 // Vasculocyte transport rules (cell_type == 12):
 // - Vascular-to-vascular connections use VASCULAR_TRANSPORT_RATE (5x normal) for
 //   high-throughput conduit behaviour across large body structures.
-// - When a vasculocyte is sealed (vascular_outlet == 0), outflow to non-vascular
-//   neighbors is reduced to VASCULAR_SEAL_FACTOR * normal rate (~5%), effectively
-//   keeping nutrients inside the network.
-// - When a vasculocyte is an outlet (vascular_outlet == 1), outflow to non-vascular
-//   neighbors uses the normal rate, delivering nutrients to surrounding cells.
+// - Vasculocyte nutrient transport and exchange are separate mode settings.
+// - Transport-enabled vasculocyte pairs use VASCULAR_TRANSPORT_RATE as internal pipes.
+// - Exchange ports move nutrients between pipe and non-vascular tissue in both directions.
+// - Sealed pipes have strongly reduced exchange with non-vascular neighbors.
 // - Physical compression between any two cells boosts their shared connection's
 //   transport rate by up to PUMP_AMPLIFICATION * compression_ratio. This amplifies
 //   flow through cells that are being squeezed (e.g. Lipocytes compressed by Myocytes).
@@ -146,7 +145,7 @@ var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
 var<storage, read> mode_properties_v9: array<vec4<f32>>;
 
 // Mode properties v12: per-mode Vasculocyte params.
-// [vascular_outlet as f32 (0=sealed, 1=outlet), 0, 0, 0]
+// [nutrient_transport, nutrient_exchange, signal_transport, signal_exchange]
 @group(3) @binding(13)
 var<storage, read> mode_properties_v12: array<vec4<f32>>;
 
@@ -163,7 +162,8 @@ struct AdhesionConnection {
     is_active: u32,
     zone_a: u32,
     zone_b: u32,
-    _align_pad: vec2<u32>,            // Padding to align anchor_direction_a
+    bond_flags: u32,
+    _align_pad1: u32,                 // Padding to align anchor_direction_a
     anchor_direction_a: vec4<f32>,    // xyz = direction, w = padding
     anchor_direction_b: vec4<f32>,    // xyz = direction, w = padding
     twist_reference_a: vec4<f32>,
@@ -189,6 +189,7 @@ const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
 const VASCULOCYTE_CELL_TYPE: u32 = 12u;
 const VASCULAR_TRANSPORT_RATE: f32 = 500.0; // 5x normal: vascular-to-vascular highway rate
 const VASCULAR_SEAL_FACTOR: f32 = 0.05;     // Only 5% of normal rate leaks through a sealed vasculocyte
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 const PUMP_AMPLIFICATION: f32 = 8.0;        // Compression multiplier for myocyte-driven pumping
 
 // Myocyte directional pump constants
@@ -412,9 +413,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Determine if cell_a is a vasculocyte and whether it is an outlet.
     let cell_a_is_vascular = mode_valid && cell_type == VASCULOCYTE_CELL_TYPE;
-    var cell_a_is_outlet = false;
+    var cell_a_nutrient_transport = false;
+    var cell_a_nutrient_exchange = false;
     if (cell_a_is_vascular && mode_a_idx < arrayLength(&mode_properties_v12)) {
-        cell_a_is_outlet = mode_properties_v12[mode_a_idx].x > 0.5;
+        let vascular_a = mode_properties_v12[mode_a_idx];
+        cell_a_nutrient_transport = vascular_a.x > 0.5;
+        cell_a_nutrient_exchange = vascular_a.y > 0.5;
     }
 
     // --- Myocyte directional pump setup ---
@@ -494,6 +498,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (adhesion.is_active == 0u || adhesion.cell_a_index != cell_idx) {
             continue;
         }
+        if ((adhesion.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
+            continue;
+        }
         let cell_b_idx = adhesion.cell_b_index;
         if (cell_b_idx >= cell_count || death_flags[cell_b_idx] == 1u) {
             continue;
@@ -523,25 +530,37 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             cell_b_type = mode_cell_types[mode_b_idx];
         }
         let cell_b_is_vascular = cell_b_type == VASCULOCYTE_CELL_TYPE;
+        var cell_b_nutrient_transport = false;
+        var cell_b_nutrient_exchange = false;
+        if (cell_b_is_vascular && mode_b_idx < arrayLength(&mode_properties_v12)) {
+            let vascular_b = mode_properties_v12[mode_b_idx];
+            cell_b_nutrient_transport = vascular_b.x > 0.5;
+            cell_b_nutrient_exchange = vascular_b.y > 0.5;
+        }
 
         // --- Effective transport rate for this connection ---
-        // 1. Vascular-to-vascular: 5x highway rate.
-        // 2. Vascular sealed (cell_a) to non-vascular: nearly blocked.
-        // 3. Vascular outlet (cell_a) to non-vascular: normal rate.
-        // 4. Non-vascular to vascular (cell_b): normal rate (vasculocytes absorb freely).
-        // 5. Non-vascular to non-vascular: normal rate.
+        // 1. Transport-enabled vascular-to-vascular: 5x highway rate.
+        // 2. Vascular sealed to/from non-vascular: nearly blocked.
+        // 3. Vascular exchange port to/from non-vascular: normal rate.
+        // 4. Non-vascular to non-vascular: normal rate.
         // 6. Embryocyte receiver: rate scaled by nutrient_priority so high-priority
         //    embryocytes fill their reserve much faster than the base 30/sec.
         var effective_rate: f32 = TRANSPORT_RATE;
-        if (cell_a_is_vascular) {
-            if (cell_b_is_vascular) {
+        if (cell_a_is_vascular && cell_b_is_vascular) {
+            if (cell_a_nutrient_transport && cell_b_nutrient_transport) {
                 effective_rate = VASCULAR_TRANSPORT_RATE;
-            } else if (!cell_a_is_outlet) {
+            } else {
                 effective_rate = TRANSPORT_RATE * VASCULAR_SEAL_FACTOR;
             }
-            // outlet to non-vascular: keep TRANSPORT_RATE
+        } else if (cell_a_is_vascular && !cell_b_is_vascular) {
+            if (!cell_a_nutrient_exchange) {
+                effective_rate = TRANSPORT_RATE * VASCULAR_SEAL_FACTOR;
+            }
+        } else if (!cell_a_is_vascular && cell_b_is_vascular) {
+            if (!cell_b_nutrient_exchange) {
+                effective_rate = TRANSPORT_RATE * VASCULAR_SEAL_FACTOR;
+            }
         }
-        // Non-vascular sending to vasculocyte: no restriction (TRANSPORT_RATE unchanged).
 
         // Embryocyte receivers: scale rate by their nutrient_priority so the setting
         // actually controls how fast the reserve fills. Priority 4.0 -> 4x base rate.

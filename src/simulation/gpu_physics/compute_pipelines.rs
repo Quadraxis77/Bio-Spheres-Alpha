@@ -7209,9 +7209,19 @@ impl GpuPhysicsPipelines {
             },
             count: None,
         };
+        let rw = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cell Adhesion Mode Layout"),
-            entries: &[ro(0), ro(1), ro(2), ro(3), ro(4), ro(5), ro(6)],
+            entries: &[ro(0), ro(1), ro(2), ro(3), ro(4), rw(5), ro(6)],
         })
     }
 
@@ -7660,7 +7670,7 @@ impl GpuPhysicsPipelines {
 
     /// Signal propagate adhesion bind group layout (Group 1 for signal_propagate)
     /// binding 0: adhesion_connections (read), binding 1: cell_adhesion_indices (read)
-    /// binding 2: mode_indices (read), binding 3: mode_cell_types (read)
+    /// binding 2: mode_indices (read), binding 3: mode_cell_types (read), binding 4: mode_properties_v12 (read)
     fn create_signal_propagate_adhesion_bind_group_layout(
         device: &wgpu::Device,
     ) -> wgpu::BindGroupLayout {
@@ -7699,6 +7709,16 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -7839,6 +7859,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: buffers.mode_cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.mode_properties_v12.as_entire_binding(),
                 },
             ],
         })

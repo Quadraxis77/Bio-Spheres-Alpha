@@ -804,6 +804,9 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         if connections.is_active[i] == 0 {
             continue;
         }
+        if (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) != 0 {
+            continue;
+        }
         let cell_a = connections.cell_a_index[i];
         let cell_b = connections.cell_b_index[i];
         if cell_a >= n || cell_b >= n {
@@ -1032,6 +1035,9 @@ pub fn form_glueocyte_contact_bonds(
     for pair in collision_pairs {
         let idx_a = pair.index_a;
         let idx_b = pair.index_b;
+        if idx_a >= state.cell_count || idx_b >= state.cell_count {
+            continue;
+        }
 
         if state
             .adhesion_manager
@@ -1122,58 +1128,15 @@ pub fn form_glueocyte_contact_bonds(
             continue;
         }
 
-        let dir_a_to_b =
-            (state.positions[idx_b] - state.positions[idx_a]).normalize_or(glam::Vec3::X);
-        let dir_b_to_a = -dir_a_to_b;
-
-        let anchor_a = state.genome_orientations[idx_a].inverse() * dir_a_to_b;
-        let anchor_b = state.genome_orientations[idx_b].inverse() * dir_b_to_a;
-
-        let split_dir_a = genome
-            .modes
-            .get(mode_a)
-            .map(|m| {
-                let pitch = m.parent_split_direction.x.to_radians();
-                let yaw = m.parent_split_direction.y.to_radians();
-                glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
-            })
-            .unwrap_or(glam::Vec3::Z);
-
-        let split_dir_b = genome
-            .modes
-            .get(mode_b)
-            .map(|m| {
-                let pitch = m.parent_split_direction.x.to_radians();
-                let yaw = m.parent_split_direction.y.to_radians();
-                glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, 0.0) * glam::Vec3::Z
-            })
-            .unwrap_or(glam::Vec3::Z);
-
-        let split_ratio_a = genome
-            .modes
-            .get(mode_a)
-            .map(|m| m.split_ratio)
-            .unwrap_or(0.5);
-        let split_ratio_b = genome
-            .modes
-            .get(mode_b)
-            .map(|m| m.split_ratio)
-            .unwrap_or(0.5);
-
-        let _ = state.adhesion_manager.add_adhesion_with_directions(
+        let glue_mode = if is_glue_a { mode_a } else { mode_b };
+        let _ = state.adhesion_manager.add_ball_joint(
             &mut state.adhesion_connections,
             idx_a,
             idx_b,
-            mode_a,
-            anchor_a,
-            anchor_b,
-            split_dir_a,
-            split_dir_b,
-            state.genome_orientations[idx_a],
-            state.genome_orientations[idx_b],
-            split_ratio_a,
-            split_ratio_b,
+            glue_mode,
             current_time,
+            crate::cell::adhesion::BOND_FLAG_GLUEOCYTE
+                | crate::cell::adhesion::BOND_FLAG_BARRIER_BALL,
         );
     }
 }

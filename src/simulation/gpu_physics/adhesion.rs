@@ -33,6 +33,7 @@ pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 /// Stored in `GpuAdhesionConnection::bond_flags` bit 0.
 /// Used by the glueocyte cell-adhesion shader to selectively release only its own bonds.
 pub const BOND_FLAG_GLUEOCYTE: u32 = 1 << 0;
+pub const BOND_FLAG_BARRIER_BALL: u32 = 1 << 1;
 
 /// Legacy constant - buffer sizes now derived dynamically from cell_capacity * MAX_ADHESIONS_PER_CELL / 2
 /// in AdhesionBuffers::new(). Kept for reference only.
@@ -55,7 +56,7 @@ pub struct GpuAdhesionConnection {
     pub zone_a: u32, // offset 16
     /// Zone classification for cell B (0=ZoneA, 1=ZoneB, 2=ZoneC)
     pub zone_b: u32, // offset 20
-    /// Bond origin flags: bit 0 = created by glueocyte cell-adhesion (vs division/inheritance)
+    /// Bond origin flags: bit 0 = glueocyte-created, bit 1 = barrier ball joint
     pub bond_flags: u32, // offset 24
     /// Padding to align anchor_direction_a to 16 bytes
     pub _align_pad: u32, // offset 28

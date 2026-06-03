@@ -1,4 +1,4 @@
-use super::adhesion::AdhesionConnections;
+use super::adhesion::{AdhesionConnections, BOND_FLAG_BARRIER_BALL};
 use crate::genome::AdhesionSettings;
 use glam::{Quat, Vec3};
 
@@ -86,6 +86,7 @@ pub fn compute_adhesion_forces(
             connections.twist_reference_a[i],
             connections.twist_reference_b[i],
             settings,
+            (connections.bond_flags[i] & BOND_FLAG_BARRIER_BALL) != 0,
             0.0,
             0.0,
             dt,
@@ -208,6 +209,7 @@ pub fn compute_adhesion_forces_parallel(
                     connections.twist_reference_a[i],
                     connections.twist_reference_b[i],
                     settings,
+                    (connections.bond_flags[i] & BOND_FLAG_BARRIER_BALL) != 0,
                     contraction_a,
                     contraction_b,
                     dt,
@@ -279,6 +281,7 @@ fn compute_adhesion_force_pair(
     twist_ref_a: Quat,
     twist_ref_b: Quat,
     settings: &AdhesionSettings,
+    is_ball_joint: bool,
     contraction_a: f32,
     contraction_b: f32,
     dt: f32,
@@ -303,6 +306,15 @@ fn compute_adhesion_force_pair(
     // Two myocytes at full contraction shorten it to zero.
     let effective_rest_length =
         rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
+    if is_ball_joint {
+        const SETTLE_DURATION: f32 = 0.3;
+        let settle_factor = (bond_age / SETTLE_DURATION).clamp(0.0, 1.0);
+        let spring = (dist - effective_rest_length) * settings.linear_spring_stiffness * settle_factor;
+        let rel_vel = vel_b - vel_a;
+        let damping = settings.linear_spring_damping * rel_vel.dot(adhesion_dir);
+        let force = adhesion_dir * (spring + damping);
+        return (force, Vec3::ZERO, -force, Vec3::ZERO, force.length());
+    }
 
     // Transform anchor directions to world space using physics rotations.
     // Both the geometric spring and orientation spring use physics rotations so the
@@ -533,6 +545,7 @@ pub fn compute_adhesion_substep(
             connections.twist_reference_a[i],
             connections.twist_reference_b[i],
             settings,
+            (connections.bond_flags[i] & BOND_FLAG_BARRIER_BALL) != 0,
             contraction_a,
             contraction_b,
             masses[cell_a_idx],
@@ -637,6 +650,7 @@ fn compute_substep_force_pair(
     twist_ref_a: Quat,
     twist_ref_b: Quat,
     settings: &AdhesionSettings,
+    is_ball_joint: bool,
     contraction_a: f32,
     contraction_b: f32,
     mass_a: f32,
@@ -658,6 +672,13 @@ fn compute_substep_force_pair(
     let rest_length = settings.rest_length;
     let effective_rest_length =
         rest_length * (1.0 - contraction_a * 0.5 - contraction_b * 0.5).max(0.0);
+    if is_ball_joint {
+        let spring = (dist - effective_rest_length) * settings.linear_spring_stiffness;
+        let rel_vel = vel_b - vel_a;
+        let damping = settings.linear_spring_damping * rel_vel.dot(adhesion_dir);
+        let force = adhesion_dir * (spring + damping);
+        return (force, Vec3::ZERO, -force, Vec3::ZERO);
+    }
 
     // Geometric spring using GENOME orientations (matches GPU)
     let genome_anchor_a =
@@ -846,6 +867,7 @@ pub fn compute_adhesion_forces_batched(
                     connections.twist_reference_a[i],
                     connections.twist_reference_b[i],
                     settings,
+                    (connections.bond_flags[i] & BOND_FLAG_BARRIER_BALL) != 0,
                     0.0,
                     0.0,
                     dt,

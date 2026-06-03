@@ -43,7 +43,7 @@
 //! - Culling statistics (frustum and occlusion)
 //! - Cell counts and simulation metrics
 
-use crate::scene::{MainMenuScene, SceneManager};
+use crate::scene::{MainMenuScene, PreviewScene, SceneManager};
 use crate::ui::{DockManager, PerformanceMetrics, UiSystem};
 use egui::TextureId;
 use egui_wgpu::ScreenDescriptor;
@@ -52,7 +52,7 @@ use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    window::{Window, WindowId},
+    window::{CursorIcon, Window, WindowId},
 };
 
 /// High-level application phase.
@@ -74,6 +74,28 @@ enum MenuAction {
     Settings,
     Credits,
     Exit,
+}
+
+const CELL_LINK_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(450);
+const CELL_LINK_HOLD_CANCEL_DISTANCE_PX: f32 = 8.0;
+
+#[derive(Debug, Clone, Copy)]
+struct PreviewCellHit {
+    cell_index: usize,
+    mode_index: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CellLinkHold {
+    hit: PreviewCellHit,
+    started_at: std::time::Instant,
+    screen_pos: (f32, f32),
+}
+
+#[derive(Debug, Clone)]
+struct CellLinkSelection {
+    anchor_cell_index: usize,
+    selected_cell_indices: Vec<usize>,
 }
 
 /// Action deferred until after the current frame is presented to the screen.
@@ -138,6 +160,12 @@ pub struct App {
     /// Screen position where the right mouse button was pressed (physical pixels).
     /// Used to distinguish a tap (open context menu) from a drag (rotate camera).
     right_click_start_pos: Option<(f32, f32)>,
+    /// Pending press-and-hold over a preview cell to enter cell-link selection.
+    cell_link_hold: Option<CellLinkHold>,
+    /// Active cell-link selection, used by scaffold/link tools.
+    cell_link_selection: Option<CellLinkSelection>,
+    /// Last cursor icon set by App-level viewport interactions.
+    app_cursor_icon: CursorIcon,
     // IMPORTANT: surface must be declared before device so it drops first.
     // Rust drops fields in declaration order; wgpu/Vulkan requires the surface
     // to be destroyed before the device, otherwise the Vulkan validation layer
@@ -189,6 +217,9 @@ impl App {
             last_left_click_time: None,
             last_left_click_pos: (0.0, 0.0),
             right_click_start_pos: None,
+            cell_link_hold: None,
+            cell_link_selection: None,
+            app_cursor_icon: CursorIcon::Default,
             device,
             surface,
             app_phase: AppPhase::MainMenu,
@@ -198,6 +229,178 @@ impl App {
 
     pub fn window(&self) -> &Window {
         &self.window
+    }
+
+    fn set_app_cursor(&mut self, icon: CursorIcon) {
+        if self.app_cursor_icon != icon {
+            self.window.set_cursor(icon);
+            self.app_cursor_icon = icon;
+        }
+    }
+
+    fn pick_preview_cell_at(
+        preview_scene: &PreviewScene,
+        screen_pos: (f32, f32),
+        viewport_size: (f32, f32),
+    ) -> Option<PreviewCellHit> {
+        let (mx, my) = screen_pos;
+        let (w, h) = viewport_size;
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+
+        let aspect = w / h;
+        let cam_pos = preview_scene.camera.position();
+        let cam_rot = preview_scene.camera.rotation;
+        let fov_y = 45.0_f32.to_radians();
+        let tan_half_fov = (fov_y / 2.0).tan();
+
+        let ndc_x = (mx / w) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (my / h) * 2.0;
+        let ray_dir_cam =
+            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0)
+                .normalize();
+        let ray_dir = cam_rot * ray_dir_cam;
+
+        let cell_count = preview_scene.state.display_state.cell_count;
+        let mut best_t = f32::MAX;
+        let mut hit: Option<PreviewCellHit> = None;
+
+        for i in 0..cell_count {
+            let center = preview_scene.state.display_state.positions[i];
+            let radius = preview_scene.state.display_state.radii[i];
+            let oc = cam_pos - center;
+            let b = oc.dot(ray_dir);
+            let c = oc.dot(oc) - radius * radius;
+            let disc = b * b - c;
+            if disc >= 0.0 {
+                let t = -b - disc.sqrt();
+                if t > 0.001 && t < best_t {
+                    best_t = t;
+                    hit = Some(PreviewCellHit {
+                        cell_index: i,
+                        mode_index: preview_scene.state.display_state.mode_indices[i],
+                    });
+                }
+            }
+        }
+
+        hit
+    }
+
+    fn select_preview_mode_from_hit(&mut self, hit: PreviewCellHit, ctrl_held: bool) {
+        let mode_idx = hit.mode_index;
+        if self.editor_state.selected_mode_indices.is_empty() {
+            self.editor_state.selected_mode_indices = vec![self.editor_state.selected_mode_index];
+        }
+
+        if ctrl_held {
+            if self.editor_state.selected_mode_indices.contains(&mode_idx) {
+                if self.editor_state.selected_mode_indices.len() > 1 {
+                    self.editor_state
+                        .selected_mode_indices
+                        .retain(|&i| i != mode_idx);
+                    if self.editor_state.selected_mode_index == mode_idx {
+                        let new_primary = self.editor_state.selected_mode_indices[0];
+                        self.editor_state.selected_mode_index = new_primary;
+                        if let Some(mode) = self.working_genome.modes.get(new_primary) {
+                            self.editor_state.child_a_orientation = mode.child_a.orientation;
+                            self.editor_state.child_b_orientation = mode.child_b.orientation;
+                        }
+                    }
+                }
+            } else {
+                self.editor_state.selected_mode_indices.push(mode_idx);
+            }
+            log::info!(
+                "Preview Ctrl+click: multi-selection now {:?}",
+                self.editor_state.selected_mode_indices
+            );
+        } else {
+            self.editor_state.selected_mode_index = mode_idx;
+            self.editor_state.selected_mode_indices = vec![mode_idx];
+            if let Some(mode) = self.working_genome.modes.get(mode_idx) {
+                self.editor_state.child_a_orientation = mode.child_a.orientation;
+                self.editor_state.child_b_orientation = mode.child_b.orientation;
+            }
+            log::info!("Preview cell click: selected mode {}", mode_idx);
+        }
+    }
+
+    fn cancel_cell_link_hold(&mut self) {
+        if self.cell_link_hold.take().is_some() {
+            self.set_app_cursor(CursorIcon::Default);
+        }
+    }
+
+    fn start_cell_link_hold(&mut self, hit: PreviewCellHit, screen_pos: (f32, f32)) {
+        self.cell_link_hold = Some(CellLinkHold {
+            hit,
+            started_at: std::time::Instant::now(),
+            screen_pos,
+        });
+        self.set_app_cursor(CursorIcon::Progress);
+        self.window.request_redraw();
+    }
+
+    fn complete_cell_link_hold(&mut self) {
+        let Some(hold) = self.cell_link_hold.take() else {
+            return;
+        };
+        self.cell_link_selection = Some(CellLinkSelection {
+            anchor_cell_index: hold.hit.cell_index,
+            selected_cell_indices: vec![hold.hit.cell_index],
+        });
+        self.set_app_cursor(CursorIcon::Default);
+        log::info!(
+            "Cell link selection started from preview cell {}",
+            hold.hit.cell_index
+        );
+        self.window.request_redraw();
+    }
+
+    fn update_cell_link_selection_from_hit(&mut self, hit: PreviewCellHit, ctrl_held: bool) {
+        let Some(selection) = self.cell_link_selection.as_mut() else {
+            return;
+        };
+
+        if ctrl_held {
+            if hit.cell_index == selection.anchor_cell_index {
+                return;
+            }
+            if selection.selected_cell_indices.contains(&hit.cell_index) {
+                selection
+                    .selected_cell_indices
+                    .retain(|&idx| idx != hit.cell_index);
+            } else {
+                selection.selected_cell_indices.push(hit.cell_index);
+            }
+        } else {
+            selection.selected_cell_indices.clear();
+            selection.selected_cell_indices.push(selection.anchor_cell_index);
+            if hit.cell_index != selection.anchor_cell_index {
+                selection.selected_cell_indices.push(hit.cell_index);
+            }
+        }
+
+        log::info!(
+            "Cell link selection: anchor {}, selected {:?}",
+            selection.anchor_cell_index,
+            selection.selected_cell_indices
+        );
+        self.window.request_redraw();
+    }
+
+    fn update_cell_link_hold(&mut self) {
+        let should_complete = self
+            .cell_link_hold
+            .as_ref()
+            .is_some_and(|hold| hold.started_at.elapsed() >= CELL_LINK_HOLD_DURATION);
+        if should_complete {
+            self.complete_cell_link_hold();
+        } else if self.cell_link_hold.is_some() {
+            self.window.request_redraw();
+        }
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
@@ -250,133 +453,33 @@ impl App {
                 }
             }
             WindowEvent::MouseInput { button, state, .. } => {
-                // Handle cell click in Preview mode to select mode
+                // Preview left-click: quick click selects a mode, press-and-hold
+                // over a cell enters cell-link selection for scaffold editing.
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview
                     && *button == MouseButton::Left
                     && *state == ElementState::Pressed
                     && !self.ui.wants_pointer_input()
                 {
                     let ctrl_held = self.keyboard_modifiers.state().control_key();
-                    // Start a Ctrl+drag sweep if Ctrl is held
-                    if ctrl_held {
+                    if ctrl_held && self.cell_link_selection.is_none() {
                         self.ctrl_drag_selecting = true;
                     }
 
-                    if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
-                        let (mx, my) = self.mouse_position;
-                        let w = self.config.width as f32;
-                        let h = self.config.height as f32;
-                        let aspect = w / h;
-
-                        // Build camera ray from screen position
-                        let cam_pos = preview_scene.camera.position();
-                        let cam_rot = preview_scene.camera.rotation;
-                        let fov_y = 45.0_f32.to_radians();
-                        let tan_half_fov = (fov_y / 2.0).tan();
-
-                        // NDC [-1, 1]
-                        let ndc_x = (mx / w) * 2.0 - 1.0;
-                        let ndc_y = 1.0 - (my / h) * 2.0;
-
-                        let ray_dir_cam = glam::Vec3::new(
-                            ndc_x * aspect * tan_half_fov,
-                            ndc_y * tan_half_fov,
-                            -1.0,
+                    let hit = self.scene_manager.preview_scene_mut().and_then(|preview_scene| {
+                        Self::pick_preview_cell_at(
+                            preview_scene,
+                            self.mouse_position,
+                            (self.config.width as f32, self.config.height as f32),
                         )
-                        .normalize();
-                        let ray_dir = cam_rot * ray_dir_cam;
+                    });
 
-                        // Ray-sphere intersection against all cells
-                        let cell_count = preview_scene.state.display_state.cell_count;
-                        let mut best_t = f32::MAX;
-                        let mut hit_mode: Option<usize> = None;
-
-                        for i in 0..cell_count {
-                            let center = preview_scene.state.display_state.positions[i];
-                            let radius = preview_scene.state.display_state.radii[i];
-                            let oc = cam_pos - center;
-                            let b = oc.dot(ray_dir);
-                            let c = oc.dot(oc) - radius * radius;
-                            let disc = b * b - c;
-                            if disc >= 0.0 {
-                                let t = -b - disc.sqrt();
-                                if t > 0.001 && t < best_t {
-                                    best_t = t;
-                                    hit_mode =
-                                        Some(preview_scene.state.display_state.mode_indices[i]);
-                                }
-                            }
-                        }
-
-                        if let Some(mode_idx) = hit_mode {
-                            let ctrl_held = self.keyboard_modifiers.state().control_key();
-                            let shift_held = self.keyboard_modifiers.state().shift_key();
-
-                            // Ensure selected_mode_indices is consistent before modifying
-                            if self.editor_state.selected_mode_indices.is_empty() {
-                                self.editor_state.selected_mode_indices =
-                                    vec![self.editor_state.selected_mode_index];
-                            }
-
-                            if ctrl_held {
-                                // Ctrl+click: toggle this mode in the multi-selection
-                                if self.editor_state.selected_mode_indices.contains(&mode_idx) {
-                                    // Don't deselect if it's the only one selected
-                                    if self.editor_state.selected_mode_indices.len() > 1 {
-                                        self.editor_state
-                                            .selected_mode_indices
-                                            .retain(|&i| i != mode_idx);
-                                        // If we removed the primary, promote the first remaining
-                                        if self.editor_state.selected_mode_index == mode_idx {
-                                            let new_primary =
-                                                self.editor_state.selected_mode_indices[0];
-                                            self.editor_state.selected_mode_index = new_primary;
-                                            if let Some(mode) =
-                                                self.working_genome.modes.get(new_primary)
-                                            {
-                                                self.editor_state.child_a_orientation =
-                                                    mode.child_a.orientation;
-                                                self.editor_state.child_b_orientation =
-                                                    mode.child_b.orientation;
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Add to selection without changing the primary
-                                    self.editor_state.selected_mode_indices.push(mode_idx);
-                                }
-                                log::info!(
-                                    "Preview Ctrl+click: multi-selection now {:?}",
-                                    self.editor_state.selected_mode_indices
-                                );
-                            } else if shift_held {
-                                // Shift+click: range select from current primary to clicked mode
-                                let anchor = self.editor_state.selected_mode_index;
-                                let lo = anchor.min(mode_idx);
-                                let hi = anchor.max(mode_idx);
-                                for i in lo..=hi {
-                                    if !self.editor_state.selected_mode_indices.contains(&i) {
-                                        self.editor_state.selected_mode_indices.push(i);
-                                    }
-                                }
-                                log::info!(
-                                    "Preview Shift+click: range selection {:?}",
-                                    self.editor_state.selected_mode_indices
-                                );
-                            } else {
-                                // Plain click: single selection
-                                self.editor_state.selected_mode_index = mode_idx;
-                                self.editor_state.selected_mode_indices = vec![mode_idx];
-                                // Sync quaternion ball orientations from the selected mode's genome
-                                // data - same sync that happens when clicking a mode button directly.
-                                if let Some(mode) = self.working_genome.modes.get(mode_idx) {
-                                    self.editor_state.child_a_orientation =
-                                        mode.child_a.orientation;
-                                    self.editor_state.child_b_orientation =
-                                        mode.child_b.orientation;
-                                }
-                                log::info!("Preview cell click: selected mode {}", mode_idx);
-                            }
+                    if let Some(hit) = hit {
+                        if self.cell_link_selection.is_some() {
+                            self.update_cell_link_selection_from_hit(hit, ctrl_held);
+                        } else if ctrl_held {
+                            self.select_preview_mode_from_hit(hit, true);
+                        } else {
+                            self.start_cell_link_hold(hit, self.mouse_position);
                         }
                     }
                     self.window.request_redraw();
@@ -385,6 +488,11 @@ impl App {
                 // Clear Ctrl+drag sweep on left button release
                 if *button == MouseButton::Left && *state == ElementState::Released {
                     self.ctrl_drag_selecting = false;
+                    if let Some(hold) = self.cell_link_hold.take() {
+                        self.set_app_cursor(CursorIcon::Default);
+                        self.select_preview_mode_from_hit(hold.hit, false);
+                        self.window.request_redraw();
+                    }
                 }
 
                 // Handle right-click in Preview mode for cell context menu
@@ -664,8 +772,20 @@ impl App {
                 // Track mouse position for tool interactions
                 self.mouse_position = (position.x as f32, position.y as f32);
 
+                if let Some(hold) = self.cell_link_hold.as_ref() {
+                    let dx = self.mouse_position.0 - hold.screen_pos.0;
+                    let dy = self.mouse_position.1 - hold.screen_pos.1;
+                    if self.ui.wants_pointer_input()
+                        || dx * dx + dy * dy
+                            > CELL_LINK_HOLD_CANCEL_DISTANCE_PX * CELL_LINK_HOLD_CANCEL_DISTANCE_PX
+                    {
+                        self.cancel_cell_link_hold();
+                    }
+                }
+
                 // Ctrl+drag: continuously add hovered cells' modes to the selection
                 if self.ctrl_drag_selecting
+                    && self.cell_link_selection.is_none()
                     && self.scene_manager.current_mode()
                         == crate::ui::types::SimulationMode::Preview
                     && !self.ui.wants_pointer_input()
@@ -841,6 +961,15 @@ impl App {
 
                 // Escape returns to the main menu from any in-game scene
                 if let PhysicalKey::Code(KeyCode::Escape) = event.physical_key {
+                    if event.state == ElementState::Pressed
+                        && (self.cell_link_hold.is_some() || self.cell_link_selection.is_some())
+                    {
+                        self.cancel_cell_link_hold();
+                        self.cell_link_selection = None;
+                        self.window.request_redraw();
+                        return true;
+                    }
+
                     if event.state == ElementState::Pressed && self.app_phase == AppPhase::InGame {
                         log::info!("Escape pressed — returning to main menu");
                         // Rebuild the menu scene so the previews are fresh
@@ -882,6 +1011,9 @@ impl App {
                     self.scene_manager.clear_dragged_cell();
                     self.editor_state.radial_menu.clear_drag_state();
                     self.window.request_redraw();
+                }
+                if !focused {
+                    self.cancel_cell_link_hold();
                 }
             }
             _ => {}
@@ -1530,6 +1662,7 @@ impl App {
 
         // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);
+        self.update_cell_link_hold();
         let gpu_headless = self.scene_manager.current_mode()
             == crate::ui::types::SimulationMode::Gpu
             && self.ui.state.gpu_headless_mode;

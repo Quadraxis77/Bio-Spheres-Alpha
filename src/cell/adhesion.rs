@@ -10,6 +10,8 @@ pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 /// Shared by the CPU (division.rs) and GPU (lifecycle_division_execute_ring.wgsl)
 /// paths so both scenes disconnect identically.
 pub const ANCHOR_OVERLAP_COS: f32 = 0.99;
+pub const BOND_FLAG_GLUEOCYTE: u32 = 1 << 0;
+pub const BOND_FLAG_BARRIER_BALL: u32 = 1 << 1;
 
 /// Legacy constant - actual capacity is computed dynamically as cell_capacity * MAX_ADHESIONS_PER_CELL / 2
 /// Kept for backwards compatibility with code that references it
@@ -30,6 +32,8 @@ pub struct AdhesionConnections {
     pub zone_a: Vec<u8>,
     /// Zone classification for cell B
     pub zone_b: Vec<u8>,
+    /// Bond flags: glueocyte-created, barrier ball joint, etc.
+    pub bond_flags: Vec<u32>,
 
     /// Anchor direction for cell A (local space, normalized)
     pub anchor_direction_a: Vec<Vec3>,
@@ -61,6 +65,7 @@ impl AdhesionConnections {
             is_active: vec![0; capacity],
             zone_a: vec![0; capacity],
             zone_b: vec![0; capacity],
+            bond_flags: vec![0; capacity],
             anchor_direction_a: vec![Vec3::X; capacity],
             anchor_direction_b: vec![-Vec3::X; capacity],
             twist_reference_a: vec![Quat::IDENTITY; capacity],

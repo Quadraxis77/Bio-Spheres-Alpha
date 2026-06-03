@@ -3575,52 +3575,110 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 format!("At maximum ({} modes)", crate::genome::MAX_MODES)
             } else {
                 format!(
-                    "Add mode ({}/{})",
+                    "Insert mode after selected ({}/{})",
                     context.genome.modes.len(),
                     crate::genome::MAX_MODES
                 )
             })
             .clicked()
         {
-            if let Some(new_idx) = context.genome.add_mode() {
+            let after_idx = context
+                .editor_state
+                .selected_mode_index
+                .min(context.genome.modes.len().saturating_sub(1));
+            if let Some(new_idx) = context.genome.insert_mode_after(after_idx) {
                 context.editor_state.selected_mode_index = new_idx;
                 context.editor_state.selected_mode_indices = vec![new_idx];
-                log::info!("Added mode M{}", new_idx + 1);
+                log::info!("Inserted mode after {}", after_idx);
             }
         }
 
-        // Remove last mode button
-        let can_remove = context.genome.modes.len() > 1;
+        // Remove selected modes button. The initial mode is preserved by the genome.
+        let removable_selected_count = context
+            .editor_state
+            .selected_mode_indices
+            .iter()
+            .filter(|&&idx| idx < context.genome.modes.len() && idx != initial_mode)
+            .count();
+        let can_remove = removable_selected_count > 0;
         let remove_btn = ui.add_enabled(
             can_remove,
             egui::Button::new("−").min_size(egui::Vec2::new(20.0, 0.0)),
         );
         if remove_btn
             .on_hover_text(if can_remove {
-                format!("Remove last mode ({})", context.genome.modes.len())
+                if removable_selected_count == 1 {
+                    "Remove selected mode".to_string()
+                } else {
+                    format!("Remove {} selected modes", removable_selected_count)
+                }
             } else {
-                "Need at least 1 mode".to_string()
+                "Select a non-initial mode to remove".to_string()
             })
             .clicked()
         {
-            context.genome.remove_last_mode();
-            // Clamp selection after removal
-            if context.editor_state.selected_mode_index >= context.genome.modes.len() {
-                context.editor_state.selected_mode_index =
-                    context.genome.modes.len().saturating_sub(1);
+            let old_selected = context.editor_state.selected_mode_index;
+            let old_selection = context.editor_state.selected_mode_indices.clone();
+            let removed = context
+                .genome
+                .remove_modes_except_initial(&context.editor_state.selected_mode_indices);
+
+            if !removed.is_empty() {
+                let removed_before = |idx: usize| removed.iter().filter(|&&r| r < idx).count();
+                context.editor_state.selected_mode_indices = old_selection
+                    .iter()
+                    .copied()
+                    .filter(|idx| !removed.contains(idx))
+                    .map(|idx| idx - removed_before(idx))
+                    .filter(|&idx| idx < context.genome.modes.len())
+                    .collect();
+
+                context.editor_state.selected_mode_index = if removed.contains(&old_selected) {
+                    context.genome.initial_mode.max(0) as usize
+                } else {
+                    old_selected - removed_before(old_selected)
+                }
+                .min(context.genome.modes.len().saturating_sub(1));
+
+                if context.editor_state.selected_mode_indices.is_empty() {
+                    context.editor_state.selected_mode_indices =
+                        vec![context.editor_state.selected_mode_index];
+                } else if !context
+                    .editor_state
+                    .selected_mode_indices
+                    .contains(&context.editor_state.selected_mode_index)
+                {
+                    context
+                        .editor_state
+                        .selected_mode_indices
+                        .push(context.editor_state.selected_mode_index);
+                    context.editor_state.selected_mode_indices.sort_unstable();
+                    context.editor_state.selected_mode_indices.dedup();
+                }
+
+                let remap_surviving_index = |idx: usize| {
+                    if removed.contains(&idx) {
+                        None
+                    } else {
+                        let remapped = idx - removed_before(idx);
+                        (remapped < context.genome.modes.len()).then_some(remapped)
+                    }
+                };
+
+                context.editor_state.renaming_mode = context
+                    .editor_state
+                    .renaming_mode
+                    .and_then(remap_surviving_index);
+                context.editor_state.color_picker_state = context
+                    .editor_state
+                    .color_picker_state
+                    .take()
+                    .and_then(|(idx, hsva)| remap_surviving_index(idx).map(|idx| (idx, hsva)));
+
+                selected_index = context.editor_state.selected_mode_index;
+                initial_mode = context.genome.initial_mode.max(0) as usize;
             }
-            context
-                .editor_state
-                .selected_mode_indices
-                .retain(|&i| i < context.genome.modes.len());
-            if context.editor_state.selected_mode_indices.is_empty() {
-                context.editor_state.selected_mode_indices =
-                    vec![context.editor_state.selected_mode_index];
-            }
-            log::info!(
-                "Removed last mode, now {} modes",
-                context.genome.modes.len()
-            );
+            log::info!("Removed modes {:?}, now {} modes", removed, context.genome.modes.len());
         }
 
         if copy_into_clicked {
@@ -3777,8 +3835,10 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode_switch_invert: false,
                     devorocyte_consume_range: 0.5,
                     devorocyte_consume_rate: 30.0,
+                    vascular_nutrient_transport: true,
                     vascular_outlet: false,
                     vascular_signal_transport: false,
+                    vascular_signal_exchange: false,
                     vascular_signal_capacity: 10.0,
                     gametocyte_merge_range: 0.5,
                     memorocyte_rate: 0.1,
@@ -4588,7 +4648,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.checkbox(&mut mode.glueocyte_cell_adhesion, "Cell Adhesion")
                         .on_hover_text("Form adhesion bonds with other cells on contact");
                     ui.checkbox(&mut mode.glueocyte_self_adhesion, "Bond to Own Organism")
-                        .on_hover_text("When enabled, also bonds to cells of the same organism. When disabled (default), only bonds to foreign cells");
+                        .on_hover_text("When enabled, preview glueocytes act as disposable applicators: after touching two own-organism cells they create a black mechanical ball joint between them and are consumed. Two touching glueocytes merge into one larger glueocyte.");
                     ui.checkbox(&mut mode.glueocyte_env_adhesion, "Environment Adhesion")
                         .on_hover_text("Bond to cave walls and the world boundary on contact");
                     ui.checkbox(&mut mode.glueocyte_boulder_adhesion, "Boulder/Mossrock Adhesion")
@@ -5153,31 +5213,42 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Physical compression (e.g. from Myocytes) boosts transport rate.");
                     ui.separator();
 
-                    // Transport mode checkboxes
-                    ui.label("Transport:");
+                    ui.label("Nutrients:");
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut mode.vascular_outlet, "Nutrients")
-                            .on_hover_text("When enabled, nutrients flow out to adjacent non-vascular cells. When disabled, acts as a sealed pipe — nutrients pass through but are not released to neighbors");
-                        ui.checkbox(&mut mode.vascular_signal_transport, "Signals")
-                            .on_hover_text("When enabled, signals pass through this vasculocyte with zero attenuation (instead of the normal 50% per hop). Every hop still consumes 1 unit of the signal's hop budget. Output is capped at the Signal Capacity to prevent fan-in amplification");
+                        ui.checkbox(&mut mode.vascular_nutrient_transport, "Transport")
+                            .on_hover_text("Carries nutrients efficiently between connected vasculocytes. Disable this to make the mode a nutrient barrier unless exchange is enabled.");
+                        ui.checkbox(&mut mode.vascular_outlet, "Exchange Port")
+                            .on_hover_text("Bidirectional inlet/outlet: can receive nutrients from adjacent non-vascular tissue and release nutrients back into it.");
                     });
 
-                    if mode.vascular_outlet && mode.vascular_signal_transport {
-                        ui.colored_label(egui::Color32::from_rgb(120, 220, 255), "  ▸ Dual transport — nutrients and signals.");
-                    } else if mode.vascular_outlet {
-                        ui.colored_label(egui::Color32::from_rgb(120, 220, 255), "  ▸ Nutrient transport only.");
-                    } else if mode.vascular_signal_transport {
-                        ui.colored_label(egui::Color32::from_rgb(120, 255, 180), "  ▸ Signal highway only — nutrients sealed.");
-                    } else {
-                        ui.colored_label(egui::Color32::GRAY, "  ▸ Structural only — no transport.");
-                    }
+                    ui.label("Signals:");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut mode.vascular_signal_transport, "Transport")
+                            .on_hover_text("Carries signals efficiently between connected vasculocytes. A vascular-to-vascular step costs 0.25 travel points instead of 1.0.");
+                        ui.checkbox(&mut mode.vascular_signal_exchange, "Exchange Port")
+                            .on_hover_text("Bidirectional inlet/outlet: can receive signals from adjacent non-vascular tissue and release signals back into it.");
+                    });
 
-                    // Signal capacity (only relevant when signal transport is on)
-                    if mode.vascular_signal_transport {
+                    let nutrient_label = match (mode.vascular_nutrient_transport, mode.vascular_outlet) {
+                        (true, true) => "Nutrients: pipe with tissue exchange.",
+                        (true, false) => "Nutrients: sealed pipe.",
+                        (false, true) => "Nutrients: local exchange port only.",
+                        (false, false) => "Nutrients: closed.",
+                    };
+                    let signal_label = match (mode.vascular_signal_transport, mode.vascular_signal_exchange) {
+                        (true, true) => "Signals: road with tissue exchange.",
+                        (true, false) => "Signals: sealed road.",
+                        (false, true) => "Signals: local exchange port only.",
+                        (false, false) => "Signals: closed.",
+                    };
+                    ui.colored_label(egui::Color32::from_rgb(120, 220, 255), nutrient_label);
+                    ui.colored_label(egui::Color32::from_rgb(120, 255, 180), signal_label);
+                    // Signal capacity (only relevant when signal transport or exchange is on)
+                    if mode.vascular_signal_transport || mode.vascular_signal_exchange {
                         ui.add_space(4.0);
                         ui.separator();
                         ui.label("Signal Capacity:")
-                            .on_hover_text("Maximum signal value this node forwards per tick. Caps the output regardless of how many upstream paths converge here, preventing junction amplification. Set higher for a main trunk, lower for branches");
+                            .on_hover_text("Maximum signal value this node forwards per tick. Caps output regardless of how many upstream paths converge here, preventing junction amplification. Set higher for a main trunk, lower for branches.");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -6416,8 +6487,22 @@ fn sync_mode_changes_to_others(
         }
 
         // Vasculocyte
+        if updated.vascular_nutrient_transport != snapshot.vascular_nutrient_transport {
+            other.vascular_nutrient_transport = updated.vascular_nutrient_transport;
+        }
         if updated.vascular_outlet != snapshot.vascular_outlet {
             other.vascular_outlet = updated.vascular_outlet;
+        }
+        if updated.vascular_signal_transport != snapshot.vascular_signal_transport {
+            other.vascular_signal_transport = updated.vascular_signal_transport;
+        }
+        if updated.vascular_signal_exchange != snapshot.vascular_signal_exchange {
+            other.vascular_signal_exchange = updated.vascular_signal_exchange;
+        }
+        if (updated.vascular_signal_capacity - snapshot.vascular_signal_capacity).abs()
+            > f32::EPSILON
+        {
+            other.vascular_signal_capacity = updated.vascular_signal_capacity;
         }
 
         // Gametocyte

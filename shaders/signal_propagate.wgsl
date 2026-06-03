@@ -12,7 +12,7 @@
 //
 // 16 channels per cell: signal_flags[cell_idx * 16 + channel]
 // Each channel is independently propagated.
-// Signal word format: bit16 = source flag, bits 11-15 = hops remaining, bits 0-10 = value
+// Signal word format: bit24 = source flag, bits 11-23 = scaled travel budget, bits 0-10 = value
 //
 // Summation semantics: contributions from multiple neighbors are SUMMED (clamped to 2047),
 // and hops is the MAX across all contributing neighbors. This enables quorum-sensing patterns
@@ -25,7 +25,8 @@ struct AdhesionConnection {
     is_active: u32,
     zone_a: u32,
     zone_b: u32,
-    _align_pad: vec2<u32>,
+    bond_flags: u32,
+    _align_pad1: u32,
     anchor_direction_a: vec4<f32>,
     anchor_direction_b: vec4<f32>,
     twist_reference_a: vec4<f32>,
@@ -36,7 +37,13 @@ struct AdhesionConnection {
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const SIGNAL_CHANNELS: u32 = 16u;
-const SIGNAL_ATTENUATION_PER_HOP: f32 = 0.5; // 50% signal strength retained per hop (matches CPU)
+const SIGNAL_VALUE_MASK: u32 = 2047u;
+const SIGNAL_HOP_SHIFT: u32 = 11u;
+const SIGNAL_HOP_MASK: u32 = 8191u;
+const SIGNAL_SOURCE_FLAG: u32 = 1u << 24u;
+const SIGNAL_NORMAL_COST: u32 = 4u;
+const SIGNAL_ROAD_COST: u32 = 1u;
+const SIGNAL_LOSS_PER_POINT: f32 = 0.05;
 
 // Group 0: signal buffers + cell count
 // binding 0: signal_flags      - read-only source for this hop (previous state)
@@ -65,6 +72,61 @@ var<storage, read> mode_indices: array<u32>;
 var<storage, read> mode_cell_types: array<u32>;
 
 const OCULOCYTE_TYPE: u32 = 7u;
+const VASCULOCYTE_TYPE: u32 = 12u;
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
+
+// [nutrient_transport, nutrient_exchange, signal_transport, signal_exchange]
+@group(1) @binding(4)
+var<storage, read> mode_properties_v12: array<vec4<f32>>;
+
+fn is_signal_transport_vascular(mode_idx: u32, cell_type: u32) -> bool {
+    if (cell_type != VASCULOCYTE_TYPE || mode_idx >= arrayLength(&mode_properties_v12)) {
+        return false;
+    }
+    return mode_properties_v12[mode_idx].z > 0.5;
+}
+
+fn is_signal_exchange_vascular(mode_idx: u32, cell_type: u32) -> bool {
+    if (cell_type != VASCULOCYTE_TYPE || mode_idx >= arrayLength(&mode_properties_v12)) {
+        return false;
+    }
+    return mode_properties_v12[mode_idx].w > 0.5;
+}
+
+fn can_signal_cross(
+    from_mode: u32,
+    from_type: u32,
+    to_mode: u32,
+    to_type: u32,
+) -> bool {
+    let from_vascular = from_type == VASCULOCYTE_TYPE;
+    let to_vascular = to_type == VASCULOCYTE_TYPE;
+    if (from_vascular && to_vascular) {
+        return is_signal_transport_vascular(from_mode, from_type) &&
+               is_signal_transport_vascular(to_mode, to_type);
+    }
+    if (from_vascular && !to_vascular) {
+        return is_signal_exchange_vascular(from_mode, from_type);
+    }
+    if (!from_vascular && to_vascular) {
+        return is_signal_exchange_vascular(to_mode, to_type);
+    }
+    return true;
+}
+
+fn signal_edge_cost(
+    from_mode: u32,
+    from_type: u32,
+    to_mode: u32,
+    to_type: u32,
+) -> u32 {
+    if (from_type == VASCULOCYTE_TYPE && to_type == VASCULOCYTE_TYPE &&
+        is_signal_transport_vascular(from_mode, from_type) &&
+        is_signal_transport_vascular(to_mode, to_type)) {
+        return SIGNAL_ROAD_COST;
+    }
+    return SIGNAL_NORMAL_COST;
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -93,19 +155,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Start with whatever this cell already has (from the sense pass or a prior hop).
         let own_signal = signal_flags[my_base + ch];
-        let own_hops  = (own_signal >> 11u) & 31u;
-        let own_value = own_signal & 2047u;
+        let own_hops  = (own_signal >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
+        let own_value = own_signal & SIGNAL_VALUE_MASK;
 
         // Accumulate contributions from all neighbors:
         //   summed_value  – sum of each neighbor's attenuated value (clamped to 2047)
         //   best_hops     – max hops across contributing neighbors (determines reach)
-        //   any_source    – true if any contributing neighbor is a direct emitter (bit 16)
+        //   any_source    - true if any contributing neighbor is a direct emitter (bit 24)
         //
         // The cell's own current signal is included as the starting sum so that a cell
         // which is itself an emitter (or already accumulated signal) carries it forward.
         var summed_value: u32 = own_value;
         var best_hops:    u32 = own_hops;
-        var any_source:   u32 = own_signal & (1u << 16u);
+        var any_source:   u32 = own_signal & SIGNAL_SOURCE_FLAG;
         let adhesion_base = idx * MAX_ADHESIONS_PER_CELL;
 
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
@@ -114,6 +176,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             let conn = adhesion_connections[u32(adh_idx)];
             if (conn.is_active == 0u) { continue; }
+            if ((conn.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) { continue; }
 
             // Resolve neighbor cell index.
             var neighbor: u32;
@@ -126,24 +189,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (neighbor >= cell_count) { continue; }
 
             let neighbor_signal = signal_flags[neighbor * SIGNAL_CHANNELS + ch];
-            // Decode signal word: bit16 = source flag, bits 11-15 = hops, bits 0-10 = value
-            let neighbor_hops        = (neighbor_signal >> 11u) & 31u;
-            let neighbor_value       = neighbor_signal & 2047u;
-            let neighbor_source_flag = neighbor_signal & (1u << 16u);
+            let neighbor_mode = mode_indices[neighbor];
+            if (neighbor_mode >= arrayLength(&mode_cell_types)) { continue; }
+            let neighbor_type = mode_cell_types[neighbor_mode];
+            if (!can_signal_cross(neighbor_mode, neighbor_type, mode_idx, cell_type)) { continue; }
+
+            let edge_cost = signal_edge_cost(neighbor_mode, neighbor_type, mode_idx, cell_type);
+
+            // Decode signal word.
+            let neighbor_hops        = (neighbor_signal >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
+            let neighbor_value       = neighbor_signal & SIGNAL_VALUE_MASK;
+            let neighbor_source_flag = neighbor_signal & SIGNAL_SOURCE_FLAG;
 
             // Only accept contributions from neighbors with signal remaining to relay.
-            if (neighbor_hops > 0u && neighbor_value > 0u) {
-                // Attenuate: direct sources pass full strength; relays lose 50% per hop.
-                let contrib = select(
-                    max(1u, neighbor_value * u32(SIGNAL_ATTENUATION_PER_HOP * 1000.0) / 1000u),
-                    neighbor_value,
-                    neighbor_source_flag != 0u
-                );
+            if (neighbor_hops >= edge_cost && neighbor_value > 0u) {
+                let loss = SIGNAL_LOSS_PER_POINT * (f32(edge_cost) / f32(SIGNAL_NORMAL_COST));
+                let retain = clamp(1.0 - loss, 0.0, 1.0);
+                let contrib = max(1u, u32(f32(neighbor_value) * retain));
                 // Sum contributions; clamp to 11-bit max.
-                summed_value = min(summed_value + contrib, 2047u);
-                // Track max hops so the furthest-reaching signal governs propagation distance.
-                if (neighbor_hops > best_hops) {
-                    best_hops = neighbor_hops;
+                summed_value = min(summed_value + contrib, SIGNAL_VALUE_MASK);
+                // Track max remaining budget so the furthest-reaching signal governs propagation distance.
+                let remaining_hops = neighbor_hops - edge_cost;
+                if (remaining_hops > best_hops) {
+                    best_hops = remaining_hops;
                 }
                 // If any contributor is a direct source, mark result as source-adjacent.
                 any_source = any_source | neighbor_source_flag;
@@ -152,9 +220,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Determine what to write to signal_flags_next for this cell/channel.
         if (summed_value > 0u && best_hops > 0u) {
-            // Decrement hop count; clear source flag so downstream cells attenuate normally.
-            let new_hops = best_hops - 1u;
-            let encoded  = (new_hops << 11u) | summed_value;
+            let encoded  = (best_hops << SIGNAL_HOP_SHIFT) | summed_value;
             signal_flags_next[my_base + ch] = encoded;
         } else {
             // No propagatable signal - preserve whatever this cell already had

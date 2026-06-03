@@ -242,8 +242,10 @@ pub struct ModeSettings {
     pub devorocyte_consume_rate: f32, // Nutrients stolen per second from each victim (1.0 to 100.0)
 
     // Vasculocyte settings
-    pub vascular_outlet: bool, // When true, releases nutrients to non-vascular neighbors; when false, sealed (pipe only)
-    pub vascular_signal_transport: bool, // Routes signals losslessly (zero attenuation per hop)
+    pub vascular_nutrient_transport: bool, // When true, this mode participates in vascular nutrient pipes
+    pub vascular_outlet: bool, // Nutrient exchange port: exchanges with non-vascular neighbors in both directions
+    pub vascular_signal_transport: bool, // When true, this mode participates in vascular signal pipes
+    pub vascular_signal_exchange: bool, // Signal exchange port: exchanges with non-vascular neighbors in both directions
     pub vascular_signal_capacity: f32, // Node-level throughput cap prevents fan-in amplification
 
     // Gametocyte settings
@@ -390,6 +392,7 @@ impl Default for ModeSettings {
             mode_switch_invert: false,
             devorocyte_consume_range: 0.5,
             devorocyte_consume_rate: 30.0,
+            vascular_nutrient_transport: true,
             vascular_outlet: false,
             photocyte_emit_enabled: false,
             photocyte_emit_channel: 0,
@@ -404,6 +407,7 @@ impl Default for ModeSettings {
             lipocyte_emit_mode: 1,
             lipocyte_emit_value: 10.0,
             vascular_signal_transport: false,
+            vascular_signal_exchange: false,
             vascular_signal_capacity: 10.0,
             gametocyte_merge_range: 0.5,
             memorocyte_rate: 0.1,
@@ -596,22 +600,30 @@ impl Genome {
         genome
     }
 
-    /// Add a new mode to this genome, returning its index.
-    /// Returns `None` if the genome is already at `MAX_MODES`.
-    /// The new mode gets a random color and self-referencing children.
-    pub fn add_mode(&mut self) -> Option<usize> {
-        if self.modes.len() >= MAX_MODES {
-            return None;
-        }
-        let idx = self.modes.len();
-        let mode_name = format!("M {}", idx + 1);
+    fn next_mode_label(&self) -> String {
+        let next_number = self
+            .modes
+            .iter()
+            .filter_map(|mode| {
+                let trimmed = mode.name.trim();
+                let number = trimmed
+                    .strip_prefix('M')
+                    .or_else(|| trimmed.strip_prefix('m'))?
+                    .trim();
+                number.parse::<usize>().ok()
+            })
+            .max()
+            .unwrap_or(self.modes.len())
+            + 1;
+        format!("M {}", next_number)
+    }
 
-        // Random color from system time + index mix
+    fn random_mode_color(seed_index: usize) -> Vec3 {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(12345) as u64;
-        let mut rng = seed.wrapping_add((idx as u64).wrapping_mul(0x9e3779b97f4a7c15));
+        let mut rng = seed.wrapping_add((seed_index as u64).wrapping_mul(0x9e3779b97f4a7c15));
         rng = rng
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
@@ -625,66 +637,192 @@ impl Genome {
             .wrapping_add(1442695040888963407);
         let b = ((rng >> 33) & 0xFF) as f32 / 255.0;
 
+        Vec3::new(r, g, b)
+    }
+
+    fn make_inserted_mode(&self, idx: usize) -> ModeSettings {
+        let mode_name = self.next_mode_label();
         let mut mode = ModeSettings {
             name: mode_name.clone(),
             default_name: mode_name,
-            color: Vec3::new(r, g, b),
+            color: Self::random_mode_color(idx),
             cell_type: 2, // Phagocyte - all modes after the first default to Phagocyte
             ..Default::default()
         };
         mode.child_a.mode_number = idx as i32;
         mode.child_b.mode_number = idx as i32;
-        self.modes.push(mode);
-        Some(idx)
+        mode
+    }
+
+    fn shift_mode_references_after_insert(&mut self, insert_idx: usize) {
+        let remap = |idx: i32| {
+            if idx >= insert_idx as i32 {
+                idx + 1
+            } else {
+                idx
+            }
+        };
+
+        self.initial_mode = remap(self.initial_mode);
+        for mode in &mut self.modes {
+            mode.child_a.mode_number = remap(mode.child_a.mode_number);
+            mode.child_b.mode_number = remap(mode.child_b.mode_number);
+            mode.mode_a_after_splits = remap(mode.mode_a_after_splits);
+            mode.mode_b_after_splits = remap(mode.mode_b_after_splits);
+            mode.signal_child_a_mode_above = remap(mode.signal_child_a_mode_above);
+            mode.signal_child_a_mode_below = remap(mode.signal_child_a_mode_below);
+            mode.signal_child_b_mode_above = remap(mode.signal_child_b_mode_above);
+            mode.signal_child_b_mode_below = remap(mode.signal_child_b_mode_below);
+            if mode.mode_switch_target >= 0 {
+                mode.mode_switch_target = remap(mode.mode_switch_target);
+            }
+        }
+    }
+
+    /// Add a new mode to this genome, returning its index.
+    /// Returns `None` if the genome is already at `MAX_MODES`.
+    /// The new mode gets a random color and self-referencing children.
+    pub fn add_mode(&mut self) -> Option<usize> {
+        let after_index = self.modes.len().saturating_sub(1);
+        self.insert_mode_after(after_index)
+    }
+
+    /// Insert a new mode immediately after `after_index`, returning its new index.
+    /// Existing mode names are preserved, so labels stay stable across insertion.
+    pub fn insert_mode_after(&mut self, after_index: usize) -> Option<usize> {
+        if self.modes.len() >= MAX_MODES {
+            return None;
+        }
+
+        let insert_idx = (after_index + 1).min(self.modes.len());
+        self.shift_mode_references_after_insert(insert_idx);
+        let mode = self.make_inserted_mode(insert_idx);
+        self.modes.insert(insert_idx, mode);
+        Some(insert_idx)
+    }
+
+    /// Remove selected modes while preserving the initial mode.
+    /// Surviving references shift with their target. References to removed child
+    /// modes become self-references; other removed targets revert to disabled defaults.
+    /// Returns removed indices in old-index space.
+    pub fn remove_modes_except_initial(&mut self, selected_indices: &[usize]) -> Vec<usize> {
+        if self.modes.len() <= 1 {
+            return Vec::new();
+        }
+
+        let initial_idx = self
+            .initial_mode
+            .max(0)
+            .min(self.modes.len().saturating_sub(1) as i32) as usize;
+        let mut removed: Vec<usize> = selected_indices
+            .iter()
+            .copied()
+            .filter(|&idx| idx < self.modes.len() && idx != initial_idx)
+            .collect();
+        removed.sort_unstable();
+        removed.dedup();
+
+        if removed.is_empty() {
+            return Vec::new();
+        }
+
+        let old_len = self.modes.len();
+        let mut remap_table = vec![0usize; old_len];
+        let mut next_idx = 0usize;
+        for (old_idx, slot) in remap_table.iter_mut().enumerate() {
+            if removed.binary_search(&old_idx).is_ok() {
+                continue;
+            }
+            *slot = next_idx;
+            next_idx += 1;
+        }
+
+        let selected_for_reset = removed.clone();
+        let defaults = ModeSettings::default();
+        for (old_idx, mode) in self.modes.iter_mut().enumerate() {
+            if selected_for_reset.binary_search(&old_idx).is_ok() {
+                continue;
+            }
+            let new_self_idx = remap_table[old_idx] as i32;
+            let child_remap = |idx: i32| -> Option<i32> {
+                if idx < 0 || idx as usize >= old_len {
+                    return Some(idx);
+                }
+                if selected_for_reset.binary_search(&(idx as usize)).is_ok() {
+                    None
+                } else {
+                    Some(remap_table[idx as usize] as i32)
+                }
+            };
+
+            mode.child_a.mode_number = child_remap(mode.child_a.mode_number).unwrap_or(new_self_idx);
+            mode.child_b.mode_number = child_remap(mode.child_b.mode_number).unwrap_or(new_self_idx);
+
+            if let Some(target) = child_remap(mode.mode_a_after_splits) {
+                mode.mode_a_after_splits = target;
+            } else {
+                mode.mode_a_after_splits = defaults.mode_a_after_splits;
+                mode.child_a_after_split_orientation = defaults.child_a_after_split_orientation;
+                mode.child_a_after_split_keep_adhesion = defaults.child_a_after_split_keep_adhesion;
+            }
+            if let Some(target) = child_remap(mode.mode_b_after_splits) {
+                mode.mode_b_after_splits = target;
+            } else {
+                mode.mode_b_after_splits = defaults.mode_b_after_splits;
+                mode.child_b_after_split_orientation = defaults.child_b_after_split_orientation;
+                mode.child_b_after_split_keep_adhesion = defaults.child_b_after_split_keep_adhesion;
+            }
+
+            let signal_child_a_above = child_remap(mode.signal_child_a_mode_above);
+            let signal_child_a_below = child_remap(mode.signal_child_a_mode_below);
+            if let (Some(above), Some(below)) = (signal_child_a_above, signal_child_a_below) {
+                mode.signal_child_a_mode_above = above;
+                mode.signal_child_a_mode_below = below;
+            } else {
+                mode.signal_child_a_channel = defaults.signal_child_a_channel;
+                mode.signal_child_a_threshold = defaults.signal_child_a_threshold;
+                mode.signal_child_a_mode_above = defaults.signal_child_a_mode_above;
+                mode.signal_child_a_mode_below = defaults.signal_child_a_mode_below;
+            }
+
+            let signal_child_b_above = child_remap(mode.signal_child_b_mode_above);
+            let signal_child_b_below = child_remap(mode.signal_child_b_mode_below);
+            if let (Some(above), Some(below)) = (signal_child_b_above, signal_child_b_below) {
+                mode.signal_child_b_mode_above = above;
+                mode.signal_child_b_mode_below = below;
+            } else {
+                mode.signal_child_b_channel = defaults.signal_child_b_channel;
+                mode.signal_child_b_threshold = defaults.signal_child_b_threshold;
+                mode.signal_child_b_mode_above = defaults.signal_child_b_mode_above;
+                mode.signal_child_b_mode_below = defaults.signal_child_b_mode_below;
+            }
+
+            if let Some(target) = child_remap(mode.mode_switch_target) {
+                mode.mode_switch_target = target;
+            } else {
+                mode.mode_switch_signal_channel = defaults.mode_switch_signal_channel;
+                mode.mode_switch_signal_threshold = defaults.mode_switch_signal_threshold;
+                mode.mode_switch_target = defaults.mode_switch_target;
+                mode.mode_switch_invert = defaults.mode_switch_invert;
+            }
+        }
+
+        for &idx in removed.iter().rev() {
+            self.modes.remove(idx);
+        }
+        self.initial_mode = remap_table[initial_idx] as i32;
+
+        removed
     }
 
     /// Remove the last mode from this genome.
-    /// Returns `false` if the genome only has 1 mode (minimum).
-    /// Clamps `initial_mode` and any child references that pointed at the removed index.
+    /// Returns `false` if the genome only has 1 mode or the last mode is initial.
     pub fn remove_last_mode(&mut self) -> bool {
         if self.modes.len() <= 1 {
             return false;
         }
         let removed_idx = self.modes.len() - 1;
-        self.modes.pop();
-
-        // Clamp initial_mode
-        if self.initial_mode as usize >= self.modes.len() {
-            self.initial_mode = (self.modes.len() - 1) as i32;
-        }
-
-        // Clamp any child references that pointed at the removed index
-        let last_valid = (self.modes.len() - 1) as i32;
-        for mode in &mut self.modes {
-            if mode.child_a.mode_number >= removed_idx as i32 {
-                mode.child_a.mode_number = last_valid;
-            }
-            if mode.child_b.mode_number >= removed_idx as i32 {
-                mode.child_b.mode_number = last_valid;
-            }
-            if mode.mode_a_after_splits >= removed_idx as i32 {
-                mode.mode_a_after_splits = last_valid;
-            }
-            if mode.mode_b_after_splits >= removed_idx as i32 {
-                mode.mode_b_after_splits = last_valid;
-            }
-            if mode.signal_child_a_mode_above >= removed_idx as i32 {
-                mode.signal_child_a_mode_above = last_valid;
-            }
-            if mode.signal_child_a_mode_below >= removed_idx as i32 {
-                mode.signal_child_a_mode_below = last_valid;
-            }
-            if mode.signal_child_b_mode_above >= removed_idx as i32 {
-                mode.signal_child_b_mode_above = last_valid;
-            }
-            if mode.signal_child_b_mode_below >= removed_idx as i32 {
-                mode.signal_child_b_mode_below = last_valid;
-            }
-            if mode.mode_switch_target >= removed_idx as i32 {
-                mode.mode_switch_target = -1; // disable rather than clamp
-            }
-        }
-        true
+        !self.remove_modes_except_initial(&[removed_idx]).is_empty()
     }
     pub fn generate_procedural(seed: u64) -> Self {
         // -- Seeded RNG (splitmix64 + LCG) -----------------------------------
@@ -1004,6 +1142,7 @@ impl Genome {
                 }
                 12 => {
                     // Vasculocyte
+                    m.vascular_nutrient_transport = true;
                     m.vascular_outlet = true;
                     m.nutrient_priority = 0.5;
                 }
@@ -1427,6 +1566,7 @@ impl Genome {
             m.max_splits = 0; // terminal
             m.enable_parent_angle_snapping = false;
             m.membrane_stiffness = membrane;
+            m.vascular_nutrient_transport = true;
             m.vascular_outlet = rng.bool(0.4); // some are outlets
             apply_adhesion(m, adh_rest, adh_lin, adh_ang, flex);
             m.child_a.mode_number = idx as i32;

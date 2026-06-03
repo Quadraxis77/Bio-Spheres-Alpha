@@ -21,7 +21,8 @@ struct AdhesionConnection {
     is_active: u32,             // offset 12
     zone_a: u32,                // offset 16
     zone_b: u32,                // offset 20
-    _align_pad: vec2<u32>,      // offset 24-31 (8 bytes)
+    bond_flags: u32,            // offset 24
+    _align_pad1: u32,           // offset 28
     anchor_direction_a: vec4<f32>,  // offset 32-47 (xyz = direction, w = padding)
     anchor_direction_b: vec4<f32>,  // offset 48-63 (xyz = direction, w = padding)
     twist_reference_a: vec4<f32>,   // offset 64-79
@@ -47,6 +48,8 @@ var<storage, read> cell_count_buffer: array<u32>;
 
 @group(1) @binding(4)
 var<storage, read> signal_flags: array<atomic<u32>>;
+
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -123,9 +126,9 @@ fn vs_main(
         let signal_a = atomicLoad(&signal_flags[connection.cell_a_index * 16u + ch]);
         let signal_b = atomicLoad(&signal_flags[connection.cell_b_index * 16u + ch]);
 
-        // Decode hop counts (bits 11-15) and values (bits 0-10)
-        let hops_a = (signal_a >> 11u) & 31u;
-        let hops_b = (signal_b >> 11u) & 31u;
+        // Decode scaled travel budgets (bits 11-23) and values (bits 0-10)
+        let hops_a = ((signal_a >> 11u) & 8191u) / 4u;
+        let hops_b = ((signal_b >> 11u) & 8191u) / 4u;
         let value_a = signal_a & 2047u;
         let value_b = signal_b & 2047u;
 
@@ -140,7 +143,9 @@ fn vs_main(
     }
     
     var sig_color: vec4<f32>;
-    if (signal_flowed_through) {
+    if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
+        sig_color = vec4<f32>(0.0, 0.0, 0.0, 0.95);
+    } else if (signal_flowed_through) {
         sig_color = vec4<f32>(1.0, 1.0, 0.0, 1.0); // Bright yellow
     } else {
         sig_color = vec4<f32>(0.0, 0.0, 0.0, 0.6); // Black
@@ -166,7 +171,16 @@ fn vs_main(
     var seg_end: vec3<f32>;
     var zone_col: vec4<f32>;
     
-    if (half_seg == 0u) {
+    if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
+        if (half_seg == 0u) {
+            seg_start = pos_a;
+            seg_end = midpoint;
+        } else {
+            seg_start = midpoint;
+            seg_end = pos_b;
+        }
+        zone_col = vec4<f32>(0.0, 0.0, 0.0, 0.95);
+    } else if (half_seg == 0u) {
         seg_start = pos_a;
         seg_end = midpoint;
         zone_col = get_zone_color(connection.zone_a);

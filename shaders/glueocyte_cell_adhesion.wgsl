@@ -24,7 +24,8 @@
 //       bit 1 = invert gate   (0 = active when sig >= threshold, 1 = active when sig < threshold)
 //
 // Bond origin flag stored in AdhesionConnection._align_pad.x (offset 24):
-//   BOND_FLAG_GLUEOCYTE = 1u  - created by this shader, released on deactivation
+//   BOND_FLAG_GLUEOCYTE = 1u      - created by this shader, released on deactivation
+//   BOND_FLAG_BARRIER_BALL = 2u  - black mechanical-only ball joint
 //
 // Group 0: Standard physics bind group
 // Group 1: Adhesion buffers (connections, indices, next_id, free_slots, counts)
@@ -78,6 +79,7 @@ const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const SIGNAL_CHANNELS: u32 = 16u;
 const GLUEOCYTE_CELL_TYPE: u32 = 6u;
 const BOND_FLAG_GLUEOCYTE: u32 = 1u;
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 
 // ---- Group 0: Physics ----
 
@@ -105,12 +107,12 @@ const BOND_FLAG_GLUEOCYTE: u32 = 1u;
 @group(3) @binding(1) var<storage, read> mode_cell_types: array<u32>;
 // 4 u32 per mode: [enabled, signal_channel, signal_threshold_bits, flags(bit0=self_adhesion, bit1=invert)]
 @group(3) @binding(2) var<storage, read> glueocyte_cell_adhesion_flags: array<u32>;
-// Per-cell signal flags (packed u32: bits 0-10 = value, bits 11-15 = hops, bit 16 = source)
+// Per-cell signal flags (packed u32: bits 0-10 = value, bits 11-23 = scaled travel budget, bit 24 = source)
 @group(3) @binding(3) var<storage, read> signal_flags: array<u32>;
 // Per-cell genome orientations (pure genome chain, no physics perturbation)
 @group(3) @binding(4) var<storage, read> genome_orientations: array<vec4<f32>>;
 // Per-cell death flags
-@group(3) @binding(5) var<storage, read> death_flags: array<u32>;
+@group(3) @binding(5) var<storage, read_write> death_flags: array<u32>;
 // Per-cell organism labels (for self-adhesion filtering)
 @group(3) @binding(6) var<storage, read> organism_labels: array<u32>;
 // ---- Helpers ----
@@ -314,7 +316,7 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                     // Self-adhesion gate: skip same-organism cells unless self_adhesion is enabled.
                     let flags_base = mode_idx * 4u;
-                    let self_adhesion_flag = glueocyte_cell_adhesion_flags[flags_base + 3u];
+                    let self_adhesion_flag = glueocyte_cell_adhesion_flags[flags_base + 3u] & 1u;
                     if (self_adhesion_flag == 0u) {
                         let my_org    = organism_labels[cell_idx];
                         let other_org = organism_labels[other_idx];
@@ -348,7 +350,7 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     conn.is_active    = 1u;
                     conn.zone_a       = 2u; // ZoneC (equatorial - no zone preference)
                     conn.zone_b       = 2u;
-                    conn.bond_flags   = BOND_FLAG_GLUEOCYTE;
+                    conn.bond_flags   = BOND_FLAG_GLUEOCYTE | BOND_FLAG_BARRIER_BALL;
                     conn._align_pad1  = 0u;
                     conn.anchor_direction_a = vec4<f32>(anchor_a, 0.0);
                     conn.anchor_direction_b = vec4<f32>(anchor_b, 0.0);

@@ -400,14 +400,14 @@ impl PreviewState {
             mode.devorocyte_consume_rate.to_bits().hash(&mut hasher);
 
             // Hash vasculocyte settings
+            mode.vascular_nutrient_transport.hash(&mut hasher);
             mode.vascular_outlet.hash(&mut hasher);
+            mode.vascular_signal_transport.hash(&mut hasher);
+            mode.vascular_signal_exchange.hash(&mut hasher);
+            mode.vascular_signal_capacity.to_bits().hash(&mut hasher);
 
             // Hash gametocyte settings
             mode.gametocyte_merge_range.to_bits().hash(&mut hasher);
-
-            // Hash vasculocyte signal transport
-            mode.vascular_signal_transport.hash(&mut hasher);
-            mode.vascular_signal_capacity.to_bits().hash(&mut hasher);
 
             // Hash photocyte signal emission settings
             mode.photocyte_emit_enabled.hash(&mut hasher);

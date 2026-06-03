@@ -4,7 +4,7 @@
 //   Phase 2: ALL cells with regulation_emit_channel 8-15 -> emit unconditionally
 //
 // 16 channels per cell: signal_flags[cell_idx * 16 + channel]
-// Each channel is a packed u32: bits 16+ = direction flag, bits 11-15 = hops, bits 0-10 = value
+// Each channel is a packed u32: bit 24 = source flag, bits 11-23 = scaled travel budget, bits 0-10 = value
 //
 // sense_type is now a bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Wall/Cave, bit4=Self, bit5=Mossrock
 // Multiple bits can be set; the oculocyte fires if ANY enabled sense type detects a target.
@@ -13,6 +13,10 @@
 const OCULOCYTE_TYPE: u32 = 7u;
 const LIGHT_THRESHOLD: f32 = 0.1;
 const SIGNAL_CHANNELS: u32 = 16u;
+const SIGNAL_VALUE_MASK: u32 = 2047u;
+const SIGNAL_HOP_SHIFT: u32 = 11u;
+const SIGNAL_SOURCE_FLAG: u32 = 1u << 24u;
+const SIGNAL_BUDGET_SCALE: u32 = 4u;
 
 @group(0) @binding(0)
 var<storage, read_write> signal_flags: array<atomic<u32>>;
@@ -335,15 +339,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             if (detected) {
                 // Write signal to the correct channel slot.
-                // Format: bit16 = source flag, bits 11-15 = hops, bits 0-10 = value
+                // Format: bit24 = source flag, bits 11-23 = scaled travel budget, bits 0-10 = value.
                 // Use atomicStore - the clear pass already zeroed this slot, and only one
                 // oculocyte thread owns each (cell, channel) pair, so there is no contention.
                 // atomicAdd on a packed bitfield would corrupt hops/value/source-flag if two
                 // threads ever wrote the same slot concurrently.
                 let raw_value = oculocyte_signal_values[mode_idx];
-                let clamped_value = min(u32(max(raw_value, 0.0)), 2047u);
+                let clamped_value = min(u32(max(raw_value, 0.0)), SIGNAL_VALUE_MASK);
                 let emit_value = select(1u, clamped_value, clamped_value > 0u); // Ensure at least 1 so propagation fires
-                let signal_value = (1u << 16u) | (signal_hops << 11u) | emit_value;
+                let signal_budget = signal_hops * SIGNAL_BUDGET_SCALE;
+                let signal_value = SIGNAL_SOURCE_FLAG | (signal_budget << SIGNAL_HOP_SHIFT) | emit_value;
                 atomicStore(&signal_flags[idx * SIGNAL_CHANNELS + signal_channel], signal_value);
             }
         }
@@ -359,13 +364,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let reg_value = bitcast<f32>(reg_value_bits);
 
         // Clamp value to 11-bit range (0-2047)
-        let clamped_value = min(u32(max(reg_value, 0.0)), 2047u);
+        let clamped_value = min(u32(max(reg_value, 0.0)), SIGNAL_VALUE_MASK);
 
         if (clamped_value > 0u && reg_hops > 0u) {
             // Source flag + hops + value.
             // Use atomicStore - the clear pass already zeroed this slot, and each cell
             // owns exactly one regulation channel, so there is no write contention.
-            let signal_packed = (1u << 16u) | (reg_hops << 11u) | clamped_value;
+            let signal_budget = reg_hops * SIGNAL_BUDGET_SCALE;
+            let signal_packed = SIGNAL_SOURCE_FLAG | (signal_budget << SIGNAL_HOP_SHIFT) | clamped_value;
             atomicStore(&signal_flags[idx * SIGNAL_CHANNELS + reg_channel], signal_packed);
         }
     }
