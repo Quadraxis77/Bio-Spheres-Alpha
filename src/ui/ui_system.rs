@@ -3198,6 +3198,8 @@ fn render_gpu_headless_overlay(
                             ui.end_row();
                         });
 
+                    let headless_speed_cap = crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED;
+
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -3205,8 +3207,9 @@ fn render_gpu_headless_overlay(
                                 .size(12.0)
                                 .color(p.text_secondary),
                         );
+                        sim_speed = sim_speed.clamp(0.1, headless_speed_cap);
                         let speed_response = ui.add(
-                            egui::Slider::new(&mut sim_speed, 0.1..=20.0)
+                            egui::Slider::new(&mut sim_speed, 0.1..=headless_speed_cap)
                                 .logarithmic(true)
                                 .suffix("x"),
                         );
@@ -3240,7 +3243,7 @@ fn render_gpu_headless_overlay(
                             state.gpu_headless_auto_speed = true;
                             state.gpu_headless_target_fps = 30.0;
                             *scene_request = crate::ui::panel_context::SceneModeRequest::SetSpeed(
-                                state.gpu_headless_max_speed,
+                                state.gpu_headless_max_speed.min(headless_speed_cap),
                             );
                         }
                     });
@@ -3272,17 +3275,27 @@ fn render_gpu_headless_overlay(
                                 .color(p.text_secondary),
                         );
                         ui.add(
-                            egui::Slider::new(&mut state.gpu_headless_min_speed, 0.1..=20.0)
-                                .logarithmic(true)
-                                .prefix("min ")
-                                .suffix("x"),
+                            egui::Slider::new(
+                                &mut state.gpu_headless_min_speed,
+                                0.1..=headless_speed_cap,
+                            )
+                            .logarithmic(true)
+                            .prefix("min ")
+                            .suffix("x"),
                         );
                         ui.add(
-                            egui::Slider::new(&mut state.gpu_headless_max_speed, 0.1..=20.0)
-                                .logarithmic(true)
-                                .prefix("max ")
-                                .suffix("x"),
+                            egui::Slider::new(
+                                &mut state.gpu_headless_max_speed,
+                                0.1..=headless_speed_cap,
+                            )
+                            .logarithmic(true)
+                            .prefix("max ")
+                            .suffix("x"),
                         );
+                        state.gpu_headless_min_speed =
+                            state.gpu_headless_min_speed.clamp(0.1, headless_speed_cap);
+                        state.gpu_headless_max_speed =
+                            state.gpu_headless_max_speed.clamp(0.1, headless_speed_cap);
                         if state.gpu_headless_min_speed > state.gpu_headless_max_speed {
                             std::mem::swap(
                                 &mut state.gpu_headless_min_speed,

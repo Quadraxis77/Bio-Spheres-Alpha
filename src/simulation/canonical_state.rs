@@ -243,6 +243,16 @@ pub struct CanonicalState {
     /// Last local branch slot used to derive this address.
     pub lineage_branch_slots: Vec<u16>,
 
+    /// Lineage hash of each cell's parent at the moment it was born.
+    /// Set once at division and never changed. Root cells have 0 (no parent).
+    /// Used by the scaffold resolver to trace descendants through the division tree.
+    pub parent_lineage_hashes: Vec<u64>,
+
+    /// Records every division: parent_hash → (child_a_hash, child_b_hash).
+    /// Never deleted — enables structural descendant search even after multiple generations
+    /// have passed and intermediate ancestor cells no longer exist.
+    pub division_log: std::collections::HashMap<u64, (u64, u64)>,
+
     // === Position and Motion (SoA) ===
     // These arrays are accessed together during physics integration
     /// Current 3D world positions of all cells
@@ -715,6 +725,8 @@ impl CanonicalState {
             morphology_hashes: vec![0; capacity],
             lineage_depths: vec![0; capacity],
             lineage_branch_slots: vec![0; capacity],
+            parent_lineage_hashes: vec![0; capacity],
+            division_log: std::collections::HashMap::new(),
 
             // Position and motion arrays - initialized to zero/identity
             positions: vec![Vec3::ZERO; capacity],
@@ -1075,6 +1087,7 @@ impl CanonicalState {
             self.morphology_hashes[cell_index] = self.morphology_hashes[last_index];
             self.lineage_depths[cell_index] = self.lineage_depths[last_index];
             self.lineage_branch_slots[cell_index] = self.lineage_branch_slots[last_index];
+            self.parent_lineage_hashes[cell_index] = self.parent_lineage_hashes[last_index];
             self.positions[cell_index] = self.positions[last_index];
             self.prev_positions[cell_index] = self.prev_positions[last_index];
             self.velocities[cell_index] = self.velocities[last_index];

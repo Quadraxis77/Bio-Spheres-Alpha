@@ -600,6 +600,22 @@ impl App {
         );
     }
 
+    fn scaffold_selector_mode(s: &crate::genome::CellAddressSelector) -> Option<usize> {
+        match s {
+            crate::genome::CellAddressSelector::ByModeIndex(m) => Some(*m),
+            crate::genome::CellAddressSelector::ByLineageHashOrMode { mode_index, .. } => Some(*mode_index),
+            _ => None,
+        }
+    }
+
+    fn scaffold_selector_lineage(s: &crate::genome::CellAddressSelector) -> Option<u64> {
+        match s {
+            crate::genome::CellAddressSelector::ByLineageHash(h) => Some(*h),
+            crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, .. } => Some(*lineage_hash),
+            _ => None,
+        }
+    }
+
     fn apply_preview_scaffolds(&mut self) {
         let Some(selection) = self.cell_link_selection.clone() else {
             return;
@@ -657,8 +673,16 @@ impl App {
                 )
             } else {
                 (
-                    crate::genome::CellAddressSelector::ByLineageHash(anchor_lineage),
-                    crate::genome::CellAddressSelector::ByLineageHash(state.lineage_hashes[target]),
+                    crate::genome::CellAddressSelector::ByLineageHashOrMode {
+                        lineage_hash: anchor_lineage,
+                        mode_index: anchor_mode,
+                        preferred_branch_slot: state.lineage_branch_slots[anchor],
+                    },
+                    crate::genome::CellAddressSelector::ByLineageHashOrMode {
+                        lineage_hash: state.lineage_hashes[target],
+                        mode_index: state.mode_indices[target],
+                        preferred_branch_slot: state.lineage_branch_slots[target],
+                    },
                 )
             };
             if let Some(rule) = self
@@ -736,25 +760,24 @@ impl App {
 
         // Remove rules that involve this anchor↔target pair in either direction.
         self.working_genome.scaffold_rules.retain(|r| {
-            match (&r.endpoint_a, &r.endpoint_b) {
-                (
-                    crate::genome::CellAddressSelector::ByModeIndex(ma),
-                    crate::genome::CellAddressSelector::ByModeIndex(mb),
-                ) => {
-                    let fwd = *ma == anchor_mode && target_modes.contains(mb);
-                    let rev = *mb == anchor_mode && target_modes.contains(ma);
-                    !(fwd || rev)
-                }
-                (
-                    crate::genome::CellAddressSelector::ByLineageHash(la),
-                    crate::genome::CellAddressSelector::ByLineageHash(lb),
-                ) => {
-                    let fwd = *la == anchor_lineage && target_lineages.contains(lb);
-                    let rev = *lb == anchor_lineage && target_lineages.contains(la);
-                    !(fwd || rev)
-                }
-                _ => true,
+            let a_mode = Self::scaffold_selector_mode(&r.endpoint_a);
+            let b_mode = Self::scaffold_selector_mode(&r.endpoint_b);
+            let a_lineage = Self::scaffold_selector_lineage(&r.endpoint_a);
+            let b_lineage = Self::scaffold_selector_lineage(&r.endpoint_b);
+
+            // Pattern rules: match by mode in either direction.
+            if let (Some(ma), Some(mb)) = (a_mode, b_mode) {
+                let fwd = ma == anchor_mode && target_modes.contains(&mb);
+                let rev = mb == anchor_mode && target_modes.contains(&ma);
+                if fwd || rev { return false; }
             }
+            // Specific rules: match by lineage in either direction.
+            if let (Some(la), Some(lb)) = (a_lineage, b_lineage) {
+                let fwd = la == anchor_lineage && target_lineages.contains(&lb);
+                let rev = lb == anchor_lineage && target_lineages.contains(&la);
+                if fwd || rev { return false; }
+            }
+            true
         });
 
         let genome = self.working_genome.clone();
@@ -2231,6 +2254,13 @@ impl App {
 
         if gpu_headless {
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                let headless_speed_cap = crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED;
+                if !gpu_scene.time_scale.is_finite() {
+                    gpu_scene.time_scale = 1.0;
+                } else {
+                    gpu_scene.time_scale = gpu_scene.time_scale.clamp(0.01, headless_speed_cap);
+                }
+
                 if self.ui.state.gpu_headless_auto_speed {
                     let fps = self.performance.fps();
                     let target = self.ui.state.gpu_headless_target_fps.max(1.0);
@@ -2239,8 +2269,14 @@ impl App {
                         .state
                         .gpu_headless_min_speed
                         .min(self.ui.state.gpu_headless_max_speed)
+                        .min(headless_speed_cap)
                         .max(0.01);
-                    let max_speed = self.ui.state.gpu_headless_max_speed.max(min_speed);
+                    let max_speed = self
+                        .ui
+                        .state
+                        .gpu_headless_max_speed
+                        .min(headless_speed_cap)
+                        .max(min_speed);
                     let old_speed = gpu_scene.time_scale;
 
                     if fps < target * 0.96 {
@@ -3399,11 +3435,35 @@ impl App {
                     }
                 }
                 crate::ui::panel_context::SceneModeRequest::SetSpeed(speed) => {
+                    let speed = if self.scene_manager.current_mode()
+                        == crate::ui::types::SimulationMode::Gpu
+                        && self.ui.state.gpu_headless_mode
+                    {
+                        if speed.is_finite() {
+                            speed.clamp(0.01, crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED)
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        speed
+                    };
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.time_scale = speed;
                     }
                 }
                 crate::ui::panel_context::SceneModeRequest::SetSpeedAndUnpause(speed) => {
+                    let speed = if self.scene_manager.current_mode()
+                        == crate::ui::types::SimulationMode::Gpu
+                        && self.ui.state.gpu_headless_mode
+                    {
+                        if speed.is_finite() {
+                            speed.clamp(0.01, crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED)
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        speed
+                    };
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.time_scale = speed;
                         gpu_scene.paused = false;

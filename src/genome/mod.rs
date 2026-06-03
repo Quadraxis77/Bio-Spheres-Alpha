@@ -26,6 +26,11 @@ pub enum CellAddressSelector {
     ByMorphologyHash(u64),
     /// Cells whose lineage hash matches exactly (unique per cell in a deterministic sim).
     ByLineageHash(u64),
+    /// Prefer the exact lineage hash; on division, follow descendants by tracing through the
+    /// division log and preferring the child that matches `preferred_branch_slot` (the branch
+    /// slot the original cell occupied at each generation — 1 = child_a, 2 = child_b).
+    /// Falls back to any descendant, then to nearest mode match.
+    ByLineageHashOrMode { lineage_hash: u64, mode_index: usize, preferred_branch_slot: u16 },
 }
 
 /// A persistent scaffold rule stored in the genome.

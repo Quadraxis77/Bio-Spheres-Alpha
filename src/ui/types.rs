@@ -546,8 +546,10 @@ fn default_headless_min_speed() -> f32 {
     0.1
 }
 
+pub const GPU_HEADLESS_MAX_SIM_SPEED: f32 = 10.0;
+
 fn default_headless_max_speed() -> f32 {
-    20.0
+    GPU_HEADLESS_MAX_SIM_SPEED
 }
 
 /// Status shown by the GPU headless auto-speed controller.

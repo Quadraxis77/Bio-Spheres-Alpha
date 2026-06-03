@@ -28,21 +28,29 @@ pub enum GenomeDeserializeError {
 
 /// Serializable cell address selector.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type", content = "value")]
+#[serde(tag = "type")]
 pub enum SerializableCellAddressSelector {
     AnyCell,
-    ByModeIndex(usize),
-    ByMorphologyHash(u64),
-    ByLineageHash(u64),
+    ByModeIndex { mode_index: usize },
+    ByMorphologyHash { hash: u64 },
+    ByLineageHash { hash: u64 },
+    ByLineageHashOrMode { lineage_hash: u64, mode_index: usize, preferred_branch_slot: u16 },
 }
 
 impl From<&super::CellAddressSelector> for SerializableCellAddressSelector {
     fn from(s: &super::CellAddressSelector) -> Self {
         match s {
             super::CellAddressSelector::AnyCell => Self::AnyCell,
-            super::CellAddressSelector::ByModeIndex(m) => Self::ByModeIndex(*m),
-            super::CellAddressSelector::ByMorphologyHash(h) => Self::ByMorphologyHash(*h),
-            super::CellAddressSelector::ByLineageHash(h) => Self::ByLineageHash(*h),
+            super::CellAddressSelector::ByModeIndex(m) => Self::ByModeIndex { mode_index: *m },
+            super::CellAddressSelector::ByMorphologyHash(h) => Self::ByMorphologyHash { hash: *h },
+            super::CellAddressSelector::ByLineageHash(h) => Self::ByLineageHash { hash: *h },
+            super::CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
+                Self::ByLineageHashOrMode {
+                    lineage_hash: *lineage_hash,
+                    mode_index: *mode_index,
+                    preferred_branch_slot: *preferred_branch_slot,
+                }
+            }
         }
     }
 }
@@ -51,9 +59,12 @@ impl From<SerializableCellAddressSelector> for super::CellAddressSelector {
     fn from(s: SerializableCellAddressSelector) -> Self {
         match s {
             SerializableCellAddressSelector::AnyCell => Self::AnyCell,
-            SerializableCellAddressSelector::ByModeIndex(m) => Self::ByModeIndex(m),
-            SerializableCellAddressSelector::ByMorphologyHash(h) => Self::ByMorphologyHash(h),
-            SerializableCellAddressSelector::ByLineageHash(h) => Self::ByLineageHash(h),
+            SerializableCellAddressSelector::ByModeIndex { mode_index } => Self::ByModeIndex(mode_index),
+            SerializableCellAddressSelector::ByMorphologyHash { hash } => Self::ByMorphologyHash(hash),
+            SerializableCellAddressSelector::ByLineageHash { hash } => Self::ByLineageHash(hash),
+            SerializableCellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
+                Self::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot }
+            }
         }
     }
 }

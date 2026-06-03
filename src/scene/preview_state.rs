@@ -458,6 +458,12 @@ impl PreviewState {
                     3u8.hash(&mut hasher);
                     h.hash(&mut hasher);
                 }
+                crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
+                    4u8.hash(&mut hasher);
+                    lineage_hash.hash(&mut hasher);
+                    mode_index.hash(&mut hasher);
+                    preferred_branch_slot.hash(&mut hasher);
+                }
             }
             match &rule.endpoint_b {
                 crate::genome::CellAddressSelector::AnyCell => 0u8.hash(&mut hasher),
@@ -472,6 +478,12 @@ impl PreviewState {
                 crate::genome::CellAddressSelector::ByLineageHash(h) => {
                     3u8.hash(&mut hasher);
                     h.hash(&mut hasher);
+                }
+                crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, mode_index, preferred_branch_slot } => {
+                    4u8.hash(&mut hasher);
+                    lineage_hash.hash(&mut hasher);
+                    mode_index.hash(&mut hasher);
+                    preferred_branch_slot.hash(&mut hasher);
                 }
             }
         }

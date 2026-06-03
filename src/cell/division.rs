@@ -204,6 +204,7 @@ pub fn division_step(
             parent_nutrients: f32,
             parent_radius: f32,
             parent_reserve: u32,
+            parent_lineage_hash: u64,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
             child_a_orientation: Quat,
@@ -494,6 +495,7 @@ pub fn division_step(
                     parent_nutrients,
                     parent_radius,
                     parent_reserve,
+                    parent_lineage_hash: state.lineage_hashes[parent_idx],
                     child_a_pos,
                     child_b_pos,
                     child_a_orientation,
@@ -530,6 +532,7 @@ pub fn division_step(
                 state.cell_ids[data.child_a_slot] = child_a_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_a_slot, data.child_a_development_address);
+                state.parent_lineage_hashes[data.child_a_slot] = data.parent_lineage_hash;
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
@@ -569,6 +572,7 @@ pub fn division_step(
                 state.cell_ids[data.child_b_slot] = child_b_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_b_slot, data.child_b_development_address);
+                state.parent_lineage_hashes[data.child_b_slot] = data.parent_lineage_hash;
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;
@@ -608,6 +612,16 @@ pub fn division_step(
                 child_a_idx: data.child_a_slot,
                 child_b_idx: data.child_b_slot,
             });
+
+            // Log the division: parent_hash → (child_a_hash, child_b_hash)
+            // Used by the scaffold resolver to trace descendants through dead ancestors.
+            state.division_log.insert(
+                data.parent_lineage_hash,
+                (
+                    data.child_a_development_address.lineage_hash,
+                    data.child_b_development_address.lineage_hash,
+                ),
+            );
 
             // Handle adhesion inheritance from parent to children
             // This must happen AFTER children are written but BEFORE new adhesions are created
@@ -896,6 +910,7 @@ pub fn division_step_multi(
             #[allow(dead_code)]
             parent_nutrients: f32,
             parent_reserve: u32,
+            parent_lineage_hash: u64,
             child_a_pos: Vec3,
             child_b_pos: Vec3,
             child_a_orientation: Quat,
@@ -1126,6 +1141,7 @@ pub fn division_step_multi(
                 parent_genome_orientation,
                 parent_nutrients,
                 parent_reserve,
+                parent_lineage_hash: state.lineage_hashes[parent_idx],
                 child_a_pos,
                 child_b_pos,
                 child_a_orientation,
@@ -1162,6 +1178,7 @@ pub fn division_step_multi(
                 state.cell_ids[data.child_a_slot] = child_a_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_a_slot, data.child_a_development_address);
+                state.parent_lineage_hashes[data.child_a_slot] = data.parent_lineage_hash;
                 state.positions[data.child_a_slot] = data.child_a_pos;
                 state.prev_positions[data.child_a_slot] = data.child_a_pos;
                 state.velocities[data.child_a_slot] = data.parent_velocity;
@@ -1197,6 +1214,7 @@ pub fn division_step_multi(
                 state.cell_ids[data.child_b_slot] = child_b_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_b_slot, data.child_b_development_address);
+                state.parent_lineage_hashes[data.child_b_slot] = data.parent_lineage_hash;
                 state.positions[data.child_b_slot] = data.child_b_pos;
                 state.prev_positions[data.child_b_slot] = data.child_b_pos;
                 state.velocities[data.child_b_slot] = data.parent_velocity;
@@ -1226,6 +1244,15 @@ pub fn division_step_multi(
                 state.reserves[data.child_b_slot] = child_reserve;
                 state.embryocyte_timers[data.child_b_slot] = 0.0;
             }
+
+            // Log the division for scaffold descendant tracing
+            state.division_log.insert(
+                data.parent_lineage_hash,
+                (
+                    data.child_a_development_address.lineage_hash,
+                    data.child_b_development_address.lineage_hash,
+                ),
+            );
 
             pass_division_events.push(DivisionEvent {
                 parent_idx: data.parent_idx,
