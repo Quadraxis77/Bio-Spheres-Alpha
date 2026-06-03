@@ -26,6 +26,48 @@ pub enum GenomeDeserializeError {
     InvalidModeIndex(usize),
 }
 
+/// Serializable cell address selector.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type", content = "value")]
+pub enum SerializableCellAddressSelector {
+    AnyCell,
+    ByModeIndex(usize),
+    ByMorphologyHash(u64),
+    ByLineageHash(u64),
+}
+
+impl From<&super::CellAddressSelector> for SerializableCellAddressSelector {
+    fn from(s: &super::CellAddressSelector) -> Self {
+        match s {
+            super::CellAddressSelector::AnyCell => Self::AnyCell,
+            super::CellAddressSelector::ByModeIndex(m) => Self::ByModeIndex(*m),
+            super::CellAddressSelector::ByMorphologyHash(h) => Self::ByMorphologyHash(*h),
+            super::CellAddressSelector::ByLineageHash(h) => Self::ByLineageHash(*h),
+        }
+    }
+}
+
+impl From<SerializableCellAddressSelector> for super::CellAddressSelector {
+    fn from(s: SerializableCellAddressSelector) -> Self {
+        match s {
+            SerializableCellAddressSelector::AnyCell => Self::AnyCell,
+            SerializableCellAddressSelector::ByModeIndex(m) => Self::ByModeIndex(m),
+            SerializableCellAddressSelector::ByMorphologyHash(h) => Self::ByMorphologyHash(h),
+            SerializableCellAddressSelector::ByLineageHash(h) => Self::ByLineageHash(h),
+        }
+    }
+}
+
+/// Serializable scaffold rule.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SerializableScaffoldRule {
+    pub id: u32,
+    pub endpoint_a: SerializableCellAddressSelector,
+    pub endpoint_b: SerializableCellAddressSelector,
+    pub rest_length: f32,
+    pub max_formation_range: f32,
+}
+
 /// Serializable genome format - only stores modified data
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SerializableGenome {
@@ -47,6 +89,10 @@ pub struct SerializableGenome {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
     pub modified_modes: Vec<SerializableMode>,
+    /// Developmental scaffold rules.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub scaffold_rules: Vec<SerializableScaffoldRule>,
 }
 
 fn is_default_initial_mode(mode: &i32) -> bool {
@@ -409,12 +455,25 @@ impl Genome {
             }
         }
 
+        let scaffold_rules = self
+            .scaffold_rules
+            .iter()
+            .map(|r| SerializableScaffoldRule {
+                id: r.id,
+                endpoint_a: SerializableCellAddressSelector::from(&r.endpoint_a),
+                endpoint_b: SerializableCellAddressSelector::from(&r.endpoint_b),
+                rest_length: r.rest_length,
+                max_formation_range: r.max_formation_range,
+            })
+            .collect();
+
         SerializableGenome {
             name: self.name.clone(),
             initial_mode: self.initial_mode,
             initial_orientation: quat_to_array(self.initial_orientation),
             mode_count: Some(self.modes.len()),
             modified_modes,
+            scaffold_rules,
         }
     }
 
@@ -446,6 +505,8 @@ impl Genome {
             name: String::new(),
             initial_mode: 0,
             initial_orientation: glam::Quat::IDENTITY,
+            scaffold_rules: Vec::new(),
+            next_scaffold_rule_id: 1,
             modes: (0..target_count)
                 .map(|i| {
                     let mode_name = format!("M {}", i + 1);
@@ -463,6 +524,20 @@ impl Genome {
         genome.name = ser.name;
         genome.initial_mode = ser.initial_mode;
         genome.initial_orientation = array_to_quat(ser.initial_orientation);
+
+        // Restore scaffold rules and advance the ID counter past the highest stored ID.
+        let mut max_rule_id = 0u32;
+        for sr in ser.scaffold_rules {
+            max_rule_id = max_rule_id.max(sr.id);
+            genome.scaffold_rules.push(super::ScaffoldRule {
+                id: sr.id,
+                endpoint_a: super::CellAddressSelector::from(sr.endpoint_a),
+                endpoint_b: super::CellAddressSelector::from(sr.endpoint_b),
+                rest_length: sr.rest_length,
+                max_formation_range: sr.max_formation_range,
+            });
+        }
+        genome.next_scaffold_rule_id = max_rule_id.saturating_add(1).max(1);
 
         // Apply modified modes. If a mode index exceeds the current vec length
         // (e.g. a file saved with 80 modes but mode_count was missing), extend.

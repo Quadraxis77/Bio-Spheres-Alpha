@@ -38,6 +38,9 @@ pub struct AdhesionConnections {
     /// Per-connection rest length override. Values <= 0 use the mode adhesion setting.
     pub rest_length_overrides: Vec<f32>,
 
+    /// Which ScaffoldRule created this bond (0 = manual / no rule).
+    pub scaffold_rule_id: Vec<u32>,
+
     /// Anchor direction for cell A (local space, normalized)
     pub anchor_direction_a: Vec<Vec3>,
     /// Anchor direction for cell B (local space, normalized)
@@ -70,6 +73,7 @@ impl AdhesionConnections {
             zone_b: vec![0; capacity],
             bond_flags: vec![0; capacity],
             rest_length_overrides: vec![0.0; capacity],
+            scaffold_rule_id: vec![0; capacity],
             anchor_direction_a: vec![Vec3::X; capacity],
             anchor_direction_b: vec![-Vec3::X; capacity],
             twist_reference_a: vec![Quat::IDENTITY; capacity],

@@ -101,6 +101,141 @@ pub fn sync_development_organism_ids_from_adhesions(state: &mut CanonicalState) 
     state.next_organism_id = state.next_organism_id.max(max_organism_id.saturating_add(1));
 }
 
+/// Instantiate and maintain scaffold bonds defined by a genome's `scaffold_rules`.
+///
+/// - Creates barrier-ball bonds for all same-organism cell pairs that match a rule
+///   and are within `rule.max_formation_range`, if no bond yet exists.
+/// - Updates `rest_length_overrides` when they drift from the rule.
+/// - Removes bonds whose `scaffold_rule_id` no longer corresponds to any rule.
+///
+/// Must be called after `sync_development_organism_ids_from_adhesions`.
+pub fn resolve_scaffold_rules(
+    state: &mut CanonicalState,
+    genome: &Genome,
+    genome_idx: usize,
+    current_time: f32,
+) {
+    use std::collections::HashSet;
+    use crate::cell::adhesion::BOND_FLAG_BARRIER_BALL;
+
+    let live_rule_ids: HashSet<u32> = genome.scaffold_rules.iter().map(|r| r.id).collect();
+
+    // --- pass 1: remove bonds whose rule was deleted ---
+    let active_count = state.adhesion_connections.active_count;
+    let mut to_remove: Vec<usize> = Vec::new();
+    for conn_idx in 0..active_count {
+        if state.adhesion_connections.is_active[conn_idx] == 0 {
+            continue;
+        }
+        let rule_id = state.adhesion_connections.scaffold_rule_id[conn_idx];
+        if rule_id != 0 && !live_rule_ids.contains(&rule_id) {
+            to_remove.push(conn_idx);
+        }
+    }
+    for conn_idx in to_remove.into_iter().rev() {
+        state
+            .adhesion_manager
+            .remove_adhesion(&mut state.adhesion_connections, conn_idx);
+    }
+
+    // --- pass 2: create / update bonds from live rules ---
+    for rule in &genome.scaffold_rules {
+        let cells_a: Vec<usize> = (0..state.cell_count)
+            .filter(|&i| {
+                state.genome_ids[i] == genome_idx && selector_matches(state, i, &rule.endpoint_a)
+            })
+            .collect();
+        let cells_b: Vec<usize> = (0..state.cell_count)
+            .filter(|&i| {
+                state.genome_ids[i] == genome_idx && selector_matches(state, i, &rule.endpoint_b)
+            })
+            .collect();
+
+        // Run nearest-neighbour in both directions so neither side misses a match.
+        // The bond-exists check prevents duplicates when both passes select the same pair.
+        for pass in 0..2u8 {
+            let (sources, targets) = if pass == 0 {
+                (&cells_a, &cells_b)
+            } else {
+                (&cells_b, &cells_a)
+            };
+
+            for &ca in sources {
+                let best_cb = targets
+                    .iter()
+                    .copied()
+                    .filter(|&cb| {
+                        cb != ca && state.organism_ids[ca] == state.organism_ids[cb]
+                    })
+                    .min_by(|&cb1, &cb2| {
+                        let d1 = state.positions[ca].distance_squared(state.positions[cb1]);
+                        let d2 = state.positions[ca].distance_squared(state.positions[cb2]);
+                        d1.partial_cmp(&d2).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+
+                let Some(cb) = best_cb else { continue };
+
+                let dist = state.positions[ca].distance(state.positions[cb]);
+                if dist > rule.max_formation_range {
+                    continue;
+                }
+
+                if let Some(conn_idx) = state
+                    .adhesion_manager
+                    .find_connection_between(&state.adhesion_connections, ca, cb)
+                {
+                    let flags = state.adhesion_connections.bond_flags[conn_idx];
+                    if flags & BOND_FLAG_BARRIER_BALL != 0
+                        && state.adhesion_connections.scaffold_rule_id[conn_idx] == rule.id
+                    {
+                        state.adhesion_connections.rest_length_overrides[conn_idx] =
+                            rule.rest_length.max(0.001);
+                    }
+                } else {
+                    if state
+                        .adhesion_manager
+                        .find_connection_between(&state.adhesion_connections, ca, cb)
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    let mode_index = state.mode_indices[ca];
+                    let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
+                        &mut state.adhesion_connections,
+                        ca,
+                        cb,
+                        mode_index,
+                        current_time,
+                        BOND_FLAG_BARRIER_BALL,
+                        rule.rest_length,
+                    );
+                    if let Some(idx) = conn_idx {
+                        state.adhesion_connections.scaffold_rule_id[idx] = rule.id;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[inline]
+fn selector_matches(
+    state: &CanonicalState,
+    cell_idx: usize,
+    selector: &crate::genome::CellAddressSelector,
+) -> bool {
+    match selector {
+        crate::genome::CellAddressSelector::AnyCell => true,
+        crate::genome::CellAddressSelector::ByModeIndex(m) => state.mode_indices[cell_idx] == *m,
+        crate::genome::CellAddressSelector::ByMorphologyHash(h) => {
+            state.morphology_hashes[cell_idx] == *h
+        }
+        crate::genome::CellAddressSelector::ByLineageHash(h) => {
+            state.lineage_hashes[cell_idx] == *h
+        }
+    }
+}
+
 /// Detect collisions using the spatial grid
 pub fn detect_collisions(state: &CanonicalState) -> Vec<CollisionPair> {
     let mut collision_pairs = Vec::new();
@@ -1583,5 +1718,10 @@ pub fn physics_step_with_genome(
 
     let division_events = division::division_step(state, genome, current_time, max_cells, rng_seed);
     sync_development_organism_ids_from_adhesions(state);
+    // Resolve scaffold rules every step so bonds form/persist through resim.
+    // genome_idx = 0: preview scene uses a single genome.
+    if !genome.scaffold_rules.is_empty() {
+        resolve_scaffold_rules(state, genome, 0, current_time);
+    }
     division_events
 }

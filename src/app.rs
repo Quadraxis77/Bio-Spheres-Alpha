@@ -78,9 +78,10 @@ enum MenuAction {
 
 const CELL_LINK_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(450);
 const CELL_LINK_HOLD_CANCEL_DISTANCE_PX: f32 = 8.0;
-const SCAFFOLD_MIN_REST_LENGTH: f32 = 0.4;
-const SCAFFOLD_MAX_REST_LENGTH: f32 = 3.0;
-const SCAFFOLD_MAX_FORMATION_RANGE: f32 = 3.0;
+const SCAFFOLD_MIN_REST_LENGTH: f32 = 0.5;
+const SCAFFOLD_MAX_REST_LENGTH: f32 = 5.0;
+/// Multiplier on anchor cell radius used as the formation range for new rules.
+const SCAFFOLD_FORMATION_RANGE_MULTIPLIER: f32 = 4.0;
 
 #[derive(Debug, Clone, Copy)]
 struct PreviewCellHit {
@@ -101,6 +102,13 @@ struct CellLinkSelection {
     selected_cell_indices: Vec<usize>,
     rest_length: f32,
     rest_length_initialized: bool,
+    /// Pinned egui logical-point position for the popup menu (set once at selection start).
+    menu_pos: egui::Pos2,
+    /// World-space formation range (anchor_radius * SCAFFOLD_FORMATION_RANGE_MULTIPLIER).
+    formation_range: f32,
+    /// When true, rule uses ByMorphologyHash (connects all structurally equivalent pairs).
+    /// When false, rule uses ByLineageHash (connects only this specific pair).
+    match_pattern: bool,
 }
 
 /// Action deferred until after the current frame is presented to the screen.
@@ -351,11 +359,31 @@ impl App {
         let Some(hold) = self.cell_link_hold.take() else {
             return;
         };
+        let scale = self.window.scale_factor() as f32;
+        let menu_pos = egui::pos2(
+            hold.screen_pos.0 / scale + 18.0,
+            hold.screen_pos.1 / scale + 18.0,
+        );
+        let anchor = hold.hit.cell_index;
+        let formation_range = self
+            .scene_manager
+            .get_preview_scene()
+            .and_then(|s| {
+                if anchor < s.state.display_state.cell_count {
+                    Some(s.state.display_state.radii[anchor] * SCAFFOLD_FORMATION_RANGE_MULTIPLIER)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(2.5);
         self.cell_link_selection = Some(CellLinkSelection {
-            anchor_cell_index: hold.hit.cell_index,
-            selected_cell_indices: vec![hold.hit.cell_index],
+            anchor_cell_index: anchor,
+            selected_cell_indices: vec![anchor],
             rest_length: 1.0,
             rest_length_initialized: false,
+            menu_pos,
+            formation_range,
+            match_pattern: true,
         });
         self.set_app_cursor(CursorIcon::Default);
         log::info!(
@@ -376,17 +404,13 @@ impl App {
                             preview_scene,
                             selection.anchor_cell_index,
                             hit.cell_index,
+                            selection.formation_range,
                         );
-                        distance <= SCAFFOLD_MAX_FORMATION_RANGE
+                        distance <= selection.formation_range
                     })
                     .unwrap_or(false)
         });
         if !in_range {
-            log::info!(
-                "Cell link selection ignored preview cell {}: outside scaffold range {:.2}",
-                hit.cell_index,
-                SCAFFOLD_MAX_FORMATION_RANGE
-            );
             return;
         }
 
@@ -412,6 +436,8 @@ impl App {
                 .push(selection.anchor_cell_index);
             if hit.cell_index != selection.anchor_cell_index {
                 selection.selected_cell_indices.push(hit.cell_index);
+                // Reset rest length so it snaps to the new pair's distance.
+                selection.rest_length_initialized = false;
             }
         }
 
@@ -447,13 +473,14 @@ impl App {
         scene: &PreviewScene,
         anchor: usize,
         target: usize,
+        formation_range: f32,
     ) -> (f32, bool, bool) {
         let state = &scene.state.display_state;
         if anchor >= state.cell_count || target >= state.cell_count {
             return (0.0, false, false);
         }
         let distance = state.positions[anchor].distance(state.positions[target]);
-        let in_range = distance <= SCAFFOLD_MAX_FORMATION_RANGE;
+        let in_range = distance <= formation_range;
         let same_organism = Self::preview_cells_are_same_organism(scene, anchor, target);
         (distance, in_range, same_organism)
     }
@@ -461,6 +488,7 @@ impl App {
     fn preview_world_to_screen(
         scene: &PreviewScene,
         world_pos: glam::Vec3,
+        viewport_origin: (f32, f32),
         viewport_size: (f32, f32),
     ) -> Option<egui::Pos2> {
         let (width, height) = viewport_size;
@@ -486,8 +514,8 @@ impl App {
         }
 
         Some(egui::pos2(
-            (ndc.x * 0.5 + 0.5) * width,
-            (0.5 - ndc.y * 0.5) * height,
+            viewport_origin.0 + (ndc.x * 0.5 + 0.5) * width,
+            viewport_origin.1 + (0.5 - ndc.y * 0.5) * height,
         ))
     }
 
@@ -507,26 +535,39 @@ impl App {
             return;
         }
 
-        let viewport_size = (self.config.width as f32, self.config.height as f32);
+        let scale = self.window.scale_factor() as f32;
+        let (vp_origin, vp_size) = if let Some(rect) = self.ui.get_viewport_rect() {
+            ((rect.min.x, rect.min.y), (rect.width(), rect.height()))
+        } else {
+            (
+                (0.0, 0.0),
+                (
+                    self.config.width as f32 / scale,
+                    self.config.height as f32 / scale,
+                ),
+            )
+        };
         let center_world = state.positions[anchor];
         let Some(center) =
-            Self::preview_world_to_screen(preview_scene, center_world, viewport_size)
+            Self::preview_world_to_screen(preview_scene, center_world, vp_origin, vp_size)
         else {
             return;
         };
 
         let camera_right = preview_scene.camera.rotation * glam::Vec3::X;
         let camera_up = preview_scene.camera.rotation * glam::Vec3::Y;
-        let radius_world = SCAFFOLD_MAX_FORMATION_RANGE;
+        let radius_world = selection.formation_range;
         let right_edge = Self::preview_world_to_screen(
             preview_scene,
             center_world + camera_right * radius_world,
-            viewport_size,
+            vp_origin,
+            vp_size,
         );
         let up_edge = Self::preview_world_to_screen(
             preview_scene,
             center_world + camera_up * radius_world,
-            viewport_size,
+            vp_origin,
+            vp_size,
         );
         let screen_radius = right_edge
             .map(|edge| center.distance(edge))
@@ -563,7 +604,7 @@ impl App {
         let Some(selection) = self.cell_link_selection.clone() else {
             return;
         };
-        let Some(preview_scene) = self.scene_manager.preview_scene_mut() else {
+        let Some(preview_scene) = self.scene_manager.get_preview_scene() else {
             return;
         };
 
@@ -571,72 +612,81 @@ impl App {
         let rest_length = selection
             .rest_length
             .clamp(SCAFFOLD_MIN_REST_LENGTH, SCAFFOLD_MAX_REST_LENGTH);
-        let current_time = preview_scene.state.display_time;
+
+        let state = &preview_scene.state.display_state;
+        if anchor >= state.cell_count {
+            return;
+        }
+        let anchor_mode = state.mode_indices[anchor];
+        let anchor_lineage = state.lineage_hashes[anchor];
+
+        // Collect valid targets (same organism, within formation range).
         let valid_targets: Vec<usize> = selection
             .selected_cell_indices
             .iter()
             .copied()
             .filter(|&target| {
-                target != anchor && {
-                    let (_, in_range, same_organism) =
-                        Self::scaffold_pair_status(preview_scene, anchor, target);
-                    let existing = preview_scene
-                        .state
-                        .display_state
-                        .adhesion_manager
-                        .find_connection_between(
-                            &preview_scene.state.display_state.adhesion_connections,
-                            anchor,
-                            target,
-                        );
-                    let can_use_pair = existing.is_none_or(|conn_idx| {
-                        (preview_scene
-                            .state
-                            .display_state
-                            .adhesion_connections
-                            .bond_flags[conn_idx]
-                            & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
-                            != 0
-                    });
-                    in_range && same_organism && can_use_pair
+                if target == anchor {
+                    return false;
                 }
+                let (_, in_range, same_organism) = Self::scaffold_pair_status(
+                    preview_scene,
+                    anchor,
+                    target,
+                    selection.formation_range,
+                );
+                in_range && same_organism
             })
             .collect();
-        let state = &mut preview_scene.state.display_state;
 
-        if anchor >= state.cell_count {
+        if valid_targets.is_empty() {
             return;
         }
 
+        let formation_range = selection.formation_range;
+        let match_pattern = selection.match_pattern;
+
+        // Create or update one rule per unique target identity.
+        // Pattern: ByModeIndex — connects all same-mode cells (nearest neighbour per cell).
+        // Specific: ByLineageHash — connects only this exact pair.
         for target in valid_targets {
-            let mode_index = state.mode_indices[anchor];
-            if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
-                &state.adhesion_connections,
-                anchor,
-                target,
-            ) {
-                if (state.adhesion_connections.bond_flags[conn_idx]
-                    & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
-                    != 0
-                {
-                    state.adhesion_connections.rest_length_overrides[conn_idx] = rest_length;
-                }
+            let (sel_a, sel_b) = if match_pattern {
+                (
+                    crate::genome::CellAddressSelector::ByModeIndex(anchor_mode),
+                    crate::genome::CellAddressSelector::ByModeIndex(state.mode_indices[target]),
+                )
             } else {
-                let _ = state.adhesion_manager.add_ball_joint_with_rest_length(
-                    &mut state.adhesion_connections,
-                    anchor,
-                    target,
-                    mode_index,
-                    current_time,
-                    crate::cell::adhesion::BOND_FLAG_BARRIER_BALL,
+                (
+                    crate::genome::CellAddressSelector::ByLineageHash(anchor_lineage),
+                    crate::genome::CellAddressSelector::ByLineageHash(state.lineage_hashes[target]),
+                )
+            };
+            if let Some(rule) = self
+                .working_genome
+                .scaffold_rules
+                .iter_mut()
+                .find(|r| r.endpoint_a == sel_a && r.endpoint_b == sel_b)
+            {
+                rule.rest_length = rest_length;
+            } else {
+                let id = self.working_genome.next_scaffold_rule_id;
+                self.working_genome.next_scaffold_rule_id = id.saturating_add(1).max(1);
+                self.working_genome.scaffold_rules.push(crate::genome::ScaffoldRule {
+                    id,
+                    endpoint_a: sel_a,
+                    endpoint_b: sel_b,
                     rest_length,
-                );
+                    max_formation_range: formation_range,
+                });
             }
         }
 
-        crate::simulation::preview_physics::sync_development_organism_ids_from_adhesions(state);
-        preview_scene.state.work_state = preview_scene.state.display_state.clone();
-        preview_scene.state.work_time = preview_scene.state.display_time;
+        // Propagate updated genome to preview scene → triggers resim so bonds
+        // form correctly even after a backward seek.
+        let genome = self.working_genome.clone();
+        if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
+            preview_scene.update_genome(&genome);
+        }
         self.window.request_redraw();
     }
 
@@ -644,35 +694,73 @@ impl App {
         let Some(selection) = self.cell_link_selection.clone() else {
             return;
         };
-        let Some(preview_scene) = self.scene_manager.preview_scene_mut() else {
+        let Some(preview_scene) = self.scene_manager.get_preview_scene() else {
             return;
         };
-        let state = &mut preview_scene.state.display_state;
+
         let anchor = selection.anchor_cell_index;
-
-        for &target in &selection.selected_cell_indices {
-            if target == anchor {
-                continue;
-            }
-            if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
-                &state.adhesion_connections,
-                anchor,
-                target,
-            ) {
-                if (state.adhesion_connections.bond_flags[conn_idx]
-                    & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
-                    != 0
-                {
-                    state
-                        .adhesion_manager
-                        .remove_adhesion(&mut state.adhesion_connections, conn_idx);
-                }
-            }
+        let state = &preview_scene.state.display_state;
+        if anchor >= state.cell_count {
+            return;
         }
+        let anchor_mode = state.mode_indices[anchor];
+        let anchor_lineage = state.lineage_hashes[anchor];
 
-        crate::simulation::preview_physics::sync_development_organism_ids_from_adhesions(state);
-        preview_scene.state.work_state = preview_scene.state.display_state.clone();
-        preview_scene.state.work_time = preview_scene.state.display_time;
+        // Collect (mode, lineage) of selected targets that have a scaffold bond to anchor.
+        let target_modes: std::collections::HashSet<usize> = selection
+            .selected_cell_indices
+            .iter()
+            .copied()
+            .filter(|&target| {
+                target != anchor
+                    && state
+                        .adhesion_manager
+                        .find_connection_between(&state.adhesion_connections, anchor, target)
+                        .is_some_and(|ci| state.adhesion_connections.scaffold_rule_id[ci] != 0)
+            })
+            .map(|target| state.mode_indices[target])
+            .collect();
+        let target_lineages: std::collections::HashSet<u64> = selection
+            .selected_cell_indices
+            .iter()
+            .copied()
+            .filter(|&target| {
+                target != anchor
+                    && state
+                        .adhesion_manager
+                        .find_connection_between(&state.adhesion_connections, anchor, target)
+                        .is_some_and(|ci| state.adhesion_connections.scaffold_rule_id[ci] != 0)
+            })
+            .map(|target| state.lineage_hashes[target])
+            .collect();
+
+        // Remove rules that involve this anchor↔target pair in either direction.
+        self.working_genome.scaffold_rules.retain(|r| {
+            match (&r.endpoint_a, &r.endpoint_b) {
+                (
+                    crate::genome::CellAddressSelector::ByModeIndex(ma),
+                    crate::genome::CellAddressSelector::ByModeIndex(mb),
+                ) => {
+                    let fwd = *ma == anchor_mode && target_modes.contains(mb);
+                    let rev = *mb == anchor_mode && target_modes.contains(ma);
+                    !(fwd || rev)
+                }
+                (
+                    crate::genome::CellAddressSelector::ByLineageHash(la),
+                    crate::genome::CellAddressSelector::ByLineageHash(lb),
+                ) => {
+                    let fwd = *la == anchor_lineage && target_lineages.contains(lb);
+                    let rev = *lb == anchor_lineage && target_lineages.contains(la);
+                    !(fwd || rev)
+                }
+                _ => true,
+            }
+        });
+
+        let genome = self.working_genome.clone();
+        if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
+            preview_scene.update_genome(&genome);
+        }
         self.window.request_redraw();
     }
 
@@ -705,7 +793,7 @@ impl App {
 
         for &target in &targets {
             let (distance, in_range, same_organism) =
-                Self::scaffold_pair_status(preview_scene, anchor, target);
+                Self::scaffold_pair_status(preview_scene, anchor, target, selection_snapshot.formation_range);
             first_distance.get_or_insert(distance);
             if !same_organism {
                 wrong_organism_count += 1;
@@ -751,14 +839,15 @@ impl App {
         }
 
         let ctx = self.ui.ctx().clone();
-        let pos = egui::pos2(self.mouse_position.0 + 18.0, self.mouse_position.1 + 18.0);
+        let pos = selection_snapshot.menu_pos;
         let mut apply_clicked = false;
         let mut remove_clicked = false;
         let mut rest_changed = false;
 
         egui::Area::new(egui::Id::new("cell_link_scaffold_menu"))
             .order(egui::Order::Foreground)
-            .fixed_pos(pos)
+            .default_pos(pos)
+            .movable(true)
             .show(&ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(210.0);
@@ -779,6 +868,13 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("Rest length");
                             let response = ui.add(
+                                egui::Slider::new(
+                                    &mut selection.rest_length,
+                                    SCAFFOLD_MIN_REST_LENGTH..=SCAFFOLD_MAX_REST_LENGTH,
+                                )
+                                .show_value(false),
+                            );
+                            ui.add(
                                 egui::DragValue::new(&mut selection.rest_length)
                                     .speed(0.01)
                                     .range(SCAFFOLD_MIN_REST_LENGTH..=SCAFFOLD_MAX_REST_LENGTH),
@@ -792,10 +888,18 @@ impl App {
                         });
                     }
 
+                    if let Some(selection) = self.cell_link_selection.as_mut() {
+                        ui.horizontal(|ui| {
+                            ui.label("Rule:");
+                            ui.selectable_value(&mut selection.match_pattern, true, "Pattern");
+                            ui.selectable_value(&mut selection.match_pattern, false, "Specific");
+                        });
+                    }
+
                     if let Some(distance) = first_distance {
                         ui.label(format!(
                             "Distance {:.2} / max {:.2}",
-                            distance, SCAFFOLD_MAX_FORMATION_RANGE
+                            distance, selection_snapshot.formation_range
                         ));
                     }
                     if out_of_range_count > 0 {
@@ -972,7 +1076,12 @@ impl App {
                     });
                     self.right_click_start_pos = None;
 
-                    if was_tap {
+                    if was_tap && self.cell_link_selection.is_some() {
+                        // Right-click while scaffold selection is active = cancel selection.
+                        self.cell_link_selection = None;
+                        self.set_app_cursor(CursorIcon::Default);
+                        self.window.request_redraw();
+                    } else if was_tap {
                         if let Some(preview_scene) = self.scene_manager.preview_scene_mut() {
                             let (mx, my) = self.mouse_position;
                             let w = self.config.width as f32;

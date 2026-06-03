@@ -76,6 +76,14 @@ pub fn inherit_adhesions_on_division(
             if state.adhesion_connections.is_active[connection_idx] == 0 {
                 continue;
             }
+            // Scaffold bonds are never inherited regardless.
+            if (state.adhesion_connections.bond_flags[connection_idx]
+                & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+                != 0
+            {
+                state.adhesion_connections.is_active[connection_idx] = 0;
+                continue;
+            }
             let cell_a = state.adhesion_connections.cell_a_index[connection_idx];
             let cell_b = state.adhesion_connections.cell_b_index[connection_idx];
             let neighbor_idx = if cell_a == child_a_idx {
@@ -152,6 +160,14 @@ pub fn inherit_adhesions_on_division(
             continue;
         }
         if state.adhesion_connections.is_active[connection_idx] == 0 {
+            continue;
+        }
+        // Scaffold bonds are managed by the rule resolver — never inherit them.
+        if (state.adhesion_connections.bond_flags[connection_idx]
+            & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL)
+            != 0
+        {
+            state.adhesion_connections.is_active[connection_idx] = 0;
             continue;
         }
 

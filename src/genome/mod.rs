@@ -15,12 +15,44 @@ pub const GAMETOCYTE_MIN_SIMILARITY: f32 = 0.5;
 /// Raised from 80 to 128 to give more room for complex creatures.
 pub const MAX_MODES: usize = 128;
 
+/// Selects a subset of cells by developmental identity.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellAddressSelector {
+    /// Any cell belonging to the same organism.
+    AnyCell,
+    /// Cells currently in a specific genome mode.
+    ByModeIndex(usize),
+    /// Cells whose bounded morphology hash matches exactly.
+    ByMorphologyHash(u64),
+    /// Cells whose lineage hash matches exactly (unique per cell in a deterministic sim).
+    ByLineageHash(u64),
+}
+
+/// A persistent scaffold rule stored in the genome.
+///
+/// The resolver creates/maintains barrier-ball bonds between all same-organism cell
+/// pairs where `endpoint_a` matches one cell and `endpoint_b` matches the other,
+/// and the cells are within `max_formation_range` of each other.
+#[derive(Debug, Clone)]
+pub struct ScaffoldRule {
+    /// Stable ID — used by bonds to track which rule created them.
+    pub id: u32,
+    pub endpoint_a: CellAddressSelector,
+    pub endpoint_b: CellAddressSelector,
+    pub rest_length: f32,
+    pub max_formation_range: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Genome {
     pub name: String,
     pub initial_mode: i32,
     pub initial_orientation: Quat,
     pub modes: Vec<ModeSettings>,
+    /// Developmental scaffold rules for this genome.
+    pub scaffold_rules: Vec<ScaffoldRule>,
+    /// Monotonically increasing counter for assigning stable ScaffoldRule IDs.
+    pub next_scaffold_rule_id: u32,
 }
 
 /// Child settings for mode transitions
@@ -440,6 +472,8 @@ impl Default for Genome {
             initial_mode: 0,
             initial_orientation: Quat::IDENTITY,
             modes: Vec::with_capacity(10),
+            scaffold_rules: Vec::new(),
+            next_scaffold_rule_id: 1,
         };
 
         for i in 0..10 {
@@ -561,6 +595,8 @@ impl Genome {
             initial_mode: 0,
             initial_orientation: Quat::IDENTITY,
             modes: Vec::with_capacity(count),
+            scaffold_rules: Vec::new(),
+            next_scaffold_rule_id: 1,
         };
 
         // Randomize colors using LCG seeded from system time
@@ -1749,6 +1785,8 @@ impl Genome {
             initial_mode,
             initial_orientation: parent_a.initial_orientation,
             modes,
+            scaffold_rules: Vec::new(),
+            next_scaffold_rule_id: 1,
         }
     }
 }

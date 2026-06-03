@@ -439,6 +439,43 @@ impl PreviewState {
             mode.cognocyte_output_hops.hash(&mut hasher);
         }
 
+        // Scaffold rules affect bond topology during resim.
+        for rule in &genome.scaffold_rules {
+            rule.id.hash(&mut hasher);
+            rule.rest_length.to_bits().hash(&mut hasher);
+            rule.max_formation_range.to_bits().hash(&mut hasher);
+            match &rule.endpoint_a {
+                crate::genome::CellAddressSelector::AnyCell => 0u8.hash(&mut hasher),
+                crate::genome::CellAddressSelector::ByModeIndex(m) => {
+                    1u8.hash(&mut hasher);
+                    m.hash(&mut hasher);
+                }
+                crate::genome::CellAddressSelector::ByMorphologyHash(h) => {
+                    2u8.hash(&mut hasher);
+                    h.hash(&mut hasher);
+                }
+                crate::genome::CellAddressSelector::ByLineageHash(h) => {
+                    3u8.hash(&mut hasher);
+                    h.hash(&mut hasher);
+                }
+            }
+            match &rule.endpoint_b {
+                crate::genome::CellAddressSelector::AnyCell => 0u8.hash(&mut hasher),
+                crate::genome::CellAddressSelector::ByModeIndex(m) => {
+                    1u8.hash(&mut hasher);
+                    m.hash(&mut hasher);
+                }
+                crate::genome::CellAddressSelector::ByMorphologyHash(h) => {
+                    2u8.hash(&mut hasher);
+                    h.hash(&mut hasher);
+                }
+                crate::genome::CellAddressSelector::ByLineageHash(h) => {
+                    3u8.hash(&mut hasher);
+                    h.hash(&mut hasher);
+                }
+            }
+        }
+
         hasher.finish()
     }
 

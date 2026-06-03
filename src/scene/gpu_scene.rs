@@ -1467,6 +1467,8 @@ impl GpuScene {
             initial_mode: initial_mode_local,
             initial_orientation: glam::Quat::IDENTITY,
             modes,
+            scaffold_rules: Vec::new(),
+            next_scaffold_rule_id: 1,
         })
     }
 

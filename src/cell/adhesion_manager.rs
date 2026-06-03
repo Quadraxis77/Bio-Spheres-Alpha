@@ -192,6 +192,7 @@ impl AdhesionConnectionManager {
         connections.zone_b[connection_index] = zone_b as u8;
         connections.bond_flags[connection_index] = 0;
         connections.rest_length_overrides[connection_index] = 0.0;
+        connections.scaffold_rule_id[connection_index] = 0;
 
         // Set anchor directions (normalized)
         let normalized_anchor_a = if anchor_direction_a.length() > 0.001 {
@@ -265,6 +266,7 @@ impl AdhesionConnectionManager {
         connections.zone_b[connection_index] = 2;
         connections.bond_flags[connection_index] = bond_flags;
         connections.rest_length_overrides[connection_index] = 0.0;
+        connections.scaffold_rule_id[connection_index] = 0;
         connections.anchor_direction_a[connection_index] = Vec3::ZERO;
         connections.anchor_direction_b[connection_index] = Vec3::ZERO;
         connections.twist_reference_a[connection_index] = Quat::IDENTITY;
