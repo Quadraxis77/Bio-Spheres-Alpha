@@ -8,6 +8,7 @@ const SELECTOR_ANY: u32 = 0;
 const SELECTOR_MODE: u32 = 1;
 const SELECTOR_LINEAGE: u32 = 2;
 const SELECTOR_LINEAGE_OR_MODE: u32 = 3;
+const SELECTOR_ORGANISM_CELL_ID: u32 = 4;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -46,7 +47,10 @@ pub struct GpuScaffoldSystem {
     adhesion_layout: wgpu::BindGroupLayout,
     rule_layout: wgpu::BindGroupLayout,
     rules_buffer: wgpu::Buffer,
-    params_buffer: wgpu::Buffer,
+    /// Separate params buffers for each pass — avoids the race where both
+    /// queue.write_buffer calls are flushed before any encoder commands run,
+    /// which caused pass 0 data to be overwritten by pass 1 before dispatch.
+    params_buffers: [wgpu::Buffer; 2],
     rule_count: u32,
 }
 
@@ -68,6 +72,7 @@ impl GpuScaffoldSystem {
                 buffer_entry(2, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(3, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(4, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(5, true, true, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let adhesion_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -119,16 +124,18 @@ impl GpuScaffoldSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let params = GpuScaffoldParams {
-            rule_count: 0,
-            cell_slots: 0,
-            pass_index: 0,
-            _pad0: 0,
-        };
-        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("GPU Scaffold Params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let params_buffers = std::array::from_fn(|pass_index| {
+            let params = GpuScaffoldParams {
+                rule_count: 0,
+                cell_slots: 0,
+                pass_index: pass_index as u32,
+                _pad0: 0,
+            };
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&format!("GPU Scaffold Params Pass {pass_index}")),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            })
         });
 
         Self {
@@ -138,7 +145,7 @@ impl GpuScaffoldSystem {
             adhesion_layout,
             rule_layout,
             rules_buffer,
-            params_buffer,
+            params_buffers,
             rule_count: 0,
         }
     }
@@ -235,6 +242,10 @@ impl GpuScaffoldSystem {
                     binding: 4,
                     resource: buffers.parent_lineage_hashes.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.organism_cell_ids.as_entire_binding(),
+                },
             ],
         });
         let adhesion_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -263,30 +274,37 @@ impl GpuScaffoldSystem {
                 },
             ],
         });
-        let rule_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("GPU Scaffold Rule BG"),
-            layout: &self.rule_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.rules_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
         let workgroups = (cell_slots + 127) / 128;
-        for pass_index in 0..2 {
+        // Write rule_count and cell_slots into both params buffers up front.
+        // pass_index is baked in at construction and never changes, so we only
+        // need to update the two fields that vary per dispatch.
+        for (pass_index, buf) in self.params_buffers.iter().enumerate() {
             let params = GpuScaffoldParams {
                 rule_count: self.rule_count,
                 cell_slots,
-                pass_index,
+                pass_index: pass_index as u32,
                 _pad0: 0,
             };
-            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+            queue.write_buffer(buf, 0, bytemuck::bytes_of(&params));
+        }
+        // Now record both passes into the encoder. Each pass reads from its own
+        // params buffer so the pass_index is guaranteed to be correct at execution
+        // time even though all write_buffer calls complete before the encoder runs.
+        for pass_index in 0..2usize {
+            let rule_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("GPU Scaffold Rule BG"),
+                layout: &self.rule_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.rules_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.params_buffers[pass_index].as_entire_binding(),
+                    },
+                ],
+            });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("GPU Scaffold Resolve"),
                 timestamp_writes: None,
@@ -335,9 +353,8 @@ fn selector_kind(selector: &CellAddressSelector) -> u32 {
     match selector {
         CellAddressSelector::AnyCell => SELECTOR_ANY,
         CellAddressSelector::ByModeIndex(_) => SELECTOR_MODE,
-        CellAddressSelector::ByMorphologyHash(_) | CellAddressSelector::ByLineageHash(_) => {
-            SELECTOR_LINEAGE
-        }
+        CellAddressSelector::ByOrganismCellId(_) => SELECTOR_ORGANISM_CELL_ID,
+        CellAddressSelector::ByLineageHash(_) => SELECTOR_LINEAGE,
         CellAddressSelector::ByLineageHashOrMode { .. } => SELECTOR_LINEAGE_OR_MODE,
     }
 }
@@ -354,11 +371,11 @@ fn selector_mode(selector: &CellAddressSelector, mode_offset: usize) -> u32 {
 
 fn selector_hash(selector: &CellAddressSelector) -> u64 {
     match selector {
-        CellAddressSelector::ByMorphologyHash(hash)
-        | CellAddressSelector::ByLineageHash(hash)
+        CellAddressSelector::ByLineageHash(hash)
         | CellAddressSelector::ByLineageHashOrMode {
             lineage_hash: hash, ..
         } => *hash,
+        CellAddressSelector::ByOrganismCellId(id) => *id as u64,
         _ => 0,
     }
 }

@@ -69,6 +69,7 @@ struct ScaffoldParams {
 @group(1) @binding(2) var<storage, read> development_addresses: array<vec4<u32>>;
 @group(1) @binding(3) var<storage, read> death_flags: array<u32>;
 @group(1) @binding(4) var<storage, read> parent_lineage_hashes: array<vec2<u32>>;
+@group(1) @binding(5) var<storage, read> organism_cell_ids: array<u32>;
 
 @group(2) @binding(0) var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 @group(2) @binding(1) var<storage, read_write> cell_adhesion_indices: array<atomic<i32>>;
@@ -85,6 +86,7 @@ const SELECTOR_ANY: u32 = 0u;
 const SELECTOR_MODE: u32 = 1u;
 const SELECTOR_LINEAGE: u32 = 2u;
 const SELECTOR_LINEAGE_OR_MODE: u32 = 3u;
+const SELECTOR_ORGANISM_CELL_ID: u32 = 4u;
 
 fn selector_matches(cell_idx: u32, kind: u32, mode_idx: u32, hash_lo: u32, hash_hi: u32, branch_slot: u32) -> bool {
     if (kind == SELECTOR_ANY) {
@@ -92,6 +94,9 @@ fn selector_matches(cell_idx: u32, kind: u32, mode_idx: u32, hash_lo: u32, hash_
     }
     if (kind == SELECTOR_MODE) {
         return mode_indices[cell_idx] == mode_idx;
+    }
+    if (kind == SELECTOR_ORGANISM_CELL_ID) {
+        return organism_cell_ids[cell_idx] == hash_lo;
     }
 
     let dev = development_addresses[cell_idx];
@@ -250,8 +255,8 @@ fn find_best_structural_match(live_slots: u32, rule: ScaffoldRule, kind: u32, mo
         if (development_addresses[candidate].x != organism_id) { continue; }
 
         let rank = structural_match_rank(candidate, kind, mode_idx, hash_lo, hash_hi, branch_slot);
-        let generation_delta = lineage_depth(candidate) - source_depth;
-        let delta_error = abs_i32(generation_delta - rule.preferred_generation_delta);
+        let generation_delta = abs_i32(lineage_depth(candidate) - source_depth);
+        let delta_error = abs_i32(generation_delta - abs_i32(rule.preferred_generation_delta));
         if (rank > best_rank || (rank == best_rank && delta_error < best_delta_error)) {
             best_rank = rank;
             best_delta_error = delta_error;
@@ -275,6 +280,23 @@ fn existing_scaffold_connection(a: u32, b: u32) -> u32 {
         let conn = adhesion_connections[idx];
         if (conn.is_active == 0u) { continue; }
         if ((conn.bond_flags & BOND_FLAG_BARRIER_BALL) == 0u) { continue; }
+        if ((conn.cell_a_index == a && conn.cell_b_index == b)
+            || (conn.cell_a_index == b && conn.cell_b_index == a)) {
+            return idx;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+fn existing_connection(a: u32, b: u32) -> u32 {
+    let base = a * MAX_ADHESIONS_PER_CELL;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        let signed_idx = atomicLoad(&cell_adhesion_indices[base + i]);
+        if (signed_idx < 0) { continue; }
+        let idx = u32(signed_idx);
+        if (idx >= arrayLength(&adhesion_connections)) { continue; }
+        let conn = adhesion_connections[idx];
+        if (conn.is_active == 0u) { continue; }
         if ((conn.cell_a_index == a && conn.cell_b_index == b)
             || (conn.cell_a_index == b && conn.cell_b_index == a)) {
             return idx;
@@ -333,6 +355,44 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    let source_org = development_addresses[source].x;
+    if (source_org == 0u) {
+        return;
+    }
+
+    if (rule.endpoint_a_kind == SELECTOR_ORGANISM_CELL_ID && rule.endpoint_b_kind == SELECTOR_ORGANISM_CELL_ID) {
+        if (scaffold_params.pass_index == 1u) {
+            return;
+        }
+
+        for (var candidate = 0u; candidate < source; candidate++) {
+            if (death_flags[candidate] != 0u) { continue; }
+            if (genome_ids[candidate] != rule.genome_id) { continue; }
+            if (development_addresses[candidate].x == source_org) {
+                return;
+            }
+        }
+
+        var endpoint_a = 0xFFFFFFFFu;
+        var endpoint_b = 0xFFFFFFFFu;
+        for (var candidate = 0u; candidate < live_slots; candidate++) {
+            if (death_flags[candidate] != 0u) { continue; }
+            if (genome_ids[candidate] != rule.genome_id) { continue; }
+            if (development_addresses[candidate].x != source_org) { continue; }
+            let cell_id = organism_cell_ids[candidate];
+            if (cell_id == rule.endpoint_a_hash_lo) {
+                endpoint_a = candidate;
+            }
+            if (cell_id == rule.endpoint_b_hash_lo) {
+                endpoint_b = candidate;
+            }
+        }
+        if (endpoint_a != 0xFFFFFFFFu && endpoint_b != 0xFFFFFFFFu && endpoint_a != endpoint_b) {
+            create_or_update_scaffold_connection(endpoint_a, endpoint_b, rule);
+        }
+        return;
+    }
+
     let source_kind = select(rule.endpoint_a_kind, rule.endpoint_b_kind, scaffold_params.pass_index == 1u);
     let source_mode = select(rule.endpoint_a_mode, rule.endpoint_b_mode, scaffold_params.pass_index == 1u);
     let source_hash_lo = select(rule.endpoint_a_hash_lo, rule.endpoint_b_hash_lo, scaffold_params.pass_index == 1u);
@@ -348,22 +408,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let source_org = development_addresses[source].x;
-    if (source_org == 0u) {
-        return;
-    }
-
     // Structural = ByLineageHashOrMode on either endpoint (matches CPU is_structural check).
     // ByLineageHash falls through to the pattern path exactly like the CPU does.
     let is_structural_rule = rule.endpoint_a_kind == SELECTOR_LINEAGE_OR_MODE
-        || rule.endpoint_b_kind == SELECTOR_LINEAGE_OR_MODE;
+        || rule.endpoint_b_kind == SELECTOR_LINEAGE_OR_MODE
+        || rule.endpoint_a_kind == SELECTOR_ORGANISM_CELL_ID
+        || rule.endpoint_b_kind == SELECTOR_ORGANISM_CELL_ID;
     if (is_structural_rule && scaffold_params.pass_index == 1u) {
         return;
     }
 
     if (is_structural_rule) {
-        // CPU find_structural_match_in_org returns None for non-ByLineageHashOrMode selectors,
-        // so if either endpoint is not LINEAGE_OR_MODE no bond can form.
         if (source_kind != SELECTOR_LINEAGE_OR_MODE || target_kind != SELECTOR_LINEAGE_OR_MODE) {
             return;
         }
@@ -388,10 +443,53 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Pattern bond: nearest neighbour, no distance cutoff (matches CPU behaviour exactly).
+    let same_selector_rule = source_kind == target_kind
+        && source_mode == target_mode
+        && source_hash_lo == target_hash_lo
+        && source_hash_hi == target_hash_hi
+        && source_branch_slot == target_branch_slot;
+    if (same_selector_rule) {
+        let source_cell_id = organism_cell_ids[source];
+        var next_cell = 0xFFFFFFFFu;
+        var next_cell_id = 0xFFFFFFFFu;
+        var first_cell = 0xFFFFFFFFu;
+        var first_cell_id = 0xFFFFFFFFu;
+
+        for (var candidate = 0u; candidate < live_slots; candidate++) {
+            if (candidate == source) { continue; }
+            if (death_flags[candidate] != 0u) { continue; }
+            if (genome_ids[candidate] != rule.genome_id) { continue; }
+            if (development_addresses[candidate].x != source_org) { continue; }
+            if (!selector_matches(candidate, target_kind, target_mode, target_hash_lo, target_hash_hi, target_branch_slot)) {
+                continue;
+            }
+
+            let candidate_cell_id = organism_cell_ids[candidate];
+            if (candidate_cell_id < first_cell_id || (candidate_cell_id == first_cell_id && candidate < first_cell)) {
+                first_cell_id = candidate_cell_id;
+                first_cell = candidate;
+            }
+            if (candidate_cell_id > source_cell_id
+                && (candidate_cell_id < next_cell_id || (candidate_cell_id == next_cell_id && candidate < next_cell))) {
+                next_cell_id = candidate_cell_id;
+                next_cell = candidate;
+            }
+        }
+
+        let cycle_target = select(first_cell, next_cell, next_cell != 0xFFFFFFFFu);
+        if (cycle_target != 0xFFFFFFFFu) {
+            create_or_update_scaffold_connection(source, cycle_target, rule);
+        }
+        return;
+    }
+
+    // Pattern bond: match the rule's undirected generation separation first,
+    // then use deterministic organism-cell identity as the tie-breaker.
     var best_target = 0xFFFFFFFFu;
-    var best_dist_sq = 3.402823466e+38f;
-    let source_pos = positions[source].xyz;
+    var best_delta_error = 0x7FFFFFFF;
+    var best_organism_cell_id = 0xFFFFFFFFu;
+    let source_depth = lineage_depth(source);
+    let preferred_delta = abs_i32(rule.preferred_generation_delta);
 
     for (var candidate = 0u; candidate < live_slots; candidate++) {
         if (candidate == source) { continue; }
@@ -401,10 +499,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (!selector_matches(candidate, target_kind, target_mode, target_hash_lo, target_hash_hi, target_branch_slot)) {
             continue;
         }
-        let diff = positions[candidate].xyz - source_pos;
-        let dist_sq = dot(diff, diff);
-        if (dist_sq < best_dist_sq) {
-            best_dist_sq = dist_sq;
+        let generation_delta = abs_i32(lineage_depth(candidate) - source_depth);
+        let delta_error = abs_i32(generation_delta - preferred_delta);
+        let candidate_organism_cell_id = organism_cell_ids[candidate];
+        if (delta_error < best_delta_error
+            || (delta_error == best_delta_error && candidate_organism_cell_id < best_organism_cell_id)
+            || (delta_error == best_delta_error && candidate_organism_cell_id == best_organism_cell_id && candidate < best_target)) {
+            best_delta_error = delta_error;
+            best_organism_cell_id = candidate_organism_cell_id;
             best_target = candidate;
         }
     }
@@ -420,6 +522,10 @@ fn create_or_update_scaffold_connection(source: u32, best_target: u32, rule: Sca
     let existing = existing_scaffold_connection(source, best_target);
     if (existing != 0xFFFFFFFFu) {
         adhesion_connections[existing]._pad = rule.rest_length_bits;
+        return;
+    }
+
+    if (existing_connection(source, best_target) != 0xFFFFFFFFu) {
         return;
     }
 

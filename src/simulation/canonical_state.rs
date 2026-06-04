@@ -155,7 +155,6 @@ use crate::simulation::spatial_grid::DeterministicSpatialGrid;
 use glam::{Quat, Vec3};
 
 const DEVELOPMENT_ROOT_LINEAGE_HASH: u64 = 0x9E37_79B9_7F4A_7C15;
-const DEVELOPMENT_ROOT_MORPHOLOGY_HASH: u64 = 0xC2B2_AE3D_27D4_EB4F;
 
 /// Event describing a cell division that occurred during physics simulation
 ///
@@ -179,7 +178,7 @@ pub struct DivisionEvent {
 pub struct CellDevelopmentAddress {
     pub organism_id: u32,
     pub lineage_hash: u64,
-    pub morphology_hash: u64,
+    pub organism_cell_id: u32,
     pub lineage_depth: u16,
     pub branch_slot: u16,
 }
@@ -234,8 +233,12 @@ pub struct CanonicalState {
     /// Bounded rolling lineage hash for each cell, scoped by `organism_ids`.
     pub lineage_hashes: Vec<u64>,
 
-    /// Bounded rolling morphology hash for each cell, derived from mode sequence.
-    pub morphology_hashes: Vec<u64>,
+    /// Deterministic cell address within an organism's developmental tree.
+    ///
+    /// Root cells are 1. On division child A is `parent * 2`, child B is
+    /// `parent * 2 + 1`, with a deterministic hashed fallback if the tree path
+    /// exceeds u32 range. The value is intentionally scoped by `organism_ids`.
+    pub organism_cell_ids: Vec<u32>,
 
     /// Saturating lineage depth for display/debug and selector specificity.
     pub lineage_depths: Vec<u16>,
@@ -573,6 +576,24 @@ impl CanonicalState {
         )
     }
 
+    #[inline]
+    fn derive_organism_cell_id(parent_id: u32, branch_slot: u16) -> u32 {
+        parent_id
+            .checked_mul(2)
+            .and_then(|base| {
+                if branch_slot == 2 {
+                    base.checked_add(1)
+                } else {
+                    Some(base)
+                }
+            })
+            .unwrap_or_else(|| {
+                let mixed =
+                    Self::mix_development_hash(((parent_id as u64) << 16) ^ branch_slot as u64);
+                (mixed as u32).max(1)
+            })
+    }
+
     pub fn development_address(&self, cell_index: usize) -> Option<CellDevelopmentAddress> {
         if cell_index >= self.cell_count {
             return None;
@@ -580,7 +601,7 @@ impl CanonicalState {
         Some(CellDevelopmentAddress {
             organism_id: self.organism_ids[cell_index],
             lineage_hash: self.lineage_hashes[cell_index],
-            morphology_hash: self.morphology_hashes[cell_index],
+            organism_cell_id: self.organism_cell_ids[cell_index],
             lineage_depth: self.lineage_depths[cell_index],
             branch_slot: self.lineage_branch_slots[cell_index],
         })
@@ -596,7 +617,7 @@ impl CanonicalState {
         }
         self.organism_ids[cell_index] = address.organism_id;
         self.lineage_hashes[cell_index] = address.lineage_hash;
-        self.morphology_hashes[cell_index] = address.morphology_hash;
+        self.organism_cell_ids[cell_index] = address.organism_cell_id;
         self.lineage_depths[cell_index] = address.lineage_depth;
         self.lineage_branch_slots[cell_index] = address.branch_slot;
         if address.organism_id >= self.next_organism_id {
@@ -622,12 +643,7 @@ impl CanonicalState {
                     genome_id,
                     mode_index,
                 ),
-                morphology_hash: Self::development_root_hash(
-                    DEVELOPMENT_ROOT_MORPHOLOGY_HASH,
-                    organism_id,
-                    genome_id,
-                    mode_index,
-                ),
+                organism_cell_id: 1,
                 lineage_depth: 0,
                 branch_slot: 0,
             },
@@ -646,7 +662,7 @@ impl CanonicalState {
             .unwrap_or(CellDevelopmentAddress {
                 organism_id: 0,
                 lineage_hash: DEVELOPMENT_ROOT_LINEAGE_HASH,
-                morphology_hash: DEVELOPMENT_ROOT_MORPHOLOGY_HASH,
+                organism_cell_id: 1,
                 lineage_depth: 0,
                 branch_slot: 0,
             });
@@ -659,13 +675,7 @@ impl CanonicalState {
                 child_mode,
                 branch_slot,
             ),
-            morphology_hash: Self::derive_development_hash(
-                parent.morphology_hash,
-                parent.organism_id,
-                parent_mode,
-                child_mode,
-                branch_slot,
-            ),
+            organism_cell_id: Self::derive_organism_cell_id(parent.organism_cell_id, branch_slot),
             lineage_depth: parent.lineage_depth.saturating_add(1),
             branch_slot,
         }
@@ -719,7 +729,7 @@ impl CanonicalState {
             cell_ids: vec![0; capacity],
             organism_ids: vec![0; capacity],
             lineage_hashes: vec![0; capacity],
-            morphology_hashes: vec![0; capacity],
+            organism_cell_ids: vec![0; capacity],
             lineage_depths: vec![0; capacity],
             lineage_branch_slots: vec![0; capacity],
             parent_lineage_hashes: vec![0; capacity],
@@ -1081,7 +1091,7 @@ impl CanonicalState {
             self.cell_ids[cell_index] = self.cell_ids[last_index];
             self.organism_ids[cell_index] = self.organism_ids[last_index];
             self.lineage_hashes[cell_index] = self.lineage_hashes[last_index];
-            self.morphology_hashes[cell_index] = self.morphology_hashes[last_index];
+            self.organism_cell_ids[cell_index] = self.organism_cell_ids[last_index];
             self.lineage_depths[cell_index] = self.lineage_depths[last_index];
             self.lineage_branch_slots[cell_index] = self.lineage_branch_slots[last_index];
             self.parent_lineage_hashes[cell_index] = self.parent_lineage_hashes[last_index];

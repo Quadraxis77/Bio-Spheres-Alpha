@@ -37,6 +37,9 @@ pub enum SerializableCellAddressSelector {
     ByMorphologyHash {
         hash: u64,
     },
+    ByOrganismCellId {
+        id: u32,
+    },
     ByLineageHash {
         hash: u64,
     },
@@ -52,7 +55,7 @@ impl From<&super::CellAddressSelector> for SerializableCellAddressSelector {
         match s {
             super::CellAddressSelector::AnyCell => Self::AnyCell,
             super::CellAddressSelector::ByModeIndex(m) => Self::ByModeIndex { mode_index: *m },
-            super::CellAddressSelector::ByMorphologyHash(h) => Self::ByMorphologyHash { hash: *h },
+            super::CellAddressSelector::ByOrganismCellId(id) => Self::ByOrganismCellId { id: *id },
             super::CellAddressSelector::ByLineageHash(h) => Self::ByLineageHash { hash: *h },
             super::CellAddressSelector::ByLineageHashOrMode {
                 lineage_hash,
@@ -75,8 +78,9 @@ impl From<SerializableCellAddressSelector> for super::CellAddressSelector {
                 Self::ByModeIndex(mode_index)
             }
             SerializableCellAddressSelector::ByMorphologyHash { hash } => {
-                Self::ByMorphologyHash(hash)
+                Self::ByOrganismCellId(hash as u32)
             }
+            SerializableCellAddressSelector::ByOrganismCellId { id } => Self::ByOrganismCellId(id),
             SerializableCellAddressSelector::ByLineageHash { hash } => Self::ByLineageHash(hash),
             SerializableCellAddressSelector::ByLineageHashOrMode {
                 lineage_hash,

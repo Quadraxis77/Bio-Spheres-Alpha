@@ -201,6 +201,9 @@ var<storage, read_write> development_addresses: array<vec4<u32>>;
 @group(2) @binding(20)
 var<storage, read_write> parent_lineage_hashes_out: array<vec2<u32>>;
 
+@group(2) @binding(21)
+var<storage, read_write> organism_cell_ids: array<u32>;
+
 struct U64 {
     lo: u32,
     hi: u32,
@@ -395,6 +398,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let root_hash = development_root_hash(insertion_params.genome_id, insertion_params.mode_index);
     development_addresses[slot] = vec4<u32>(final_cell_id + 1u, root_hash.lo, root_hash.hi, 0u);
     parent_lineage_hashes_out[slot] = vec2<u32>(0u, 0u);
+    organism_cell_ids[slot] = 1u;
     
     // Initialize cell properties from genome mode
     nutrient_gain_rates[slot] = insertion_params.nutrient_gain_rate;

@@ -1937,15 +1937,7 @@ impl GpuScene {
             self.total_cell_slots.max(1),
         );
 
-        self.scaffold_system.dispatch(
-            device,
-            encoder,
-            queue,
-            &self.gpu_triple_buffers,
-            &self.adhesion_buffers,
-            self.gpu_triple_buffers.output_buffer_index(),
-            self.total_cell_slots.max(self.current_cell_count).max(1),
-        );
+        self.dispatch_scaffold_rules(device, encoder, queue);
 
         // Mutation pass: collect candidates from division results, then apply mutations.
         // Runs after division execute so division_flags and division_slot_assignments are set.
@@ -2853,6 +2845,23 @@ impl GpuScene {
             genome_id,
             mode_count,
             global_start_index
+        );
+    }
+
+    fn dispatch_scaffold_rules(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
+        self.scaffold_system.dispatch(
+            device,
+            encoder,
+            queue,
+            &self.gpu_triple_buffers,
+            &self.adhesion_buffers,
+            self.gpu_triple_buffers.output_buffer_index(),
+            self.gpu_triple_buffers.capacity.max(1),
         );
     }
 
@@ -7398,15 +7407,16 @@ impl Scene for GpuScene {
             self.snapshot_death_flags_for_particles(&mut encoder);
         }
 
+        let mut physics_steps = 0;
+
         // Execute GPU physics pipeline if not paused and has cells
         // Use fixed timestep accumulator for consistent physics behavior
         if !self.paused {
             let fixed_dt = self.config.fixed_timestep;
             // Allow more steps when time_scale > 1 (fast forward)
             let max_steps = (4.0 * self.time_scale).ceil() as i32;
-            let mut steps = 0;
 
-            while self.time_accumulator >= fixed_dt && steps < max_steps {
+            while self.time_accumulator >= fixed_dt && physics_steps < max_steps {
                 self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
 
                 // Wrap current_time to prevent f32 precision loss in long runs.
@@ -7416,11 +7426,11 @@ impl Scene for GpuScene {
                 // as long as no cell lives longer than 65536 sim-seconds (they don't).
                 self.current_time = (self.current_time + fixed_dt) % 65536.0;
                 self.time_accumulator -= fixed_dt;
-                steps += 1;
+                physics_steps += 1;
             }
 
             // If we hit max steps, discard remaining accumulated time
-            if steps >= max_steps {
+            if physics_steps >= max_steps {
                 self.time_accumulator = 0.0;
             }
 
@@ -7442,6 +7452,10 @@ impl Scene for GpuScene {
             // and lifecycle to preserve cell split timing and nutrient state.
             let fixed_dt = self.config.fixed_timestep;
             self.run_mechanics_only(device, &mut encoder, queue, fixed_dt, world_diameter);
+        }
+
+        if physics_steps == 0 {
+            self.dispatch_scaffold_rules(device, &mut encoder, queue);
         }
 
         // Execute non-drag pending position updates (e.g. from other tools)

@@ -451,7 +451,7 @@ impl PreviewState {
                     1u8.hash(&mut hasher);
                     m.hash(&mut hasher);
                 }
-                crate::genome::CellAddressSelector::ByMorphologyHash(h) => {
+                crate::genome::CellAddressSelector::ByOrganismCellId(h) => {
                     2u8.hash(&mut hasher);
                     h.hash(&mut hasher);
                 }
@@ -476,7 +476,7 @@ impl PreviewState {
                     1u8.hash(&mut hasher);
                     m.hash(&mut hasher);
                 }
-                crate::genome::CellAddressSelector::ByMorphologyHash(h) => {
+                crate::genome::CellAddressSelector::ByOrganismCellId(h) => {
                     2u8.hash(&mut hasher);
                     h.hash(&mut hasher);
                 }

@@ -22,8 +22,8 @@ pub enum CellAddressSelector {
     AnyCell,
     /// Cells currently in a specific genome mode.
     ByModeIndex(usize),
-    /// Cells whose bounded morphology hash matches exactly.
-    ByMorphologyHash(u64),
+    /// Cells at the same deterministic address within each organism's development tree.
+    ByOrganismCellId(u32),
     /// Cells whose lineage hash matches exactly (unique per cell in a deterministic sim).
     ByLineageHash(u64),
     /// Prefer the exact lineage hash; on division, follow descendants by tracing through the
@@ -47,7 +47,7 @@ pub struct ScaffoldRule {
     pub id: u32,
     pub endpoint_a: CellAddressSelector,
     pub endpoint_b: CellAddressSelector,
-    /// Preferred lineage-depth difference from endpoint A to endpoint B.
+    /// Preferred absolute lineage-depth separation between the endpoints.
     ///
     /// This is a matching hint, not a hard requirement: runtime resolution can
     /// still connect across generations when one side has divided sooner.

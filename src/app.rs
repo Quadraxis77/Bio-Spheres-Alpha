@@ -106,7 +106,7 @@ struct CellLinkSelection {
     menu_pos: egui::Pos2,
     /// World-space formation range (anchor_radius * SCAFFOLD_FORMATION_RANGE_MULTIPLIER).
     formation_range: f32,
-    /// When true, rule uses ByMorphologyHash (connects all structurally equivalent pairs).
+    /// When true, rule uses pattern mode matching.
     /// When false, rule uses ByLineageHash (connects only this specific pair).
     match_pattern: bool,
 }
@@ -610,14 +610,40 @@ impl App {
         }
     }
 
-    fn scaffold_selector_lineage(s: &crate::genome::CellAddressSelector) -> Option<u64> {
+    fn scaffold_selector_cell_address(s: &crate::genome::CellAddressSelector) -> Option<u32> {
         match s {
-            crate::genome::CellAddressSelector::ByLineageHash(h) => Some(*h),
-            crate::genome::CellAddressSelector::ByLineageHashOrMode { lineage_hash, .. } => {
-                Some(*lineage_hash)
-            }
+            crate::genome::CellAddressSelector::ByOrganismCellId(id) => Some(*id),
             _ => None,
         }
+    }
+
+    fn scaffold_connection_exists(
+        state: &crate::simulation::canonical_state::CanonicalState,
+        cell_a: usize,
+        cell_b: usize,
+    ) -> bool {
+        if cell_a >= state.adhesion_manager.cell_adhesion_indices.len() {
+            return false;
+        }
+
+        let connections = &state.adhesion_connections;
+        state.adhesion_manager.cell_adhesion_indices[cell_a]
+            .iter()
+            .copied()
+            .filter(|&conn_idx| conn_idx >= 0)
+            .map(|conn_idx| conn_idx as usize)
+            .any(|conn_idx| {
+                if conn_idx >= connections.active_count || connections.is_active[conn_idx] == 0 {
+                    return false;
+                }
+                if connections.scaffold_rule_id[conn_idx] == 0 {
+                    return false;
+                }
+
+                let ca = connections.cell_a_index[conn_idx];
+                let cb = connections.cell_b_index[conn_idx];
+                (ca == cell_a && cb == cell_b) || (ca == cell_b && cb == cell_a)
+            })
     }
 
     fn apply_preview_scaffolds(&mut self) {
@@ -638,9 +664,13 @@ impl App {
             return;
         }
         let anchor_mode = state.mode_indices[anchor];
-        let anchor_lineage = state.lineage_hashes[anchor];
+        let anchor_cell_address = state.organism_cell_ids[anchor];
 
-        // Collect valid targets (same organism, within formation range).
+        let formation_range = selection.formation_range;
+        let match_pattern = selection.match_pattern;
+
+        // Collect valid targets. Runtime scaffold rules are developmental, not
+        // proximity based; range is only a visual/authoring aid.
         let valid_targets: Vec<usize> = selection
             .selected_cell_indices
             .iter()
@@ -649,13 +679,13 @@ impl App {
                 if target == anchor {
                     return false;
                 }
-                let (_, in_range, same_organism) = Self::scaffold_pair_status(
+                let (_, _, same_organism) = Self::scaffold_pair_status(
                     preview_scene,
                     anchor,
                     target,
                     selection.formation_range,
                 );
-                in_range && same_organism
+                same_organism
             })
             .collect();
 
@@ -663,43 +693,67 @@ impl App {
             return;
         }
 
-        let formation_range = selection.formation_range;
-        let match_pattern = selection.match_pattern;
-
         // Create or update one rule per unique target identity.
         // Pattern: ByModeIndex — connects all same-mode cells (nearest neighbour per cell).
         // Specific: ByLineageHash — connects only this exact pair.
         for target in valid_targets {
-            let preferred_generation_delta =
-                (state.lineage_depths[target] as i32 - state.lineage_depths[anchor] as i32)
-                    .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let mut preferred_generation_delta = state.lineage_depths[target]
+                .abs_diff(state.lineage_depths[anchor])
+                .min(i16::MAX as u16) as i16;
+            let target_mode = state.mode_indices[target];
             let (sel_a, sel_b) = if match_pattern {
+                let (mode_a, mode_b) = if anchor_mode <= target_mode {
+                    (anchor_mode, target_mode)
+                } else {
+                    (target_mode, anchor_mode)
+                };
                 (
-                    crate::genome::CellAddressSelector::ByModeIndex(anchor_mode),
-                    crate::genome::CellAddressSelector::ByModeIndex(state.mode_indices[target]),
+                    crate::genome::CellAddressSelector::ByModeIndex(mode_a),
+                    crate::genome::CellAddressSelector::ByModeIndex(mode_b),
                 )
             } else {
-                (
-                    crate::genome::CellAddressSelector::ByLineageHashOrMode {
-                        lineage_hash: anchor_lineage,
-                        mode_index: anchor_mode,
-                        preferred_branch_slot: state.lineage_branch_slots[anchor],
-                    },
-                    crate::genome::CellAddressSelector::ByLineageHashOrMode {
-                        lineage_hash: state.lineage_hashes[target],
-                        mode_index: state.mode_indices[target],
-                        preferred_branch_slot: state.lineage_branch_slots[target],
-                    },
-                )
+                let target_cell_address = state.organism_cell_ids[target];
+                if anchor_cell_address != 0 && target_cell_address != 0 {
+                    (
+                        crate::genome::CellAddressSelector::ByOrganismCellId(anchor_cell_address),
+                        crate::genome::CellAddressSelector::ByOrganismCellId(target_cell_address),
+                    )
+                } else {
+                    (
+                        crate::genome::CellAddressSelector::ByLineageHashOrMode {
+                            lineage_hash: state.lineage_hashes[anchor],
+                            mode_index: anchor_mode,
+                            preferred_branch_slot: state.lineage_branch_slots[anchor],
+                        },
+                        crate::genome::CellAddressSelector::ByLineageHashOrMode {
+                            lineage_hash: state.lineage_hashes[target],
+                            mode_index: state.mode_indices[target],
+                            preferred_branch_slot: state.lineage_branch_slots[target],
+                        },
+                    )
+                }
             };
-            if let Some(rule) = self
-                .working_genome
-                .scaffold_rules
-                .iter_mut()
-                .find(|r| r.endpoint_a == sel_a && r.endpoint_b == sel_b)
-            {
+            if match_pattern && sel_a == sel_b {
+                preferred_generation_delta = 0;
+            }
+            if let Some(rule) = self.working_genome.scaffold_rules.iter_mut().find(|r| {
+                if match_pattern {
+                    let same_direction = r.endpoint_a == sel_a && r.endpoint_b == sel_b;
+                    let reverse_direction = r.endpoint_a == sel_b && r.endpoint_b == sel_a;
+                    (same_direction || reverse_direction)
+                        && (sel_a == sel_b
+                            || r.preferred_generation_delta.unsigned_abs()
+                                == preferred_generation_delta as u16)
+                } else {
+                    r.endpoint_a == sel_a && r.endpoint_b == sel_b
+                }
+            }) {
                 rule.rest_length = rest_length;
                 rule.preferred_generation_delta = preferred_generation_delta;
+                if match_pattern {
+                    rule.endpoint_a = sel_a;
+                    rule.endpoint_b = sel_b;
+                }
             } else {
                 let id = self.working_genome.next_scaffold_rule_id;
                 self.working_genome.next_scaffold_rule_id = id.saturating_add(1).max(1);
@@ -739,7 +793,7 @@ impl App {
             return;
         }
         let anchor_mode = state.mode_indices[anchor];
-        let anchor_lineage = state.lineage_hashes[anchor];
+        let anchor_cell_address = state.organism_cell_ids[anchor];
 
         // Collect (mode, lineage) of selected targets that have a scaffold bond to anchor.
         let target_modes: std::collections::HashSet<usize> = selection
@@ -747,34 +801,26 @@ impl App {
             .iter()
             .copied()
             .filter(|&target| {
-                target != anchor
-                    && state
-                        .adhesion_manager
-                        .find_connection_between(&state.adhesion_connections, anchor, target)
-                        .is_some_and(|ci| state.adhesion_connections.scaffold_rule_id[ci] != 0)
+                target != anchor && Self::scaffold_connection_exists(state, anchor, target)
             })
             .map(|target| state.mode_indices[target])
             .collect();
-        let target_lineages: std::collections::HashSet<u64> = selection
+        let target_cell_addresses: std::collections::HashSet<u32> = selection
             .selected_cell_indices
             .iter()
             .copied()
             .filter(|&target| {
-                target != anchor
-                    && state
-                        .adhesion_manager
-                        .find_connection_between(&state.adhesion_connections, anchor, target)
-                        .is_some_and(|ci| state.adhesion_connections.scaffold_rule_id[ci] != 0)
+                target != anchor && Self::scaffold_connection_exists(state, anchor, target)
             })
-            .map(|target| state.lineage_hashes[target])
+            .map(|target| state.organism_cell_ids[target])
             .collect();
 
         // Remove rules that involve this anchor↔target pair in either direction.
         self.working_genome.scaffold_rules.retain(|r| {
             let a_mode = Self::scaffold_selector_mode(&r.endpoint_a);
             let b_mode = Self::scaffold_selector_mode(&r.endpoint_b);
-            let a_lineage = Self::scaffold_selector_lineage(&r.endpoint_a);
-            let b_lineage = Self::scaffold_selector_lineage(&r.endpoint_b);
+            let a_cell_address = Self::scaffold_selector_cell_address(&r.endpoint_a);
+            let b_cell_address = Self::scaffold_selector_cell_address(&r.endpoint_b);
 
             // Pattern rules: match by mode in either direction.
             if let (Some(ma), Some(mb)) = (a_mode, b_mode) {
@@ -784,10 +830,10 @@ impl App {
                     return false;
                 }
             }
-            // Specific rules: match by lineage in either direction.
-            if let (Some(la), Some(lb)) = (a_lineage, b_lineage) {
-                let fwd = la == anchor_lineage && target_lineages.contains(&lb);
-                let rev = lb == anchor_lineage && target_lineages.contains(&la);
+            // Specific rules: match by per-organism cell address in either direction.
+            if let (Some(la), Some(lb)) = (a_cell_address, b_cell_address) {
+                let fwd = la == anchor_cell_address && target_cell_addresses.contains(&lb);
+                let rev = lb == anchor_cell_address && target_cell_addresses.contains(&la);
                 if fwd || rev {
                     return false;
                 }
@@ -839,10 +885,11 @@ impl App {
             first_distance.get_or_insert(distance);
             if !same_organism {
                 wrong_organism_count += 1;
-            } else if !in_range {
-                out_of_range_count += 1;
             } else {
                 valid_count += 1;
+                if !in_range {
+                    out_of_range_count += 1;
+                }
             }
 
             if let Some(conn_idx) = preview_scene
@@ -866,7 +913,6 @@ impl App {
                     existing_count += 1;
                 } else {
                     already_attached_count += 1;
-                    valid_count = valid_count.saturating_sub(1);
                 }
             }
         }

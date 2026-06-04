@@ -486,6 +486,9 @@ pub struct GpuTripleBufferSystem {
     /// depth_branch packs lineage_depth in the high 16 bits and branch_slot in the low 16 bits.
     pub development_addresses: wgpu::Buffer,
 
+    /// Per-cell deterministic address within the current organism.
+    pub organism_cell_ids: wgpu::Buffer,
+
     /// Per-cell parent lineage hash: [parent_lineage_hash_lo, parent_lineage_hash_hi].
     /// Set once at birth and never changed. Root cells store 0.
     /// Used by the scaffold resolver to verify preferred-branch chain membership.
@@ -679,8 +682,7 @@ impl GpuTripleBufferSystem {
             Self::create_storage_buffer(device, max_modes * 8, "Child Mode Indices");
 
         // Is-initial-mode flag: one u32 per mode (1 = this is the genome's initial mode)
-        let is_initial_mode =
-            Self::create_storage_buffer(device, max_modes * 4, "Is Initial Mode");
+        let is_initial_mode = Self::create_storage_buffer(device, max_modes * 4, "Is Initial Mode");
 
         // Parent make adhesion flags: one u32 per mode
         let parent_make_adhesion_flags =
@@ -825,6 +827,11 @@ impl GpuTripleBufferSystem {
             buffer_size,
             "Development Addresses",
         );
+        let organism_cell_ids = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Organism Cell IDs",
+        );
 
         // 8 bytes per cell: [parent_lineage_hash_lo: u32, parent_lineage_hash_hi: u32]
         let parent_lineage_hashes = Self::create_zero_initialized_storage_buffer(
@@ -923,6 +930,7 @@ impl GpuTripleBufferSystem {
             signal_settings_v4,
             genome_orientations,
             development_addresses,
+            organism_cell_ids,
             parent_lineage_hashes,
             indirect_dispatch_buffer,
             current_index: AtomicUsize::new(0),
@@ -1339,6 +1347,13 @@ impl GpuTripleBufferSystem {
             .collect();
         queue.write_buffer(&self.development_addresses, 0, bytemuck::cast_slice(&data));
 
+        let organism_cell_ids: Vec<u32> = state.organism_cell_ids[..state.cell_count].to_vec();
+        queue.write_buffer(
+            &self.organism_cell_ids,
+            0,
+            bytemuck::cast_slice(&organism_cell_ids),
+        );
+
         let parent_data: Vec<[u32; 2]> = (0..state.cell_count)
             .map(|i| {
                 let ph = state.parent_lineage_hashes[i];
@@ -1360,6 +1375,7 @@ impl GpuTripleBufferSystem {
         lineage_hash: u64,
         lineage_depth: u16,
         branch_slot: u16,
+        organism_cell_id: u32,
     ) {
         let data = [
             organism_id,
@@ -1371,6 +1387,11 @@ impl GpuTripleBufferSystem {
             &self.development_addresses,
             (cell_idx * 16) as u64,
             bytemuck::bytes_of(&data),
+        );
+        queue.write_buffer(
+            &self.organism_cell_ids,
+            (cell_idx * 4) as u64,
+            bytemuck::bytes_of(&organism_cell_id),
         );
     }
 
@@ -2755,7 +2776,15 @@ impl GpuTripleBufferSystem {
             request.genome_id,
             request.mode_index,
         );
-        self.sync_single_development_address(queue, slot as usize, organism_id, lineage_hash, 0, 0);
+        self.sync_single_development_address(
+            queue,
+            slot as usize,
+            organism_id,
+            lineage_hash,
+            0,
+            0,
+            1,
+        );
 
         // Update GPU cell count
         let new_count = self.slot_allocator.allocated_count();
@@ -3203,6 +3232,7 @@ impl GpuTripleBufferSystem {
                     state.lineage_hashes[cell_idx],
                     state.lineage_depths[cell_idx],
                     state.lineage_branch_slots[cell_idx],
+                    state.organism_cell_ids[cell_idx],
                 );
             }
         }

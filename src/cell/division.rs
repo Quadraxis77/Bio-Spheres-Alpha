@@ -469,18 +469,25 @@ pub fn division_step(
                     parent_rotation * split_rotation * child_a_orientation_for_genome;
                 let child_b_orientation =
                     parent_rotation * split_rotation * child_b_orientation_for_genome;
-                let child_a_development_address = state.derive_division_development_address(
+                let mut child_a_development_address = state.derive_division_development_address(
                     parent_idx,
                     mode_index,
                     child_a_mode_idx,
                     1,
                 );
-                let child_b_development_address = state.derive_division_development_address(
+                let mut child_b_development_address = state.derive_division_development_address(
                     parent_idx,
                     mode_index,
                     child_b_mode_idx,
                     2,
                 );
+                let initial_mode_idx = genome.initial_mode.max(0) as usize;
+                if mode_index != initial_mode_idx && child_a_mode_idx == initial_mode_idx {
+                    child_a_development_address.organism_cell_id = 1;
+                }
+                if mode_index != initial_mode_idx && child_b_mode_idx == initial_mode_idx {
+                    child_b_development_address.organism_cell_id = 1;
+                }
 
                 division_data_list.push(DivisionData {
                     parent_idx,
@@ -638,17 +645,18 @@ pub fn division_step(
             );
 
             // Create sibling adhesion between children if parent_make_adhesion is enabled.
-            // keep_adhesion flags only affect INHERITANCE of existing bonds, not sibling creation.
+            // Normal keep_adhesion flags only affect inheritance; after-split keep flags
+            // also suppress the sibling bond when the max-splits transition fires.
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
-                // When will_reach_max_splits fires and child_a_after_split_keep_adhesion is false,
-                // child A is the detached egg - do NOT create a sibling bond to it.
                 let will_reach_max_splits =
                     mode.max_splits >= 0 && (data.parent_split_count + 1) >= mode.max_splits;
-                let egg_detach = will_reach_max_splits && !mode.child_a_after_split_keep_adhesion;
+                let after_split_sibling_allowed = !will_reach_max_splits
+                    || (mode.child_a_after_split_keep_adhesion
+                        && mode.child_b_after_split_keep_adhesion);
 
-                if mode.parent_make_adhesion && !egg_detach {
+                if mode.parent_make_adhesion && after_split_sibling_allowed {
                     // Calculate anchor directions based on compounded genome orientations (matches Python reference)
                     // Python: angle1_relative = (spawn_direction + math.pi) - daughter1.arrow_direction
                     // Python: angle2_relative = spawn_direction - daughter2.arrow_direction
@@ -1116,18 +1124,25 @@ pub fn division_step_multi(
                 parent_rotation * split_rotation * child_a_orientation_for_genome;
             let child_b_orientation =
                 parent_rotation * split_rotation * child_b_orientation_for_genome;
-            let child_a_development_address = state.derive_division_development_address(
+            let mut child_a_development_address = state.derive_division_development_address(
                 parent_idx,
                 mode_index,
                 child_a_mode_idx,
                 1,
             );
-            let child_b_development_address = state.derive_division_development_address(
+            let mut child_b_development_address = state.derive_division_development_address(
                 parent_idx,
                 mode_index,
                 child_b_mode_idx,
                 2,
             );
+            let initial_mode_idx = genome.initial_mode.max(0) as usize;
+            if mode_index != initial_mode_idx && child_a_mode_idx == initial_mode_idx {
+                child_a_development_address.organism_cell_id = 1;
+            }
+            if mode_index != initial_mode_idx && child_b_mode_idx == initial_mode_idx {
+                child_b_development_address.organism_cell_id = 1;
+            }
 
             division_data_list.push(DivisionData {
                 parent_idx,
@@ -1273,14 +1288,19 @@ pub fn division_step_multi(
                 data.parent_radius,
             );
 
-            // Create adhesion between children if parent_make_adhesion is enabled
-            // AND both children have keep_adhesion set.
+            // Create sibling adhesion between children if parent_make_adhesion is enabled.
+            // Normal keep_adhesion flags only affect inheritance; after-split keep flags
+            // also suppress the sibling bond when the max-splits transition fires.
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
-                // parent_make_adhesion always creates a sibling bond, regardless of keep_adhesion
-                // (matches GPU line 588: only checks make_adhesion flag, not keep flags)
-                if mode.parent_make_adhesion {
+                let will_reach_max_splits =
+                    mode.max_splits >= 0 && (data.parent_split_count + 1) >= mode.max_splits;
+                let after_split_sibling_allowed = !will_reach_max_splits
+                    || (mode.child_a_after_split_keep_adhesion
+                        && mode.child_b_after_split_keep_adhesion);
+
+                if mode.parent_make_adhesion && after_split_sibling_allowed {
                     // Use the full world-space spawn direction (parent_genome_orientation * split_rotation),
                     // then transform into each child's genome-local space - matching division_step exactly.
                     let pitch = mode.parent_split_direction.x.to_radians();

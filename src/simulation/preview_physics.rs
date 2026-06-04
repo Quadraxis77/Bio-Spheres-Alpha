@@ -67,6 +67,77 @@ fn are_cells_in_same_organism(state: &CanonicalState, cell_a: usize, cell_b: usi
     false
 }
 
+fn find_scaffold_connection_between(
+    state: &CanonicalState,
+    cell_a: usize,
+    cell_b: usize,
+) -> Option<usize> {
+    if cell_a >= state.adhesion_manager.cell_adhesion_indices.len() {
+        return None;
+    }
+
+    let connections = &state.adhesion_connections;
+    for &conn_idx in &state.adhesion_manager.cell_adhesion_indices[cell_a] {
+        if conn_idx < 0 {
+            continue;
+        }
+        let conn_idx = conn_idx as usize;
+        if conn_idx >= connections.active_count || connections.is_active[conn_idx] == 0 {
+            continue;
+        }
+        if (connections.bond_flags[conn_idx] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) == 0 {
+            continue;
+        }
+
+        let ca = connections.cell_a_index[conn_idx];
+        let cb = connections.cell_b_index[conn_idx];
+        if (ca == cell_a && cb == cell_b) || (ca == cell_b && cb == cell_a) {
+            return Some(conn_idx);
+        }
+    }
+
+    None
+}
+
+fn create_or_update_scaffold_bond(
+    state: &mut CanonicalState,
+    ca: usize,
+    cb: usize,
+    rule_id: u32,
+    rest_length: f32,
+    current_time: f32,
+) {
+    use crate::cell::adhesion::BOND_FLAG_BARRIER_BALL;
+
+    if let Some(conn_idx) = find_scaffold_connection_between(state, ca, cb) {
+        state.adhesion_connections.scaffold_rule_id[conn_idx] = rule_id;
+        state.adhesion_connections.rest_length_overrides[conn_idx] = rest_length.max(0.001);
+        return;
+    }
+
+    if state
+        .adhesion_manager
+        .find_connection_between(&state.adhesion_connections, ca, cb)
+        .is_some()
+    {
+        return;
+    }
+
+    let mode_index = state.mode_indices[ca];
+    let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
+        &mut state.adhesion_connections,
+        ca,
+        cb,
+        mode_index,
+        current_time,
+        BOND_FLAG_BARRIER_BALL,
+        rest_length,
+    );
+    if let Some(idx) = conn_idx {
+        state.adhesion_connections.scaffold_rule_id[idx] = rule_id;
+    }
+}
+
 /// Sync developmental organism scopes to current developmental adhesion components.
 ///
 /// Structural barrier-ball bonds (glueocyte/scaffold mechanics) do not define
@@ -135,8 +206,7 @@ pub fn sync_development_organism_ids_from_adhesions(state: &mut CanonicalState) 
 
 /// Instantiate and maintain scaffold bonds defined by a genome's `scaffold_rules`.
 ///
-/// - Creates barrier-ball bonds for all same-organism cell pairs that match a rule
-///   and are within `rule.max_formation_range`, if no bond yet exists.
+/// - Creates barrier-ball bonds for all same-organism cell pairs that match a rule.
 /// - Updates `rest_length_overrides` when they drift from the rule.
 /// - Removes bonds whose `scaffold_rule_id` no longer corresponds to any rule.
 ///
@@ -147,7 +217,6 @@ pub fn resolve_scaffold_rules(
     genome_idx: usize,
     current_time: f32,
 ) {
-    use crate::cell::adhesion::BOND_FLAG_BARRIER_BALL;
     use std::collections::HashSet;
 
     let live_rule_ids: HashSet<u32> = genome.scaffold_rules.iter().map(|r| r.id).collect();
@@ -175,54 +244,47 @@ pub fn resolve_scaffold_rules(
         let is_structural = matches!(
             &rule.endpoint_a,
             crate::genome::CellAddressSelector::ByLineageHashOrMode { .. }
+                | crate::genome::CellAddressSelector::ByOrganismCellId(_)
         ) || matches!(
             &rule.endpoint_b,
             crate::genome::CellAddressSelector::ByLineageHashOrMode { .. }
+                | crate::genome::CellAddressSelector::ByOrganismCellId(_)
         );
 
         if is_structural {
             // Specific bond: exactly ONE bond per organism instance.
             // Find the living lineage-hash representative for each endpoint within
             // each organism, then create/maintain that single bond.
-            let organism_ids: HashSet<u32> = (0..state.cell_count)
+            let mut organism_ids: Vec<u32> = (0..state.cell_count)
                 .filter(|&i| state.genome_ids[i] == genome_idx && state.organism_ids[i] != 0)
                 .map(|i| state.organism_ids[i])
                 .collect();
+            organism_ids.sort_unstable();
+            organism_ids.dedup();
 
             for org_id in organism_ids {
-                let Some(ca) = find_structural_match_in_org(state, genome_idx, org_id, &rule.endpoint_a) else { continue };
-                let Some(cb) = find_structural_match_in_org(state, genome_idx, org_id, &rule.endpoint_b) else { continue };
+                let Some(ca) =
+                    find_structural_match_in_org(state, genome_idx, org_id, &rule.endpoint_a)
+                else {
+                    continue;
+                };
+                let Some(cb) =
+                    find_structural_match_in_org(state, genome_idx, org_id, &rule.endpoint_b)
+                else {
+                    continue;
+                };
                 if ca == cb {
                     continue;
                 }
 
-                if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
-                    &state.adhesion_connections,
+                create_or_update_scaffold_bond(
+                    state,
                     ca,
                     cb,
-                ) {
-                    let flags = state.adhesion_connections.bond_flags[conn_idx];
-                    if flags & BOND_FLAG_BARRIER_BALL != 0
-                        && state.adhesion_connections.scaffold_rule_id[conn_idx] == rule.id
-                    {
-                        state.adhesion_connections.rest_length_overrides[conn_idx] =
-                            rule.rest_length.max(0.001);
-                    }
-                } else {
-                    let mode_index = state.mode_indices[ca];
-                    let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
-                        &mut state.adhesion_connections,
-                        ca,
-                        cb,
-                        mode_index,
-                        current_time,
-                        BOND_FLAG_BARRIER_BALL,
-                        rule.rest_length,
-                    );
-                    if let Some(idx) = conn_idx {
-                        state.adhesion_connections.scaffold_rule_id[idx] = rule.id;
-                    }
-                }
+                    rule.id,
+                    rule.rest_length,
+                    current_time,
+                );
             }
         } else {
             // ── Pattern rule (ByModeIndex etc.): nearest-neighbour per source, both passes ──
@@ -239,6 +301,52 @@ pub fn resolve_scaffold_rules(
                 })
                 .collect();
 
+            if rule.endpoint_a == rule.endpoint_b {
+                let mut organism_ids: Vec<u32> =
+                    cells_a.iter().map(|&i| state.organism_ids[i]).collect();
+                organism_ids.sort_unstable();
+                organism_ids.dedup();
+
+                for org_id in organism_ids {
+                    if org_id == 0 {
+                        continue;
+                    }
+                    let mut cells: Vec<usize> = cells_a
+                        .iter()
+                        .copied()
+                        .filter(|&i| state.organism_ids[i] == org_id)
+                        .collect();
+                    if cells.len() < 2 {
+                        continue;
+                    }
+                    cells.sort_by_key(|&i| {
+                        (
+                            state.organism_cell_ids[i],
+                            state.lineage_depths[i],
+                            state.cell_ids[i],
+                            i,
+                        )
+                    });
+
+                    for idx in 0..cells.len() {
+                        let ca = cells[idx];
+                        let cb = cells[(idx + 1) % cells.len()];
+                        if ca == cb {
+                            continue;
+                        }
+                        create_or_update_scaffold_bond(
+                            state,
+                            ca,
+                            cb,
+                            rule.id,
+                            rule.rest_length,
+                            current_time,
+                        );
+                    }
+                }
+                continue;
+            }
+
             for pass in 0..2u8 {
                 let (sources, targets) = if pass == 0 {
                     (&cells_a, &cells_b)
@@ -252,40 +360,30 @@ pub fn resolve_scaffold_rules(
                         .copied()
                         .filter(|&cb| cb != ca && state.organism_ids[ca] == state.organism_ids[cb])
                         .min_by(|&cb1, &cb2| {
-                            let d1 = state.positions[ca].distance_squared(state.positions[cb1]);
-                            let d2 = state.positions[ca].distance_squared(state.positions[cb2]);
-                            d1.partial_cmp(&d2).unwrap_or(std::cmp::Ordering::Equal)
+                            let preferred_delta = rule.preferred_generation_delta.unsigned_abs();
+                            let generation_error = |cb: usize| {
+                                state.lineage_depths[ca]
+                                    .abs_diff(state.lineage_depths[cb])
+                                    .abs_diff(preferred_delta)
+                            };
+                            generation_error(cb1)
+                                .cmp(&generation_error(cb2))
+                                .then_with(|| {
+                                    state.organism_cell_ids[cb1].cmp(&state.organism_cell_ids[cb2])
+                                })
+                                .then_with(|| cb1.cmp(&cb2))
                         });
 
                     let Some(cb) = best_cb else { continue };
 
-                    if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
-                        &state.adhesion_connections,
+                    create_or_update_scaffold_bond(
+                        state,
                         ca,
                         cb,
-                    ) {
-                        let flags = state.adhesion_connections.bond_flags[conn_idx];
-                        if flags & BOND_FLAG_BARRIER_BALL != 0
-                            && state.adhesion_connections.scaffold_rule_id[conn_idx] == rule.id
-                        {
-                            state.adhesion_connections.rest_length_overrides[conn_idx] =
-                                rule.rest_length.max(0.001);
-                        }
-                    } else {
-                        let mode_index = state.mode_indices[ca];
-                        let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
-                            &mut state.adhesion_connections,
-                            ca,
-                            cb,
-                            mode_index,
-                            current_time,
-                            BOND_FLAG_BARRIER_BALL,
-                            rule.rest_length,
-                        );
-                        if let Some(idx) = conn_idx {
-                            state.adhesion_connections.scaffold_rule_id[idx] = rule.id;
-                        }
-                    }
+                        rule.id,
+                        rule.rest_length,
+                        current_time,
+                    );
                 }
             }
         }
@@ -300,8 +398,8 @@ pub(crate) fn selector_matches(
     match selector {
         crate::genome::CellAddressSelector::AnyCell => true,
         crate::genome::CellAddressSelector::ByModeIndex(m) => state.mode_indices[cell_idx] == *m,
-        crate::genome::CellAddressSelector::ByMorphologyHash(h) => {
-            state.morphology_hashes[cell_idx] == *h
+        crate::genome::CellAddressSelector::ByOrganismCellId(id) => {
+            state.organism_cell_ids[cell_idx] == *id
         }
         crate::genome::CellAddressSelector::ByLineageHash(h) => {
             state.lineage_hashes[cell_idx] == *h
@@ -334,6 +432,17 @@ fn find_structural_match_in_org(
     selector: &crate::genome::CellAddressSelector,
 ) -> Option<usize> {
     use crate::genome::CellAddressSelector;
+    if let CellAddressSelector::ByOrganismCellId(id) = selector {
+        if *id == 0 {
+            return None;
+        }
+        return (0..state.cell_count).find(|&i| {
+            state.genome_ids[i] == genome_idx
+                && state.organism_ids[i] == organism_id
+                && state.organism_cell_ids[i] == *id
+        });
+    }
+
     let CellAddressSelector::ByLineageHashOrMode {
         lineage_hash,
         mode_index,

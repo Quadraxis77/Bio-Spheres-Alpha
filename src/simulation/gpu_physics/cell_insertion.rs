@@ -227,6 +227,10 @@ impl GpuCellInsertion {
                     binding: 20,
                     resource: buffers.parent_lineage_hashes.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 21,
+                    resource: buffers.organism_cell_ids.as_entire_binding(),
+                },
             ],
         });
 

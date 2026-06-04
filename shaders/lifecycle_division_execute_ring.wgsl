@@ -254,6 +254,9 @@ var<storage, read_write> parent_lineage_hashes_out: array<vec2<u32>>;
 @group(2) @binding(43)
 var<storage, read> is_initial_mode: array<u32>;
 
+@group(2) @binding(44)
+var<storage, read_write> organism_cell_ids: array<u32>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -490,6 +493,18 @@ fn derive_development_hash(
         parent_hash.hi ^ (parent_mode >> 8u) ^ (child_mode >> 24u)
     );
     return mix_development_hash(mixed);
+}
+
+fn derive_organism_cell_id(parent_id: u32, branch_slot: u32) -> u32 {
+    if (parent_id <= 0x7FFFFFFFu) {
+        let base = parent_id * 2u;
+        if (branch_slot != 2u || base < 0xFFFFFFFFu) {
+            return base + select(0u, 1u, branch_slot == 2u);
+        }
+    }
+
+    let mixed = mix_development_hash(U64((parent_id << 16u) ^ branch_slot, parent_id >> 16u));
+    return max(mixed.lo, 1u);
 }
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
@@ -763,6 +778,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let parent_development = development_addresses[cell_idx];
     let base_org_id = select(parent_development.x, parent_cell_id, parent_development.x == 0u);
     let parent_lineage_hash = U64(parent_development.y, parent_development.z);
+    let parent_organism_cell_id = max(organism_cell_ids[cell_idx], 1u);
     let parent_lineage_depth = parent_development.w >> 16u;
     let child_lineage_depth = min(parent_lineage_depth + 1u, 0xFFFFu);
     let child_a_lineage_hash = derive_development_hash(
@@ -779,16 +795,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     );
 
     // Allocate both child cell IDs up front so we can derive organism IDs before any writes.
-    // A child whose mode is the genome's initial mode starts a new organism and gets a
-    // fresh organism ID rather than inheriting the parent's.
+    // A non-initial parent that routes into the genome's initial mode starts a new organism.
+    // Initial-mode self-renewal stays in the same organism with deterministic child IDs.
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
     let child_b_id = atomicAdd(&next_cell_id[0], 1u);
-    let child_a_is_new_org = child_a_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_a_mode_idx] != 0u;
-    let child_b_is_new_org = child_b_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_b_mode_idx] != 0u;
+    let parent_is_initial_mode = parent_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[parent_mode_idx] != 0u;
+    let child_a_is_new_org = !parent_is_initial_mode && child_a_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_a_mode_idx] != 0u;
+    let child_b_is_new_org = !parent_is_initial_mode && child_b_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_b_mode_idx] != 0u;
     // child_a uses child_b_id as its new org seed; child_b uses child_b_id+1.
     // These are safe unique values: child_b_id is freshly allocated and no cell has it as org_id.
     let child_a_org_id = select(base_org_id, child_b_id, child_a_is_new_org);
     let child_b_org_id = select(base_org_id, child_b_id + 1u, child_b_is_new_org);
+    let child_a_organism_cell_id = select(derive_organism_cell_id(parent_organism_cell_id, 1u), 1u, child_a_is_new_org);
+    let child_b_organism_cell_id = select(derive_organism_cell_id(parent_organism_cell_id, 2u), 1u, child_b_is_new_org);
 
     // === Create Child A (overwrites parent slot) ===
     let parent_velocity = velocities_in[cell_idx];
@@ -796,6 +815,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     velocities_out[cell_idx] = vec4<f32>(parent_velocity.xyz, 0.0);
 
     cell_ids[cell_idx] = child_a_id;
+    organism_cell_ids[cell_idx] = child_a_organism_cell_id;
 
     // Physics rotation = genome rotation chain (no random perturbation for determinism)
     rotations_out[cell_idx] = child_a_rotation;
@@ -858,6 +878,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     velocities_out[child_b_slot] = vec4<f32>(parent_velocity.xyz, 0.0);
 
     cell_ids[child_b_slot] = child_b_id;
+    organism_cell_ids[child_b_slot] = child_b_organism_cell_id;
 
     // Physics rotation = genome rotation chain (no random perturbation for determinism)
     rotations_out[child_b_slot] = child_b_rotation;
@@ -918,8 +939,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var sibling_adhesion_slot: u32 = 0xFFFFFFFFu;
     
     // === Create sibling adhesion if parent_make_adhesion is enabled ===
+    // Normal keep_adhesion flags only affect inheritance; after-split keep flags
+    // also suppress the sibling bond when the max-splits transition fires.
     let make_adhesion = parent_make_adhesion_flags[parent_mode_idx];
-    if (make_adhesion == 1u) {
+    let after_split_sibling_allowed = !will_reach_max_splits
+        || (
+            child_a_after_split_keep_adhesion_flags[parent_mode_idx] == 1u
+            && child_b_after_split_keep_adhesion_flags[parent_mode_idx] == 1u
+        );
+    if (make_adhesion == 1u && after_split_sibling_allowed) {
         let adhesion_id = allocate_adhesion_slot();
         if (adhesion_id != 0xFFFFFFFFu) {
             // Anchor directions in each child's LOCAL space (XPBD approach)
@@ -993,7 +1021,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         child_b_after_split_keep_adhesion_flags[parent_mode_idx] == 1u,
         will_reach_max_splits
     );
-    // but always preserve the sibling adhesion (if parent_make_adhesion is set).
+    // but always preserve the sibling adhesion if one was created.
     // Also clear child_b's stale indices and rebuild with just the sibling bond.
     if (!child_a_keep && !child_b_keep) {
         // Clear child_a (parent slot): deactivate old inherited connections, skip sibling
@@ -1008,7 +1036,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         }
         // Clear child_b's stale old indices and repopulate with just the sibling bond.
-        // parent_make_adhesion creates the sibling regardless of keep_adhesion settings.
+        // parent_make_adhesion creates the sibling on normal splits; after-split keep
+        // flags can suppress it on the max-splits transition.
         let clear_base_b = child_b_slot * MAX_ADHESIONS_PER_CELL;
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
             atomicStore(&cell_adhesion_indices[clear_base_b + i], -1);
