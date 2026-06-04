@@ -127,6 +127,7 @@ var<storage, read> muscle_contraction: array<f32>;
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
+const SCAFFOLD_STIFFNESS: f32 = 5000.0;
 
 fn quat_multiply(q1: vec4<f32>, q2: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
@@ -243,10 +244,11 @@ fn compute_substep_forces(
 
     let adhesion_dir = delta_pos / dist;
     let rest_length_override = bitcast<f32>(connection._pad);
-    let rest_length = select(settings.rest_length, rest_length_override, rest_length_override > 0.0);
+    let is_barrier_ball = (connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u;
+    let rest_length = select(settings.rest_length, rest_length_override, is_barrier_ball && rest_length_override > 0.0);
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
     if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
-        let spring = (dist - effective_rest_length) * settings.linear_spring_stiffness;
+        let spring = (dist - effective_rest_length) * SCAFFOLD_STIFFNESS;
         let rel_vel = vel_b - vel_a;
         let damping = settings.linear_spring_damping * dot(rel_vel, adhesion_dir);
         let ball_force = adhesion_dir * (spring + damping);

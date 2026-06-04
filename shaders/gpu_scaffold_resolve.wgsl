@@ -68,6 +68,7 @@ struct ScaffoldParams {
 @group(1) @binding(1) var<storage, read> genome_ids: array<u32>;
 @group(1) @binding(2) var<storage, read> development_addresses: array<vec4<u32>>;
 @group(1) @binding(3) var<storage, read> death_flags: array<u32>;
+@group(1) @binding(4) var<storage, read> parent_lineage_hashes: array<vec2<u32>>;
 
 @group(2) @binding(0) var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 @group(2) @binding(1) var<storage, read_write> cell_adhesion_indices: array<atomic<i32>>;
@@ -158,6 +159,84 @@ fn is_first_structural_match(cell_idx: u32, live_slots: u32, rule: ScaffoldRule,
     return true;
 }
 
+// Follow the preferred-branch lineage chain from `root_hash_lo/hi` and return the
+// index of the current living tip cell, or 0xFFFFFFFF if not found.
+//
+// Algorithm mirrors the CPU `find_structural_match_in_org` BFS:
+//   1. If a cell with the exact lineage hash is alive → it IS the tip (rank 3).
+//   2. Otherwise find the living child whose parent_lineage_hash == current_hash
+//      and whose branch_slot == preferred_branch_slot.  Follow it forward one level.
+//   3. If no preferred child, try any child (fallback).
+//   Repeat up to MAX_GENERATIONS times.
+// Mirrors CPU find_structural_match_in_org:
+//   1. Exact lineage hash match within organism.
+//   2. BFS through parent_lineage_hashes following preferred_branch_slot.
+//   3. Mode-only fallback (fallback_mode = 0xFFFFFFFF disables it).
+fn find_preferred_chain_tip(
+    live_slots: u32,
+    genome_id: u32,
+    organism_id: u32,
+    root_hash_lo: u32,
+    root_hash_hi: u32,
+    preferred_branch_slot: u32,
+    fallback_mode: u32,
+) -> u32 {
+    var cur_lo = root_hash_lo;
+    var cur_hi = root_hash_hi;
+
+    for (var gen = 0u; gen < 24u; gen++) {
+        // Step 1: living cell with exact lineage hash.
+        for (var i = 0u; i < live_slots; i++) {
+            if (death_flags[i] != 0u) { continue; }
+            if (genome_ids[i] != genome_id) { continue; }
+            if (development_addresses[i].x != organism_id) { continue; }
+            let dev = development_addresses[i];
+            if (dev.y == cur_lo && dev.z == cur_hi) {
+                return i;
+            }
+        }
+
+        // Step 2: cell with this hash has divided — follow preferred child.
+        var preferred_child = 0xFFFFFFFFu;
+        var any_child = 0xFFFFFFFFu;
+        for (var i = 0u; i < live_slots; i++) {
+            if (death_flags[i] != 0u) { continue; }
+            if (genome_ids[i] != genome_id) { continue; }
+            if (development_addresses[i].x != organism_id) { continue; }
+            let ph = parent_lineage_hashes[i];
+            if (ph.x != cur_lo || ph.y != cur_hi) { continue; }
+            let cell_branch = development_addresses[i].w & 0xFFFFu;
+            if (cell_branch == preferred_branch_slot) {
+                preferred_child = i;
+                break;
+            }
+            if (any_child == 0xFFFFFFFFu) {
+                any_child = i;
+            }
+        }
+
+        let next_child = select(any_child, preferred_child, preferred_child != 0xFFFFFFFFu);
+        if (next_child == 0xFFFFFFFFu) {
+            break;
+        }
+        let next_dev = development_addresses[next_child];
+        cur_lo = next_dev.y;
+        cur_hi = next_dev.z;
+    }
+
+    // Step 3: mode-only fallback — mirrors CPU step 3.
+    if (fallback_mode != 0xFFFFFFFFu) {
+        for (var i = 0u; i < live_slots; i++) {
+            if (death_flags[i] != 0u) { continue; }
+            if (genome_ids[i] != genome_id) { continue; }
+            if (development_addresses[i].x != organism_id) { continue; }
+            if (mode_indices[i] == fallback_mode) { return i; }
+        }
+    }
+
+    return 0xFFFFFFFFu;
+}
+
 fn find_best_structural_match(live_slots: u32, rule: ScaffoldRule, kind: u32, mode_idx: u32, hash_lo: u32, hash_hi: u32, branch_slot: u32, organism_id: u32, exclude: u32) -> u32 {
     var best = 0xFFFFFFFFu;
     var best_rank = 0u;
@@ -182,7 +261,11 @@ fn find_best_structural_match(live_slots: u32, rule: ScaffoldRule, kind: u32, mo
     return best;
 }
 
-fn existing_connection(a: u32, b: u32) -> u32 {
+// Returns the slot of an existing SCAFFOLD (barrier-ball) bond between a and b,
+// or 0xFFFFFFFF if none exists. Deliberately ignores normal (non-barrier-ball)
+// bonds so that scaffold bonds are always created alongside them rather than
+// being suppressed by the early-return.
+fn existing_scaffold_connection(a: u32, b: u32) -> u32 {
     let base = a * MAX_ADHESIONS_PER_CELL;
     for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
         let signed_idx = atomicLoad(&cell_adhesion_indices[base + i]);
@@ -191,6 +274,7 @@ fn existing_connection(a: u32, b: u32) -> u32 {
         if (idx >= arrayLength(&adhesion_connections)) { continue; }
         let conn = adhesion_connections[idx];
         if (conn.is_active == 0u) { continue; }
+        if ((conn.bond_flags & BOND_FLAG_BARRIER_BALL) == 0u) { continue; }
         if ((conn.cell_a_index == a && conn.cell_b_index == b)
             || (conn.cell_a_index == b && conn.cell_b_index == a)) {
             return idx;
@@ -269,24 +353,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let is_structural_rule = rule.endpoint_a_kind == SELECTOR_LINEAGE_OR_MODE || rule.endpoint_b_kind == SELECTOR_LINEAGE_OR_MODE;
+    // Structural = ByLineageHashOrMode on either endpoint (matches CPU is_structural check).
+    // ByLineageHash falls through to the pattern path exactly like the CPU does.
+    let is_structural_rule = rule.endpoint_a_kind == SELECTOR_LINEAGE_OR_MODE
+        || rule.endpoint_b_kind == SELECTOR_LINEAGE_OR_MODE;
     if (is_structural_rule && scaffold_params.pass_index == 1u) {
         return;
     }
 
     if (is_structural_rule) {
-        if (!is_first_structural_match(source, live_slots, rule, source_kind, source_mode, source_hash_lo, source_hash_hi, source_branch_slot, source_org)) {
+        // CPU find_structural_match_in_org returns None for non-ByLineageHashOrMode selectors,
+        // so if either endpoint is not LINEAGE_OR_MODE no bond can form.
+        if (source_kind != SELECTOR_LINEAGE_OR_MODE || target_kind != SELECTOR_LINEAGE_OR_MODE) {
             return;
         }
-        let structural_target = find_best_structural_match(live_slots, rule, target_kind, target_mode, target_hash_lo, target_hash_hi, target_branch_slot, source_org, source);
-        if (structural_target == 0xFFFFFFFFu) {
+        // source_mode / target_mode carry the fallback mode index for step 3.
+        let tip_a = find_preferred_chain_tip(
+            live_slots, rule.genome_id, source_org,
+            source_hash_lo, source_hash_hi, source_branch_slot,
+            source_mode,
+        );
+        if (tip_a != source) {
             return;
         }
-        create_or_update_scaffold_connection(source, structural_target, rule);
+        let tip_b = find_preferred_chain_tip(
+            live_slots, rule.genome_id, source_org,
+            target_hash_lo, target_hash_hi, target_branch_slot,
+            target_mode,
+        );
+        if (tip_b == 0xFFFFFFFFu || tip_b == source) {
+            return;
+        }
+        create_or_update_scaffold_connection(source, tip_b, rule);
         return;
     }
 
+    // Pattern bond: nearest neighbour, no distance cutoff (matches CPU behaviour exactly).
     var best_target = 0xFFFFFFFFu;
+    var best_dist_sq = 3.402823466e+38f;
+    let source_pos = positions[source].xyz;
 
     for (var candidate = 0u; candidate < live_slots; candidate++) {
         if (candidate == source) { continue; }
@@ -296,8 +401,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (!selector_matches(candidate, target_kind, target_mode, target_hash_lo, target_hash_hi, target_branch_slot)) {
             continue;
         }
-        best_target = candidate;
-        break;
+        let diff = positions[candidate].xyz - source_pos;
+        let dist_sq = dot(diff, diff);
+        if (dist_sq < best_dist_sq) {
+            best_dist_sq = dist_sq;
+            best_target = candidate;
+        }
     }
 
     if (best_target == 0xFFFFFFFFu) {
@@ -308,12 +417,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 fn create_or_update_scaffold_connection(source: u32, best_target: u32, rule: ScaffoldRule) {
-    let existing = existing_connection(source, best_target);
+    let existing = existing_scaffold_connection(source, best_target);
     if (existing != 0xFFFFFFFFu) {
-        let conn = adhesion_connections[existing];
-        if ((conn.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
-            adhesion_connections[existing]._pad = rule.rest_length_bits;
-        }
+        adhesion_connections[existing]._pad = rule.rest_length_bits;
         return;
     }
 

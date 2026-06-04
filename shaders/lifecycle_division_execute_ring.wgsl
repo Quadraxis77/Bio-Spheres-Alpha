@@ -59,6 +59,7 @@ struct AdhesionConnection {
 };
 
 const PI: f32 = 3.14159265359;
+const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 
 // Physics bind group (group 0)
 @group(0) @binding(0)
@@ -244,6 +245,15 @@ var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
 @group(2) @binding(41)
 var<storage, read_write> development_addresses: array<vec4<u32>>;
 
+// Per-cell parent lineage hash: [parent_hash_lo, parent_hash_hi]. Written at birth, never changed.
+@group(2) @binding(42)
+var<storage, read_write> parent_lineage_hashes_out: array<vec2<u32>>;
+
+// Per-mode flag: 1 if this is the genome's initial mode, 0 otherwise.
+// A child whose mode equals the genome's initial mode begins a new organism.
+@group(2) @binding(43)
+var<storage, read> is_initial_mode: array<u32>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -292,6 +302,16 @@ fn allocate_adhesion_slot() -> u32 {
     }
     // At capacity
     return 0xFFFFFFFFu;
+}
+
+// Return a freed adhesion slot to the free stack so the scaffold can reuse it.
+fn free_adhesion_slot(slot: u32) {
+    let free_pos = atomicAdd(&adhesion_counts[2], 1u);
+    if (free_pos < arrayLength(&free_adhesion_slots)) {
+        free_adhesion_slots[free_pos] = slot;
+    }
+    // Decrement live count (wrapping sub via wrapping add of max u32)
+    atomicAdd(&adhesion_counts[1], 0xFFFFFFFFu);
 }
 
 // Helper functions
@@ -515,6 +535,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let conn = adhesion_connections[adh_idx];
             if (conn.is_active != 0u) {
                 adhesion_connections[adh_idx].is_active = 0u;
+                free_adhesion_slot(adh_idx);
                 // Clear this bond from the other cell's index list
                 let other_cell = select(conn.cell_a_index, conn.cell_b_index, conn.cell_a_index == cell_idx);
                 let other_base = other_cell * MAX_ADHESIONS_PER_CELL;
@@ -740,7 +761,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let parent_development = development_addresses[cell_idx];
-    let parent_organism_id = select(parent_development.x, parent_cell_id, parent_development.x == 0u);
+    let base_org_id = select(parent_development.x, parent_cell_id, parent_development.x == 0u);
     let parent_lineage_hash = U64(parent_development.y, parent_development.z);
     let parent_lineage_depth = parent_development.w >> 16u;
     let child_lineage_depth = min(parent_lineage_depth + 1u, 0xFFFFu);
@@ -757,25 +778,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         2u
     );
 
+    // Allocate both child cell IDs up front so we can derive organism IDs before any writes.
+    // A child whose mode is the genome's initial mode starts a new organism and gets a
+    // fresh organism ID rather than inheriting the parent's.
+    let child_a_id = atomicAdd(&next_cell_id[0], 1u);
+    let child_b_id = atomicAdd(&next_cell_id[0], 1u);
+    let child_a_is_new_org = child_a_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_a_mode_idx] != 0u;
+    let child_b_is_new_org = child_b_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_b_mode_idx] != 0u;
+    // child_a uses child_b_id as its new org seed; child_b uses child_b_id+1.
+    // These are safe unique values: child_b_id is freshly allocated and no cell has it as org_id.
+    let child_a_org_id = select(base_org_id, child_b_id, child_a_is_new_org);
+    let child_b_org_id = select(base_org_id, child_b_id + 1u, child_b_is_new_org);
+
     // === Create Child A (overwrites parent slot) ===
     let parent_velocity = velocities_in[cell_idx];
     positions_out[cell_idx] = vec4<f32>(child_a_pos, child_a_mass);
     velocities_out[cell_idx] = vec4<f32>(parent_velocity.xyz, 0.0);
-    
-    // Assign cell ID first so we can use it for pseudo-random rotation
-    let child_a_id = atomicAdd(&next_cell_id[0], 1u);
+
     cell_ids[cell_idx] = child_a_id;
-    
+
     // Physics rotation = genome rotation chain (no random perturbation for determinism)
     rotations_out[cell_idx] = child_a_rotation;
     genome_orientations[cell_idx] = child_a_genome_orientation;
     development_addresses[cell_idx] = vec4<u32>(
-        parent_organism_id,
+        child_a_org_id,
         child_a_lineage_hash.lo,
         child_a_lineage_hash.hi,
         (child_lineage_depth << 16u) | 1u
     );
-    
+    parent_lineage_hashes_out[cell_idx] = vec2<u32>(parent_lineage_hash.lo, parent_lineage_hash.hi);
+
     birth_times[cell_idx] = params.current_time;
     mode_indices[cell_idx] = child_a_mode_idx;
     
@@ -824,21 +856,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // === Create Child B (in assigned slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_b_mass);
     velocities_out[child_b_slot] = vec4<f32>(parent_velocity.xyz, 0.0);
-    
-    // Assign cell ID first so we can use it for pseudo-random rotation
-    let child_b_id = atomicAdd(&next_cell_id[0], 1u);
+
     cell_ids[child_b_slot] = child_b_id;
-    
+
     // Physics rotation = genome rotation chain (no random perturbation for determinism)
     rotations_out[child_b_slot] = child_b_rotation;
     genome_orientations[child_b_slot] = child_b_genome_orientation;
     development_addresses[child_b_slot] = vec4<u32>(
-        parent_organism_id,
+        child_b_org_id,
         child_b_lineage_hash.lo,
         child_b_lineage_hash.hi,
         (child_lineage_depth << 16u) | 2u
     );
-    
+    parent_lineage_hashes_out[child_b_slot] = vec2<u32>(parent_lineage_hash.lo, parent_lineage_hash.hi);
+
     let child_b_props_0 = mode_properties_v0[child_b_mode_idx];
     let child_b_props_1 = mode_properties_v1[child_b_mode_idx];
     let child_b_props_2 = mode_properties_v2[child_b_mode_idx];
@@ -970,8 +1001,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
             let adh_idx_signed = atomicLoad(&cell_adhesion_indices[clear_base_a + i]);
             if (adh_idx_signed >= 0 && u32(adh_idx_signed) != sibling_adhesion_slot) {
-                // Deactivate old inherited connection (not the sibling)
-                adhesion_connections[u32(adh_idx_signed)].is_active = 0u;
+                let freed = u32(adh_idx_signed);
+                adhesion_connections[freed].is_active = 0u;
+                free_adhesion_slot(freed);
                 atomicStore(&cell_adhesion_indices[clear_base_a + i], -1);
             }
         }
@@ -1086,6 +1118,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         if (!give_to_child_a && !give_to_child_b) {
             adhesion_connections[adh_idx].is_active = 0u;
+            free_adhesion_slot(adh_idx);
             continue;
         }
         

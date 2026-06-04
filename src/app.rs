@@ -4216,7 +4216,7 @@ impl ApplicationHandler for AppState {
                 // wgpu to validate every bind group against that cap, dropping FPS.
                 max_storage_buffers_per_shader_stage: match adapter_info.backend {
                     wgpu::Backend::Metal => 31,
-                    _ => 42,
+                    _ => 64,
                 },
                 // Clamp to what the adapter actually supports - requesting more than the
                 // adapter limit causes request_device to fail (panic on .unwrap()).

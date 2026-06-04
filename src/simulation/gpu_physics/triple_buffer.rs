@@ -313,6 +313,11 @@ pub struct GpuTripleBufferSystem {
     /// Total size: num_modes * 8 bytes
     pub child_mode_indices: wgpu::Buffer,
 
+    /// Per-mode flag: 1 if this mode is the genome's initial mode, 0 otherwise.
+    /// Used by the division shader to assign fresh organism IDs to children that
+    /// restart development at the initial mode (i.e., a new sub-organism is born).
+    pub is_initial_mode: wgpu::Buffer,
+
     /// Parent make adhesion flags buffer (one u32 per mode)
     /// Stores whether each mode allows sibling adhesion creation during division
     pub parent_make_adhesion_flags: wgpu::Buffer,
@@ -480,6 +485,11 @@ pub struct GpuTripleBufferSystem {
     /// Per-cell development address: [organism_id, lineage_hash_lo, lineage_hash_hi, depth_branch].
     /// depth_branch packs lineage_depth in the high 16 bits and branch_slot in the low 16 bits.
     pub development_addresses: wgpu::Buffer,
+
+    /// Per-cell parent lineage hash: [parent_lineage_hash_lo, parent_lineage_hash_hi].
+    /// Set once at birth and never changed. Root cells store 0.
+    /// Used by the scaffold resolver to verify preferred-branch chain membership.
+    pub parent_lineage_hashes: wgpu::Buffer,
 
     /// Indirect dispatch buffer for GPU-driven workgroup counts
     /// Layout: [workgroup_count_x, workgroup_count_y, workgroup_count_z, padding]
@@ -668,6 +678,10 @@ impl GpuTripleBufferSystem {
         let child_mode_indices =
             Self::create_storage_buffer(device, max_modes * 8, "Child Mode Indices");
 
+        // Is-initial-mode flag: one u32 per mode (1 = this is the genome's initial mode)
+        let is_initial_mode =
+            Self::create_storage_buffer(device, max_modes * 4, "Is Initial Mode");
+
         // Parent make adhesion flags: one u32 per mode
         let parent_make_adhesion_flags =
             Self::create_storage_buffer(device, max_modes * 4, "Parent Make Adhesion Flags");
@@ -812,6 +826,13 @@ impl GpuTripleBufferSystem {
             "Development Addresses",
         );
 
+        // 8 bytes per cell: [parent_lineage_hash_lo: u32, parent_lineage_hash_hi: u32]
+        let parent_lineage_hashes = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 8,
+            "Parent Lineage Hashes",
+        );
+
         // Indirect dispatch buffer: 3 x u32 for workgroup counts + padding
         // Used for GPU-driven dispatch that scales with actual cell count
         let indirect_dispatch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -864,6 +885,7 @@ impl GpuTripleBufferSystem {
             genome_mode_data_v3,
             genome_mode_data_v4,
             child_mode_indices,
+            is_initial_mode,
             parent_make_adhesion_flags,
             child_a_keep_adhesion_flags,
             child_b_keep_adhesion_flags,
@@ -901,6 +923,7 @@ impl GpuTripleBufferSystem {
             signal_settings_v4,
             genome_orientations,
             development_addresses,
+            parent_lineage_hashes,
             indirect_dispatch_buffer,
             current_index: AtomicUsize::new(0),
             capacity,
@@ -1315,6 +1338,18 @@ impl GpuTripleBufferSystem {
             })
             .collect();
         queue.write_buffer(&self.development_addresses, 0, bytemuck::cast_slice(&data));
+
+        let parent_data: Vec<[u32; 2]> = (0..state.cell_count)
+            .map(|i| {
+                let ph = state.parent_lineage_hashes[i];
+                [ph as u32, (ph >> 32) as u32]
+            })
+            .collect();
+        queue.write_buffer(
+            &self.parent_lineage_hashes,
+            0,
+            bytemuck::cast_slice(&parent_data),
+        );
     }
 
     pub fn sync_single_development_address(
@@ -1444,6 +1479,7 @@ impl GpuTripleBufferSystem {
         self.genome_mode_data_v4 = Self::create_storage_buffer(device, m16, "Genome Mode Data V4");
 
         self.child_mode_indices = Self::create_storage_buffer(device, m8, "Child Mode Indices");
+        self.is_initial_mode = Self::create_storage_buffer(device, m4, "Is Initial Mode");
         self.parent_make_adhesion_flags =
             Self::create_storage_buffer(device, m4, "Parent Make Adhesion Flags");
         self.child_a_keep_adhesion_flags =
@@ -1548,6 +1584,21 @@ impl GpuTripleBufferSystem {
                 0,
                 bytemuck::cast_slice(&mode_indices),
             );
+        }
+    }
+
+    /// Sync is-initial-mode flags for the division shader.
+    /// Sets 1 for the mode at `genome.initial_mode` index, 0 for all others.
+    pub fn sync_is_initial_mode(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
+        let mut data: Vec<u32> = Vec::new();
+        for genome in genomes {
+            let initial_mode = genome.initial_mode.max(0) as usize;
+            for mode_idx in 0..genome.modes.len() {
+                data.push(if mode_idx == initial_mode { 1u32 } else { 0u32 });
+            }
+        }
+        if !data.is_empty() {
+            queue.write_buffer(&self.is_initial_mode, 0, bytemuck::cast_slice(&data));
         }
     }
 

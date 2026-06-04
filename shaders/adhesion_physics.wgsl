@@ -153,6 +153,7 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
+const SCAFFOLD_STIFFNESS: f32 = 5000.0;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;
@@ -255,15 +256,15 @@ fn compute_adhesion_forces_for_cell(
     
     let adhesion_dir = delta_pos / dist;
     let rest_length_override = bitcast<f32>(connection._pad);
-    let rest_length = select(settings.rest_length, rest_length_override, rest_length_override > 0.0);
+    let is_barrier_ball = (connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u;
+    let rest_length = select(settings.rest_length, rest_length_override, is_barrier_ball && rest_length_override > 0.0);
     
     // Per-cell contraction: each cell's contraction reduces the total rest length by half.
     // One myocyte at full contraction (1.0) shortens the bond by 50%.
     // Two myocytes at full contraction shorten it to zero.
     let effective_rest_length = rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
     if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
-        let settle_factor = clamp(bond_age * 3.3333, 0.0, 1.0);
-        let spring = (dist - effective_rest_length) * settings.linear_spring_stiffness * settle_factor;
+        let spring = (dist - effective_rest_length) * SCAFFOLD_STIFFNESS;
         let rel_vel = vel_b - vel_a;
         let damping = settings.linear_spring_damping * dot(rel_vel, adhesion_dir);
         let ball_force = adhesion_dir * (spring + damping);

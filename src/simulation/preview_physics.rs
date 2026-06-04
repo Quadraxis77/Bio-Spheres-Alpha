@@ -181,43 +181,20 @@ pub fn resolve_scaffold_rules(
         );
 
         if is_structural {
-            // Specific rules repeat through the chosen lineage branches.
-            // Generation alignment is a preference, not a hard gate, so descendant
-            // pairs can still resolve when one side divided sooner than the other.
-            let matches_a = find_structural_matches(state, genome_idx, &rule.endpoint_a);
-            let matches_b = find_structural_matches(state, genome_idx, &rule.endpoint_b);
+            // Specific bond: exactly ONE bond per organism instance.
+            // Find the living lineage-hash representative for each endpoint within
+            // each organism, then create/maintain that single bond.
+            let organism_ids: HashSet<u32> = (0..state.cell_count)
+                .filter(|&i| state.genome_ids[i] == genome_idx && state.organism_ids[i] != 0)
+                .map(|i| state.organism_ids[i])
+                .collect();
 
-            if matches_a.is_empty() || matches_b.is_empty() {
-                continue;
-            }
-
-            let mut used_b: HashSet<usize> = HashSet::new();
-            for a_match in &matches_a {
-                let best_b = matches_b
-                    .iter()
-                    .copied()
-                    .filter(|b_match| {
-                        b_match.cell_idx != a_match.cell_idx
-                            && !used_b.contains(&b_match.cell_idx)
-                            && state.organism_ids[b_match.cell_idx]
-                                == state.organism_ids[a_match.cell_idx]
-                    })
-                    .min_by_key(|b_match| {
-                        let generation_delta =
-                            b_match.lineage_depth as i32 - a_match.lineage_depth as i32;
-                        (
-                            (generation_delta - rule.preferred_generation_delta as i32).abs(),
-                            a_match.generation.abs_diff(b_match.generation),
-                            b_match.generation,
-                            b_match.cell_idx,
-                        )
-                    });
-
-                let Some(b_match) = best_b else { continue };
-                used_b.insert(b_match.cell_idx);
-
-                let ca = a_match.cell_idx;
-                let cb = b_match.cell_idx;
+            for org_id in organism_ids {
+                let Some(ca) = find_structural_match_in_org(state, genome_idx, org_id, &rule.endpoint_a) else { continue };
+                let Some(cb) = find_structural_match_in_org(state, genome_idx, org_id, &rule.endpoint_b) else { continue };
+                if ca == cb {
+                    continue;
+                }
 
                 if let Some(conn_idx) = state.adhesion_manager.find_connection_between(
                     &state.adhesion_connections,
@@ -340,152 +317,20 @@ pub(crate) fn selector_matches(
     }
 }
 
-#[derive(Clone, Copy)]
-struct StructuralMatch {
-    cell_idx: usize,
-    generation: usize,
-    lineage_depth: u16,
-}
-
-/// Find repeated structural matches for a `ByLineageHashOrMode` selector.
+/// Find the single living representative of a `ByLineageHashOrMode` selector
+/// within a specific organism.
 ///
-/// Generation 0 is the original selected cell if it still exists. Later
-/// generations follow the stored preferred branch slot through the division log,
-/// which lets a specific link repeat at the same developmental position in
-/// offspring instead of remaining a single original pair.
-fn find_structural_matches(
+/// Priority:
+///   1. Exact lineage-hash match (the original cell is still alive).
+///   2. BFS through the division log following `preferred_branch_slot` at each
+///      generation — stops at the first still-living descendant on that branch.
+///   3. Mode-only fallback within the organism if the lineage is unresolvable.
+///
+/// Returns exactly one cell index, or `None`.
+fn find_structural_match_in_org(
     state: &CanonicalState,
     genome_idx: usize,
-    selector: &crate::genome::CellAddressSelector,
-) -> Vec<StructuralMatch> {
-    use crate::genome::CellAddressSelector;
-    let CellAddressSelector::ByLineageHashOrMode {
-        lineage_hash,
-        mode_index,
-        preferred_branch_slot,
-    } = selector
-    else {
-        return Vec::new();
-    };
-
-    let mut matches = Vec::new();
-
-    for i in 0..state.cell_count {
-        if state.genome_ids[i] == genome_idx && state.lineage_hashes[i] == *lineage_hash {
-            matches.push(StructuralMatch {
-                cell_idx: i,
-                generation: 0,
-                lineage_depth: state.lineage_depths[i],
-            });
-            break;
-        }
-    }
-
-    let mut parent_to_live: std::collections::HashMap<u64, Vec<usize>> =
-        std::collections::HashMap::new();
-    for i in 0..state.cell_count {
-        if state.genome_ids[i] == genome_idx {
-            parent_to_live
-                .entry(state.parent_lineage_hashes[i])
-                .or_default()
-                .push(i);
-        }
-    }
-
-    let mut frontier: Vec<u64> = vec![*lineage_hash];
-    let mut visited: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    const MAX_GENERATIONS: usize = 24;
-
-    for generation in 1..=MAX_GENERATIONS {
-        if frontier.is_empty() {
-            break;
-        }
-
-        let mut next_frontier: Vec<u64> = Vec::new();
-        let mut preferred_results: Vec<usize> = Vec::new();
-        let mut fallback_results: Vec<usize> = Vec::new();
-
-        for ancestor_hash in frontier.drain(..) {
-            if !visited.insert(ancestor_hash) {
-                continue;
-            }
-
-            if let Some(children) = parent_to_live.get(&ancestor_hash) {
-                for &ci in children {
-                    if state.lineage_branch_slots[ci] == *preferred_branch_slot {
-                        preferred_results.push(ci);
-                    } else {
-                        fallback_results.push(ci);
-                    }
-                }
-            }
-
-            if let Some(&(child_a_hash, child_b_hash)) = state.division_log.get(&ancestor_hash) {
-                let preferred_hash = if *preferred_branch_slot == 2 {
-                    child_b_hash
-                } else {
-                    child_a_hash
-                };
-                let fallback_hash = if *preferred_branch_slot == 2 {
-                    child_a_hash
-                } else {
-                    child_b_hash
-                };
-                next_frontier.push(preferred_hash);
-                if preferred_results.is_empty() {
-                    next_frontier.push(fallback_hash);
-                }
-            }
-        }
-
-        let generation_results = if preferred_results.is_empty() {
-            fallback_results
-        } else {
-            preferred_results
-        };
-
-        for cell_idx in generation_results {
-            matches.push(StructuralMatch {
-                cell_idx,
-                generation,
-                lineage_depth: state.lineage_depths[cell_idx],
-            });
-            next_frontier.push(state.lineage_hashes[cell_idx]);
-        }
-
-        frontier = next_frontier;
-    }
-
-    if matches.is_empty() {
-        matches.extend((0..state.cell_count).filter_map(|i| {
-            if state.genome_ids[i] == genome_idx && state.mode_indices[i] == *mode_index {
-                Some(StructuralMatch {
-                    cell_idx: i,
-                    generation: 0,
-                    lineage_depth: state.lineage_depths[i],
-                })
-            } else {
-                None
-            }
-        }));
-    }
-
-    matches
-}
-
-/// Find the single best structural match for a `ByLineageHashOrMode` selector.
-///
-/// 1. Exact lineage hash — unique cell, returned immediately.
-/// 2. Division-log BFS — follow `preferred_branch_slot` through the recorded division tree,
-///    visiting the child that matches the stored branch slot at each generation. This uses
-///    the genome's actual structural pattern (who divides into whom) rather than guessing
-///    by position or mode alone.
-/// 3. Mode fallback — if the lineage is completely untraceable (orphaned rule), find
-///    the single nearest mode-matching cell to the organism's centroid as a last resort.
-#[allow(dead_code)]
-fn find_structural_match(
-    state: &CanonicalState,
-    genome_idx: usize,
+    organism_id: u32,
     selector: &crate::genome::CellAddressSelector,
 ) -> Option<usize> {
     use crate::genome::CellAddressSelector;
@@ -498,22 +343,21 @@ fn find_structural_match(
         return None;
     };
 
-    // 1. Exact lineage hash match.
+    // 1. Exact lineage hash within this organism.
     for i in 0..state.cell_count {
-        if state.genome_ids[i] == genome_idx && state.lineage_hashes[i] == *lineage_hash {
+        if state.genome_ids[i] == genome_idx
+            && state.organism_ids[i] == organism_id
+            && state.lineage_hashes[i] == *lineage_hash
+        {
             return Some(i);
         }
     }
 
-    // 2. Division-log BFS.
-    //
-    // Build a reverse lookup: parent_hash → [child cell indices currently alive].
-    // Also collect all parent hashes that appear in the state so we can detect
-    // intermediate "dead" ancestors that divided further.
+    // 2. BFS through the division log following the preferred branch slot.
     let mut parent_to_live: std::collections::HashMap<u64, Vec<usize>> =
         std::collections::HashMap::new();
     for i in 0..state.cell_count {
-        if state.genome_ids[i] == genome_idx {
+        if state.genome_ids[i] == genome_idx && state.organism_ids[i] == organism_id {
             parent_to_live
                 .entry(state.parent_lineage_hashes[i])
                 .or_default()
@@ -521,8 +365,6 @@ fn find_structural_match(
         }
     }
 
-    // Trace from the original hash following the preferred branch at each generation.
-    // `frontier` holds the hashes of ancestors whose live children we haven't found yet.
     let mut frontier: Vec<u64> = vec![*lineage_hash];
     let mut visited: std::collections::HashSet<u64> = std::collections::HashSet::new();
     const MAX_GENERATIONS: usize = 24;
@@ -540,38 +382,33 @@ fn find_structural_match(
                 continue;
             }
             if let Some(children) = parent_to_live.get(&ancestor_hash) {
-                // Found live cells whose parent was this ancestor.
                 for &ci in children {
                     if state.lineage_branch_slots[ci] == *preferred_branch_slot {
                         preferred_result = Some(ci);
                     } else if any_result.is_none() {
                         any_result = Some(ci);
                     }
-                    // The child itself may have divided; add its hash to the next frontier
-                    // so we can go deeper if we don't return here.
                     next_frontier.push(state.lineage_hashes[ci]);
                 }
             }
-            // Also push the children from the division log for this ancestor so we can
-            // trace through ancestors that divided away and have no live direct children.
             if let Some(&(child_a_hash, child_b_hash)) = state.division_log.get(&ancestor_hash) {
                 next_frontier.push(child_a_hash);
                 next_frontier.push(child_b_hash);
             }
         }
 
-        if preferred_result.is_some() {
-            return preferred_result;
-        }
-        if any_result.is_some() {
-            return any_result;
+        if let Some(result) = preferred_result.or(any_result) {
+            return Some(result);
         }
         frontier = next_frontier;
     }
 
-    // 3. Mode fallback — rule has drifted completely off-lineage; pick any mode match.
-    (0..state.cell_count)
-        .find(|&i| state.genome_ids[i] == genome_idx && state.mode_indices[i] == *mode_index)
+    // 3. Mode-only fallback within this organism.
+    (0..state.cell_count).find(|&i| {
+        state.genome_ids[i] == genome_idx
+            && state.organism_ids[i] == organism_id
+            && state.mode_indices[i] == *mode_index
+    })
 }
 
 /// Detect collisions using the spatial grid

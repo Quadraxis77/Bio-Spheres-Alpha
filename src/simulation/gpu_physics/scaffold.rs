@@ -67,6 +67,7 @@ impl GpuScaffoldSystem {
                 buffer_entry(1, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(2, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(3, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(4, true, true, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let adhesion_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -229,6 +230,10 @@ impl GpuScaffoldSystem {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.parent_lineage_hashes.as_entire_binding(),
                 },
             ],
         });

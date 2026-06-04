@@ -144,7 +144,7 @@ fn vs_main(
     
     var sig_color: vec4<f32>;
     if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
-        sig_color = vec4<f32>(0.0, 0.0, 0.0, 0.95);
+        sig_color = vec4<f32>(1.0, 1.0, 1.0, 1.0); // White outline
     } else if (signal_flowed_through) {
         sig_color = vec4<f32>(1.0, 1.0, 0.0, 1.0); // Bright yellow
     } else {
@@ -179,7 +179,7 @@ fn vs_main(
             seg_start = midpoint;
             seg_end = pos_b;
         }
-        zone_col = vec4<f32>(0.0, 0.0, 0.0, 0.95);
+        zone_col = vec4<f32>(1.0, 0.5, 0.0, 1.0); // Orange
     } else if (half_seg == 0u) {
         seg_start = pos_a;
         seg_end = midpoint;

@@ -2632,6 +2632,10 @@ impl GpuScene {
             global_start_index,
         );
 
+        // Update is-initial-mode flags for this genome (full re-sync; buffer is small)
+        self.gpu_triple_buffers
+            .sync_is_initial_mode(queue, &self.genomes);
+
         // Update parent_make_adhesion flags for this genome's modes only
         self.incremental_sync_parent_make_adhesion_flags(
             queue,
@@ -3017,6 +3021,10 @@ impl GpuScene {
 
         self.adhesion_buffers
             .sync_adhesion_settings(queue, &self.genomes);
+
+        // Sync is-initial-mode flags so the division shader can assign fresh organism IDs
+        self.gpu_triple_buffers
+            .sync_is_initial_mode(queue, &self.genomes);
 
         // Sync parent_make_adhesion_flags to triple buffer system
         self.gpu_triple_buffers

@@ -1788,6 +1788,14 @@ impl GpuPhysicsPipelines {
                     binding: 41,
                     resource: buffers.development_addresses.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 42,
+                    resource: buffers.parent_lineage_hashes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 43,
+                    resource: buffers.is_initial_mode.as_entire_binding(),
+                },
             ],
         })
     }
@@ -3814,6 +3822,28 @@ impl GpuPhysicsPipelines {
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 42: Parent lineage hash buffer, written at birth and never changed.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 42,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 43: Is-initial-mode flag per mode (read-only, 1 = genome's initial mode).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 43,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -5982,6 +6012,17 @@ impl GpuPhysicsPipelines {
                 // Binding 19: Development address [organism_id, lineage_hash_lo, lineage_hash_hi, depth_branch]
                 wgpu::BindGroupLayoutEntry {
                     binding: 19,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 20: Parent lineage hash [parent_hash_lo, parent_hash_hi] — written at birth
+                wgpu::BindGroupLayoutEntry {
+                    binding: 20,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
