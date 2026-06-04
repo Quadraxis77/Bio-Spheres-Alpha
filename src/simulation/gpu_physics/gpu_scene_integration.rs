@@ -336,7 +336,7 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, position_update_rotations_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.position_update_force_accum, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.position_update_spatial_grid, &[]);
-        // Water buffers are now part of bind group 2 (position_update_force_accum)
+        compute_pass.set_bind_group(4, &cached_bind_groups.position_update_grip, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 6.5: Cave collision (if enabled) - corrects positions using SDF
@@ -712,6 +712,7 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_bind_group(1, position_update_rotations_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.position_update_force_accum, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.position_update_spatial_grid, &[]);
+        compute_pass.set_bind_group(4, &cached_bind_groups.position_update_grip, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 6.5: Cave collision (if enabled)

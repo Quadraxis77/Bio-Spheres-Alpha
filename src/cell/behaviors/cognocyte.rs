@@ -66,9 +66,20 @@ pub const OP_AND: i32 = 10;
 pub const OP_OR: i32 = 11;
 pub const OP_NOT: i32 = 12;
 pub const OP_SELECT: i32 = 13;
+/// Ignores input channels. Emits `max(0, sin(2π·rate·t + 2π·phase))` — a half-rectified
+/// sine wave driven by simulation time. Rate and phase come from the mode's
+/// `cognocyte_oscillator_rate` and `cognocyte_oscillator_phase` fields.
+/// Two cells at phase 0.0 and 0.5 are fully complementary for left/right gating.
+pub const OP_OSCILLATE: i32 = 14;
+
+/// Steps the emission hop-reach from 1 up to `step_count` over one cycle, then resets.
+/// Cells at hop k first receive the signal during step k of the cycle, creating a
+/// natural phase gradient along the chain without per-cell phase settings.
+/// Reuses rate, phase, and strength fields; uses `step_count` for the step count.
+pub const OP_HOPS_OSCILLATE: i32 = 15;
 
 /// Number of defined operations.
-pub const OP_COUNT: i32 = 14;
+pub const OP_COUNT: i32 = 16;
 
 /// Tolerance used by the Equal operation.
 const EQUAL_EPSILON: f32 = 1e-4;
@@ -174,6 +185,8 @@ pub fn op_name(op: i32) -> &'static str {
         OP_OR => "OR",
         OP_NOT => "NOT",
         OP_SELECT => "Select",
+        OP_OSCILLATE => "Oscillate",
+        OP_HOPS_OSCILLATE => "Hops Oscillate",
         _ => "Unknown",
     }
 }

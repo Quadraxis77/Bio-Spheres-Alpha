@@ -441,6 +441,11 @@ pub struct GpuTripleBufferSystem {
     /// Each cell only controls its own half of the adhesion bond.
     pub muscle_contraction_buffer: wgpu::Buffer,
 
+    /// Per-cell grip (friction drag) value (one f32 per cell).
+    /// Written by muscle_contraction shader alongside contraction.
+    /// mix(grip_extended, grip_contracted, contraction) — read by position_update for medium friction.
+    pub cell_grip_buffer: wgpu::Buffer,
+
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
     pub glueocyte_boulder_adhesion_flags: wgpu::Buffer,
@@ -793,6 +798,14 @@ impl GpuTripleBufferSystem {
             "Muscle Contraction Buffer",
         );
 
+        // Per-cell grip (friction drag) value, written by muscle_contraction shader alongside contraction.
+        // Zero = no friction contribution. Read by position_update shader.
+        let cell_grip_buffer = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4, // f32 = 4 bytes per cell
+            "Cell Grip Buffer",
+        );
+
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
         let oculocyte_params =
             Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
@@ -917,6 +930,7 @@ impl GpuTripleBufferSystem {
             behavior_flags,
             env_anchor_buffer,
             muscle_contraction_buffer,
+            cell_grip_buffer,
             glueocyte_env_adhesion_flags,
             glueocyte_boulder_adhesion_flags,
             glueocyte_cell_adhesion_flags,
@@ -1988,8 +2002,8 @@ impl GpuTripleBufferSystem {
         }
     }
 
-    /// Sync Devorocyte mode properties for the devorocyte_consume shader.
-    /// v11: [consume_range, consume_rate, 0.0, 0.0]
+    /// Sync Devorocyte mode properties and myocyte grip into v11.
+    /// v11: [consume_range, consume_rate, myocyte_grip_contracted, myocyte_grip_extended]
     pub fn sync_devorocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2001,8 +2015,8 @@ impl GpuTripleBufferSystem {
                 v11.push([
                     mode.devorocyte_consume_range,
                     mode.devorocyte_consume_rate,
-                    0.0,
-                    0.0,
+                    mode.myocyte_grip_contracted,
+                    mode.myocyte_grip_extended,
                 ]);
             }
         }
@@ -2011,7 +2025,7 @@ impl GpuTripleBufferSystem {
         }
     }
 
-    /// Incremental sync of Devorocyte mode properties for a single genome.
+    /// Incremental sync of Devorocyte/myocyte-grip mode properties for a single genome.
     pub fn incremental_sync_devorocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2025,8 +2039,8 @@ impl GpuTripleBufferSystem {
                 [
                     mode.devorocyte_consume_range,
                     mode.devorocyte_consume_rate,
-                    0.0,
-                    0.0,
+                    mode.myocyte_grip_contracted,
+                    mode.myocyte_grip_extended,
                 ]
             })
             .collect();

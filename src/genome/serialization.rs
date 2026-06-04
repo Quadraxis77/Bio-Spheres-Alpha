@@ -344,6 +344,10 @@ pub struct SerializableModeSettings {
     pub myocyte_pulse_rate: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub myocyte_pulse_phase: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_grip_contracted: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub myocyte_grip_extended: Option<f32>,
     // Embryocyte settings
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embryocyte_use_timer: Option<bool>,
@@ -393,6 +397,14 @@ pub struct SerializableModeSettings {
     pub cognocyte_output_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cognocyte_output_hops: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_oscillator_rate: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_oscillator_phase: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_oscillator_strength: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognocyte_oscillator_step_count: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -831,6 +843,8 @@ fn mode_to_serializable(
         myocyte_threshold: diff_f32(mode.myocyte_threshold, default.myocyte_threshold),
         myocyte_pulse_rate: diff_f32(mode.myocyte_pulse_rate, default.myocyte_pulse_rate),
         myocyte_pulse_phase: diff_i32(mode.myocyte_pulse_phase, default.myocyte_pulse_phase),
+        myocyte_grip_contracted: diff_f32(mode.myocyte_grip_contracted, default.myocyte_grip_contracted),
+        myocyte_grip_extended: diff_f32(mode.myocyte_grip_extended, default.myocyte_grip_extended),
         embryocyte_use_timer: diff_bool(mode.embryocyte_use_timer, default.embryocyte_use_timer),
         embryocyte_release_timer: diff_f32(
             mode.embryocyte_release_timer,
@@ -912,6 +926,10 @@ fn mode_to_serializable(
             default.cognocyte_output_channel,
         ),
         cognocyte_output_hops: diff_i32(mode.cognocyte_output_hops, default.cognocyte_output_hops),
+        cognocyte_oscillator_rate: diff_f32(mode.cognocyte_oscillator_rate, default.cognocyte_oscillator_rate),
+        cognocyte_oscillator_phase: diff_f32(mode.cognocyte_oscillator_phase, default.cognocyte_oscillator_phase),
+        cognocyte_oscillator_strength: diff_f32(mode.cognocyte_oscillator_strength, default.cognocyte_oscillator_strength),
+        cognocyte_oscillator_step_count: diff_i32(mode.cognocyte_oscillator_step_count, default.cognocyte_oscillator_step_count),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(
@@ -1022,6 +1040,8 @@ impl SerializableModeSettings {
             || self.myocyte_threshold.is_some()
             || self.myocyte_pulse_rate.is_some()
             || self.myocyte_pulse_phase.is_some()
+            || self.myocyte_grip_contracted.is_some()
+            || self.myocyte_grip_extended.is_some()
             || self.embryocyte_use_timer.is_some()
             || self.embryocyte_release_timer.is_some()
             || self.embryocyte_use_threshold.is_some()
@@ -1046,6 +1066,10 @@ impl SerializableModeSettings {
             || self.cognocyte_input_channel_b.is_some()
             || self.cognocyte_output_channel.is_some()
             || self.cognocyte_output_hops.is_some()
+            || self.cognocyte_oscillator_rate.is_some()
+            || self.cognocyte_oscillator_phase.is_some()
+            || self.cognocyte_oscillator_strength.is_some()
+            || self.cognocyte_oscillator_step_count.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -1382,6 +1406,12 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.myocyte_pulse_phase {
         mode.myocyte_pulse_phase = v;
     }
+    if let Some(v) = ser.myocyte_grip_contracted {
+        mode.myocyte_grip_contracted = v;
+    }
+    if let Some(v) = ser.myocyte_grip_extended {
+        mode.myocyte_grip_extended = v;
+    }
     if let Some(v) = ser.embryocyte_use_timer {
         mode.embryocyte_use_timer = v;
     }
@@ -1489,6 +1519,18 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.cognocyte_output_hops {
         mode.cognocyte_output_hops = v;
+    }
+    if let Some(v) = ser.cognocyte_oscillator_rate {
+        mode.cognocyte_oscillator_rate = v;
+    }
+    if let Some(v) = ser.cognocyte_oscillator_phase {
+        mode.cognocyte_oscillator_phase = v;
+    }
+    if let Some(v) = ser.cognocyte_oscillator_strength {
+        mode.cognocyte_oscillator_strength = v;
+    }
+    if let Some(v) = ser.cognocyte_oscillator_step_count {
+        mode.cognocyte_oscillator_step_count = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

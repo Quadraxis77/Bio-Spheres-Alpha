@@ -853,6 +853,53 @@ pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, cu
     }
 }
 
+/// Apply myocyte peristaltic grip as friction forces (CPU preview).
+///
+/// Uses the per-cell contraction value already computed by `apply_myocyte_contraction`.
+/// Grip force = -velocity * (1 - exp(-grip * medium_scale)) * mass / dt, equivalent to
+/// the exponential velocity-damping used in the GPU position_update shader.
+pub fn apply_myocyte_grip(
+    state: &mut CanonicalState,
+    genome: &Genome,
+    dt: f32,
+    in_water: &[bool],
+) {
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        let Some(mode) = genome.modes.get(mode_index) else {
+            continue;
+        };
+        if mode.cell_type != 9 {
+            continue; // only myocytes
+        }
+        let grip_contracted = mode.myocyte_grip_contracted;
+        let grip_extended = mode.myocyte_grip_extended;
+        if grip_contracted <= 0.0 && grip_extended <= 0.0 {
+            continue;
+        }
+
+        let contraction = state.muscle_contractions[i];
+        let grip = grip_extended + (grip_contracted - grip_extended) * contraction;
+        if grip <= 0.001 {
+            continue;
+        }
+
+        let medium_scale = if in_water.get(i).copied().unwrap_or(false) {
+            1.0_f32
+        } else {
+            0.05_f32 // air/substrate — gravity dominates, minor grip only
+        };
+        let effective_grip = grip * medium_scale;
+        let retain = (-effective_grip * dt).exp();
+
+        // Apply as a force: F = vel * (retain - 1) * mass / dt
+        // This will cause velocity to be multiplied by `retain` after integration.
+        let vel = state.velocities[i];
+        let mass = state.masses[i].max(0.001);
+        state.forces[i] += vel * (retain - 1.0) * (mass / dt);
+    }
+}
+
 /// Apply swim forces for Flagellocyte cells (cell_type == 1)
 ///
 /// Flagellocytes apply a forward thrust force in their orientation direction.
@@ -1922,7 +1969,7 @@ pub fn physics_step_with_genome(
 
     // Run signal system (oculocyte sensing + BFS propagation)
     let boundary_radius = config.sphere_radius;
-    crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius, dt);
+    crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius, dt, current_time);
 
     // Apply persistent test signals (if any) after normal signal system.
     // Do NOT clear signals first - regulation signals (channels 8-15) must remain intact.

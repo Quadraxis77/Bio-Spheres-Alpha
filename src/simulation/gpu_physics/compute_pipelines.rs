@@ -164,6 +164,8 @@ pub struct CachedBindGroups {
     pub spatial_grid: wgpu::BindGroup,
     /// Position update spatial grid bind group (read-only, same for all frames)
     pub position_update_spatial_grid: wgpu::BindGroup,
+    /// Position update grip bind group (cell_grip_buffer, read-only)
+    pub position_update_grip: wgpu::BindGroup,
     /// Lifecycle bind group (same for all frames)
     pub lifecycle: wgpu::BindGroup,
     /// Cell state read bind group (same for all frames)
@@ -366,6 +368,7 @@ pub struct GpuPhysicsPipelines {
     pub rotations_layout: wgpu::BindGroupLayout,
     pub position_update_rotations_layout: wgpu::BindGroupLayout,
     pub position_update_spatial_grid_layout: wgpu::BindGroupLayout,
+    pub position_update_grip_layout: wgpu::BindGroupLayout,
 
     // Cell insertion bind group layouts
     pub cell_insertion_physics_layout: wgpu::BindGroupLayout,
@@ -627,6 +630,21 @@ impl GpuPhysicsPipelines {
             "Collision Detection",
         );
 
+        let position_update_grip_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Position Update Grip Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
         let position_update = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/position_update.wgsl"),
@@ -636,6 +654,7 @@ impl GpuPhysicsPipelines {
                 &position_update_rotations_layout,
                 &position_update_force_accum_layout,
                 &position_update_spatial_grid_layout,
+                &position_update_grip_layout,
             ],
             "Position Update",
         );
@@ -1004,6 +1023,17 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Binding 6: v11 [consume_range, consume_rate, grip_contracted, grip_extended]
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
         let muscle_contraction_group2_layout =
@@ -1013,6 +1043,17 @@ impl GpuPhysicsPipelines {
                     // Binding 0: Per-cell muscle contraction output (read-write)
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 1: Per-cell grip output (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -1342,6 +1383,7 @@ impl GpuPhysicsPipelines {
             rotations_layout,
             position_update_rotations_layout,
             position_update_spatial_grid_layout,
+            position_update_grip_layout,
             cell_insertion_physics_layout,
             cell_insertion_params_layout,
             cell_insertion_state_layout,
@@ -1939,6 +1981,16 @@ impl GpuPhysicsPipelines {
         let position_update_spatial_grid =
             self.create_position_update_spatial_grid_bind_group_internal(device, buffers);
 
+        // Position update grip bind group (cell_grip_buffer, read-only, same for all frames)
+        let position_update_grip = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Position Update Grip BG"),
+            layout: &self.position_update_grip_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffers.cell_grip_buffer.as_entire_binding(),
+            }],
+        });
+
         // Lifecycle bind group (same for all frames)
         let lifecycle = self.create_lifecycle_bind_group(device, buffers);
 
@@ -2109,15 +2161,25 @@ impl GpuPhysicsPipelines {
                     binding: 5,
                     resource: buffers.mode_properties_v8.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.mode_properties_v11.as_entire_binding(),
+                },
             ],
         });
         let muscle_contraction_group2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Muscle Contraction Group 2"),
             layout: &self.muscle_contraction_group2_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffers.muscle_contraction_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.muscle_contraction_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.cell_grip_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         // Glueocyte env adhesion bind groups
@@ -2329,6 +2391,7 @@ impl GpuPhysicsPipelines {
             physics,
             spatial_grid,
             position_update_spatial_grid,
+            position_update_grip,
             lifecycle,
             cell_state_read,
             cell_state_write,

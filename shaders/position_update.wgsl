@@ -89,6 +89,11 @@ var<storage, read> water_bitfield: array<u32>;
 @group(2) @binding(6)
 var<storage, read> water_velocity: array<u32>;
 
+// Per-cell grip (friction drag). Written by muscle_contraction shader.
+// 0.0 = no grip; positive values add medium-scaled drag opposing velocity.
+@group(4) @binding(0)
+var<storage, read> cell_grip: array<f32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 const MIN_SAFE_DT: f32 = 0.0001;
@@ -268,6 +273,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let vel_delta = (new_vel_axial + new_vel_lateral) - vel;
             force += vel_delta * (safe_mass / dt);
         }
+    }
+
+    // Myocyte peristaltic grip: friction drag that varies with contraction phase.
+    // Scaled by medium density:
+    //   water → full grip (cells push against viscous medium to propel themselves)
+    //   air   → 5% of water grip (gravity dominates; glueocytes/cilia handle land motion)
+    // Applied as an exponential velocity-retention force so it is frame-rate-independent
+    // and numerically identical to the water anisotropic drag above.
+    let grip = cell_grip[cell_idx];
+    if (grip > 0.001) {
+        let medium_scale = select(0.05, 1.0, in_water);
+        let effective_grip = grip * medium_scale;
+        // exp(-g*dt) = fraction of velocity retained after drag for this timestep
+        let grip_retain = exp(-effective_grip * dt);
+        // Equivalent force that would produce this velocity change in one step
+        force += vel * (grip_retain - 1.0) * (safe_mass / dt);
     }
 
     // Apply gravity (F = mg) in the selected axis or radially toward origin

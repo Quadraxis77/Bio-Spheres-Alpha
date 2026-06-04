@@ -3790,6 +3790,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     myocyte_threshold: 1.0,
                     myocyte_pulse_rate: 1.0,
                     myocyte_pulse_phase: 0,
+                    myocyte_grip_contracted: 0.0,
+                    myocyte_grip_extended: 0.0,
                     embryocyte_use_timer: false,
                     embryocyte_release_timer: 10.0,
                     embryocyte_use_threshold: false,
@@ -3854,6 +3856,10 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     cognocyte_input_channel_b: 1,
                     cognocyte_output_channel: 8,
                     cognocyte_output_hops: 5,
+                    cognocyte_oscillator_rate: 1.0,
+                    cognocyte_oscillator_phase: 0.0,
+                    cognocyte_oscillator_strength: 1.0,
+                    cognocyte_oscillator_step_count: 4,
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -4990,7 +4996,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.myocyte_pulse_rate, 0.1..=10.0).show_value(false));
+                            ui.add(egui::Slider::new(&mut mode.myocyte_pulse_rate, 0.1..=10.0).show_value(false).logarithmic(true));
                             ui.add(egui::DragValue::new(&mut mode.myocyte_pulse_rate).speed(0.01).range(0.1..=10.0));
                         });
 
@@ -5050,6 +5056,43 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.style_mut().spacing.slider_width = slider_width;
                             ui.add(egui::Slider::new(&mut mode.myocyte_threshold, -100.0..=100.0).show_value(false));
                             ui.add(egui::DragValue::new(&mut mode.myocyte_threshold).speed(0.1).range(-100.0..=100.0));
+                        });
+                    }
+
+                    // Peristaltic grip — available in both pulse-timer and signal modes
+                    ui.separator();
+                    let grip_enabled = mode.myocyte_grip_contracted > 0.0 || mode.myocyte_grip_extended > 0.0;
+                    let mut grip_on = grip_enabled;
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut grip_on, "Peristaltic Grip")
+                            .on_hover_text("Friction against the medium tied to the contraction cycle. Set Grip on Contract > Grip on Extend to push forward; reverse values to go backward. Full strength in water, 5% in air.");
+                    });
+                    if !grip_on && grip_enabled {
+                        mode.myocyte_grip_contracted = 0.0;
+                        mode.myocyte_grip_extended = 0.0;
+                    }
+                    if grip_on {
+                        // Ensure at least one value is non-zero when first enabled
+                        if !grip_enabled {
+                            mode.myocyte_grip_contracted = 10.0;
+                        }
+                        ui.label("Grip on Contract:")
+                            .on_hover_text("Friction drag when fully contracted (~10–20 = strong). Higher than Grip on Extend = pushes forward on the power stroke.");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.myocyte_grip_contracted, 0.0..=30.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.myocyte_grip_contracted).speed(0.1).range(0.0..=30.0));
+                        });
+                        ui.label("Grip on Extend:")
+                            .on_hover_text("Friction drag when fully extended. Keep near 0 for efficient forward motion; set higher than Grip on Contract to reverse direction.");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.myocyte_grip_extended, 0.0..=30.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.myocyte_grip_extended).speed(0.1).range(0.0..=30.0));
                         });
                     }
                 });
@@ -5299,10 +5342,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         "Min", "Max", "Average",
                         "Greater Than", "Less Than", "Equal",
                         "AND", "OR", "NOT", "Select",
+                        "Oscillate", "Hops Oscillate",
                     ];
-                    let current_op = mode.cognocyte_operation.clamp(0, 13) as usize;
+                    let current_op = mode.cognocyte_operation.clamp(0, 15) as usize;
                     ui.label("Operation:")
-                        .on_hover_text("Arithmetic: result = A op B.  Comparison: outputs 1.0 (true) or 0.0 (false).  Boolean: treats any value > 0 as true, outputs 1.0 or 0.0.  NOT uses only Input A.  Select: if A > 0 outputs B, otherwise outputs 0.0.  Emits nothing if a required input channel has no signal");
+                        .on_hover_text("Arithmetic: result = A op B.  Comparison: outputs 1.0 (true) or 0.0 (false).  Boolean: treats any value > 0 as true.  NOT uses only Input A.  Select: if A > 0 outputs B, else 0.  Oscillate: generates a half-rectified sine wave from time — no inputs needed.");
                     egui::ComboBox::from_id_salt("cognocyte_op")
                         .selected_text(op_names[current_op])
                         .show_ui(ui, |ui| {
@@ -5313,58 +5357,102 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     ui.separator();
 
-                    let input_a_label = match mode.cognocyte_operation {
-                        13 => "Condition Channel:",
-                        10 | 11 | 12 => "Input A - Boolean Channel:",
-                        7 | 8 | 9 => "Input A - Test Channel:",
-                        _ => "Input A - Channel:",
-                    };
-                    let input_a_tooltip = match mode.cognocyte_operation {
-                        13 => "Signal channel (0-15) used as the selector. If A > 0, the Cognocyte outputs B; otherwise it outputs 0. Missing A means no output",
-                        10 | 11 | 12 => "Signal channel (0-15) read as a boolean. Values greater than 0 are true. Missing A means no output",
-                        7 | 8 | 9 => "Signal channel (0-15) read as the value being compared. Missing A means no output",
-                        _ => "Signal channel (0-15) read as the left operand. Missing A means no output",
-                    };
+                    let is_oscillate = mode.cognocyte_operation == 14 || mode.cognocyte_operation == 15;
 
-                    // Input Channel A
-                    ui.label(input_a_label)
-                        .on_hover_text(input_a_tooltip);
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_a, 0..=15).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_a).speed(0.1).range(0..=15));
-                    });
-
-                    if mode.cognocyte_operation != 12 {
-                        let input_b_label = match mode.cognocyte_operation {
-                            13 => "Value Channel:",
-                            10 | 11 => "Input B - Boolean Channel:",
-                            7 | 8 | 9 => "Input B - Reference Channel:",
-                            _ => "Input B - Channel:",
-                        };
-                        let input_b_tooltip = match mode.cognocyte_operation {
-                            13 => "Signal channel (0-15) emitted when the condition channel is true. Missing B means no output",
-                            10 | 11 => "Signal channel (0-15) read as a boolean. Values greater than 0 are true. Missing B means no output",
-                            7 => "Signal channel (0-15) used as the comparison threshold. Outputs 1.0 when A > B, otherwise 0.0. Missing B means no output",
-                            8 => "Signal channel (0-15) used as the comparison threshold. Outputs 1.0 when A < B, otherwise 0.0. Missing B means no output",
-                            9 => "Signal channel (0-15) used as the equality reference. Outputs 1.0 when A and B are nearly equal, otherwise 0.0. Missing B means no output",
-                            3 => "Signal channel (0-15) read as the divisor. Missing B means no output. If B is zero, Divide emits 0.0",
-                            _ => "Signal channel (0-15) read as the right operand. Missing B means no output",
-                        };
-
-                        ui.label(input_b_label)
-                            .on_hover_text(input_b_tooltip);
+                    if is_oscillate {
+                        // Oscillate mode: show rate and phase, hide input channels
+                        ui.label("Rate (cycles/sec):")
+                            .on_hover_text("How many full oscillation cycles per second. Two Cognocytes at the same rate but phase 0.5 apart give fully complementary signals for left/right gating.");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_b, 0..=15).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_b).speed(0.1).range(0..=15));
+                            ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_rate, 0.1..=10.0).show_value(false).logarithmic(true));
+                            ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_rate).speed(0.01).range(0.1..=10.0));
+                        });
+                        ui.label("Phase Offset (0–1):")
+                            .on_hover_text("Fraction of a full cycle to offset this oscillator. 0.0 = in phase, 0.5 = opposite phase. Use 0.0 on one side and 0.5 on the other for left/right locomotion gating.");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_phase, 0.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_phase).speed(0.01).range(0.0..=1.0));
+                        });
+                        if mode.cognocyte_operation == 15 {
+                            ui.label("Steps:")
+                                .on_hover_text("Number of discrete steps per cycle (also the maximum hop reach). The signal propagates 1 hop on step 1, 2 hops on step 2, and so on. Cells at hop k only receive the signal during steps k–N of each cycle, creating a natural phase gradient along the chain.");
+                            ui.horizontal(|ui| {
+                                let available = ui.available_width();
+                                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                                ui.style_mut().spacing.slider_width = slider_width;
+                                ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_step_count, 1..=20).show_value(false));
+                                ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_step_count).speed(0.1).range(1..=20));
+                            });
+                        }
+                        ui.label("Signal Strength:")
+                            .on_hover_text("Peak value of the output signal. Downstream cells see this value at the top of each cycle and 0 at the trough.");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_strength, 0.0..=100.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_strength).speed(0.1).range(0.0..=100.0));
                         });
                     } else {
-                        ui.label(egui::RichText::new("Input B unused for NOT").small());
+                        let input_a_label = match mode.cognocyte_operation {
+                            13 => "Condition Channel:",
+                            10 | 11 | 12 => "Input A - Boolean Channel:",
+                            7 | 8 | 9 => "Input A - Test Channel:",
+                            _ => "Input A - Channel:",
+                        };
+                        let input_a_tooltip = match mode.cognocyte_operation {
+                            13 => "Signal channel (0-15) used as the selector. If A > 0, the Cognocyte outputs B; otherwise it outputs 0. Missing A means no output",
+                            10 | 11 | 12 => "Signal channel (0-15) read as a boolean. Values greater than 0 are true. Missing A means no output",
+                            7 | 8 | 9 => "Signal channel (0-15) read as the value being compared. Missing A means no output",
+                            _ => "Signal channel (0-15) read as the left operand. Missing A means no output",
+                        };
+
+                        // Input Channel A
+                        ui.label(input_a_label)
+                            .on_hover_text(input_a_tooltip);
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_a, 0..=15).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_a).speed(0.1).range(0..=15));
+                        });
+
+                        if mode.cognocyte_operation != 12 {
+                            let input_b_label = match mode.cognocyte_operation {
+                                13 => "Value Channel:",
+                                10 | 11 => "Input B - Boolean Channel:",
+                                7 | 8 | 9 => "Input B - Reference Channel:",
+                                _ => "Input B - Channel:",
+                            };
+                            let input_b_tooltip = match mode.cognocyte_operation {
+                                13 => "Signal channel (0-15) emitted when the condition channel is true. Missing B means no output",
+                                10 | 11 => "Signal channel (0-15) read as a boolean. Values greater than 0 are true. Missing B means no output",
+                                7 => "Signal channel (0-15) used as the comparison threshold. Outputs 1.0 when A > B, otherwise 0.0. Missing B means no output",
+                                8 => "Signal channel (0-15) used as the comparison threshold. Outputs 1.0 when A < B, otherwise 0.0. Missing B means no output",
+                                9 => "Signal channel (0-15) used as the equality reference. Outputs 1.0 when A and B are nearly equal, otherwise 0.0. Missing B means no output",
+                                3 => "Signal channel (0-15) read as the divisor. Missing B means no output. If B is zero, Divide emits 0.0",
+                                _ => "Signal channel (0-15) read as the right operand. Missing B means no output",
+                            };
+
+                            ui.label(input_b_label)
+                                .on_hover_text(input_b_tooltip);
+                            ui.horizontal(|ui| {
+                                let available = ui.available_width();
+                                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                                ui.style_mut().spacing.slider_width = slider_width;
+                                ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_b, 0..=15).show_value(false));
+                                ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_b).speed(0.1).range(0..=15));
+                            });
+                        } else {
+                            ui.label(egui::RichText::new("Input B unused for NOT").small());
+                        }
                     }
 
                     ui.separator();
@@ -6368,6 +6456,12 @@ fn sync_mode_changes_to_others(
         }
         if updated.myocyte_pulse_phase != snapshot.myocyte_pulse_phase {
             other.myocyte_pulse_phase = updated.myocyte_pulse_phase;
+        }
+        if (updated.myocyte_grip_contracted - snapshot.myocyte_grip_contracted).abs() > f32::EPSILON {
+            other.myocyte_grip_contracted = updated.myocyte_grip_contracted;
+        }
+        if (updated.myocyte_grip_extended - snapshot.myocyte_grip_extended).abs() > f32::EPSILON {
+            other.myocyte_grip_extended = updated.myocyte_grip_extended;
         }
 
         // Embryocyte

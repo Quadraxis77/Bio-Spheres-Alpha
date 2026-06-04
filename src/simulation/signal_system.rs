@@ -491,7 +491,10 @@ fn read_channel(state: &CanonicalState, cell_idx: usize, channel: usize) -> Opti
 ///
 /// If a required input channel has no signal the cell emits nothing -
 /// misconfigured circuits go dark visibly rather than silently misbehave.
-pub fn process_cognocytes(state: &CanonicalState, genome: &Genome) -> Vec<SignalEmission> {
+pub fn process_cognocytes(state: &CanonicalState, genome: &Genome, current_time: f32) -> Vec<SignalEmission> {
+    use crate::cell::behaviors::cognocyte::{OP_HOPS_OSCILLATE, OP_NOT, OP_OSCILLATE};
+    use std::f32::consts::TAU;
+
     let mut emissions = Vec::new();
 
     for cell_idx in 0..state.cell_count {
@@ -505,25 +508,54 @@ pub fn process_cognocytes(state: &CanonicalState, genome: &Genome) -> Vec<Signal
             continue;
         }
 
-        let ch_a = mode.cognocyte_input_channel_a.clamp(0, 15) as usize;
-        let ch_b = mode.cognocyte_input_channel_b.clamp(0, 15) as usize;
         let op = mode.cognocyte_operation;
 
-        // NOT is unary - only A required.
-        let a = match read_channel(state, cell_idx, ch_a) {
-            Some(v) => v,
-            None => continue,
-        };
-        let b = if op == crate::cell::behaviors::cognocyte::OP_NOT {
-            0.0
+        let result = if op == OP_OSCILLATE {
+            // No input channels needed — generated from simulation time.
+            // Half-rectified sine: 0 during trough, rises smoothly to 1 at peak.
+            // Two cells at phase 0.0 and 0.5 give fully complementary signals.
+            let angle = TAU * mode.cognocyte_oscillator_rate * current_time
+                + TAU * mode.cognocyte_oscillator_phase;
+            angle.sin().max(0.0) * mode.cognocyte_oscillator_strength
+        } else if op == OP_HOPS_OSCILLATE {
+            // Traveling-wave oscillator: over one cycle, the emission hop-reach
+            // advances from 1 up to step_count, then resets. Cells at hop k first
+            // receive the signal at step k — no per-cell phase offsets needed.
+            let steps = mode.cognocyte_oscillator_step_count.max(1);
+            let cycle_pos = (mode.cognocyte_oscillator_rate * current_time
+                + mode.cognocyte_oscillator_phase)
+                .fract()
+                .abs();
+            let current_step = ((cycle_pos * steps as f32).floor() as i32).clamp(1, steps);
+            let out_ch = mode.cognocyte_output_channel.clamp(0, 15) as usize;
+            let hops = current_step.clamp(1, 20) as usize;
+            emissions.push(SignalEmission {
+                source_cell: cell_idx,
+                channel: out_ch,
+                value: mode.cognocyte_oscillator_strength,
+                hops,
+            });
+            continue; // already pushed with dynamic hops
         } else {
-            match read_channel(state, cell_idx, ch_b) {
+            let ch_a = mode.cognocyte_input_channel_a.clamp(0, 15) as usize;
+            let ch_b = mode.cognocyte_input_channel_b.clamp(0, 15) as usize;
+
+            // NOT is unary — only A required.
+            let a = match read_channel(state, cell_idx, ch_a) {
                 Some(v) => v,
                 None => continue,
-            }
-        };
+            };
+            let b = if op == OP_NOT {
+                0.0
+            } else {
+                match read_channel(state, cell_idx, ch_b) {
+                    Some(v) => v,
+                    None => continue,
+                }
+            };
 
-        let result = crate::cell::behaviors::cognocyte::evaluate(op, a, b);
+            crate::cell::behaviors::cognocyte::evaluate(op, a, b)
+        };
 
         let out_ch = mode.cognocyte_output_channel.clamp(0, 15) as usize;
         let hops = mode.cognocyte_output_hops.clamp(1, 20) as usize;
@@ -686,6 +718,7 @@ pub fn run_signal_system(
     genome: &Genome,
     boundary_radius: f32,
     dt: f32,
+    current_time: f32,
 ) {
     clear_all_signals(state);
 
@@ -702,7 +735,7 @@ pub fn run_signal_system(
     propagate_signals(state, genome, &emissions);
 
     // Phase 3: Cognocytes compute on the propagated signals and re-emit.
-    let cogno_emissions = process_cognocytes(state, genome);
+    let cogno_emissions = process_cognocytes(state, genome, current_time);
     propagate_signals(state, genome, &cogno_emissions);
 
     // Phase 4: Memorocytes update their leaky-integrator state and emit.

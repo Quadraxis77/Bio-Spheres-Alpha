@@ -81,10 +81,19 @@ var<storage, read> mode_properties_v7: array<vec4<f32>>;
 @group(1) @binding(5)
 var<storage, read> mode_properties_v8: array<vec4<f32>>;
 
-// Per-cell muscle contraction output (group 2)
-// Each cell's contraction value: 0.0 = relaxed, 1.0 = fully contracted
+// v11: [devorocyte_consume_range, devorocyte_consume_rate, myocyte_grip_contracted, myocyte_grip_extended]
+@group(1) @binding(6)
+var<storage, read> mode_properties_v11: array<vec4<f32>>;
+
+// Per-cell outputs (group 2)
+// Binding 0: contraction value (0.0 = relaxed, 1.0 = fully contracted)
 @group(2) @binding(0)
 var<storage, read_write> muscle_contraction_out: array<f32>;
+
+// Binding 1: grip (friction drag) value — mix(grip_extended, grip_contracted, contraction)
+// Read by position_update shader to apply medium-scaled friction.
+@group(2) @binding(1)
+var<storage, read_write> cell_grip_out: array<f32>;
 
 const PI: f32 = 3.14159265359;
 
@@ -100,18 +109,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get mode index and derive cell type
     let mode_idx = mode_indices[cell_idx];
     if (mode_idx >= arrayLength(&mode_properties_v7)) {
-        // Non-myocyte: write 0.0 (relaxed)
+        // Non-myocyte: write 0.0 (relaxed, no grip)
         muscle_contraction_out[cell_idx] = 0.0;
+        cell_grip_out[cell_idx] = 0.0;
         return;
     }
-    
+
     let cell_type = mode_cell_types[mode_idx];
-    
+
     // Check if this cell type applies muscle contraction
     let behavior = type_behaviors[cell_type];
     if (behavior.applies_muscle_contraction == 0u) {
-        // Non-myocyte: write 0.0 (relaxed)
+        // Non-myocyte: write 0.0 (relaxed, no grip)
         muscle_contraction_out[cell_idx] = 0.0;
+        cell_grip_out[cell_idx] = 0.0;
         return;
     }
     
@@ -156,5 +167,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Write per-cell contraction value (clamped to valid range)
-    muscle_contraction_out[cell_idx] = clamp(contraction, 0.0, 1.0);
+    let clamped = clamp(contraction, 0.0, 1.0);
+    muscle_contraction_out[cell_idx] = clamped;
+
+    // Compute grip from contraction phase.
+    // grip_contracted = drag when fully contracted, grip_extended = drag when fully extended.
+    // Interpolating between them gives smooth grip variation through the pulse cycle.
+    let grip_contracted = mode_properties_v11[mode_idx].z;
+    let grip_extended   = mode_properties_v11[mode_idx].w;
+    cell_grip_out[cell_idx] = mix(grip_extended, grip_contracted, clamped);
 }

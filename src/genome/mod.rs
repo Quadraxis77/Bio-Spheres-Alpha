@@ -239,6 +239,8 @@ pub struct ModeSettings {
     pub myocyte_threshold: f32,   // Signal threshold for contraction switching
     pub myocyte_pulse_rate: f32,  // Pulse oscillation rate in cycles per second (0.1 to 10.0)
     pub myocyte_pulse_phase: i32, // Which pulse phase to contract on (0 = Pulse A, 1 = Pulse B)
+    pub myocyte_grip_contracted: f32, // Friction drag when fully contracted (0 = none, ~15 = strong grip)
+    pub myocyte_grip_extended: f32,   // Friction drag when fully extended (0 = none, ~15 = strong grip)
 
     // Embryocyte settings
     // Release triggers (AND logic): all enabled triggers must be satisfied simultaneously
@@ -309,17 +311,30 @@ pub struct ModeSettings {
     // Cognocyte settings
     /// Which arithmetic/logic operation to perform on the two input signals.
     /// 0=Add, 1=Subtract, 2=Multiply, 3=Divide, 4=Min, 5=Max, 6=Average,
-    /// 7=GreaterThan, 8=LessThan, 9=Equal, 10=AND, 11=OR, 12=NOT, 13=Select
+    /// 7=GreaterThan, 8=LessThan, 9=Equal, 10=AND, 11=OR, 12=NOT, 13=Select,
+    /// 14=Oscillate (ignores inputs; emits half-rectified sine based on time)
     pub cognocyte_operation: i32,
     /// First input signal channel (0-15). Emits nothing if channel has no signal.
     pub cognocyte_input_channel_a: i32,
     /// Second input signal channel (0-15). Emits nothing if channel has no signal.
-    /// Unused for NOT (which only uses A).
+    /// Unused for NOT and Oscillate (which only uses A).
     pub cognocyte_input_channel_b: i32,
     /// Channel to emit the result on (0-15).
     pub cognocyte_output_channel: i32,
     /// How many adhesion hops the result signal propagates (1-20).
     pub cognocyte_output_hops: i32,
+    /// Oscillate operation: cycles per second (ignored for non-Oscillate ops).
+    pub cognocyte_oscillator_rate: f32,
+    /// Oscillate operation: phase offset 0.0–1.0 fraction of a full cycle.
+    /// Two cognocytes at phase 0.0 and 0.5 are fully complementary — use for left/right gating.
+    pub cognocyte_oscillator_phase: f32,
+    /// Oscillate operation: peak output strength. The signal scales from 0 to this value.
+    pub cognocyte_oscillator_strength: f32,
+    /// Hops Oscillate operation: number of discrete steps per cycle (= max hop reach).
+    /// The signal steps from 1 hop up to this count over one cycle, then resets.
+    /// Cells closer to the source receive signal for more steps per cycle than distant cells,
+    /// creating an automatic phase gradient along the chain.
+    pub cognocyte_oscillator_step_count: i32,
 
     // Child settings
     pub child_a: ChildSettings,
@@ -407,6 +422,8 @@ impl Default for ModeSettings {
             myocyte_threshold: 1.0,    // Default: threshold of 1.0
             myocyte_pulse_rate: 1.0,   // Default: 1 cycle per second
             myocyte_pulse_phase: 0,    // Default: pulse A
+            myocyte_grip_contracted: 0.0,
+            myocyte_grip_extended: 0.0,
             embryocyte_use_timer: false, // Default: no timer trigger
             embryocyte_release_timer: 10.0, // Default: 10 seconds
             embryocyte_use_threshold: false, // Default: no threshold trigger
@@ -464,6 +481,10 @@ impl Default for ModeSettings {
             cognocyte_input_channel_b: 1,
             cognocyte_output_channel: 8,
             cognocyte_output_hops: 5,
+            cognocyte_oscillator_rate: 1.0,
+            cognocyte_oscillator_phase: 0.0,
+            cognocyte_oscillator_strength: 1.0,
+            cognocyte_oscillator_step_count: 4,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),
