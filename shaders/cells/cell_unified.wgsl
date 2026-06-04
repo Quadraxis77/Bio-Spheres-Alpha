@@ -1635,9 +1635,12 @@ fn fs_depth(in: VertexOutput) -> DepthOnlyOutput {
     let local_pos = in.uv * 2.0 - 1.0;
     let r2 = dot(local_pos, local_pos);
 
-    let cell_type = u32(round(in.cell_type_and_debug.x));
-    let is_devorocyte = (cell_type == 11u);
-    if (r2 > 1.0 && !is_devorocyte) {
+    if (r2 > 1.0) {
+        // Always discard outside the sphere, including devorocytes.
+        // Spike depth for the expanded region is written by fs_main, not the prepass.
+        // Without this, the prepass would write cell-center depth (z_front=0) for the
+        // entire expanded quad, incorrectly occluding everything behind the cell in the
+        // shared depth buffer.
         discard;
     }
 

@@ -873,7 +873,6 @@ impl App {
         let mut out_of_range_count = 0usize;
         let mut wrong_organism_count = 0usize;
         let mut existing_count = 0usize;
-        let mut already_attached_count = 0usize;
 
         for &target in &targets {
             let (distance, in_range, same_organism) = Self::scaffold_pair_status(
@@ -911,8 +910,6 @@ impl App {
                     != 0
                 {
                     existing_count += 1;
-                } else {
-                    already_attached_count += 1;
                 }
             }
         }
@@ -1011,13 +1008,6 @@ impl App {
                         )
                         .on_hover_text("Scaffold rules are developmental: they identify endpoints by position in the cell division tree. Cells from different organisms have completely unrelated division trees, so no rule can address both endpoints. These pairs cannot be linked. Only cells from the same organism (the same continuous chain of divisions from a single root) can be connected.");
                     }
-                    if already_attached_count > 0 {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(230, 170, 60),
-                            format!("⚠ {already_attached_count} already have a normal adhesion bond"),
-                        )
-                        .on_hover_text("A regular adhesion bond (not a scaffold bond) already exists between these cells. The scaffold resolver will not create a structural bond alongside an existing normal bond — it would silently skip these pairs at runtime. The rule will still be created, but it will only activate if the normal bond is absent (e.g. after division breaks it or before it forms).");
-                    }
                     if existing_count > 0 {
                         ui.colored_label(
                             egui::Color32::from_rgb(140, 200, 255),
@@ -1033,7 +1023,7 @@ impl App {
                             egui::Color32::from_rgb(230, 90, 80),
                             "No valid pairs — all selections rejected.",
                         )
-                        .on_hover_text("Every selected pair was rejected (see reasons above). No rule can be created until at least one pair passes all checks: same organism, with no blocking normal adhesion bond.");
+                        .on_hover_text("Every selected pair was rejected (see reasons above). No rule can be created until at least one pair passes all checks: same organism.");
                     }
 
                     ui.horizontal(|ui| {

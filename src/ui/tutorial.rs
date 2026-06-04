@@ -219,7 +219,8 @@ pub struct TutorialStepData {
 // Chapter 5 - Body shape:     child routing and orientation
 // Chapter 6 - Lifecycle:      max splits, finite growth, after-splits
 // Chapter 7 - Signals:        brief intro to the signal system
-// Chapter 8 - Go live:        releasing into the full world
+// Chapter 8 - Scaffolding:    persistent structural linkages between cell types
+// Chapter 9 - Go live:        releasing into the full world
 // -----------------------------------------------------------------------------
 
 pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
@@ -711,12 +712,62 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         target_pos: [0.5, 0.5],
     },
 
-    // 
-    // CHAPTER 8 - GO LIVE
-    // 
+    //
+    // CHAPTER 8 - SCAFFOLDING
+    //
 
     TutorialStepData {
-        title: "Chapter 8 — Release Into the World",
+        title: "Chapter 8 — Scaffold Linkages",
+        body: "Scaffold rules are persistent geometric bonds that grow with the organism. \
+               They are different from normal adhesion bonds in two important ways.\n\n\
+               Normal adhesion bonds form at the moment of cell division and can break under \
+               force. They are the glue that holds the body together as it builds itself.\n\n\
+               Scaffold bonds are structural constraints — not springs. They enforce a rest \
+               distance between two cell types without adding spring forces to the physics. \
+               The simulation resolves them every frame, re-forming the bond whenever \
+               matching cells exist and are within formation range. They persist across \
+               generations and don't rely on the division tree.\n\n\
+               Use scaffold bonds to maintain body geometry that normal adhesion alone can't \
+               guarantee: hold a structural spine at a fixed length, brace two distant limbs \
+               at a controlled offset, or anchor a flagellocyte cluster at a precise distance \
+               from the body core.\n\n\
+               Scaffold rules are stored in the genome and are developmental — you define \
+               them once and the simulation applies them to every organism grown from \
+               that genome.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::None,
+        target_pos: [0.5, 0.5],
+    },
+
+    TutorialStepData {
+        title: "Creating Scaffold Rules",
+        body: "Scaffold rules are authored directly in the Preview by pointing at live cells.\n\n\
+               Press and hold left-click over any cell in the viewport. While holding, nearby \
+               cells highlight — drag to select the ones you want to link. Release, and a \
+               floating menu appears.\n\n\
+               Rest Length sets the equilibrium distance the bond tries to maintain. Shorter \
+               than the current distance pulls the cells together; longer pushes them apart. \
+               Click Create to write the rule into the genome.\n\n\
+               Rules match by mode index: linking an M1 cell to an M2 cell creates a rule \
+               that applies to all M1–M2 pairs in the organism, not just the two cells you \
+               selected. The simulation resolves this across the whole body every physics step. \
+               If a normal adhesion bond already exists between a pair, the scaffold resolver \
+               skips that pair — scaffold bonds only form where no normal bond is present.\n\n\
+               To remove a rule: press and hold over any pair that has the bond, then \
+               click Remove. Re-scrub after any change to see the updated geometry.",
+        gate_hint: "",
+        gate:       StepGate::None,
+        target:     TutorialTarget::None,
+        target_pos: [0.5, 0.5],
+    },
+
+    //
+    // CHAPTER 9 - GO LIVE
+    //
+
+    TutorialStepData {
+        title: "Chapter 9 — Release Into the World",
         body: "The Preview editor is a sandbox — one organism, no competition, \
                no fluid dynamics. The Live Simulation is the real world.\n\n\
                When you're ready, click Live Simulation in the top bar or the \
@@ -757,6 +808,11 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                Myocyte — a contractile cell that shortens its adhesion bonds \
                on a timer or signal. Pairs of Myocytes on opposite sides of \
                a body create bending waves — peristaltic locomotion.\n\n\
+               Scaffold linkages — press and hold on a cell in Preview to open \
+               the scaffold rule editor. Use scaffold bonds to enforce fixed \
+               distances between cell types that normal adhesion can't maintain, \
+               such as bracing a spine, anchoring locomotion cells, or holding \
+               bilateral symmetry across large bodies.\n\n\
                🎲 Procedural button — generates a random creature. Study its \
                genome to see how complex body plans are structured.",
         gate_hint: "",
