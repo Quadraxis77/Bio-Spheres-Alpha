@@ -711,7 +711,7 @@ pub struct GlobalUiState {
     pub gpu_readbacks_enabled: bool,
 
     /// GPU mode no-render performance cockpit. Simulation continues, visual render passes stop.
-    #[serde(default)]
+    #[serde(skip)]
     pub gpu_headless_mode: bool,
 
     /// Automatically adjust GPU simulation speed to stay near the target FPS.

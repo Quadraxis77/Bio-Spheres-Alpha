@@ -437,6 +437,7 @@ impl SceneManager {
                         genome,
                         0,
                         0,
+                        None,
                     )
                 } else {
                     None

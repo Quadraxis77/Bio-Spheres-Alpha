@@ -240,7 +240,7 @@ pub struct ModeSettings {
     pub myocyte_pulse_rate: f32,  // Pulse oscillation rate in cycles per second (0.1 to 10.0)
     pub myocyte_pulse_phase: i32, // Which pulse phase to contract on (0 = Pulse A, 1 = Pulse B)
     pub myocyte_grip_contracted: f32, // Friction drag when fully contracted (0 = none, ~15 = strong grip)
-    pub myocyte_grip_extended: f32,   // Friction drag when fully extended (0 = none, ~15 = strong grip)
+    pub myocyte_grip_extended: f32, // Friction drag when fully extended (0 = none, ~15 = strong grip)
 
     // Embryocyte settings
     // Release triggers (AND logic): all enabled triggers must be satisfied simultaneously
@@ -424,17 +424,17 @@ impl Default for ModeSettings {
             myocyte_pulse_phase: 0,    // Default: pulse A
             myocyte_grip_contracted: 0.0,
             myocyte_grip_extended: 0.0,
-            embryocyte_use_timer: false, // Default: no timer trigger
-            embryocyte_release_timer: 10.0, // Default: 10 seconds
+            embryocyte_use_timer: false,     // Default: no timer trigger
+            embryocyte_release_timer: 10.0,  // Default: 10 seconds
             embryocyte_use_threshold: false, // Default: no threshold trigger
             embryocyte_threshold_value: 32768, // Default: half full (32768)
-            embryocyte_use_signal: false, // Default: no signal trigger
-            embryocyte_signal_channel: 0, // Default: channel 0
-            embryocyte_signal_value: 1.0, // Default: threshold of 1.0
-            regulation_emit_channel: -1, // Disabled by default
-            regulation_emit_value: 10.0, // Default: 10 signal value
-            regulation_emit_hops: 3,   // Default: 3 hops
-            division_signal_channel: -1, // Disabled by default
+            embryocyte_use_signal: false,    // Default: no signal trigger
+            embryocyte_signal_channel: 0,    // Default: channel 0
+            embryocyte_signal_value: 1.0,    // Default: threshold of 1.0
+            regulation_emit_channel: -1,     // Disabled by default
+            regulation_emit_value: 10.0,     // Default: 10 signal value
+            regulation_emit_hops: 3,         // Default: 3 hops
+            division_signal_channel: -1,     // Disabled by default
             division_signal_threshold: 1.0,
             division_signal_invert: false,
             apoptosis_signal_channel: -1, // Disabled by default

@@ -8,10 +8,13 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 
 use crate::ui::panel::Panel;
-use crate::ui::panel_context::PanelContext;
+use crate::ui::panel_context::{PanelContext, SceneModeRequest};
 use crate::ui::types::GlobalUiState;
 use crate::ui::types::SimulationMode;
-use crate::ui::ui_system::palette;
+use crate::ui::ui_system::{
+    average_fps_for_last_samples, draw_headless_fps_graph, fps_color, headless_metric, palette,
+    stat_label,
+};
 use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
 
 /// TabViewer implementation for Bio-Spheres panels.
@@ -98,6 +101,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::BottomPanel => render_placeholder_panel(ui, "Bottom Panel"),
             Panel::SceneManager => render_scene_manager(ui, self.context, self.state),
             Panel::CellInspector => render_cell_inspector(ui, self.context),
+            Panel::LineageViewer => render_lineage_viewer(ui, self.context, self.state),
             Panel::GenomeEditor => render_genome_editor(ui, self.context),
             Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
             Panel::RenderingControls => render_rendering_controls(ui),
@@ -135,6 +139,11 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> OnCloseResponse {
+        if matches!(tab, Panel::LineageViewer) {
+            self.context.set_simulation_speed(1.0);
+            return OnCloseResponse::Close;
+        }
+
         // Don't close immediately - show a confirmation dialog first.
         // Store which panel is pending and return Focus to keep it open.
         self.state.pending_close_panel = Some(*tab);
@@ -868,6 +877,1982 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             );
         });
     }
+}
+
+fn render_headless_section(
+    ui: &mut Ui,
+    context: &mut PanelContext,
+    state: &mut GlobalUiState,
+) {
+    state.gpu_headless_mode = true;
+
+    let p = palette();
+    let headless_speed_cap = crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED;
+
+    let (mut sim_speed, is_paused, sim_time, cell_count, capacity) =
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
+            (
+                gpu_scene.time_scale,
+                gpu_scene.paused,
+                gpu_scene.current_time,
+                gpu_scene.current_cell_count,
+                gpu_scene.capacity(),
+            )
+        } else {
+            (1.0, true, 0.0, 0, 0)
+        };
+
+    let fps = context.performance.fps();
+    let frame_ms = context.performance.average_frame_time_ms();
+    let min_ms = context.performance.min_frame_time_ms();
+    let max_ms = context.performance.max_frame_time_ms();
+    let frame_times: Vec<f32> = context.performance.frame_time_history().collect();
+    let avg_fps = average_fps_for_last_samples(&frame_times, 60);
+    let long_avg_fps = average_fps_for_last_samples(&frame_times, 120);
+
+    let header_frame = egui::Frame::new()
+        .fill(p.bg_darkest)
+        .stroke(egui::Stroke::new(1.0, p.border_bright))
+        .inner_margin(egui::Margin::symmetric(12, 10));
+
+    header_frame.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("HEADLESS PERFORMANCE")
+                    .size(10.0)
+                    .color(p.text_dim),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("RENDERING DISABLED")
+                    .size(10.0)
+                    .color(p.status_ok),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button(egui::RichText::new(if is_paused { "Resume" } else { "Pause" }).size(11.0))
+                    .clicked()
+                {
+                    *context.scene_request = SceneModeRequest::TogglePause;
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+        ui.columns(4, |cols| {
+            headless_metric(&mut cols[0], "FPS", &format!("{:.1}", fps), fps_color(fps, p));
+            headless_metric(&mut cols[1], "Frame", &format!("{:.2} ms", frame_ms), p.text_primary);
+            headless_metric(&mut cols[2], "Speed", &format!("{:.2}x", sim_speed), p.accent_primary);
+            headless_metric(
+                &mut cols[3],
+                "Cells",
+                &format!("{} / {}k", cell_count, capacity / 1000),
+                p.text_primary,
+            );
+        });
+
+        ui.add_space(8.0);
+        draw_headless_fps_graph(ui, &frame_times, 120.0, state.gpu_headless_target_fps);
+
+        ui.add_space(6.0);
+        egui::Grid::new("lineage_headless_stats_grid")
+            .num_columns(4)
+            .spacing([18.0, 4.0])
+            .show(ui, |ui| {
+                stat_label(ui, "1s avg", &format!("{:.1} FPS", avg_fps));
+                stat_label(ui, "2s avg", &format!("{:.1} FPS", long_avg_fps));
+                stat_label(ui, "min/max", &format!("{:.2}/{:.2} ms", min_ms, max_ms));
+                stat_label(ui, "sim time", &format!("{:.1}s", sim_time));
+                ui.end_row();
+            });
+
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Simulation speed")
+                    .size(12.0)
+                    .color(p.text_secondary),
+            );
+            sim_speed = sim_speed.clamp(0.1, headless_speed_cap);
+            let speed_resp = ui.add(
+                egui::Slider::new(&mut sim_speed, 0.1..=headless_speed_cap)
+                    .logarithmic(true)
+                    .suffix("x"),
+            );
+            if speed_resp.changed() {
+                state.gpu_headless_auto_speed = false;
+                *context.scene_request = SceneModeRequest::SetSpeed(sim_speed);
+            }
+        });
+
+        ui.horizontal(|ui| {
+            for speed in [1.0_f32, 2.0, 5.0, 10.0] {
+                if ui.button(format!("{:.0}x", speed)).clicked() {
+                    state.gpu_headless_auto_speed = false;
+                    *context.scene_request = SceneModeRequest::SetSpeed(speed);
+                }
+            }
+            ui.add_space(6.0);
+            if ui.button("Adaptive").clicked() {
+                state.gpu_headless_auto_speed = true;
+                state.gpu_headless_target_fps = 30.0;
+            }
+            if ui.button("Fast Forward").clicked() {
+                state.gpu_headless_auto_speed = true;
+                state.gpu_headless_target_fps = 30.0;
+                *context.scene_request =
+                    SceneModeRequest::SetSpeed(state.gpu_headless_max_speed.min(headless_speed_cap));
+            }
+        });
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(6.0);
+
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut state.gpu_headless_auto_speed, "Auto target FPS");
+            ui.add(
+                egui::Slider::new(&mut state.gpu_headless_target_fps, 15.0..=60.0).suffix(" FPS"),
+            );
+            ui.label(
+                egui::RichText::new(state.gpu_headless_auto_status.display_name()).color(
+                    if state.gpu_headless_auto_speed {
+                        p.accent_secondary
+                    } else {
+                        p.text_dim
+                    },
+                ),
+            );
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Auto bounds")
+                    .size(12.0)
+                    .color(p.text_secondary),
+            );
+            ui.add(
+                egui::Slider::new(&mut state.gpu_headless_min_speed, 0.1..=headless_speed_cap)
+                    .logarithmic(true)
+                    .prefix("min ")
+                    .suffix("x"),
+            );
+            ui.add(
+                egui::Slider::new(&mut state.gpu_headless_max_speed, 0.1..=headless_speed_cap)
+                    .logarithmic(true)
+                    .prefix("max ")
+                    .suffix("x"),
+            );
+            state.gpu_headless_min_speed =
+                state.gpu_headless_min_speed.clamp(0.1, headless_speed_cap);
+            state.gpu_headless_max_speed =
+                state.gpu_headless_max_speed.clamp(0.1, headless_speed_cap);
+            if state.gpu_headless_min_speed > state.gpu_headless_max_speed {
+                std::mem::swap(
+                    &mut state.gpu_headless_min_speed,
+                    &mut state.gpu_headless_max_speed,
+                );
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU readbacks");
+            ui.label(
+                egui::RichText::new(if state.gpu_readbacks_enabled {
+                    "live counts enabled"
+                } else {
+                    "reduced CPU/GPU synchronization"
+                })
+                .color(p.text_dim),
+            );
+        });
+    });
+}
+
+fn render_lineage_viewer(
+    ui: &mut Ui,
+    context: &mut PanelContext,
+    state: &mut GlobalUiState,
+) {
+    if !context.is_gpu_mode() {
+        section_header(ui, "SPECIES DOSSIER");
+        ui.label(
+            egui::RichText::new("Lineage records are available in GPU biosphere mode.")
+                .size(12.0)
+                .color(palette().text_secondary),
+        );
+        return;
+    }
+
+    render_headless_section(ui, context, state);
+    ui.add_space(8.0);
+
+    let p = palette();
+    let needs_initial_scan = context
+        .scene_manager
+        .gpu_scene()
+        .map(|scene| scene.lineage_archive.last_scan_frame.is_none())
+        .unwrap_or(false);
+    if needs_initial_scan && matches!(context.scene_request, SceneModeRequest::None) {
+        *context.scene_request = SceneModeRequest::ScanLineageForViewer;
+    }
+
+    let Some(scene) = context.scene_manager.gpu_scene() else {
+        ui.label(
+            egui::RichText::new("No GPU scene is loaded.")
+                .size(12.0)
+                .color(palette().text_secondary),
+        );
+        return;
+    };
+
+    let archive = &scene.lineage_archive;
+    let mut nodes: Vec<_> = archive.nodes.iter().collect();
+    nodes.sort_by(|a, b| {
+        b.current_cells
+            .cmp(&a.current_cells)
+            .then_with(|| b.peak_cells.cmp(&a.peak_cells))
+            .then_with(|| b.noteworthy_score.total_cmp(&a.noteworthy_score))
+            .then_with(|| a.first_frame.cmp(&b.first_frame))
+    });
+
+    let selected_id_key = egui::Id::new("lineage_viewer_selected_id");
+    let selected_snap_key = egui::Id::new("lineage_viewer_selected_snap_frame");
+    let mut selected_lineage_id = ui.ctx().data(|data| data.get_temp::<u64>(selected_id_key));
+    if selected_lineage_id
+        .map(|id| archive.nodes.iter().any(|node| node.id == id))
+        .unwrap_or(false)
+        == false
+    {
+        selected_lineage_id = nodes.first().map(|node| node.id);
+        if let Some(id) = selected_lineage_id {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(selected_id_key, id));
+        }
+    }
+    let mut selected_snap_frame: Option<i32> =
+        ui.ctx().data(|data| data.get_temp(selected_snap_key));
+    let selected_node =
+        selected_lineage_id.and_then(|id| archive.nodes.iter().find(|node| node.id == id));
+
+    let living = archive
+        .nodes
+        .iter()
+        .filter(|node| node.current_cells > 0)
+        .count();
+    let extinct = archive
+        .nodes
+        .iter()
+        .filter(|node| node.extinct_frame.is_some())
+        .count();
+    let hybrids = archive
+        .nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                node.origin,
+                crate::scene::lineage::LineageOrigin::Hybrid { .. }
+            )
+        })
+        .count();
+
+    let scan_text = if let Some(frame) = archive.last_scan_frame {
+        format!(
+            "SCAN LOCKED / FRAME {} / {:.1}s",
+            frame, archive.last_scan_time
+        )
+    } else {
+        "SCAN PENDING ON PANEL OPEN".to_string()
+    };
+
+    let header = egui::Frame::new()
+        .fill(p.bg_darkest)
+        .stroke(egui::Stroke::new(1.0, p.border_bright))
+        .inner_margin(egui::Margin::symmetric(12, 10));
+    header.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new("ECOSYSTEM LINEAGE ARCHIVE")
+                        .size(10.0)
+                        .color(p.text_dim),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        selected_node
+                            .map(|node| node.display_name.as_str())
+                            .unwrap_or("NO SPECIES SELECTED"),
+                    )
+                    .size(18.0)
+                    .color(p.text_primary)
+                    .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(scan_text)
+                        .size(10.0)
+                        .color(p.accent_secondary),
+                );
+            });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button(egui::RichText::new("Refresh Scan").size(11.0))
+                    .on_hover_text("Capture one frozen population scan for this viewer")
+                    .clicked()
+                {
+                    *context.scene_request = SceneModeRequest::ScanLineageForViewer;
+                }
+            });
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            lineage_metric_chip(
+                ui,
+                "Live Cells",
+                archive.last_scan_live_cells.to_string(),
+                p.status_ok,
+            );
+            lineage_metric_chip(
+                ui,
+                "Tracked",
+                archive.last_scan_tracked_cells.to_string(),
+                p.status_info,
+            );
+            if archive.last_scan_untracked_cells > 0 {
+                lineage_metric_chip(
+                    ui,
+                    "Untracked",
+                    archive.last_scan_untracked_cells.to_string(),
+                    p.status_warn,
+                );
+            }
+            if !archive.unpromoted_genome_samples.is_empty() {
+                let variant_cells: u32 = archive
+                    .unpromoted_genome_samples
+                    .iter()
+                    .map(|sample| sample.cells)
+                    .sum();
+                lineage_metric_chip(
+                    ui,
+                    "Variants",
+                    format!("{}/{}", archive.unpromoted_genome_samples.len(), variant_cells),
+                    p.status_warn,
+                );
+            }
+            lineage_metric_chip(ui, "Lines", archive.nodes.len().to_string(), p.status_info);
+            lineage_metric_chip(ui, "Living Lines", living.to_string(), p.status_ok);
+            lineage_metric_chip(ui, "Extinct", extinct.to_string(), p.status_err);
+            lineage_metric_chip(ui, "Hybrids", hybrids.to_string(), p.accent_secondary);
+            lineage_metric_chip(
+                ui,
+                "Events",
+                archive.events.len().to_string(),
+                p.accent_primary,
+            );
+            lineage_metric_chip(
+                ui,
+                "Loadable",
+                format!(
+                    "{}/{}",
+                    archive.loadable_genome_count(),
+                    archive.retention.max_bookmarks
+                ),
+                p.status_warn,
+            );
+        });
+    });
+
+    ui.add_space(8.0);
+    if nodes.is_empty() {
+        egui::Frame::new()
+            .fill(p.bg_widget)
+            .stroke(egui::Stroke::new(1.0, p.border_subtle))
+            .inner_margin(egui::Margin::same(14))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("No lineage records yet.")
+                        .size(12.0)
+                        .color(p.text_secondary),
+                );
+            });
+        return;
+    }
+
+    let available = ui.available_width();
+    let split = available >= 700.0;
+    if split {
+        ui.columns(2, |columns| {
+            columns[0].set_min_width(available * 0.42);
+            render_lineage_specimen_panel(
+                &mut columns[0],
+                archive,
+                selected_node,
+                selected_snap_frame,
+                scene.genomes.len(),
+                context.scene_request,
+            );
+            render_lineage_intel_panel(&mut columns[1], archive, selected_node);
+        });
+    } else {
+        render_lineage_specimen_panel(
+            ui,
+            archive,
+            selected_node,
+            selected_snap_frame,
+            scene.genomes.len(),
+            context.scene_request,
+        );
+        ui.add_space(8.0);
+        render_lineage_intel_panel(ui, archive, selected_node);
+    }
+
+    ui.add_space(8.0);
+    render_lineage_map_panel(
+        ui,
+        archive,
+        selected_id_key,
+        selected_snap_key,
+        &mut selected_lineage_id,
+        &mut selected_snap_frame,
+    );
+
+    ui.add_space(8.0);
+    section_header(ui, "SPECIES INDEX");
+    egui::ScrollArea::vertical()
+        .id_salt("lineage_viewer_species_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for node in nodes.into_iter().take(80) {
+                if render_lineage_branch_row(ui, node, Some(node.id) == selected_lineage_id) {
+                    selected_lineage_id = Some(node.id);
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(selected_id_key, node.id));
+                }
+            }
+        });
+}
+
+fn lineage_metric_chip(ui: &mut Ui, label: &str, value: String, accent: egui::Color32) {
+    egui::Frame::new()
+        .fill(palette().bg_widget)
+        .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.65)))
+        .inner_margin(egui::Margin::symmetric(8, 5))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(9.5)
+                        .color(palette().text_dim),
+                );
+                ui.label(egui::RichText::new(value).size(12.0).color(accent).strong());
+            });
+        });
+}
+
+fn render_lineage_specimen_panel(
+    ui: &mut Ui,
+    archive: &crate::scene::lineage::EcosystemLineageArchive,
+    selected_node: Option<&crate::scene::lineage::LineageNode>,
+    selected_snap_frame: Option<i32>,
+    scene_genome_count: usize,
+    scene_request: &mut SceneModeRequest,
+) {
+    let p = palette();
+    egui::Frame::new()
+        .fill(p.bg_panel)
+        .stroke(egui::Stroke::new(1.0, p.border_bright))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("SPECIMEN")
+                        .size(10.0)
+                        .color(p.accent_primary),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            selected_node
+                                .map(|node| lineage_origin_label(&node.origin))
+                                .unwrap_or("UNASSIGNED"),
+                        )
+                        .size(10.0)
+                        .color(p.text_dim),
+                    );
+                });
+            });
+
+            let specimen_height = 210.0;
+            let thumb_ar = crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH as f32
+                / crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT as f32;
+            // Constrain width to the capture aspect ratio so the image fills
+            // the rect exactly without any cropping or distortion.
+            let specimen_width = (specimen_height * thumb_ar).min(ui.available_width());
+            let (rect, _) = ui.allocate_exact_size(
+                egui::vec2(specimen_width, specimen_height),
+                egui::Sense::hover(),
+            );
+            draw_lineage_specimen(ui, rect, selected_node, selected_snap_frame);
+
+            ui.add_space(8.0);
+            if let Some(node) = selected_node {
+                ui.label(
+                    egui::RichText::new(&node.display_name)
+                        .size(18.0)
+                        .color(p.text_primary)
+                        .strong(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "ACC-{:04} / GENOME {:03} / FIRST FRAME {}",
+                        node.id,
+                        node.genome_id,
+                        node.first_frame.max(0)
+                    ))
+                    .size(10.0)
+                    .color(p.text_dim),
+                );
+
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    for tag in lineage_trait_tags(&node.traits).into_iter().take(8) {
+                        lineage_badge(ui, tag);
+                    }
+                });
+
+                ui.add_space(8.0);
+                let scene_genome_available = (node.genome_id as usize) < scene_genome_count;
+                let retained_payload_available =
+                    archive.loadable_bookmark_for_lineage(node.id).is_some();
+                let genome_available = scene_genome_available || retained_payload_available;
+                let load_response = ui.add_enabled(
+                    genome_available,
+                    egui::Button::new(
+                        egui::RichText::new("Load Genome To Preview")
+                            .size(11.0)
+                            .color(p.text_primary),
+                    ),
+                );
+                if load_response
+                    .on_hover_text(if scene_genome_available {
+                        "Loads from the biosphere genome table without another GPU readback"
+                    } else if retained_payload_available {
+                        "Loads from the rolling lineage payload retained in this biosphere save"
+                    } else {
+                        "This branch's full genome payload has rolled out of the loadable window"
+                    })
+                    .clicked()
+                {
+                    *scene_request = if scene_genome_available {
+                        SceneModeRequest::LoadGenomeFromSceneGenome(node.genome_id)
+                    } else {
+                        SceneModeRequest::LoadGenomeFromLineageBookmark(node.id)
+                    };
+                }
+            }
+        });
+}
+
+fn draw_lineage_specimen(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    selected_node: Option<&crate::scene::lineage::LineageNode>,
+    selected_snap_frame: Option<i32>,
+) {
+    let p = palette();
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, p.bg_darkest);
+    draw_corner_brackets(&painter, rect, p.accent_primary);
+
+    for i in 1..5 {
+        let y = rect.top() + i as f32 * rect.height() / 5.0;
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            egui::Stroke::new(0.5, p.border_subtle.linear_multiply(0.6)),
+        );
+    }
+    for i in 1..5 {
+        let x = rect.left() + i as f32 * rect.width() / 5.0;
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            egui::Stroke::new(0.5, p.border_subtle.linear_multiply(0.5)),
+        );
+    }
+
+    let center = rect.center();
+    let radius = rect.height().min(rect.width()) * 0.25;
+    let accent = selected_node
+        .map(|node| lineage_color_for_node(node))
+        .unwrap_or(p.text_dim);
+
+    let thumbnail_shown = if let Some((node, snapshot)) = selected_node.and_then(|node| {
+        let snap = if let Some(frame) = selected_snap_frame {
+            node.snapshot_near_frame(frame)
+        } else {
+            node.latest_snapshot()
+        };
+        snap.map(|s| (node, s))
+    }) {
+        if let Some(texture_id) = lineage_thumbnail_texture(
+            ui.ctx(),
+            node.id,
+            snapshot.captured_frame,
+            snapshot.scene_thumbnail_png.as_ref(),
+        ) {
+            let image_rect = rect.shrink(4.0);
+            let thumb_w = crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH as f32;
+            let thumb_h = crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT as f32;
+            // painter is already clipped to `rect`, so the draw_rect may safely
+            // overflow — the bleed is hidden behind the rect boundary.
+            let draw_rect = thumbnail_cover_rect(image_rect, thumb_w, thumb_h);
+            let full_uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+            painter.image(texture_id, draw_rect, full_uv, egui::Color32::WHITE);
+            true
+        } else {
+            draw_lineage_adult_snapshot(&painter, rect.shrink(18.0), snapshot, accent);
+            true
+        }
+    } else {
+        false
+    };
+
+    if !thumbnail_shown {
+        let seed = selected_node.map(|node| node.id as f32).unwrap_or(1.0);
+        painter.circle_stroke(
+            center,
+            radius * 1.35,
+            egui::Stroke::new(1.0, p.border_normal),
+        );
+        painter.circle_stroke(
+            center,
+            radius * 1.05,
+            egui::Stroke::new(1.0, accent.linear_multiply(0.8)),
+        );
+        painter.circle_filled(center, radius * 0.42, accent.linear_multiply(0.35));
+        painter.circle_stroke(center, radius * 0.42, egui::Stroke::new(2.0, accent));
+
+        let lobes = selected_node
+            .map(|node| node.traits.mode_count.max(3).min(14))
+            .unwrap_or(6);
+        for i in 0..lobes {
+            let angle = seed * 0.37 + i as f32 * std::f32::consts::TAU / lobes as f32;
+            let outer = center + egui::vec2(angle.cos(), angle.sin()) * radius * 0.92;
+            let inner = center + egui::vec2(angle.cos(), angle.sin()) * radius * 0.48;
+            painter.line_segment([inner, outer], egui::Stroke::new(1.2, accent));
+            painter.circle_filled(outer, 4.0, accent.linear_multiply(0.85));
+        }
+    }
+
+    if let Some(node) = selected_node {
+        let status = if node.current_cells > 0 {
+            "ACTIVE BIOMASS"
+        } else if node.extinct_frame.is_some() {
+            "EXTINCT RECORD"
+        } else {
+            "DORMANT RECORD"
+        };
+        painter.text(
+            rect.left_top() + egui::vec2(12.0, 12.0),
+            egui::Align2::LEFT_TOP,
+            status,
+            egui::FontId::proportional(10.0),
+            accent,
+        );
+        let active_snap = if let Some(frame) = selected_snap_frame {
+            node.snapshot_near_frame(frame)
+        } else {
+            node.latest_snapshot()
+        };
+        painter.text(
+            rect.right_bottom() - egui::vec2(12.0, 12.0),
+            egui::Align2::RIGHT_BOTTOM,
+            if let Some(snapshot) = active_snap {
+                let stage = if snapshot.captured_before_division {
+                    "PRE-RELEASE"
+                } else {
+                    "BEST ADULT"
+                };
+                format!(
+                    "{} / {} CELLS / {:.1}s",
+                    stage,
+                    snapshot.cells.len(),
+                    snapshot.captured_time
+                )
+            } else {
+                format!("CELLS {} / PEAK {}", node.current_cells, node.peak_cells)
+            },
+            egui::FontId::monospace(10.0),
+            p.text_secondary,
+        );
+    }
+}
+
+fn draw_lineage_adult_snapshot(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    snapshot: &crate::scene::lineage::LineageAdultSnapshot,
+    fallback: egui::Color32,
+) {
+    draw_lineage_adult_snapshot_scaled(painter, rect, snapshot, fallback, 3.0, 14.0, 0.45);
+}
+
+fn draw_lineage_adult_snapshot_scaled(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    snapshot: &crate::scene::lineage::LineageAdultSnapshot,
+    fallback: egui::Color32,
+    min_radius: f32,
+    max_radius: f32,
+    radius_scale: f32,
+) {
+    if snapshot.cells.is_empty() {
+        return;
+    }
+
+    let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
+    let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for cell in &snapshot.cells {
+        let p = egui::pos2(cell.position[0], cell.position[1]);
+        min.x = min.x.min(p.x);
+        min.y = min.y.min(p.y);
+        max.x = max.x.max(p.x);
+        max.y = max.y.max(p.y);
+    }
+
+    let span = egui::vec2((max.x - min.x).max(1.0), (max.y - min.y).max(1.0));
+    let scale = (rect.width() / span.x).min(rect.height() / span.y) * 0.72;
+    let center = rect.center();
+    let project = |position: [f32; 3]| {
+        let x = (position[0] - (min.x + max.x) * 0.5) * scale;
+        let y = (position[1] - (min.y + max.y) * 0.5) * scale;
+        center + egui::vec2(x, y)
+    };
+
+    for bond in &snapshot.bonds {
+        let a = bond[0] as usize;
+        let b = bond[1] as usize;
+        if let (Some(cell_a), Some(cell_b)) = (snapshot.cells.get(a), snapshot.cells.get(b)) {
+            painter.line_segment(
+                [project(cell_a.position), project(cell_b.position)],
+                egui::Stroke::new(1.0, palette().border_bright.linear_multiply(0.75)),
+            );
+        }
+    }
+
+    let mut order: Vec<_> = (0..snapshot.cells.len()).collect();
+    order.sort_by(|&a, &b| snapshot.cells[a].position[2].total_cmp(&snapshot.cells[b].position[2]));
+    for i in order {
+        let cell = &snapshot.cells[i];
+        let pos = project(cell.position);
+        let radius = (cell.radius * scale * radius_scale).clamp(min_radius, max_radius);
+        let color = egui::Color32::from_rgb(
+            (cell.color[0].clamp(0.0, 1.0) * 255.0) as u8,
+            (cell.color[1].clamp(0.0, 1.0) * 255.0) as u8,
+            (cell.color[2].clamp(0.0, 1.0) * 255.0) as u8,
+        );
+        let glow = color.linear_multiply(0.35 + cell.emissive.max(0.0).min(1.5) * 0.25);
+        painter.circle_filled(pos + egui::vec2(2.0, 2.0), radius * 1.12, glow);
+        painter.circle_filled(pos, radius, color);
+        painter.circle_stroke(
+            pos,
+            radius,
+            egui::Stroke::new(1.0, fallback.linear_multiply(0.85)),
+        );
+    }
+}
+
+fn draw_lineage_timeline_snapshot(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    node: &crate::scene::lineage::LineageNode,
+    selected: bool,
+) {
+    let accent = lineage_color_for_node(node);
+    let living = node.current_cells > 0 || node.current_organisms > 0;
+    let fill = if living {
+        palette().bg_panel
+    } else {
+        palette().bg_darkest
+    };
+    painter.rect_filled(rect, 4.0, fill);
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(
+            if selected { 1.8 } else { 1.0 },
+            if selected {
+                palette().text_primary
+            } else {
+                accent.linear_multiply(if living { 0.75 } else { 0.45 })
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+
+    if let Some(snapshot) = node.latest_snapshot() {
+        let mut image_rect = rect.shrink(3.0);
+        image_rect.max.y -= 5.0;
+        if let Some(texture_id) = lineage_thumbnail_texture(
+            painter.ctx(),
+            node.id,
+            snapshot.captured_frame,
+            snapshot.scene_thumbnail_png.as_ref(),
+        ) {
+            let thumb_w = crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH as f32;
+            let thumb_h = crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT as f32;
+            let draw_rect = thumbnail_cover_rect(image_rect, thumb_w, thumb_h);
+            let full_uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+            // Clip to image_rect so the draw_rect bleed doesn't overwrite
+            // adjacent timeline cards.
+            painter
+                .with_clip_rect(image_rect)
+                .image(texture_id, draw_rect, full_uv, egui::Color32::WHITE);
+        } else {
+            draw_lineage_adult_snapshot_scaled(
+                painter,
+                image_rect,
+                snapshot,
+                accent,
+                1.2,
+                4.8,
+                0.36,
+            );
+        }
+    } else {
+        let center = rect.center() - egui::vec2(0.0, 2.0);
+        let radius = rect.width().min(rect.height()) * 0.18;
+        painter.circle_filled(center, radius, accent.linear_multiply(0.45));
+        painter.circle_stroke(center, radius * 1.8, egui::Stroke::new(0.8, accent));
+    }
+
+    painter.text(
+        rect.center_bottom() - egui::vec2(0.0, 2.0),
+        egui::Align2::CENTER_BOTTOM,
+        format!("L{}", node.id),
+        egui::FontId::monospace(7.5),
+        palette().text_dim,
+    );
+}
+
+fn lineage_thumbnail_texture(
+    ctx: &egui::Context,
+    lineage_id: u64,
+    frame: i32,
+    png: Option<&Vec<u8>>,
+) -> Option<egui::TextureId> {
+    let png = png?;
+    let texture_key = egui::Id::new(("lineage_scene_thumbnail", lineage_id, frame, png.len()));
+    if let Some(handle) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(texture_key)) {
+        return Some(handle.id());
+    }
+
+    let image = image::load_from_memory(png).ok()?.to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+    let handle = ctx.load_texture(
+        format!("lineage_scene_thumbnail_{lineage_id}_{}", png.len()),
+        color_image,
+        egui::TextureOptions::LINEAR,
+    );
+    let texture_id = handle.id();
+    ctx.data_mut(|data| data.insert_temp(texture_key, handle));
+    Some(texture_id)
+}
+
+/// Compute the draw rect for object-fit:cover rendering.
+///
+/// Scales the image uniformly so its shorter axis exactly fills the display
+/// rect.  The longer axis overflows beyond the display rect and is clipped by
+/// the painter's existing clip rect — no UV cropping required, so the full
+/// texture is sampled and the overflow disappears behind the rect boundary.
+fn thumbnail_cover_rect(display_rect: egui::Rect, img_w: f32, img_h: f32) -> egui::Rect {
+    let img_ar = img_w / img_h;
+    let rect_ar = display_rect.width() / display_rect.height();
+    if img_ar >= rect_ar {
+        // Image wider than rect — scale to fill height, let width bleed left/right.
+        let draw_w = display_rect.height() * img_ar;
+        egui::Rect::from_center_size(display_rect.center(), egui::vec2(draw_w, display_rect.height()))
+    } else {
+        // Image taller than rect — scale to fill width, let height bleed top/bottom.
+        let draw_h = display_rect.width() / img_ar;
+        egui::Rect::from_center_size(display_rect.center(), egui::vec2(display_rect.width(), draw_h))
+    }
+}
+
+fn draw_corner_brackets(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let len = 18.0;
+    let stroke = egui::Stroke::new(1.5, color);
+    let corners = [
+        (rect.left_top(), egui::vec2(len, 0.0), egui::vec2(0.0, len)),
+        (
+            rect.right_top(),
+            egui::vec2(-len, 0.0),
+            egui::vec2(0.0, len),
+        ),
+        (
+            rect.left_bottom(),
+            egui::vec2(len, 0.0),
+            egui::vec2(0.0, -len),
+        ),
+        (
+            rect.right_bottom(),
+            egui::vec2(-len, 0.0),
+            egui::vec2(0.0, -len),
+        ),
+    ];
+    for (corner, x, y) in corners {
+        painter.line_segment([corner, corner + x], stroke);
+        painter.line_segment([corner, corner + y], stroke);
+    }
+}
+
+fn render_lineage_intel_panel(
+    ui: &mut Ui,
+    archive: &crate::scene::lineage::EcosystemLineageArchive,
+    selected_node: Option<&crate::scene::lineage::LineageNode>,
+) {
+    let p = palette();
+    egui::Frame::new()
+        .fill(p.bg_panel)
+        .stroke(egui::Stroke::new(1.0, p.border_normal))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("BIO-METRICS")
+                    .size(10.0)
+                    .color(p.accent_primary),
+            );
+            ui.add_space(6.0);
+
+            if let Some(node) = selected_node {
+                egui::Grid::new("lineage_intel_grid")
+                    .num_columns(4)
+                    .spacing([10.0, 6.0])
+                    .show(ui, |ui| {
+                        lineage_readout(ui, "Cells", node.current_cells.to_string());
+                        lineage_readout(ui, "Peak", node.peak_cells.to_string());
+                        ui.end_row();
+                        let bodies = if archive.last_scan_organism_counts_reliable {
+                            node.current_organisms.to_string()
+                        } else {
+                            "--".to_string()
+                        };
+                        lineage_readout(ui, "Bodies", bodies);
+                        lineage_readout(ui, "Modes", node.traits.mode_count.to_string());
+                        ui.end_row();
+                        lineage_readout(ui, "Genome", node.genome_id.to_string());
+                        lineage_readout(
+                            ui,
+                            "Generation",
+                            archive.generation_for_lineage(node.id).to_string(),
+                        );
+                        ui.end_row();
+                    });
+
+                ui.add_space(8.0);
+                if !archive.last_scan_organism_counts_reliable {
+                    ui.label(
+                        egui::RichText::new(
+                            "Body counts unavailable until organism labels have converged.",
+                        )
+                        .size(10.0)
+                        .color(p.status_warn),
+                    );
+                    ui.add_space(4.0);
+                }
+                if let crate::scene::lineage::LineageOrigin::Hybrid {
+                    parent_a,
+                    parent_b,
+                    similarity,
+                } = &node.origin
+                {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Parentage: L{} + L{} / {:.0}% compatibility",
+                            parent_a,
+                            parent_b,
+                            similarity * 100.0
+                        ))
+                        .size(10.0)
+                        .color(p.accent_secondary),
+                    );
+                } else if let Some(extinct_frame) = node.extinct_frame {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Archived extinction at frame {}",
+                            extinct_frame
+                        ))
+                        .size(10.0)
+                        .color(p.status_err),
+                    );
+                } else if node.mutation_count > 0 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} mutation observation(s) recorded",
+                            node.mutation_count
+                        ))
+                        .size(10.0)
+                        .color(p.accent_secondary),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new("No exceptional lineage flags recorded")
+                            .size(10.0)
+                            .color(p.text_dim),
+                    );
+                }
+
+                ui.add_space(10.0);
+                lineage_event_feed(ui, archive, node.id);
+            } else {
+                ui.label(
+                    egui::RichText::new("Select a species index entry to open its dossier.")
+                        .size(11.0)
+                        .color(p.text_secondary),
+                );
+            }
+        });
+}
+
+fn lineage_readout(ui: &mut Ui, label: &str, value: String) {
+    ui.label(
+        egui::RichText::new(label)
+            .size(10.0)
+            .color(palette().text_dim),
+    );
+    ui.label(
+        egui::RichText::new(value)
+            .size(12.0)
+            .color(palette().text_primary)
+            .strong(),
+    );
+}
+
+fn lineage_event_feed(
+    ui: &mut Ui,
+    archive: &crate::scene::lineage::EcosystemLineageArchive,
+    lineage_id: u64,
+) {
+    let p = palette();
+    ui.label(
+        egui::RichText::new("NOTABLE LOG")
+            .size(10.0)
+            .color(p.accent_primary),
+    );
+    let mut events: Vec<_> = archive
+        .events
+        .iter()
+        .filter(|event| event.lineage_id == lineage_id)
+        .collect();
+    events.sort_by(|a, b| b.frame.cmp(&a.frame));
+
+    if events.is_empty() {
+        ui.label(
+            egui::RichText::new("No timeline events recorded for this species.")
+                .size(10.0)
+                .color(p.text_dim),
+        );
+        return;
+    }
+
+    for event in events.into_iter().take(5) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!("F{}", event.frame))
+                    .size(9.5)
+                    .color(if event.noteworthy {
+                        p.accent_secondary
+                    } else {
+                        p.text_dim
+                    }),
+            );
+            ui.label(
+                egui::RichText::new(&event.title)
+                    .size(10.0)
+                    .color(p.text_primary),
+            );
+            ui.label(
+                egui::RichText::new(&event.detail)
+                    .size(10.0)
+                    .color(p.text_secondary),
+            );
+        });
+    }
+}
+
+fn lineage_badge(ui: &mut Ui, text: &str) {
+    egui::Frame::new()
+        .fill(palette().bg_darkest)
+        .stroke(egui::Stroke::new(
+            1.0,
+            palette().accent_secondary.linear_multiply(0.55),
+        ))
+        .inner_margin(egui::Margin::symmetric(6, 3))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(text.to_ascii_uppercase())
+                    .size(9.0)
+                    .color(palette().text_secondary),
+            );
+        });
+}
+
+fn render_lineage_branch_row(
+    ui: &mut Ui,
+    node: &crate::scene::lineage::LineageNode,
+    selected: bool,
+) -> bool {
+    let p = palette();
+    let fill = if selected { p.bg_selected } else { p.bg_widget };
+    let stroke = if selected {
+        egui::Stroke::new(1.0, p.accent_primary)
+    } else {
+        egui::Stroke::new(1.0, p.border_subtle)
+    };
+    let mut clicked = false;
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(stroke)
+        .inner_margin(egui::Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let color = lineage_color_for_node(node);
+                let (dot_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(10.0, 18.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot_rect.center(), 4.0, color);
+
+                clicked |= ui
+                    .selectable_label(
+                        selected,
+                        egui::RichText::new(&node.display_name)
+                            .size(12.0)
+                            .color(p.text_primary),
+                    )
+                    .clicked();
+
+                ui.label(
+                    egui::RichText::new(format!("L{:04}", node.id))
+                        .size(9.5)
+                        .color(p.text_dim),
+                );
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(lineage_origin_label(&node.origin))
+                            .size(9.5)
+                            .color(color),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("{} cells", node.current_cells))
+                            .size(9.5)
+                            .color(p.text_secondary),
+                    );
+                });
+            });
+        });
+    ui.add_space(4.0);
+    clicked
+}
+
+fn render_lineage_map_panel(
+    ui: &mut Ui,
+    archive: &crate::scene::lineage::EcosystemLineageArchive,
+    selected_id_key: egui::Id,
+    selected_snap_key: egui::Id,
+    selected_lineage_id: &mut Option<u64>,
+    selected_snap_frame: &mut Option<i32>,
+) {
+    egui::Frame::new()
+        .fill(palette().bg_panel)
+        .stroke(egui::Stroke::new(1.0, palette().border_normal))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("EVOLUTION TIMELINE")
+                    .size(10.0)
+                    .color(palette().accent_primary),
+            );
+            ui.add_space(6.0);
+            egui::ScrollArea::horizontal()
+                .id_salt("lineage_timeline_horizontal_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // Redirect vertical scroll wheel to horizontal scrolling so
+                    // the user doesn't need shift+scroll or a trackpad swipe.
+                    if ui.rect_contains_pointer(ui.max_rect()) {
+                        let dy = ui.input(|i| i.smooth_scroll_delta.y);
+                        if dy.abs() > 0.5 {
+                            ui.scroll_with_delta(egui::vec2(-dy * 2.5, 0.0));
+                        }
+                    }
+                    render_lineage_map(
+                        ui,
+                        archive,
+                        selected_id_key,
+                        selected_snap_key,
+                        selected_lineage_id,
+                        selected_snap_frame,
+                    );
+                });
+        });
+}
+
+/// A piecewise segment used to build the compressed timeline coordinate mapping.
+struct TimelineSpan {
+    frame_start: i32,
+    frame_end: i32,
+    x_start: f32,
+    x_end: f32,
+    /// True for compressed gap regions; false for proportional normal regions.
+    is_gap: bool,
+    /// Simulation time at span start (used for labelling gaps).
+    time_start: f32,
+    /// Simulation time at span end.
+    time_end: f32,
+}
+
+impl TimelineSpan {
+    fn project_frame(&self, frame: i32) -> f32 {
+        let span = (self.frame_end - self.frame_start).max(1) as f32;
+        let t = ((frame - self.frame_start) as f32 / span).clamp(0.0, 1.0);
+        self.x_start + (self.x_end - self.x_start) * t
+    }
+}
+
+fn build_timeline_spans(
+    min_frame: i32,
+    max_frame: i32,
+    gaps: &[crate::scene::lineage::LineageTimeGap],
+    inner_left: f32,
+    inner_width: f32,
+) -> Vec<TimelineSpan> {
+    const GAP_VISUAL_WIDTH: f32 = 32.0;
+
+    // Collect gaps that fall (even partially) within [min_frame, max_frame].
+    let mut active_gaps: Vec<_> = gaps
+        .iter()
+        .filter(|g| g.frame_span() > 0 && g.end_frame > min_frame && g.start_frame < max_frame)
+        .collect();
+    active_gaps.sort_by_key(|g| g.start_frame);
+
+    // Compute total frame-count that falls in gap regions vs. normal.
+    let total_gap_frames: i32 = active_gaps
+        .iter()
+        .map(|g| {
+            let s = g.start_frame.max(min_frame);
+            let e = g.end_frame.min(max_frame);
+            (e - s).max(0)
+        })
+        .sum();
+    let total_frame_span = (max_frame - min_frame).max(1);
+    let normal_frame_span = (total_frame_span - total_gap_frames).max(1);
+    let num_gaps = active_gaps.len();
+    let normal_pixels = (inner_width - num_gaps as f32 * GAP_VISUAL_WIDTH).max(1.0);
+    let pixels_per_normal_frame = normal_pixels / normal_frame_span as f32;
+
+    let mut spans = Vec::new();
+    let mut cursor_frame = min_frame;
+    let mut cursor_x = inner_left;
+
+    for gap in &active_gaps {
+        let gap_start = gap.start_frame.max(min_frame);
+        let gap_end = gap.end_frame.min(max_frame);
+        if gap_start >= gap_end {
+            continue;
+        }
+        // Normal span before this gap.
+        if cursor_frame < gap_start {
+            let width = (gap_start - cursor_frame) as f32 * pixels_per_normal_frame;
+            spans.push(TimelineSpan {
+                frame_start: cursor_frame,
+                frame_end: gap_start,
+                x_start: cursor_x,
+                x_end: cursor_x + width,
+                is_gap: false,
+                time_start: 0.0,
+                time_end: 0.0,
+            });
+            cursor_x += width;
+        }
+        // Gap span.
+        spans.push(TimelineSpan {
+            frame_start: gap_start,
+            frame_end: gap_end,
+            x_start: cursor_x,
+            x_end: cursor_x + GAP_VISUAL_WIDTH,
+            is_gap: true,
+            time_start: gap.start_time,
+            time_end: gap.end_time,
+        });
+        cursor_x += GAP_VISUAL_WIDTH;
+        cursor_frame = gap_end; // used as the start of the next normal span
+    }
+    // Trailing normal span.
+    if cursor_frame < max_frame {
+        let width = (max_frame - cursor_frame) as f32 * pixels_per_normal_frame;
+        spans.push(TimelineSpan {
+            frame_start: cursor_frame,
+            frame_end: max_frame,
+            x_start: cursor_x,
+            x_end: cursor_x + width,
+            is_gap: false,
+            time_start: 0.0,
+            time_end: 0.0,
+        });
+    }
+    spans
+}
+
+fn project_compressed_frame(spans: &[TimelineSpan], frame: i32, left: f32) -> f32 {
+    if spans.is_empty() {
+        return left;
+    }
+    for span in spans {
+        if frame <= span.frame_start {
+            return span.x_start;
+        }
+        if frame < span.frame_end {
+            return span.project_frame(frame);
+        }
+    }
+    spans.last().map(|s| s.x_end).unwrap_or(left)
+}
+
+fn format_gap_duration(seconds: f32) -> String {
+    if seconds >= 3600.0 {
+        format!("{:.1}h", seconds / 3600.0)
+    } else if seconds >= 60.0 {
+        format!("{:.1}m", seconds / 60.0)
+    } else {
+        format!("{:.0}s", seconds)
+    }
+}
+
+fn nice_time_interval(total_seconds: f32) -> f32 {
+    const NICE: &[f32] = &[
+        5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0, 3600.0, 7200.0,
+    ];
+    let raw = total_seconds / 8.0; // aim for ~8 ticks
+    NICE.iter().copied().find(|&i| i >= raw).unwrap_or(7200.0)
+}
+
+fn format_sim_time(seconds: f32) -> String {
+    let s = seconds as u32;
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let sec = s % 60;
+    if h > 0 {
+        format!("{h}h{m:02}m")
+    } else if m > 0 {
+        format!("{m}m{sec:02}s")
+    } else {
+        format!("{sec}s")
+    }
+}
+
+fn render_lineage_map(
+    ui: &mut Ui,
+    archive: &crate::scene::lineage::EcosystemLineageArchive,
+    selected_id_key: egui::Id,
+    selected_snap_key: egui::Id,
+    selected_lineage_id: &mut Option<u64>,
+    selected_snap_frame: &mut Option<i32>,
+) {
+    const TIME_STRIP_H: f32 = 20.0;
+    let map_height = 200.0; // 180px plot + 20px time strip
+    let available_width = ui.available_width().max(240.0);
+
+    if archive.nodes.is_empty() {
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(available_width, map_height),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 4.0, palette().bg_darkest);
+        painter.rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(1.0, palette().border_subtle),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "No branches recorded",
+            egui::FontId::proportional(11.0),
+            palette().text_dim,
+        );
+        return;
+    }
+
+    let generations: std::collections::HashMap<u64, u32> = archive
+        .nodes
+        .iter()
+        .map(|node| (node.id, archive.generation_for_lineage(node.id)))
+        .collect();
+
+    let mut visible: Vec<_> = archive.nodes.iter().collect();
+    visible.sort_by(|a, b| {
+        b.noteworthy_score
+            .total_cmp(&a.noteworthy_score)
+            .then_with(|| b.peak_cells.cmp(&a.peak_cells))
+            .then_with(|| a.first_frame.cmp(&b.first_frame))
+    });
+    visible.truncate(72);
+    visible.sort_by(|a, b| {
+        a.first_frame
+            .cmp(&b.first_frame)
+            .then_with(|| {
+                generations
+                    .get(&a.id)
+                    .copied()
+                    .unwrap_or(0)
+                    .cmp(&generations.get(&b.id).copied().unwrap_or(0))
+            })
+    });
+
+    let max_generation = visible
+        .iter()
+        .filter_map(|node| generations.get(&node.id).copied())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let min_frame = visible.iter().map(|node| node.first_frame).min().unwrap_or(0);
+    let branch_max_frame = visible
+        .iter()
+        .map(|node| node.first_frame)
+        .max()
+        .unwrap_or(min_frame)
+        .max(min_frame + 1);
+    let max_frame = archive
+        .last_scan_frame
+        .unwrap_or(branch_max_frame)
+        .max(branch_max_frame)
+        .max(min_frame + 1);
+
+    let estimated_frames_per_second = if archive.last_scan_time > 1.0 {
+        max_frame as f32 / archive.last_scan_time.max(1.0)
+    } else {
+        60.0
+    };
+    let interval_frames =
+        (crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS * estimated_frames_per_second)
+            .round()
+            .max(1.0) as i32;
+
+    // Count normal (non-gap) intervals to size the timeline width.
+    let active_gaps: Vec<_> = archive
+        .time_gaps
+        .iter()
+        .filter(|g| g.frame_span() > 0 && g.end_frame > min_frame && g.start_frame < max_frame)
+        .collect();
+    let total_gap_frames: i32 = active_gaps
+        .iter()
+        .map(|g| ((g.end_frame.min(max_frame)) - (g.start_frame.max(min_frame))).max(0))
+        .sum();
+    let normal_frame_span = ((max_frame - min_frame) - total_gap_frames).max(1);
+    let normal_interval_count = (normal_frame_span / interval_frames).max(1) + 1;
+    let gap_budget = active_gaps.len() as f32 * 32.0;
+    let timeline_width = available_width.max(280.0 + normal_interval_count as f32 * 120.0 + gap_budget);
+
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(timeline_width, map_height),
+        egui::Sense::click_and_drag(),
+    );
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, palette().bg_darkest);
+    for i in 1..6 {
+        let y = rect.top() + rect.height() * i as f32 / 6.0;
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            egui::Stroke::new(0.5, palette().border_subtle.linear_multiply(0.45)),
+        );
+    }
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, palette().border_subtle),
+        egui::StrokeKind::Inside,
+    );
+
+    let inner = rect.shrink2(egui::vec2(18.0, 16.0));
+    // Y range available for node placement, excluding the time strip at the bottom.
+    let plot_inner = egui::Rect::from_min_max(
+        inner.min,
+        egui::pos2(inner.max.x, rect.bottom() - TIME_STRIP_H - 4.0),
+    );
+    let spans = build_timeline_spans(
+        min_frame,
+        max_frame,
+        &archive.time_gaps,
+        inner.left(),
+        inner.width(),
+    );
+
+    // Draw gap bands first (behind everything else).
+    for span in &spans {
+        if !span.is_gap {
+            continue;
+        }
+        let gap_rect = egui::Rect::from_x_y_ranges(
+            span.x_start..=span.x_end,
+            rect.top()..=rect.bottom(),
+        );
+        painter.rect_filled(gap_rect, 0.0, palette().bg_widget.linear_multiply(0.35));
+        // Diagonal hatching.
+        let stripe_step = 5.0_f32;
+        let h = gap_rect.height();
+        let mut sx = gap_rect.left() - h;
+        while sx < gap_rect.right() + h {
+            let p0 = egui::pos2(sx, gap_rect.top());
+            let p1 = egui::pos2(sx + h, gap_rect.bottom());
+            // Clip to gap rect horizontally.
+            let clip_left = gap_rect.left();
+            let clip_right = gap_rect.right();
+            let (p0c, p1c) = clip_line_horizontal(p0, p1, clip_left, clip_right, h);
+            painter.line_segment(
+                [p0c, p1c],
+                egui::Stroke::new(0.7, palette().border_subtle.linear_multiply(0.35)),
+            );
+            sx += stripe_step;
+        }
+        let duration = (span.time_end - span.time_start).max(0.0);
+        let label = format!("▶▶ {}", format_gap_duration(duration));
+        painter.text(
+            gap_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::monospace(7.5),
+            palette().text_dim.linear_multiply(1.4),
+        );
+    }
+
+    // Interval tick marks (only in non-gap regions).
+    let first_interval = ((min_frame + interval_frames - 1) / interval_frames) * interval_frames;
+    let mut interval_frame = first_interval;
+    while interval_frame <= max_frame {
+        if !archive.frame_in_gap(interval_frame) {
+            let x = project_compressed_frame(&spans, interval_frame, inner.left());
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                egui::Stroke::new(0.75, palette().accent_primary.linear_multiply(0.28)),
+            );
+            painter.text(
+                egui::pos2(x + 3.0, rect.top() + 5.0),
+                egui::Align2::LEFT_TOP,
+                format!("F{}", interval_frame),
+                egui::FontId::monospace(8.5),
+                palette().text_dim,
+            );
+        }
+        interval_frame = interval_frame.saturating_add(interval_frames);
+        if interval_frames <= 0 {
+            break;
+        }
+    }
+
+    let mut rows_by_generation: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
+    for node in &visible {
+        let generation = generations.get(&node.id).copied().unwrap_or(0);
+        *rows_by_generation.entry(generation).or_insert(0) += 1;
+    }
+
+    let mut seen_by_generation: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
+    let mut positions = std::collections::HashMap::new();
+
+    for node in &visible {
+        let generation = generations.get(&node.id).copied().unwrap_or(0);
+        let row = seen_by_generation.entry(generation).or_insert(0);
+        let row_count = rows_by_generation.get(&generation).copied().unwrap_or(1);
+        let generation_fraction = generation as f32 / max_generation as f32;
+        let row_offset = if row_count > 1 {
+            ((*row as f32 + 1.0) / (row_count as f32 + 1.0) - 0.5) * 0.16
+        } else {
+            0.0
+        };
+        let y_fraction = (generation_fraction + row_offset).clamp(0.05, 0.95);
+        *row += 1;
+        positions.insert(
+            node.id,
+            egui::pos2(
+                project_compressed_frame(&spans, node.first_frame, inner.left()),
+                plot_inner.top() + plot_inner.height() * y_fraction,
+            ),
+        );
+    }
+
+    // Thumbnail dimensions.
+    let thumb_normal = egui::vec2(38.0, 34.0);
+    let thumb_selected = egui::vec2(46.0, 42.0);
+    let thumb_end = egui::vec2(30.0, 27.0); // smaller "latest state" thumbnail at bar end
+
+    // Helper: the x-coordinate where a node's lifespan bar ends.
+    let bar_end_x = |node: &crate::scene::lineage::LineageNode| -> f32 {
+        let end_frame = node
+            .extinct_frame
+            .unwrap_or_else(|| node.last_seen_frame.max(max_frame));
+        project_compressed_frame(&spans, end_frame, inner.left())
+    };
+
+    // --- Pass 1: horizontal lifespan bars ---
+    for node in &visible {
+        let Some(&pos) = positions.get(&node.id) else { continue };
+        let color = lineage_color_for_node(node);
+        let alive = node.current_cells > 0 || node.current_organisms > 0;
+        let bar_alpha = if alive { 0.65 } else { 0.35 };
+        let bar_thickness = if alive { 2.0 } else { 1.2 };
+        let end_x = bar_end_x(node);
+        // The bar starts from the right edge of the birth thumbnail.
+        let start_x = pos.x + thumb_normal.x * 0.5;
+        if end_x > start_x {
+            painter.line_segment(
+                [egui::pos2(start_x, pos.y), egui::pos2(end_x, pos.y)],
+                egui::Stroke::new(bar_thickness, color.linear_multiply(bar_alpha)),
+            );
+        }
+    }
+
+    // --- Pass 2: L-shaped branch connectors ---
+    // A child branches off from its parent's lifespan bar at the child's
+    // first_frame x-coordinate.  Draw a vertical segment from the parent's
+    // Y to the child's Y at that x, then a short horizontal lead-in to the
+    // child thumbnail.
+    for node in &visible {
+        let Some(child_pos) = positions.get(&node.id).copied() else { continue };
+        let color = lineage_color_for_node(node);
+        for parent_id in [node.parent_a, node.parent_b].into_iter().flatten() {
+            let Some(parent_pos) = positions.get(&parent_id).copied() else { continue };
+            let branch_x = child_pos.x - thumb_normal.x * 0.5; // left edge of child thumb
+            // Vertical from parent bar to child row.
+            painter.line_segment(
+                [
+                    egui::pos2(branch_x, parent_pos.y),
+                    egui::pos2(branch_x, child_pos.y),
+                ],
+                egui::Stroke::new(1.0, color.linear_multiply(0.55)),
+            );
+            // Short horizontal from branch point to child thumbnail.
+            painter.line_segment(
+                [
+                    egui::pos2(branch_x, child_pos.y),
+                    egui::pos2(child_pos.x, child_pos.y),
+                ],
+                egui::Stroke::new(1.0, color.linear_multiply(0.55)),
+            );
+        }
+    }
+
+    // --- Pass 3: "latest state" thumbnail at bar end (living nodes only) ---
+    // Only drawn when the bar is long enough to warrant a separate end marker
+    // (i.e., the node has actually been around for a while) and there's a
+    // snapshot available.
+    for node in &visible {
+        let Some(&pos) = positions.get(&node.id) else { continue };
+        let alive = node.current_cells > 0 || node.current_organisms > 0;
+        if !alive || node.latest_snapshot().is_none() {
+            continue;
+        }
+        let end_x = bar_end_x(node);
+        // Only show if the bar spans at least two thumbnail-widths of display space.
+        if end_x - pos.x < thumb_normal.x * 2.0 {
+            continue;
+        }
+        let end_pos = egui::pos2(end_x, pos.y);
+        let end_rect = egui::Rect::from_center_size(end_pos, thumb_end);
+        draw_lineage_timeline_snapshot(&painter, end_rect, node, false);
+    }
+
+    // --- Pass 5: interval snapshot dots / mini-thumbnails along each node's bar ---
+    const DOT_R: f32 = 4.5;
+    const MINI_THUMB: egui::Vec2 = egui::vec2(28.0, 25.0);
+    let mut snap_interval_frame = first_interval;
+    while snap_interval_frame <= max_frame {
+        if !archive.frame_in_gap(snap_interval_frame) {
+            let tick_x = project_compressed_frame(&spans, snap_interval_frame, inner.left());
+            for node in &visible {
+                let Some(&pos) = positions.get(&node.id) else { continue };
+                let end_x = bar_end_x(node);
+                // Only draw if this interval falls within the node's lifespan bar.
+                if tick_x <= pos.x + thumb_normal.x * 0.5 || tick_x > end_x + 1.0 {
+                    continue;
+                }
+                let dot_pos = egui::pos2(tick_x, pos.y);
+                let snap = node.snapshot_near_frame(snap_interval_frame);
+                let has_snap = snap
+                    .map(|s| (s.captured_frame - snap_interval_frame).abs() <= interval_frames / 2)
+                    .unwrap_or(false);
+                let is_selected = Some(node.id) == *selected_lineage_id
+                    && selected_snap_frame
+                        .map(|f| (f - snap_interval_frame).abs() <= interval_frames / 2)
+                        .unwrap_or(false);
+
+                let interact_rect = if has_snap {
+                    egui::Rect::from_center_size(dot_pos, MINI_THUMB)
+                } else {
+                    egui::Rect::from_center_size(dot_pos, egui::vec2(DOT_R * 2.5, DOT_R * 2.5))
+                };
+                let resp = ui.interact(
+                    interact_rect,
+                    egui::Id::new(("lineage_snap_dot", node.id, snap_interval_frame)),
+                    egui::Sense::click(),
+                );
+                if resp.clicked() {
+                    *selected_lineage_id = Some(node.id);
+                    *selected_snap_frame = Some(snap_interval_frame);
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(selected_id_key, node.id));
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(selected_snap_key, snap_interval_frame));
+                }
+
+                let color = lineage_color_for_node(node);
+                if has_snap {
+                    if let Some(snapshot) = snap {
+                        let mini_rect = egui::Rect::from_center_size(dot_pos, MINI_THUMB);
+                        let fill = if is_selected {
+                            palette().bg_panel
+                        } else {
+                            palette().bg_darkest
+                        };
+                        painter.rect_filled(mini_rect, 3.0, fill);
+                        painter.rect_stroke(
+                            mini_rect,
+                            3.0,
+                            egui::Stroke::new(
+                                if is_selected { 1.5 } else { 0.8 },
+                                color.linear_multiply(if is_selected { 1.0 } else { 0.55 }),
+                            ),
+                            egui::StrokeKind::Inside,
+                        );
+                        let image_rect = mini_rect.shrink(2.0);
+                        if let Some(texture_id) = lineage_thumbnail_texture(
+                            ui.ctx(),
+                            node.id,
+                            snapshot.captured_frame,
+                            snapshot.scene_thumbnail_png.as_ref(),
+                        ) {
+                            let thumb_w =
+                                crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH as f32;
+                            let thumb_h =
+                                crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT as f32;
+                            let draw_rect =
+                                thumbnail_cover_rect(image_rect, thumb_w, thumb_h);
+                            let full_uv = egui::Rect::from_min_max(
+                                egui::Pos2::ZERO,
+                                egui::pos2(1.0, 1.0),
+                            );
+                            painter
+                                .with_clip_rect(image_rect)
+                                .image(texture_id, draw_rect, full_uv, egui::Color32::WHITE);
+                        } else {
+                            draw_lineage_adult_snapshot_scaled(
+                                &painter,
+                                image_rect,
+                                snapshot,
+                                color,
+                                0.8,
+                                3.5,
+                                0.3,
+                            );
+                        }
+                    }
+                } else {
+                    // Plain dot
+                    let dot_color = color.linear_multiply(if is_selected { 1.0 } else { 0.55 });
+                    painter.circle_filled(dot_pos, DOT_R, dot_color);
+                    if is_selected {
+                        painter.circle_stroke(
+                            dot_pos,
+                            DOT_R + 2.0,
+                            egui::Stroke::new(1.2, palette().text_primary),
+                        );
+                    }
+                }
+
+                if resp.hovered() {
+                    resp.on_hover_text(format!(
+                        "{} — frame {}{}\nClick to view snapshot",
+                        node.display_name,
+                        snap_interval_frame,
+                        if has_snap { " (snapshot)" } else { " (no snapshot)" }
+                    ));
+                }
+            }
+        }
+        snap_interval_frame = snap_interval_frame.saturating_add(interval_frames);
+        if interval_frames <= 0 {
+            break;
+        }
+    }
+
+    // --- Pass 4: birth thumbnails and interaction ---
+    for node in &visible {
+        let Some(pos) = positions.get(&node.id).copied() else { continue };
+        let selected = Some(node.id) == *selected_lineage_id;
+        let thumb_size = if selected { thumb_selected } else { thumb_normal };
+        let node_rect = egui::Rect::from_center_size(pos, thumb_size);
+        let response = ui.interact(
+            node_rect,
+            egui::Id::new(("lineage_map_node", node.id)),
+            egui::Sense::click(),
+        );
+        if response.clicked() {
+            *selected_lineage_id = Some(node.id);
+            *selected_snap_frame = None;
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(selected_id_key, node.id));
+            ui.ctx()
+                .data_mut(|data| data.insert_temp::<Option<i32>>(selected_snap_key, None));
+        }
+
+        draw_lineage_timeline_snapshot(&painter, node_rect, node, selected);
+        if node.extinct_frame.is_some() {
+            let mark = 6.0;
+            let x_center = node_rect.right_top() + egui::vec2(-7.0, 7.0);
+            painter.line_segment(
+                [
+                    x_center + egui::vec2(-mark, -mark),
+                    x_center + egui::vec2(mark, mark),
+                ],
+                egui::Stroke::new(1.4, palette().status_err),
+            );
+            painter.line_segment(
+                [
+                    x_center + egui::vec2(-mark, mark),
+                    x_center + egui::vec2(mark, -mark),
+                ],
+                egui::Stroke::new(1.4, palette().status_err),
+            );
+        }
+
+        if response.hovered() {
+            response.on_hover_text(format!(
+                "{}\nLineage {} / Genome {}\nFirst frame: {}\nCells: {} / Peak: {}",
+                node.display_name,
+                node.id,
+                node.genome_id,
+                node.first_frame,
+                node.current_cells,
+                node.peak_cells
+            ));
+        }
+    }
+
+    // --- Time strip along the bottom ---
+    let time_strip_top = rect.bottom() - TIME_STRIP_H;
+    painter.line_segment(
+        [egui::pos2(rect.left(), time_strip_top), egui::pos2(rect.right(), time_strip_top)],
+        egui::Stroke::new(0.5, palette().border_subtle.linear_multiply(0.6)),
+    );
+
+    let total_seconds = archive.last_scan_time.max(1.0);
+    let fps = max_frame as f32 / total_seconds;
+    let tick_interval_secs = nice_time_interval(total_seconds);
+    let mut t = tick_interval_secs;
+    while t <= total_seconds + tick_interval_secs * 0.5 {
+        let tick_frame = (t * fps) as i32 + min_frame;
+        if !archive.frame_in_gap(tick_frame) {
+            let x = project_compressed_frame(&spans, tick_frame, inner.left());
+            if x >= rect.left() && x <= rect.right() {
+                painter.line_segment(
+                    [egui::pos2(x, time_strip_top), egui::pos2(x, time_strip_top + 5.0)],
+                    egui::Stroke::new(0.75, palette().accent_secondary.linear_multiply(0.6)),
+                );
+                painter.text(
+                    egui::pos2(x + 3.0, time_strip_top + 3.0),
+                    egui::Align2::LEFT_TOP,
+                    format_sim_time(t),
+                    egui::FontId::monospace(8.5),
+                    palette().text_secondary,
+                );
+            }
+        }
+        t += tick_interval_secs;
+    }
+}
+
+/// Horizontally clip a diagonal line segment to [clip_left, clip_right].
+///
+/// Assumes the line goes from top-left to bottom-right (x increases as y increases).
+fn clip_line_horizontal(
+    p0: egui::Pos2,
+    p1: egui::Pos2,
+    clip_left: f32,
+    clip_right: f32,
+    height: f32,
+) -> (egui::Pos2, egui::Pos2) {
+    let dx = p1.x - p0.x;
+    let dy = p1.y - p0.y;
+    let t_for_x = |x: f32| if dx.abs() < 1e-6 { 0.0 } else { (x - p0.x) / dx };
+    let t0 = t_for_x(clip_left).max(0.0);
+    let t1 = t_for_x(clip_right).min(1.0);
+    if t0 > t1 {
+        // Degenerate — return a zero-length segment at center.
+        let cx = (clip_left + clip_right) * 0.5;
+        let cy = p0.y + dy * t_for_x(cx).clamp(0.0, 1.0);
+        return (egui::pos2(cx, cy), egui::pos2(cx, cy));
+    }
+    let _ = height; // kept for signature clarity
+    (
+        egui::pos2(p0.x + dx * t0, p0.y + dy * t0),
+        egui::pos2(p0.x + dx * t1, p0.y + dy * t1),
+    )
+}
+
+fn lineage_color_for_node(node: &crate::scene::lineage::LineageNode) -> egui::Color32 {
+    match &node.origin {
+        crate::scene::lineage::LineageOrigin::Hybrid { .. } => palette().accent_secondary,
+        crate::scene::lineage::LineageOrigin::Mutation { .. } => palette().status_warn,
+        _ if node.current_cells > 0 || node.current_organisms > 0 => palette().status_ok,
+        _ if node.extinct_frame.is_some() => palette().status_err,
+        _ => palette().text_dim,
+    }
+}
+
+fn lineage_origin_label(origin: &crate::scene::lineage::LineageOrigin) -> &'static str {
+    match origin {
+        crate::scene::lineage::LineageOrigin::UserInserted => "USER ROOT",
+        crate::scene::lineage::LineageOrigin::ProceduralSeed => "SEED",
+        crate::scene::lineage::LineageOrigin::Mutation { .. } => "MUTATION",
+        crate::scene::lineage::LineageOrigin::Hybrid { .. } => "HYBRID",
+        crate::scene::lineage::LineageOrigin::Unknown => "UNKNOWN",
+    }
+}
+
+fn lineage_trait_tags(traits: &crate::scene::lineage::LineageTraitSummary) -> Vec<&'static str> {
+    let mut tags = Vec::new();
+    if traits.has_phagocyte {
+        tags.push("phagocyte");
+    }
+    if traits.has_photocyte {
+        tags.push("photocyte");
+    }
+    if traits.has_devorocyte {
+        tags.push("devorocyte");
+    }
+    if traits.has_flagellocyte {
+        tags.push("flagellocyte");
+    }
+    if traits.has_ciliocyte {
+        tags.push("ciliocyte");
+    }
+    if traits.has_gametocyte {
+        tags.push("gametocyte");
+    }
+    if traits.has_cognocyte {
+        tags.push("cognocyte");
+    }
+    if traits.uses_signals {
+        tags.push("signals");
+    }
+    if traits.uses_scaffolds {
+        tags.push("scaffold");
+    }
+    tags
 }
 
 /// Render the GenomeEditor panel (placeholder).
@@ -6457,7 +8442,8 @@ fn sync_mode_changes_to_others(
         if updated.myocyte_pulse_phase != snapshot.myocyte_pulse_phase {
             other.myocyte_pulse_phase = updated.myocyte_pulse_phase;
         }
-        if (updated.myocyte_grip_contracted - snapshot.myocyte_grip_contracted).abs() > f32::EPSILON {
+        if (updated.myocyte_grip_contracted - snapshot.myocyte_grip_contracted).abs() > f32::EPSILON
+        {
             other.myocyte_grip_contracted = updated.myocyte_grip_contracted;
         }
         if (updated.myocyte_grip_extended - snapshot.myocyte_grip_extended).abs() > f32::EPSILON {

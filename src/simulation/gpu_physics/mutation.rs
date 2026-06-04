@@ -135,8 +135,10 @@ pub struct MutationParamsUniform {
     pub subtle_color_mutation: u32,
 }
 
-/// Per-genome metadata matching WGSL: vec4<u32>(mode_count, base_mode_offset, initial_mode_local, flags)
+/// Per-genome metadata matching WGSL:
+/// vec4<u32>(mode_count, base_mode_offset, initial_mode_local, parent_genome_id)
 /// .z = initial_mode as a local (0-based) index within the genome's modes
+/// .w = parent genome id for GPU-mutated genomes, u32::MAX for CPU root genomes
 /// Real ref counts are tracked separately in genome_ref_counts_buffer (atomic).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -144,7 +146,7 @@ pub struct GenomeMeta {
     pub mode_count: u32,
     pub base_mode_offset: u32,
     pub initial_mode_local: u32, // local (0-based) initial mode index; was unused (.z = 0)
-    pub flags: u32,
+    pub parent_genome_id: u32,
 }
 
 /// Uniform params for the collect_candidates shader
@@ -2543,7 +2545,7 @@ impl MutationSystem {
                 mode_count: genome.modes.len() as u32,
                 base_mode_offset: offset,
                 initial_mode_local: genome.initial_mode.max(0) as u32,
-                flags: 0,
+                parent_genome_id: u32::MAX,
             };
             // Partial write: only touch this genome's entry, leave all others intact
             let byte_offset = (i * std::mem::size_of::<GenomeMeta>()) as u64;

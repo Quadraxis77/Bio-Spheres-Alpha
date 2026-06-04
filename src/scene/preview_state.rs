@@ -441,7 +441,9 @@ impl PreviewState {
             mode.cognocyte_output_hops.hash(&mut hasher);
             mode.cognocyte_oscillator_rate.to_bits().hash(&mut hasher);
             mode.cognocyte_oscillator_phase.to_bits().hash(&mut hasher);
-            mode.cognocyte_oscillator_strength.to_bits().hash(&mut hasher);
+            mode.cognocyte_oscillator_strength
+                .to_bits()
+                .hash(&mut hasher);
             mode.cognocyte_oscillator_step_count.hash(&mut hasher);
         }
 

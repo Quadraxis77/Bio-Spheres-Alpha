@@ -926,8 +926,6 @@ impl UiSystem {
 
         // Show branded top bar
         let mut ui_state_copy = self.state.clone();
-        let gpu_headless_ui = ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu
-            && ui_state_copy.gpu_headless_mode;
 
         // Pending mutations from inside egui closures (can't borrow self inside them).
         let mut pending_toasts: Vec<crate::ui::toast::Toast> = Vec::new();
@@ -955,7 +953,7 @@ impl UiSystem {
             p.border_normal,
         );
 
-        if !ui_state_copy.hide_ui && !gpu_headless_ui {
+        if !ui_state_copy.hide_ui {
             #[allow(deprecated)]
         egui::Panel::top("top_bar")
             .frame(
@@ -1378,15 +1376,7 @@ impl UiSystem {
                 render_side_rail(ui, &mut ui_state_copy, editor_state, dock_manager);
             });
 
-        if gpu_headless_ui {
-            render_gpu_headless_overlay(
-                &self.ctx,
-                &mut ui_state_copy,
-                scene_manager,
-                scene_request,
-                performance,
-            );
-        } else {
+        {
             // Show dock area in remaining space
             let mut style = egui_dock::Style::from_egui(self.ctx.global_style().as_ref());
             style.separator.extra = 75.0;
@@ -1586,6 +1576,11 @@ impl UiSystem {
             // Create panel context for PanelTabViewer
             let current_mode = ui_state_copy.current_mode;
             let hide_ui = ui_state_copy.hide_ui;
+
+            // Reset headless mode each frame so it's only active when the
+            // lineage panel is the visible tab and re-enables automatically
+            // when switching away without closing.
+            ui_state_copy.gpu_headless_mode = false;
 
             // Show dock area (scoped to release borrows after)
             {
@@ -2280,7 +2275,7 @@ impl UiSystem {
 
         // Render radial menu overlay (GPU mode only)
         // Now editor_state is no longer borrowed by panel_context
-        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu && !gpu_headless_ui {
+        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu && !ui_state_copy.gpu_headless_mode {
             crate::ui::radial_menu::show_radial_menu(&self.ctx, &mut editor_state.radial_menu);
             // Only show the tool cursor icon when the pointer is over the viewport,
             // not over a panel - over panels the system cursor is visible instead.
@@ -2832,6 +2827,36 @@ fn show_windows_menu(
 
     // Cave System (GPU mode only)
     if state.current_mode == crate::ui::types::SimulationMode::Gpu {
+        // Lineage Viewer (GPU mode only)
+        let lineage_open = is_panel_open(dock_manager.current_tree(), &Panel::LineageViewer);
+        let lineage_name = format!("{:?}", Panel::LineageViewer);
+        let lineage_locked = state.is_panel_locked(&lineage_name);
+
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(lineage_open, "  Lineage Viewer")
+                .clicked()
+            {
+                if lineage_open {
+                    close_panel(dock_manager.current_tree_mut(), &Panel::LineageViewer);
+                } else {
+                    open_panel_docked_to_viewport(
+                        dock_manager.current_tree_mut(),
+                        &Panel::LineageViewer,
+                    );
+                }
+            }
+
+            let lock_icon = if lineage_locked {
+                "ðŸ”’"
+            } else {
+                "ðŸ”“"
+            };
+            if ui.small_button(lock_icon).clicked() {
+                state.set_panel_locked(&lineage_name, !lineage_locked);
+            }
+        });
+
         let cave_open = is_panel_open(dock_manager.current_tree(), &Panel::CaveSystem);
         let cave_name = format!("{:?}", Panel::CaveSystem);
         let cave_locked = state.is_panel_locked(&cave_name);
@@ -2977,6 +3002,33 @@ fn open_panel(
     let _surface_index = tree.add_window(vec![*panel]);
 }
 
+/// Open a panel as a tab in the same dock leaf as the main viewport, then focus it.
+fn open_panel_docked_to_viewport(
+    tree: &mut egui_dock::DockState<crate::ui::panel::Panel>,
+    panel: &crate::ui::panel::Panel,
+) {
+    if let Some(location) = tree.find_tab(panel) {
+        tree.set_active_tab(location);
+        tree.set_focused_node_and_surface((location.0, location.1));
+        return;
+    }
+
+    if let Some((surface, node, _tab)) = tree.find_tab(&crate::ui::panel::Panel::Viewport) {
+        tree.set_focused_node_and_surface((surface, node));
+        tree.push_to_focused_leaf(*panel);
+        if let Some(location) = tree.find_tab(panel) {
+            tree.set_active_tab(location);
+            tree.set_focused_node_and_surface((location.0, location.1));
+        }
+    } else {
+        tree.push_to_first_leaf(*panel);
+        if let Some(location) = tree.find_tab(panel) {
+            tree.set_active_tab(location);
+            tree.set_focused_node_and_surface((location.0, location.1));
+        }
+    }
+}
+
 /// Show the Save / Load menu.
 ///
 /// For **save**: sets `show_saving_popup = true`.  The popup renders for one
@@ -3083,246 +3135,8 @@ fn topbar_divider(ui: &mut egui::Ui) {
     ui.painter().rect_filled(rect, 0.0, theme::BORDER_NORMAL);
 }
 
-fn render_gpu_headless_overlay(
-    ctx: &egui::Context,
-    state: &mut GlobalUiState,
-    scene_manager: &mut crate::scene::SceneManager,
-    scene_request: &mut crate::ui::panel_context::SceneModeRequest,
-    performance: &crate::ui::performance::PerformanceMetrics,
-) {
-    let p = palette();
-    let fps = performance.fps();
-    let frame_ms = performance.average_frame_time_ms();
-    let min_ms = performance.min_frame_time_ms();
-    let max_ms = performance.max_frame_time_ms();
-    let frame_times: Vec<f32> = performance.frame_time_history().collect();
-    let avg_fps = average_fps_for_last_samples(&frame_times, 60);
-    let long_avg_fps = average_fps_for_last_samples(&frame_times, 120);
 
-    let (mut sim_speed, is_paused, sim_time, cell_count, capacity) =
-        if let Some(gpu_scene) = scene_manager.gpu_scene() {
-            (
-                gpu_scene.time_scale,
-                gpu_scene.paused,
-                gpu_scene.current_time,
-                gpu_scene.current_cell_count,
-                gpu_scene.capacity(),
-            )
-        } else {
-            (1.0, true, 0.0, 0, 0)
-        };
-
-    #[allow(deprecated)]
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::none()
-                .fill(p.bg_darkest)
-                .inner_margin(egui::Margin::same(0)),
-        )
-        .show(ctx, |ui| {
-            let available = ui.max_rect();
-            let panel_width = available.width().min(980.0);
-            let panel_rect = egui::Rect::from_center_size(
-                available.center(),
-                egui::vec2(panel_width, available.height().min(720.0)),
-            );
-
-            ui.allocate_ui_at_rect(panel_rect, |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.heading(
-                            egui::RichText::new("GPU Headless")
-                                .size(24.0)
-                                .color(p.text_primary),
-                        );
-                        ui.add_space(8.0);
-                        ui.label(
-                            egui::RichText::new("scene rendering disabled")
-                                .size(12.0)
-                                .color(p.text_secondary),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Exit").clicked() {
-                                state.gpu_headless_mode = false;
-                            }
-                            if ui
-                                .button(if is_paused { "Resume" } else { "Pause" })
-                                .clicked()
-                            {
-                                *scene_request =
-                                    crate::ui::panel_context::SceneModeRequest::TogglePause;
-                            }
-                        });
-                    });
-
-                    ui.add_space(10.0);
-                    ui.columns(4, |cols| {
-                        headless_metric(
-                            &mut cols[0],
-                            "FPS",
-                            &format!("{:.1}", fps),
-                            fps_color(fps, p),
-                        );
-                        headless_metric(
-                            &mut cols[1],
-                            "Frame",
-                            &format!("{:.2} ms", frame_ms),
-                            p.text_primary,
-                        );
-                        headless_metric(
-                            &mut cols[2],
-                            "Sim Speed",
-                            &format!("{:.2}x", sim_speed),
-                            p.accent_primary,
-                        );
-                        headless_metric(
-                            &mut cols[3],
-                            "Cells",
-                            &format!("{} / {}k", cell_count, capacity / 1000),
-                            p.text_primary,
-                        );
-                    });
-
-                    ui.add_space(12.0);
-                    draw_headless_fps_graph(ui, &frame_times, 220.0, state.gpu_headless_target_fps);
-
-                    ui.add_space(10.0);
-                    egui::Grid::new("headless_stats_grid")
-                        .num_columns(4)
-                        .spacing([18.0, 5.0])
-                        .show(ui, |ui| {
-                            stat_label(ui, "1s avg", &format!("{:.1} FPS", avg_fps));
-                            stat_label(ui, "2s avg", &format!("{:.1} FPS", long_avg_fps));
-                            stat_label(ui, "min/max", &format!("{:.2}/{:.2} ms", min_ms, max_ms));
-                            stat_label(ui, "sim time", &format!("{:.1}s", sim_time));
-                            ui.end_row();
-                        });
-
-                    let headless_speed_cap = crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED;
-
-                    ui.add_space(14.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Simulation speed")
-                                .size(12.0)
-                                .color(p.text_secondary),
-                        );
-                        sim_speed = sim_speed.clamp(0.1, headless_speed_cap);
-                        let speed_response = ui.add(
-                            egui::Slider::new(&mut sim_speed, 0.1..=headless_speed_cap)
-                                .logarithmic(true)
-                                .suffix("x"),
-                        );
-                        if speed_response.changed() {
-                            state.gpu_headless_auto_speed = false;
-                            *scene_request =
-                                crate::ui::panel_context::SceneModeRequest::SetSpeed(sim_speed);
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        for speed in [1.0_f32, 2.0, 5.0, 10.0] {
-                            if ui.button(format!("{:.0}x", speed)).clicked() {
-                                state.gpu_headless_auto_speed = false;
-                                *scene_request =
-                                    crate::ui::panel_context::SceneModeRequest::SetSpeed(speed);
-                            }
-                        }
-                        ui.add_space(10.0);
-                        if ui.button("Benchmark").clicked() {
-                            state.gpu_headless_auto_speed = false;
-                            state.gpu_readbacks_enabled = false;
-                            *scene_request =
-                                crate::ui::panel_context::SceneModeRequest::SetSpeed(5.0);
-                        }
-                        if ui.button("Adaptive").clicked() {
-                            state.gpu_headless_auto_speed = true;
-                            state.gpu_headless_target_fps = 30.0;
-                        }
-                        if ui.button("Fast Forward").clicked() {
-                            state.gpu_headless_auto_speed = true;
-                            state.gpu_headless_target_fps = 30.0;
-                            *scene_request = crate::ui::panel_context::SceneModeRequest::SetSpeed(
-                                state.gpu_headless_max_speed.min(headless_speed_cap),
-                            );
-                        }
-                    });
-
-                    ui.add_space(12.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut state.gpu_headless_auto_speed, "Auto target FPS");
-                        ui.add(
-                            egui::Slider::new(&mut state.gpu_headless_target_fps, 15.0..=60.0)
-                                .suffix(" FPS"),
-                        );
-                        ui.label(
-                            egui::RichText::new(state.gpu_headless_auto_status.display_name())
-                                .color(if state.gpu_headless_auto_speed {
-                                    p.accent_secondary
-                                } else {
-                                    p.text_dim
-                                }),
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Auto bounds")
-                                .size(12.0)
-                                .color(p.text_secondary),
-                        );
-                        ui.add(
-                            egui::Slider::new(
-                                &mut state.gpu_headless_min_speed,
-                                0.1..=headless_speed_cap,
-                            )
-                            .logarithmic(true)
-                            .prefix("min ")
-                            .suffix("x"),
-                        );
-                        ui.add(
-                            egui::Slider::new(
-                                &mut state.gpu_headless_max_speed,
-                                0.1..=headless_speed_cap,
-                            )
-                            .logarithmic(true)
-                            .prefix("max ")
-                            .suffix("x"),
-                        );
-                        state.gpu_headless_min_speed =
-                            state.gpu_headless_min_speed.clamp(0.1, headless_speed_cap);
-                        state.gpu_headless_max_speed =
-                            state.gpu_headless_max_speed.clamp(0.1, headless_speed_cap);
-                        if state.gpu_headless_min_speed > state.gpu_headless_max_speed {
-                            std::mem::swap(
-                                &mut state.gpu_headless_min_speed,
-                                &mut state.gpu_headless_max_speed,
-                            );
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU readbacks");
-                        ui.label(
-                            egui::RichText::new(if state.gpu_readbacks_enabled {
-                                "live counts enabled"
-                            } else {
-                                "reduced CPU/GPU synchronization"
-                            })
-                            .color(p.text_dim),
-                        );
-                    });
-                });
-            });
-        });
-
-    ctx.request_repaint();
-}
-
-fn headless_metric(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
+pub(crate) fn headless_metric(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
     let p = palette();
     ui.vertical(|ui| {
         ui.label(
@@ -3334,7 +3148,7 @@ fn headless_metric(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Col
     });
 }
 
-fn stat_label(ui: &mut egui::Ui, label: &str, value: &str) {
+pub(crate) fn stat_label(ui: &mut egui::Ui, label: &str, value: &str) {
     let p = palette();
     ui.label(
         egui::RichText::new(label)
@@ -3344,7 +3158,7 @@ fn stat_label(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.label(egui::RichText::new(value).size(11.0).color(p.text_primary));
 }
 
-fn average_fps_for_last_samples(frame_times_ms: &[f32], samples: usize) -> f32 {
+pub(crate) fn average_fps_for_last_samples(frame_times_ms: &[f32], samples: usize) -> f32 {
     if frame_times_ms.is_empty() {
         return 0.0;
     }
@@ -3358,7 +3172,7 @@ fn average_fps_for_last_samples(frame_times_ms: &[f32], samples: usize) -> f32 {
     }
 }
 
-fn fps_color(fps: f32, p: ActivePalette) -> egui::Color32 {
+pub(crate) fn fps_color(fps: f32, p: ActivePalette) -> egui::Color32 {
     if fps >= 50.0 {
         p.status_ok
     } else if fps >= 30.0 {
@@ -3368,7 +3182,7 @@ fn fps_color(fps: f32, p: ActivePalette) -> egui::Color32 {
     }
 }
 
-fn draw_headless_fps_graph(
+pub(crate) fn draw_headless_fps_graph(
     ui: &mut egui::Ui,
     frame_times_ms: &[f32],
     height: f32,
@@ -3524,18 +3338,22 @@ fn render_side_rail(
                 state.hide_ui = !hide_active;
             }
 
-            // Headless no-render mode
-            let headless_active = state.gpu_headless_mode;
-            if rail_button_toggle(
-                ui,
-                "H",
-                "Headless Performance Mode (toggle scene rendering)",
-                headless_active,
-                &p,
-            ) {
-                state.gpu_headless_mode = !headless_active;
-                if state.gpu_headless_mode {
-                    state.hide_ui = false;
+            // Lineage viewer
+            let lineage_open = is_panel_open(
+                dock_manager.current_tree(),
+                &crate::ui::panel::Panel::LineageViewer,
+            );
+            if rail_button_toggle(ui, "🧬", "Lineage Viewer", lineage_open, &p) {
+                if lineage_open {
+                    close_panel(
+                        dock_manager.current_tree_mut(),
+                        &crate::ui::panel::Panel::LineageViewer,
+                    );
+                } else {
+                    open_panel_docked_to_viewport(
+                        dock_manager.current_tree_mut(),
+                        &crate::ui::panel::Panel::LineageViewer,
+                    );
                 }
             }
 

@@ -91,7 +91,7 @@ var<storage, read> water_velocity: array<u32>;
 
 // Per-cell grip (friction drag). Written by muscle_contraction shader.
 // 0.0 = no grip; positive values add medium-scaled drag opposing velocity.
-@group(4) @binding(0)
+@group(2) @binding(7)
 var<storage, read> cell_grip: array<f32>;
 
 const FIXED_POINT_SCALE: f32 = 1000.0;

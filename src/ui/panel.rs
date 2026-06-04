@@ -26,6 +26,8 @@ pub enum Panel {
     // Dynamic windows
     /// Inspector for viewing selected cell properties.
     CellInspector,
+    /// Ecosystem lineage archive and species dossier viewer.
+    LineageViewer,
     /// Main genome editor panel.
     GenomeEditor,
     /// Scene/mode manager for switching simulation modes.
@@ -113,6 +115,7 @@ impl Panel {
 
             // GPU mode primarily (but can be shown in preview)
             Panel::CellInspector => true,
+            Panel::LineageViewer => mode == SimulationMode::Gpu,
             Panel::PerformanceMonitor => true,
         }
     }
@@ -157,6 +160,7 @@ impl Panel {
             Panel::RightPanel,
             Panel::BottomPanel,
             Panel::CellInspector,
+            Panel::LineageViewer,
             Panel::GenomeEditor,
             Panel::SceneManager,
             Panel::PerformanceMonitor,
@@ -190,6 +194,7 @@ impl Panel {
             Panel::RightPanel => "Right Panel",
             Panel::BottomPanel => "Bottom Panel",
             Panel::CellInspector => "Cell Inspector",
+            Panel::LineageViewer => "Lineage Viewer",
             Panel::GenomeEditor => "Genome Editor",
             Panel::SceneManager => "Scene Manager",
             Panel::PerformanceMonitor => "Performance",

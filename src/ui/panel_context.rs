@@ -41,6 +41,10 @@ pub enum SceneModeRequest {
     RegenerateFluidMesh,
     /// Request to read back a mutated genome from GPU and load it into the editor
     LoadGenomeFromGpu(u32),
+    /// Request to load a scene-table genome into the editor without GPU readback.
+    LoadGenomeFromSceneGenome(u32),
+    /// Request to load a retained lineage genome payload into the editor.
+    LoadGenomeFromLineageBookmark(u64),
     /// Request to read back the GPU genome for an inspected cell.
     ///
     /// The inspector reports both `genome_id` and absolute `mode_index`. If
@@ -51,6 +55,8 @@ pub enum SceneModeRequest {
     SaveSnapshot,
     /// Request to restore a GPU scene snapshot from the given path
     LoadSnapshot(std::path::PathBuf),
+    /// Request a one-shot lineage population scan for the bestiary viewer.
+    ScanLineageForViewer,
 }
 
 impl SceneModeRequest {

@@ -858,12 +858,7 @@ pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, cu
 /// Uses the per-cell contraction value already computed by `apply_myocyte_contraction`.
 /// Grip force = -velocity * (1 - exp(-grip * medium_scale)) * mass / dt, equivalent to
 /// the exponential velocity-damping used in the GPU position_update shader.
-pub fn apply_myocyte_grip(
-    state: &mut CanonicalState,
-    genome: &Genome,
-    dt: f32,
-    in_water: &[bool],
-) {
+pub fn apply_myocyte_grip(state: &mut CanonicalState, genome: &Genome, dt: f32, in_water: &[bool]) {
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         let Some(mode) = genome.modes.get(mode_index) else {
@@ -1969,7 +1964,13 @@ pub fn physics_step_with_genome(
 
     // Run signal system (oculocyte sensing + BFS propagation)
     let boundary_radius = config.sphere_radius;
-    crate::simulation::signal_system::run_signal_system(state, genome, boundary_radius, dt, current_time);
+    crate::simulation::signal_system::run_signal_system(
+        state,
+        genome,
+        boundary_radius,
+        dt,
+        current_time,
+    );
 
     // Apply persistent test signals (if any) after normal signal system.
     // Do NOT clear signals first - regulation signals (channels 8-15) must remain intact.

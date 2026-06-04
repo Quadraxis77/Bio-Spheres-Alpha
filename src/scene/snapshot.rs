@@ -117,6 +117,14 @@ pub struct GpuSceneSnapshot {
     /// strings using the existing genome serialization path.
     pub genomes_yaml: Vec<String>,
 
+    /// Lightweight lineage/bestiary history for the ecosystem viewer.
+    ///
+    /// This is intentionally separate from `genomes_yaml`: most lineage nodes
+    /// reference a genome by ID, and only promoted/pinned nodes carry optional
+    /// full genome bookmarks inside the archive.
+    #[serde(default)]
+    pub lineage_archive: crate::scene::lineage::EcosystemLineageArchive,
+
     // -- Scalar scene settings -------------------------------------------------
     pub current_time: f32,
     pub current_frame: i32,

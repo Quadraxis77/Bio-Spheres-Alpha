@@ -843,7 +843,10 @@ fn mode_to_serializable(
         myocyte_threshold: diff_f32(mode.myocyte_threshold, default.myocyte_threshold),
         myocyte_pulse_rate: diff_f32(mode.myocyte_pulse_rate, default.myocyte_pulse_rate),
         myocyte_pulse_phase: diff_i32(mode.myocyte_pulse_phase, default.myocyte_pulse_phase),
-        myocyte_grip_contracted: diff_f32(mode.myocyte_grip_contracted, default.myocyte_grip_contracted),
+        myocyte_grip_contracted: diff_f32(
+            mode.myocyte_grip_contracted,
+            default.myocyte_grip_contracted,
+        ),
         myocyte_grip_extended: diff_f32(mode.myocyte_grip_extended, default.myocyte_grip_extended),
         embryocyte_use_timer: diff_bool(mode.embryocyte_use_timer, default.embryocyte_use_timer),
         embryocyte_release_timer: diff_f32(
@@ -926,10 +929,22 @@ fn mode_to_serializable(
             default.cognocyte_output_channel,
         ),
         cognocyte_output_hops: diff_i32(mode.cognocyte_output_hops, default.cognocyte_output_hops),
-        cognocyte_oscillator_rate: diff_f32(mode.cognocyte_oscillator_rate, default.cognocyte_oscillator_rate),
-        cognocyte_oscillator_phase: diff_f32(mode.cognocyte_oscillator_phase, default.cognocyte_oscillator_phase),
-        cognocyte_oscillator_strength: diff_f32(mode.cognocyte_oscillator_strength, default.cognocyte_oscillator_strength),
-        cognocyte_oscillator_step_count: diff_i32(mode.cognocyte_oscillator_step_count, default.cognocyte_oscillator_step_count),
+        cognocyte_oscillator_rate: diff_f32(
+            mode.cognocyte_oscillator_rate,
+            default.cognocyte_oscillator_rate,
+        ),
+        cognocyte_oscillator_phase: diff_f32(
+            mode.cognocyte_oscillator_phase,
+            default.cognocyte_oscillator_phase,
+        ),
+        cognocyte_oscillator_strength: diff_f32(
+            mode.cognocyte_oscillator_strength,
+            default.cognocyte_oscillator_strength,
+        ),
+        cognocyte_oscillator_step_count: diff_i32(
+            mode.cognocyte_oscillator_step_count,
+            default.cognocyte_oscillator_step_count,
+        ),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(

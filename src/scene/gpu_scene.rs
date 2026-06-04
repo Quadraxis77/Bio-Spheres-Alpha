@@ -10,6 +10,7 @@ use crate::rendering::{
     OrganismSkinRenderer, SkyboxRenderer, SteamParticleRenderer, SunRenderer, TailRenderer,
     VolumetricFogRenderer, VoxelRenderer, WaterParticleRenderer, WorldSphereRenderer,
 };
+use crate::scene::lineage::{EcosystemLineageArchive, LineageOrigin};
 use crate::scene::Scene;
 use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
 use crate::simulation::gpu_physics::{
@@ -63,6 +64,15 @@ pub enum ToolQueryType {
     Follow,
 }
 
+/// Cell insertion queued until the render frame has device/encoder access.
+struct PendingCellInsertion {
+    world_position: glam::Vec3,
+    genome: Genome,
+    initial_reserve: u32,
+    initial_nutrients: u32,
+    lineage_origin: Option<LineageOrigin>,
+}
+
 /// GPU simulation scene for large-scale simulations.
 ///
 /// Uses compute shaders for physics simulation, allowing for
@@ -104,6 +114,8 @@ pub struct GpuScene {
     pub current_time: f32,
     /// Genomes for cell behavior (growth, division) - supports multiple genomes
     pub genomes: Vec<Genome>,
+    /// Lightweight evolutionary/species history for the lineage viewer.
+    pub lineage_archive: EcosystemLineageArchive,
     /// Whether any genome has an oculocyte mode (for signal system gating)
     pub(super) has_oculocytes: bool,
     /// Whether any genome has a glueocyte mode (for adhesion-system gating)
@@ -125,7 +137,7 @@ pub struct GpuScene {
     /// Cached parent_make_adhesion flags from genome modes for quick lookup during division
     pub(super) parent_make_adhesion_flags: Vec<bool>,
     /// Accumulated time for fixed timestep physics
-    time_accumulator: f32,
+    pub(super) time_accumulator: f32,
     /// Current frame counter (for shader time-based logic)
     pub(super) current_frame: i32,
     /// Whether this is the first frame (no Hi-Z data yet)
@@ -147,7 +159,7 @@ pub struct GpuScene {
     /// Pending cell insertion (genome, world position)
     /// Pending cell insertion: (position, genome, initial_reserve_override, initial_nutrients_override).
     /// Both are x1000 fixed-point; 0 means "use cell_type default".
-    pending_cell_insertion: Option<(glam::Vec3, Genome, u32, u32)>,
+    pending_cell_insertion: Option<PendingCellInsertion>,
     /// Pending tool query position and type for GPU spatial query
     pending_query_position: Option<(f32, f32, ToolQueryType)>, // (screen_x, screen_y, query_type)
     /// Active query type waiting for GPU result
@@ -379,7 +391,7 @@ pub struct GpuScene {
     /// Whether depth of field is enabled
     pub show_dof: bool,
     /// Surface format (needed for DoF resize)
-    surface_format: wgpu::TextureFormat,
+    pub(super) surface_format: wgpu::TextureFormat,
     /// Procedural sun renderer
     pub sun_renderer: Option<SunRenderer>,
     /// Whether to show the procedural sun
@@ -664,6 +676,7 @@ impl GpuScene {
             camera: CameraController::new_for_gpu_scene(),
             current_time: 0.0,
             genomes: Vec::new(),
+            lineage_archive: EcosystemLineageArchive::default(),
             has_oculocytes: false,
             has_glueocytes: false,
             has_phagocytes: false,
@@ -871,6 +884,7 @@ impl GpuScene {
         self.adhesion_buffers.reset(queue);
         // Clear all genomes since no cells reference them
         self.genomes.clear();
+        self.lineage_archive = EcosystemLineageArchive::default();
         self.parent_make_adhesion_flags.clear();
         self.has_oculocytes = false;
         self.has_glueocytes = false;
@@ -2455,6 +2469,8 @@ impl GpuScene {
                     id,
                     self.genomes.len()
                 );
+                self.lineage_archive
+                    .ensure_user_lineage(id as u32, existing, self.current_frame);
                 return Some((id, false)); // needs_sync = false, nothing changed
             }
         }
@@ -2470,6 +2486,10 @@ impl GpuScene {
         self.scaffold_system.sync_genomes(queue, &self.genomes);
 
         log::info!("Added new genome {} (total: {})", id, self.genomes.len());
+        if let Some(genome) = self.genomes.get(id) {
+            self.lineage_archive
+                .ensure_user_lineage(id as u32, genome, self.current_frame);
+        }
         Some((id, true)) // needs_sync = true because genome was added
     }
 
@@ -3171,7 +3191,13 @@ impl GpuScene {
     /// Queue a cell insertion to be processed during the next render frame.
     /// This allows cell insertion to be initiated from input handling without needing device/encoder/queue.
     pub fn queue_cell_insertion(&mut self, world_position: glam::Vec3, genome: Genome) {
-        self.pending_cell_insertion = Some((world_position, genome, 0, 0));
+        self.pending_cell_insertion = Some(PendingCellInsertion {
+            world_position,
+            genome,
+            initial_reserve: 0,
+            initial_nutrients: 0,
+            lineage_origin: None,
+        });
     }
 
     /// Process any pending cell insertion during render frame when device/encoder/queue are available.
@@ -3182,17 +3208,16 @@ impl GpuScene {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) -> bool {
-        if let Some((world_position, genome, initial_reserve, initial_nutrients)) =
-            self.pending_cell_insertion.take()
-        {
+        if let Some(pending) = self.pending_cell_insertion.take() {
             self.insert_cell_from_genome(
                 device,
                 encoder,
                 queue,
-                world_position,
-                &genome,
-                initial_reserve,
-                initial_nutrients,
+                pending.world_position,
+                &pending.genome,
+                pending.initial_reserve,
+                pending.initial_nutrients,
+                pending.lineage_origin,
             )
             .is_some()
         } else {
@@ -3212,6 +3237,7 @@ impl GpuScene {
         genome: &Genome,
         initial_reserve: u32,
         initial_nutrients: u32,
+        lineage_origin: Option<LineageOrigin>,
     ) -> Option<usize> {
         // The GPU insertion shader owns exact slot allocation and recycled-slot
         // reuse, but avoid optimistic CPU bookkeeping once the last known live
@@ -3234,6 +3260,38 @@ impl GpuScene {
             }
         };
         let mode_idx = genome.initial_mode.max(0) as usize;
+
+        match lineage_origin {
+            Some(LineageOrigin::Hybrid {
+                parent_a,
+                parent_b,
+                similarity,
+            }) => {
+                self.lineage_archive.register_hybrid_lineage(
+                    genome_id as u32,
+                    &self.genomes[genome_id],
+                    parent_a,
+                    parent_b,
+                    similarity,
+                    self.current_frame,
+                );
+            }
+            Some(origin) => {
+                log::debug!("Unhandled lineage origin for insertion: {:?}", origin);
+                self.lineage_archive.ensure_user_lineage(
+                    genome_id as u32,
+                    &self.genomes[genome_id],
+                    self.current_frame,
+                );
+            }
+            None => {
+                self.lineage_archive.ensure_user_lineage(
+                    genome_id as u32,
+                    &self.genomes[genome_id],
+                    self.current_frame,
+                );
+            }
+        }
 
         // Sync settings to GPU if genome was added or updated
         if needs_sync {
@@ -5749,12 +5807,27 @@ impl GpuScene {
 
             let spawn_pos = glam::Vec3::new(event.spawn_x, event.spawn_y, event.spawn_z);
             if self.pending_cell_insertion.is_none() {
-                self.pending_cell_insertion = Some((
-                    spawn_pos,
-                    offspring_genome,
+                let parent_a = self.lineage_archive.ensure_user_lineage(
+                    genome_a_id as u32,
+                    &self.genomes[genome_a_id],
+                    self.current_frame,
+                );
+                let parent_b = self.lineage_archive.ensure_user_lineage(
+                    genome_b_id as u32,
+                    &self.genomes[genome_b_id],
+                    self.current_frame,
+                );
+                self.pending_cell_insertion = Some(PendingCellInsertion {
+                    world_position: spawn_pos,
+                    genome: offspring_genome,
                     initial_reserve,
                     initial_nutrients,
-                ));
+                    lineage_origin: Some(LineageOrigin::Hybrid {
+                        parent_a,
+                        parent_b,
+                        similarity,
+                    }),
+                });
             }
         }
     }

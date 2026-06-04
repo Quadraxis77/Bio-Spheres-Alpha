@@ -89,6 +89,14 @@ impl DockManager {
             self.scene_trees.insert(mode, dock_state);
         }
 
+        // When entering the simulation scene, always start with the lineage viewer
+        // closed so users don't see stale lineage data from a prior session.
+        if mode == SimulationMode::Gpu {
+            if let Some(tree) = self.scene_trees.get_mut(&mode) {
+                tree.retain_tabs(|tab| !matches!(tab, Panel::LineageViewer));
+            }
+        }
+
         log::info!("Switched to {} mode", mode.display_name());
     }
 

@@ -2487,6 +2487,12 @@ impl App {
                     self.editor_state.cave_params_dirty = false;
                 }
 
+                if let Err(err) =
+                    gpu_scene.maybe_capture_lineage_interval(&self.device, &self.queue)
+                {
+                    log::warn!("Periodic lineage capture failed: {err}");
+                }
+
                 // Apply light & fog parameters from UI if they changed
                 if self.editor_state.light_params_dirty {
                     gpu_scene.apply_light_params_from_editor(&self.editor_state);
@@ -3631,6 +3637,137 @@ impl App {
                         }
                     }
                 }
+                crate::ui::panel_context::SceneModeRequest::LoadGenomeFromSceneGenome(
+                    genome_id,
+                ) => {
+                    let genome = self
+                        .scene_manager
+                        .gpu_scene()
+                        .and_then(|gpu_scene| gpu_scene.genomes.get(genome_id as usize))
+                        .cloned();
+
+                    if let Some(genome) = genome {
+                        log::info!(
+                            "Loaded scene genome '{}' ({} modes) from lineage archive",
+                            genome.name,
+                            genome.modes.len()
+                        );
+                        self.working_genome = genome;
+
+                        let preview_mode = crate::ui::types::SimulationMode::Preview;
+                        if current_mode != preview_mode {
+                            let cave_initialized = self.scene_manager.switch_mode(
+                                preview_mode,
+                                &self.device,
+                                &self.queue,
+                                &self.config,
+                                self.ui.state.world_diameter,
+                                self.ui.state.world_settings.cell_capacity,
+                                &self.editor_state,
+                            );
+                            if cave_initialized {
+                                self.editor_state.cave_params_dirty = true;
+                            }
+                            self.dock_manager.switch_mode(preview_mode);
+                            if self.editor_state.radial_menu.dragging_cell.is_some() {
+                                self.scene_manager.clear_dragged_cell();
+                                self.editor_state.radial_menu.clear_drag_state();
+                            }
+                            let _ = self
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None);
+                            self.window.set_cursor_visible(true);
+                            self.editor_state.radial_menu.active_tool =
+                                crate::ui::radial_menu::RadialTool::None;
+                            self.editor_state.radial_menu.visible = false;
+                            log::info!("Switched to Preview mode for lineage genome");
+                        }
+
+                        if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
+                            preview_scene.update_genome(&self.working_genome);
+                            log::info!("Pushed lineage genome into preview scene");
+                        }
+                    } else {
+                        log::error!(
+                            "Failed to load lineage scene genome: genome_id={} is not in the scene table",
+                            genome_id
+                        );
+                    }
+                }
+                crate::ui::panel_context::SceneModeRequest::LoadGenomeFromLineageBookmark(
+                    lineage_id,
+                ) => {
+                    let genome = self
+                        .scene_manager
+                        .gpu_scene()
+                        .and_then(|gpu_scene| {
+                            gpu_scene
+                                .lineage_archive
+                                .loadable_bookmark_for_lineage(lineage_id)
+                                .and_then(|bookmark| bookmark.genome_yaml.clone())
+                        })
+                        .and_then(
+                            |yaml| match crate::genome::Genome::from_yaml_string(&yaml) {
+                                Ok(genome) => Some(genome),
+                                Err(error) => {
+                                    log::error!(
+                                        "Failed to deserialize lineage bookmark {}: {}",
+                                        lineage_id,
+                                        error
+                                    );
+                                    None
+                                }
+                            },
+                        );
+
+                    if let Some(genome) = genome {
+                        log::info!(
+                            "Loaded lineage bookmark '{}' ({} modes) into Preview",
+                            genome.name,
+                            genome.modes.len()
+                        );
+                        self.working_genome = genome;
+
+                        let preview_mode = crate::ui::types::SimulationMode::Preview;
+                        if current_mode != preview_mode {
+                            let cave_initialized = self.scene_manager.switch_mode(
+                                preview_mode,
+                                &self.device,
+                                &self.queue,
+                                &self.config,
+                                self.ui.state.world_diameter,
+                                self.ui.state.world_settings.cell_capacity,
+                                &self.editor_state,
+                            );
+                            if cave_initialized {
+                                self.editor_state.cave_params_dirty = true;
+                            }
+                            self.dock_manager.switch_mode(preview_mode);
+                            if self.editor_state.radial_menu.dragging_cell.is_some() {
+                                self.scene_manager.clear_dragged_cell();
+                                self.editor_state.radial_menu.clear_drag_state();
+                            }
+                            let _ = self
+                                .window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None);
+                            self.window.set_cursor_visible(true);
+                            self.editor_state.radial_menu.active_tool =
+                                crate::ui::radial_menu::RadialTool::None;
+                            self.editor_state.radial_menu.visible = false;
+                            log::info!("Switched to Preview mode for retained lineage genome");
+                        }
+
+                        if let Some(preview_scene) = self.scene_manager.get_preview_scene_mut() {
+                            preview_scene.update_genome(&self.working_genome);
+                            log::info!("Pushed retained lineage genome into preview scene");
+                        }
+                    } else {
+                        log::error!(
+                            "Failed to load lineage bookmark: lineage_id={} is outside the retained loadable window",
+                            lineage_id
+                        );
+                    }
+                }
                 crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpuCell {
                     genome_id,
                     mode_index,
@@ -3708,6 +3845,16 @@ impl App {
                     // Defer the actual work until after output.present() so the
                     // "Loading..." popup is visible on screen before we block.
                     self.deferred_action = Some(DeferredAction::LoadSphere(path));
+                }
+                crate::ui::panel_context::SceneModeRequest::ScanLineageForViewer => {
+                    if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                        match gpu_scene.scan_lineage_for_viewer(&self.device, &self.queue) {
+                            Ok(()) => {}
+                            Err(err) => {
+                                log::error!("Failed to scan lineage archive for viewer: {err}");
+                            }
+                        }
+                    }
                 }
                 _ => {
                     if let Some(target_mode) = scene_request.target_mode() {

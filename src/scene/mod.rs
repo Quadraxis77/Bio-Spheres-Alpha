@@ -4,6 +4,7 @@
 //! simulation modes (Preview and GPU).
 
 pub mod gpu_scene;
+pub mod lineage;
 pub mod main_menu;
 pub mod manager;
 pub mod preview_scene;
@@ -13,6 +14,7 @@ pub mod snapshot_io;
 pub mod traits;
 
 pub use gpu_scene::GpuScene;
+pub use lineage::EcosystemLineageArchive;
 pub use main_menu::MainMenuScene;
 pub use manager::SceneManager;
 pub use preview_scene::PreviewScene;

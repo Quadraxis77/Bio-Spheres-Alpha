@@ -107,7 +107,8 @@ var<storage, read_write> genome_ring_state: array<atomic<u32>>;
 @group(0) @binding(3)
 var<storage, read_write> genome_free_ring: array<u32>;
 
-// Per-genome metadata: genome_meta[genome_id] = vec4<u32>(mode_count, base_mode_offset, initial_mode_local, flags)
+// Per-genome metadata:
+// genome_meta[genome_id] = vec4<u32>(mode_count, base_mode_offset, initial_mode_local, parent_genome_id)
 // .z = initial_mode as a local (0-based) mode index within the genome
 // Note: ref_count is tracked separately in genome_ref_counts for atomic access
 @group(0) @binding(4)
@@ -1434,7 +1435,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Initialize new genome metadata - copy initial_mode_local (.z) from parent
-    genome_meta[new_genome_id] = vec4<u32>(parent_mode_count, new_base_offset, parent_meta.z, 0u);
+    // and store sampled-lineage parentage in .w. The lineage archive reads this
+    // only during interval snapshots, so we do not create one record per mutation.
+    genome_meta[new_genome_id] =
+        vec4<u32>(parent_mode_count, new_base_offset, parent_meta.z, parent_genome_id);
 
     // Update reference counts atomically
     atomicAdd(&genome_ref_counts[new_genome_id], 1u);

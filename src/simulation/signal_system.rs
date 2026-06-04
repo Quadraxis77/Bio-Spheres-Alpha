@@ -491,7 +491,11 @@ fn read_channel(state: &CanonicalState, cell_idx: usize, channel: usize) -> Opti
 ///
 /// If a required input channel has no signal the cell emits nothing -
 /// misconfigured circuits go dark visibly rather than silently misbehave.
-pub fn process_cognocytes(state: &CanonicalState, genome: &Genome, current_time: f32) -> Vec<SignalEmission> {
+pub fn process_cognocytes(
+    state: &CanonicalState,
+    genome: &Genome,
+    current_time: f32,
+) -> Vec<SignalEmission> {
     use crate::cell::behaviors::cognocyte::{OP_HOPS_OSCILLATE, OP_NOT, OP_OSCILLATE};
     use std::f32::consts::TAU;
 

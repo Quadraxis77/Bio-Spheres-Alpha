@@ -164,8 +164,6 @@ pub struct CachedBindGroups {
     pub spatial_grid: wgpu::BindGroup,
     /// Position update spatial grid bind group (read-only, same for all frames)
     pub position_update_spatial_grid: wgpu::BindGroup,
-    /// Position update grip bind group (cell_grip_buffer, read-only)
-    pub position_update_grip: wgpu::BindGroup,
     /// Lifecycle bind group (same for all frames)
     pub lifecycle: wgpu::BindGroup,
     /// Cell state read bind group (same for all frames)
@@ -368,7 +366,6 @@ pub struct GpuPhysicsPipelines {
     pub rotations_layout: wgpu::BindGroupLayout,
     pub position_update_rotations_layout: wgpu::BindGroupLayout,
     pub position_update_spatial_grid_layout: wgpu::BindGroupLayout,
-    pub position_update_grip_layout: wgpu::BindGroupLayout,
 
     // Cell insertion bind group layouts
     pub cell_insertion_physics_layout: wgpu::BindGroupLayout,
@@ -630,21 +627,6 @@ impl GpuPhysicsPipelines {
             "Collision Detection",
         );
 
-        let position_update_grip_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Position Update Grip Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
         let position_update = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/position_update.wgsl"),
@@ -654,7 +636,6 @@ impl GpuPhysicsPipelines {
                 &position_update_rotations_layout,
                 &position_update_force_accum_layout,
                 &position_update_spatial_grid_layout,
-                &position_update_grip_layout,
             ],
             "Position Update",
         );
@@ -1383,7 +1364,6 @@ impl GpuPhysicsPipelines {
             rotations_layout,
             position_update_rotations_layout,
             position_update_spatial_grid_layout,
-            position_update_grip_layout,
             cell_insertion_physics_layout,
             cell_insertion_params_layout,
             cell_insertion_state_layout,
@@ -1981,16 +1961,6 @@ impl GpuPhysicsPipelines {
         let position_update_spatial_grid =
             self.create_position_update_spatial_grid_bind_group_internal(device, buffers);
 
-        // Position update grip bind group (cell_grip_buffer, read-only, same for all frames)
-        let position_update_grip = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Position Update Grip BG"),
-            layout: &self.position_update_grip_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffers.cell_grip_buffer.as_entire_binding(),
-            }],
-        });
-
         // Lifecycle bind group (same for all frames)
         let lifecycle = self.create_lifecycle_bind_group(device, buffers);
 
@@ -2391,7 +2361,6 @@ impl GpuPhysicsPipelines {
             physics,
             spatial_grid,
             position_update_spatial_grid,
-            position_update_grip,
             lifecycle,
             cell_state_read,
             cell_state_write,
@@ -4895,6 +4864,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 7: Per-cell grip/friction buffer (read-only storage)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -5203,6 +5183,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: water_velocity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: triple_buffers.cell_grip_buffer.as_entire_binding(),
                 },
             ],
         })

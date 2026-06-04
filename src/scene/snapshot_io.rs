@@ -24,13 +24,22 @@
 //! 4. Call `AdhesionBuffers::restore_from_snapshot` + `sync_to_gpu`.
 //! 5. Restore scalar settings.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc;
 
+use image::ImageEncoder;
+
 use super::gpu_scene::GpuScene;
+use super::lineage::{
+    LineageAdultCellSnapshot, LineageAdultSnapshot, LineagePopulationSample,
+    LINEAGE_CAPTURE_INTERVAL_SECONDS,
+};
 use super::snapshot::{GpuSceneSnapshot, SnapshotError};
 use crate::genome::Genome;
+use crate::simulation::gpu_physics::GenomeMeta;
 use crate::simulation::CanonicalState;
+use crate::ui::camera::CameraMode;
 
 // --- helpers -----------------------------------------------------------------
 
@@ -99,9 +108,996 @@ fn readback_typed<T: bytemuck::Pod>(
     Ok(bytemuck::cast_slice::<u8, T>(&bytes).to_vec())
 }
 
+fn capture_gpu_adult_snapshots(
+    genomes: &[Genome],
+    connections: &[crate::simulation::gpu_physics::adhesion::GpuAdhesionConnection],
+    cell_indices: &[crate::simulation::gpu_physics::adhesion::CellAdhesionIndices],
+    positions_and_mass: &[[f32; 4]],
+    mode_indices: &[u32],
+    genome_ids: &[u32],
+    death_flags: &[u32],
+    organism_labels: Option<&[u32]>,
+    labels_reliable: bool,
+    nutrients: &[i32],
+    birth_times: &[f32],
+    split_intervals: &[f32],
+    split_thresholds: &[f32],
+    current_time: f32,
+    slots_used: u32,
+) -> HashMap<u32, LineageAdultSnapshot> {
+    const MAX_CAPTURE_CELLS: usize = 96;
+
+    let mut groups: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+    for (i, &genome_id) in genome_ids.iter().enumerate() {
+        if death_flags.get(i).copied().unwrap_or(1) != 0 || genome_id == u32::MAX {
+            continue;
+        }
+        let group_id = if labels_reliable {
+            organism_labels
+                .and_then(|labels| labels.get(i).copied())
+                .filter(|&label| label < slots_used)
+                .unwrap_or(i as u32)
+        } else {
+            genome_id
+        };
+        groups.entry((genome_id, group_id)).or_default().push(i);
+    }
+
+    let mut best_by_genome: HashMap<u32, (f32, f32, Vec<usize>)> = HashMap::new();
+    for ((genome_id, _), cells) in groups {
+        let readiness = cells
+            .iter()
+            .map(|&cell| {
+                free_division_readiness(
+                    cell,
+                    cell_indices,
+                    connections,
+                    nutrients,
+                    birth_times,
+                    split_intervals,
+                    split_thresholds,
+                    current_time,
+                )
+            })
+            .fold(0.0f32, f32::max);
+        let score = readiness * 10.0 + cells.len().min(MAX_CAPTURE_CELLS) as f32 * 0.001;
+
+        let replace = best_by_genome
+            .get(&genome_id)
+            .map(|(best_score, _, _)| score > *best_score)
+            .unwrap_or(true);
+        if replace {
+            best_by_genome.insert(genome_id, (score, readiness, cells));
+        }
+    }
+
+    best_by_genome
+        .into_iter()
+        .filter_map(|(genome_id, (_, readiness, cells))| {
+            let snapshot = snapshot_from_gpu_group(
+                genomes.get(genome_id as usize),
+                genome_id,
+                &cells,
+                connections,
+                positions_and_mass,
+                mode_indices,
+                current_time,
+                readiness >= 1.0,
+                MAX_CAPTURE_CELLS,
+            )?;
+            Some((genome_id, snapshot))
+        })
+        .collect()
+}
+
+fn free_division_readiness(
+    cell: usize,
+    cell_indices: &[crate::simulation::gpu_physics::adhesion::CellAdhesionIndices],
+    connections: &[crate::simulation::gpu_physics::adhesion::GpuAdhesionConnection],
+    nutrients: &[i32],
+    birth_times: &[f32],
+    split_intervals: &[f32],
+    split_thresholds: &[f32],
+    current_time: f32,
+) -> f32 {
+    if active_adhesion_count(cell, cell_indices, connections) > 0 {
+        return 0.0;
+    }
+
+    let age = current_time - birth_times.get(cell).copied().unwrap_or(current_time);
+    let interval = split_intervals.get(cell).copied().unwrap_or(1.0).max(0.001);
+    let nutrient = nutrients.get(cell).copied().unwrap_or(0) as f32 / 1000.0;
+    let threshold = split_thresholds
+        .get(cell)
+        .copied()
+        .unwrap_or(100.0)
+        .max(0.001);
+    let time_ready = (age / interval).clamp(0.0, 1.5);
+    let nutrient_ready = (nutrient / threshold).clamp(0.0, 1.5);
+    time_ready.min(nutrient_ready)
+}
+
+fn active_adhesion_count(
+    cell: usize,
+    cell_indices: &[crate::simulation::gpu_physics::adhesion::CellAdhesionIndices],
+    connections: &[crate::simulation::gpu_physics::adhesion::GpuAdhesionConnection],
+) -> usize {
+    cell_indices
+        .get(cell)
+        .map(|indices| {
+            indices
+                .indices
+                .iter()
+                .filter(|&&idx| {
+                    idx >= 0
+                        && connections
+                            .get(idx as usize)
+                            .map(|conn| conn.is_active == 1)
+                            .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn snapshot_from_gpu_group(
+    genome: Option<&Genome>,
+    genome_id: u32,
+    source_cells: &[usize],
+    connections: &[crate::simulation::gpu_physics::adhesion::GpuAdhesionConnection],
+    positions_and_mass: &[[f32; 4]],
+    mode_indices: &[u32],
+    current_time: f32,
+    captured_before_division: bool,
+    max_cells: usize,
+) -> Option<LineageAdultSnapshot> {
+    let mut cells: Vec<_> = source_cells.to_vec();
+    cells.truncate(max_cells.min(u16::MAX as usize));
+    if cells.is_empty() {
+        return None;
+    }
+
+    let mut center = glam::Vec3::ZERO;
+    for &cell in &cells {
+        let position = positions_and_mass.get(cell).copied().unwrap_or([0.0; 4]);
+        center += glam::vec3(position[0], position[1], position[2]);
+    }
+    center /= cells.len() as f32;
+
+    let mut remap = HashMap::new();
+    for (local, &cell) in cells.iter().enumerate() {
+        remap.insert(cell, local as u16);
+    }
+
+    let snapshot_cells = cells
+        .iter()
+        .map(|&cell| {
+            let pm = positions_and_mass.get(cell).copied().unwrap_or([0.0; 4]);
+            let world_pos = glam::vec3(pm[0], pm[1], pm[2]);
+            let mode_index = mode_indices.get(cell).copied().unwrap_or(0) as usize;
+            let mode = genome.and_then(|genome| genome.modes.get(mode_index));
+            let color = mode
+                .map(|mode| [mode.color.x, mode.color.y, mode.color.z])
+                .unwrap_or([0.35, 0.75, 0.85]);
+            let cell_type = mode
+                .map(|mode| mode.cell_type.clamp(0, u8::MAX as i32) as u8)
+                .unwrap_or(0);
+            let pos = world_pos - center;
+            LineageAdultCellSnapshot {
+                position: [pos.x, pos.y, pos.z],
+                radius: pm[3].max(0.1).cbrt().max(0.25),
+                mode_index: mode_index.min(u16::MAX as usize) as u16,
+                cell_type,
+                color,
+                emissive: mode.map(|mode| mode.emissive).unwrap_or(0.0),
+            }
+        })
+        .collect();
+
+    let mut bonds = Vec::new();
+    for connection in connections {
+        if connection.is_active == 0 {
+            continue;
+        }
+        let a = connection.cell_a_index as usize;
+        let b = connection.cell_b_index as usize;
+        if let (Some(&local_a), Some(&local_b)) = (remap.get(&a), remap.get(&b)) {
+            bonds.push([local_a, local_b]);
+        }
+    }
+
+    let mut world_radius = 0.0f32;
+    for &cell in &cells {
+        let position = positions_and_mass.get(cell).copied().unwrap_or([0.0; 4]);
+        let world_pos = glam::vec3(position[0], position[1], position[2]);
+        world_radius =
+            world_radius.max((world_pos - center).length() + position[3].max(0.1).cbrt());
+    }
+
+    let mut snapshot = LineageAdultSnapshot {
+        genome_hash: genome_id as u64,
+        captured_time: current_time,
+        captured_frame: 0, // filled in by push_adult_snapshot_for_genome
+        captured_before_division,
+        world_center: [center.x, center.y, center.z],
+        world_radius: world_radius.max(1.0),
+        cells: snapshot_cells,
+        bonds,
+        scene_thumbnail_png: None,
+    };
+    snapshot.scene_thumbnail_png = encode_lineage_scene_thumbnail_png(
+        &snapshot,
+        crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH,
+        crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT,
+    );
+    Some(snapshot)
+}
+
+fn encode_lineage_scene_thumbnail_png(
+    snapshot: &LineageAdultSnapshot,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    if snapshot.cells.is_empty() || width == 0 || height == 0 {
+        return None;
+    }
+
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for px in pixels.chunks_exact_mut(4) {
+        px.copy_from_slice(&[5, 8, 12, 255]);
+    }
+
+    let mut min = glam::Vec2::splat(f32::INFINITY);
+    let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
+    for cell in &snapshot.cells {
+        let p = glam::vec2(cell.position[0], cell.position[1]);
+        min = min.min(p);
+        max = max.max(p);
+    }
+    let span = (max - min).max(glam::Vec2::splat(1.0));
+    let scale = ((width as f32 - 14.0) / span.x)
+        .min((height as f32 - 14.0) / span.y)
+        .max(1.0)
+        * 0.82;
+    let center = glam::vec2(width as f32 * 0.5, height as f32 * 0.48);
+    let world_center = (min + max) * 0.5;
+    let project = |position: [f32; 3]| {
+        let p = glam::vec2(position[0], position[1]);
+        center + (p - world_center) * scale
+    };
+
+    for bond in &snapshot.bonds {
+        let a = bond[0] as usize;
+        let b = bond[1] as usize;
+        if let (Some(cell_a), Some(cell_b)) = (snapshot.cells.get(a), snapshot.cells.get(b)) {
+            draw_rgba_line(
+                &mut pixels,
+                width,
+                height,
+                project(cell_a.position),
+                project(cell_b.position),
+                [10, 18, 24, 160],
+                4.0,
+            );
+            draw_rgba_line(
+                &mut pixels,
+                width,
+                height,
+                project(cell_a.position),
+                project(cell_b.position),
+                [132, 212, 255, 230],
+                2.0,
+            );
+        }
+    }
+
+    let mut order: Vec<_> = (0..snapshot.cells.len()).collect();
+    order.sort_by(|&a, &b| snapshot.cells[a].position[2].total_cmp(&snapshot.cells[b].position[2]));
+    for i in order {
+        let cell = &snapshot.cells[i];
+        let p = project(cell.position);
+        let radius = (cell.radius * scale * 0.38).clamp(2.5, 9.0);
+        let color = [
+            (cell.color[0].clamp(0.0, 1.0) * 255.0) as u8,
+            (cell.color[1].clamp(0.0, 1.0) * 255.0) as u8,
+            (cell.color[2].clamp(0.0, 1.0) * 255.0) as u8,
+            255,
+        ];
+        draw_rgba_circle(
+            &mut pixels,
+            width,
+            height,
+            p + glam::vec2(2.0, 2.0),
+            radius * 1.18,
+            [0, 0, 0, 115],
+        );
+        draw_rgba_circle(
+            &mut pixels,
+            width,
+            height,
+            p,
+            radius * 1.14,
+            [210, 238, 255, 80],
+        );
+        draw_rgba_circle(&mut pixels, width, height, p, radius, color);
+    }
+
+    let mut png = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png);
+    encoder
+        .write_image(&pixels, width, height, image::ColorType::Rgba8.into())
+        .ok()?;
+    Some(png)
+}
+
+fn draw_rgba_circle(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    center: glam::Vec2,
+    radius: f32,
+    color: [u8; 4],
+) {
+    let radius_sq = radius * radius;
+    let min_x = (center.x - radius).floor().max(0.0) as u32;
+    let max_x = (center.x + radius).ceil().min(width as f32 - 1.0) as u32;
+    let min_y = (center.y - radius).floor().max(0.0) as u32;
+    let max_y = (center.y + radius).ceil().min(height as f32 - 1.0) as u32;
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 + 0.5 - center.x;
+            let dy = y as f32 + 0.5 - center.y;
+            if dx * dx + dy * dy <= radius_sq {
+                blend_pixel(pixels, width, x, y, color);
+            }
+        }
+    }
+}
+
+fn draw_rgba_line(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    a: glam::Vec2,
+    b: glam::Vec2,
+    color: [u8; 4],
+    thickness: f32,
+) {
+    let delta = b - a;
+    let steps = delta.length().ceil().max(1.0) as u32;
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let p = a.lerp(b, t);
+        draw_rgba_circle(pixels, width, height, p, thickness * 0.5, color);
+    }
+}
+
+fn blend_pixel(pixels: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 4]) {
+    let idx = ((y * width + x) * 4) as usize;
+    if idx + 3 >= pixels.len() {
+        return;
+    }
+    let alpha = color[3] as f32 / 255.0;
+    let inv = 1.0 - alpha;
+    pixels[idx] = (color[0] as f32 * alpha + pixels[idx] as f32 * inv) as u8;
+    pixels[idx + 1] = (color[1] as f32 * alpha + pixels[idx + 1] as f32 * inv) as u8;
+    pixels[idx + 2] = (color[2] as f32 * alpha + pixels[idx + 2] as f32 * inv) as u8;
+    pixels[idx + 3] = 255;
+}
+
+fn readback_texture_png(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, SnapshotError> {
+    let bytes_per_pixel = 4u32;
+    let unpadded_bytes_per_row = width * bytes_per_pixel;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
+    let buffer_size = (padded_bytes_per_row * height) as u64;
+
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Lineage Scene Thumbnail Staging Buffer"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Lineage Scene Thumbnail Readback Encoder"),
+    });
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = staging.slice(..);
+    let (tx, rx) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .map_err(|e| SnapshotError::GpuReadback(format!("device.poll failed: {e:?}")))?;
+    rx.recv()
+        .map_err(|_| SnapshotError::GpuReadback("thumbnail readback channel closed".into()))?
+        .map_err(|e| SnapshotError::GpuReadback(format!("thumbnail map_async error: {e:?}")))?;
+
+    let mapped = slice.get_mapped_range();
+    let is_bgra = matches!(
+        format,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    );
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for row in 0..height {
+        let row_start = (row * padded_bytes_per_row) as usize;
+        let row_bytes = &mapped[row_start..row_start + unpadded_bytes_per_row as usize];
+        if is_bgra {
+            for chunk in row_bytes.chunks_exact(4) {
+                rgba.push(chunk[2]);
+                rgba.push(chunk[1]);
+                rgba.push(chunk[0]);
+                rgba.push(chunk[3]);
+            }
+        } else {
+            rgba.extend_from_slice(row_bytes);
+        }
+    }
+    drop(mapped);
+    staging.unmap();
+
+    let mut png = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png);
+    encoder
+        .write_image(&rgba, width, height, image::ColorType::Rgba8.into())
+        .map_err(|e| SnapshotError::GpuReadback(format!("thumbnail png encode failed: {e}")))?;
+    Ok(png)
+}
+
+fn read_sampled_mutation_parents(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    mutation_system: Option<&crate::simulation::gpu_physics::MutationSystem>,
+    genome_ids: impl Iterator<Item = u32>,
+    cpu_genome_count: usize,
+) -> HashMap<u32, u32> {
+    let Some(mutation_system) = mutation_system else {
+        return HashMap::new();
+    };
+
+    let mut parents = HashMap::new();
+    for genome_id in genome_ids {
+        if (genome_id as usize) < cpu_genome_count
+            || genome_id >= crate::simulation::gpu_physics::mutation::GENOME_RING_CAPACITY
+        {
+            continue;
+        }
+
+        let byte_offset = genome_id as u64 * std::mem::size_of::<GenomeMeta>() as u64;
+        let Ok(bytes) = readback_buffer_bytes(
+            device,
+            queue,
+            mutation_system.genome_meta_buffer(),
+            byte_offset,
+            std::mem::size_of::<GenomeMeta>() as u64,
+        ) else {
+            continue;
+        };
+        let meta = bytemuck::from_bytes::<GenomeMeta>(&bytes);
+        if meta.mode_count > 0 && meta.parent_genome_id != u32::MAX {
+            parents.insert(genome_id, meta.parent_genome_id);
+        }
+    }
+
+    parents
+}
+
+fn sampled_mutation_is_meaningful(
+    cells: u32,
+    organisms: u32,
+    prior: Option<&crate::scene::lineage::LineageGenomeStatSample>,
+) -> bool {
+    const MIN_PROMOTION_CELLS: u32 = 25;
+    const MIN_PROMOTION_ORGANISMS: u32 = 3;
+    const MIN_PERSISTENT_CELLS: u32 = 8;
+    const MIN_PERSISTENT_OBSERVATIONS: u32 = 2;
+
+    cells >= MIN_PROMOTION_CELLS
+        || organisms >= MIN_PROMOTION_ORGANISMS
+        || prior
+            .map(|sample| {
+                sample.observations.saturating_add(1) >= MIN_PERSISTENT_OBSERVATIONS
+                    && sample.cells.max(cells) >= MIN_PERSISTENT_CELLS
+            })
+            .unwrap_or(false)
+}
+
 // --- GpuScene impl -----------------------------------------------------------
 
 impl GpuScene {
+    pub fn maybe_capture_lineage_interval(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<bool, SnapshotError> {
+        if self.current_time < LINEAGE_CAPTURE_INTERVAL_SECONDS {
+            return Ok(false);
+        }
+
+        let due = self
+            .lineage_archive
+            .last_scan_frame
+            .map(|_| {
+                self.current_time - self.lineage_archive.last_scan_time
+                    >= LINEAGE_CAPTURE_INTERVAL_SECONDS
+            })
+            .unwrap_or(true);
+
+        if due {
+            self.scan_lineage_for_viewer(device, queue)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Capture a frozen lineage/bestiary population scan for the UI.
+    ///
+    /// This is deliberately an explicit, blocking, user-initiated scan. It does
+    /// not run during normal gameplay and it reads only compact ID buffers:
+    /// genome IDs, death flags, and stable organism IDs when available.
+    pub fn scan_lineage_for_viewer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Result<(), SnapshotError> {
+        let cell_counters: Vec<u32> =
+            readback_typed(device, queue, &self.gpu_triple_buffers.cell_count_buffer, 2)?;
+        let slots_used = cell_counters
+            .first()
+            .copied()
+            .unwrap_or(0)
+            .min(self.gpu_triple_buffers.capacity);
+        let live_cells = cell_counters.get(1).copied().unwrap_or(0);
+
+        self.total_cell_slots = slots_used;
+        self.current_cell_count = live_cells;
+
+        // Snapshot pre-scan state for stable-period detection (done at end of fn).
+        let pre_node_count = self.lineage_archive.nodes.len();
+        let pre_event_count = self.lineage_archive.events.len();
+        let pre_live_cells = self.lineage_archive.last_scan_live_cells;
+        let pre_scan_time = self.lineage_archive.last_scan_time;
+        let pre_scan_frame = self.lineage_archive.last_scan_frame;
+
+        let slots = slots_used as usize;
+        self.lineage_archive
+            .ensure_scene_genomes(&self.genomes, self.current_frame);
+
+        if slots == 0 {
+            self.lineage_archive.record_scan_population(
+                self.current_frame,
+                self.current_time,
+                live_cells,
+                0,
+                live_cells,
+                true,
+            );
+            return Ok(());
+        }
+
+        if let Some(labels) = &mut self.organism_label_system {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Lineage Viewer Label Refresh"),
+            });
+            labels.encode_frame(&mut encoder, slots_used, true);
+            queue.submit(Some(encoder.finish()));
+        }
+
+        let genome_ids: Vec<u32> =
+            readback_typed(device, queue, &self.gpu_triple_buffers.genome_ids, slots)?;
+        let death_flags: Vec<u32> =
+            readback_typed(device, queue, &self.gpu_triple_buffers.death_flags, slots)?;
+        let buf_idx = self.gpu_triple_buffers.output_buffer_index();
+        let positions_and_mass: Vec<[f32; 4]> = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.position_and_mass[buf_idx],
+            slots,
+        )?;
+        let mode_indices: Vec<u32> =
+            readback_typed(device, queue, &self.gpu_triple_buffers.mode_indices, slots)?;
+        let nutrients: Vec<i32> = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.nutrients_buffer,
+            slots,
+        )?;
+        let birth_times: Vec<f32> =
+            readback_typed(device, queue, &self.gpu_triple_buffers.birth_times, slots)?;
+        let split_intervals: Vec<f32> = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.split_intervals,
+            slots,
+        )?;
+        let split_nutrient_thresholds: Vec<f32> = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.split_nutrient_thresholds,
+            slots,
+        )?;
+
+        let organism_labels: Option<Vec<u32>> = self
+            .organism_label_system
+            .as_ref()
+            .map(|labels| readback_typed(device, queue, &labels.label_buffer, slots))
+            .transpose()?;
+
+        let mut cell_counts: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut organism_sets: HashMap<u32, HashSet<u32>> = HashMap::new();
+        let mut invalid_live_cells = 0u32;
+        let mut labeled_live_cells = 0u32;
+
+        for i in 0..slots {
+            if death_flags.get(i).copied().unwrap_or(1) != 0 {
+                continue;
+            }
+
+            let genome_id = genome_ids.get(i).copied().unwrap_or(u32::MAX);
+            if genome_id == u32::MAX {
+                invalid_live_cells = invalid_live_cells.saturating_add(1);
+                continue;
+            }
+
+            let count = cell_counts.entry(genome_id).or_default();
+            *count = count.saturating_add(1);
+
+            if let Some(labels) = &organism_labels {
+                let label = labels.get(i).copied().unwrap_or(u32::MAX);
+                if label < slots_used {
+                    labeled_live_cells = labeled_live_cells.saturating_add(1);
+                    organism_sets.entry(genome_id).or_default().insert(label);
+                }
+            }
+        }
+
+        let organism_counts_reliable =
+            organism_labels.is_some() && (live_cells == 0 || labeled_live_cells > 0);
+        let mut adult_snapshots = capture_gpu_adult_snapshots(
+            &self.genomes,
+            &self.adhesion_buffers.snapshot_connections(),
+            &self.adhesion_buffers.snapshot_cell_indices(),
+            &positions_and_mass,
+            &mode_indices,
+            &genome_ids,
+            &death_flags,
+            organism_labels.as_deref(),
+            organism_counts_reliable,
+            &nutrients,
+            &birth_times,
+            &split_intervals,
+            &split_nutrient_thresholds,
+            self.current_time,
+            slots_used,
+        );
+        self.capture_scene_thumbnails_for_adult_snapshots(device, queue, &mut adult_snapshots);
+        let mutation_parents = read_sampled_mutation_parents(
+            device,
+            queue,
+            self.mutation_system.as_ref(),
+            cell_counts.keys().copied(),
+            self.genomes.len(),
+        );
+        let mut samples = Vec::with_capacity(cell_counts.len());
+        let mut tracked_cells = 0u32;
+        for (&genome_id, &cells) in &cell_counts {
+            let organisms = if organism_counts_reliable {
+                organism_sets
+                    .get(&genome_id)
+                    .map(|set| set.len() as u32)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            let lineage_id =
+                if let Some(lineage_id) = self.lineage_archive.lineage_for_genome_id(genome_id) {
+                    lineage_id
+                } else if (genome_id as usize) < self.genomes.len() {
+                    self.lineage_archive.ensure_user_lineage(
+                        genome_id,
+                        &self.genomes[genome_id as usize],
+                        self.current_frame,
+                    )
+                } else {
+                    let parent_genome_id = mutation_parents.get(&genome_id).copied();
+                    let prior_sample = self
+                        .lineage_archive
+                        .unpromoted_genome_sample(genome_id)
+                        .cloned();
+                    if !sampled_mutation_is_meaningful(cells, organisms, prior_sample.as_ref()) {
+                        self.lineage_archive.record_unpromoted_genome_sample(
+                            genome_id,
+                            parent_genome_id,
+                            cells,
+                            organisms,
+                            self.current_frame,
+                        );
+                        continue;
+                    }
+
+                    let parent_lineage = parent_genome_id.and_then(|parent_genome_id| {
+                        if parent_genome_id == genome_id {
+                            None
+                        } else if let Some(lineage_id) =
+                            self.lineage_archive.lineage_for_genome_id(parent_genome_id)
+                        {
+                            Some(lineage_id)
+                        } else if (parent_genome_id as usize) < self.genomes.len() {
+                            Some(self.lineage_archive.ensure_user_lineage(
+                                parent_genome_id,
+                                &self.genomes[parent_genome_id as usize],
+                                self.current_frame,
+                            ))
+                        } else {
+                            None
+                        }
+                    });
+                    self.lineage_archive.ensure_sampled_mutation_lineage(
+                        genome_id,
+                        parent_lineage,
+                        self.current_frame,
+                    )
+                };
+
+            if (genome_id as usize) >= self.genomes.len() {
+                let display_name = self
+                    .lineage_archive
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == lineage_id)
+                    .map(|node| node.display_name.clone())
+                    .unwrap_or_else(|| format!("GPU Genome #{genome_id}"));
+
+                if let Some(genome) = self.read_back_genome(device, queue, genome_id) {
+                    match genome.to_yaml_string() {
+                        Ok(genome_yaml) => {
+                            self.lineage_archive.upsert_loadable_genome(
+                                lineage_id,
+                                genome_id,
+                                display_name,
+                                "Rolling lineage interval payload",
+                                self.current_frame,
+                                genome_yaml,
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[Lineage] Failed to serialize loadable genome {}: {}",
+                                genome_id,
+                                error
+                            );
+                        }
+                    }
+                }
+            }
+
+            if let Some(snapshot) = adult_snapshots.get(&genome_id).cloned() {
+                self.lineage_archive
+                    .push_adult_snapshot_for_genome(genome_id, self.current_frame, snapshot);
+            }
+            tracked_cells = tracked_cells.saturating_add(cells);
+            samples.push(LineagePopulationSample {
+                lineage_id,
+                cells,
+                organisms,
+                frame: self.current_frame,
+            });
+        }
+
+        self.lineage_archive
+            .apply_population_samples(&samples, self.current_frame);
+        let untracked_cells = live_cells
+            .saturating_sub(tracked_cells)
+            .max(invalid_live_cells);
+        self.lineage_archive.record_scan_population(
+            self.current_frame,
+            self.current_time,
+            live_cells,
+            tracked_cells,
+            untracked_cells,
+            organism_counts_reliable,
+        );
+
+        // Detect stable periods: if nothing meaningful changed since the last scan,
+        // record a compressed time gap so the UI can collapse it.
+        if let Some(start_frame) = pre_scan_frame {
+            let new_noteworthy = self
+                .lineage_archive
+                .events
+                .get(pre_event_count..)
+                .map(|events| events.iter().any(|e| e.noteworthy))
+                .unwrap_or(false);
+            let new_extinctions = self
+                .lineage_archive
+                .nodes
+                .iter()
+                .any(|n| n.extinct_frame.map(|f| f > start_frame).unwrap_or(false));
+            // Count nodes added beyond what ensure_scene_genomes would guarantee.
+            let guaranteed_node_count = pre_node_count.max(self.genomes.len());
+            let new_promoted = self.lineage_archive.nodes.len() > guaranteed_node_count;
+            let cell_change = if pre_live_cells > 0 {
+                (live_cells as f32 - pre_live_cells as f32).abs() / pre_live_cells as f32
+            } else if live_cells > 0 {
+                1.0
+            } else {
+                0.0
+            };
+
+            let is_stable = !new_noteworthy
+                && !new_extinctions
+                && !new_promoted
+                && cell_change < crate::scene::lineage::STABLE_LIVE_CELL_CHANGE_THRESHOLD;
+
+            if is_stable {
+                self.lineage_archive.record_stable_period(
+                    start_frame,
+                    self.current_frame,
+                    pre_scan_time,
+                    self.current_time,
+                    pre_live_cells,
+                );
+            }
+        }
+
+        log::info!(
+            "[Lineage] Captured viewer scan: {} slots, {} live cells, {} tracked cells, {} samples",
+            slots,
+            live_cells,
+            tracked_cells,
+            samples.len()
+        );
+
+        Ok(())
+    }
+
+    fn capture_scene_thumbnails_for_adult_snapshots(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        snapshots: &mut HashMap<u32, LineageAdultSnapshot>,
+    ) {
+        if snapshots.is_empty() || self.headless_no_render {
+            return;
+        }
+
+        const THUMB_WIDTH: u32 = crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH;
+        const THUMB_HEIGHT: u32 = crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT;
+
+        let original_width = self.renderer.width.max(1);
+        let original_height = self.renderer.height.max(1);
+        let original_center = self.camera.center;
+        let original_distance = self.camera.distance;
+        let original_target_distance = self.camera.target_distance;
+        let original_rotation = self.camera.rotation;
+        let original_target_rotation = self.camera.target_rotation;
+        let original_mode = self.camera.mode;
+        let original_paused = self.paused;
+        let original_show_adhesion_lines = self.show_adhesion_lines;
+        let original_show_world_sphere = self.show_world_sphere;
+        let original_show_skybox = self.show_skybox;
+        let original_show_dof = self.show_dof;
+        let original_time_accumulator = self.time_accumulator;
+
+        self.paused = true;
+        self.show_adhesion_lines = true;
+        self.show_world_sphere = false;
+        self.show_skybox = false;
+        self.show_dof = false;
+        self.time_accumulator = 0.0;
+
+        <GpuScene as crate::scene::Scene>::resize(self, device, THUMB_WIDTH, THUMB_HEIGHT);
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Lineage Scene Thumbnail Texture"),
+            size: wgpu::Extent3d {
+                width: THUMB_WIDTH,
+                height: THUMB_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        for snapshot in snapshots.values_mut() {
+            let center = glam::vec3(
+                snapshot.world_center[0],
+                snapshot.world_center[1],
+                snapshot.world_center[2],
+            );
+            let distance = (snapshot.world_radius * 5.5).clamp(12.0, 120.0);
+            let rotation = glam::Quat::from_rotation_y(0.55)
+                * glam::Quat::from_rotation_x(-0.58)
+                * glam::Quat::from_rotation_z(0.18);
+
+            self.camera.center = center;
+            self.camera.distance = distance;
+            self.camera.target_distance = distance;
+            self.camera.rotation = rotation;
+            self.camera.target_rotation = rotation;
+            self.camera.mode = CameraMode::Orbit;
+
+            <GpuScene as crate::scene::Scene>::render(
+                self,
+                device,
+                queue,
+                &view,
+                None,
+                self.config.sphere_radius * 2.0,
+                500.0,
+                10.0,
+                25.0,
+                50.0,
+                false,
+                0.08,
+            );
+
+            match readback_texture_png(
+                device,
+                queue,
+                &texture,
+                self.surface_format,
+                THUMB_WIDTH,
+                THUMB_HEIGHT,
+            ) {
+                Ok(png) => snapshot.scene_thumbnail_png = Some(png),
+                Err(error) => {
+                    log::warn!("[Lineage] Scene thumbnail capture failed: {error}");
+                }
+            }
+        }
+
+        self.camera.center = original_center;
+        self.camera.distance = original_distance;
+        self.camera.target_distance = original_target_distance;
+        self.camera.rotation = original_rotation;
+        self.camera.target_rotation = original_target_rotation;
+        self.camera.mode = original_mode;
+        self.paused = original_paused;
+        self.show_adhesion_lines = original_show_adhesion_lines;
+        self.show_world_sphere = original_show_world_sphere;
+        self.show_skybox = original_show_skybox;
+        self.show_dof = original_show_dof;
+        self.time_accumulator = original_time_accumulator;
+
+        <GpuScene as crate::scene::Scene>::resize(self, device, original_width, original_height);
+    }
+
     /// Capture the current simulation state into a `GpuSceneSnapshot`.
     ///
     /// This performs a **blocking** GPU readback of all per-cell buffers.  The
@@ -322,6 +1318,9 @@ impl GpuScene {
             fluid_active,
         );
 
+        let mut lineage_archive = self.lineage_archive.clone();
+        lineage_archive.prepare_for_save();
+
         Ok(GpuSceneSnapshot {
             version: GpuSceneSnapshot::CURRENT_VERSION,
             capacity,
@@ -345,6 +1344,7 @@ impl GpuScene {
             cell_adhesion_indices,
             adhesion_allocated_count,
             genomes_yaml,
+            lineage_archive,
             current_time: self.current_time,
             current_frame: self.current_frame,
             next_cell_id: self.next_cell_id,
@@ -459,6 +1459,10 @@ impl GpuScene {
             genomes.push(genome);
         }
         self.genomes = genomes;
+        self.lineage_archive = snapshot.lineage_archive.clone();
+        self.lineage_archive.migrate_legacy_snapshots();
+        self.lineage_archive
+            .ensure_scene_genomes(&self.genomes, self.current_frame);
 
         // Rebuild derived genome caches.
         self.parent_make_adhesion_flags.clear();
