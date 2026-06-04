@@ -328,12 +328,12 @@ impl AdhesionLineRenderer {
             let is_barrier_ball =
                 (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) != 0;
             let zone_color_a = if is_barrier_ball {
-                [0.0, 0.0, 0.0, 0.95]
+                [1.0, 0.5, 0.0, 1.0] // Orange — matches GPU scaffold bond colour
             } else {
                 get_zone_color(zone_a)
             };
             let zone_color_b = if is_barrier_ball {
-                [0.0, 0.0, 0.0, 0.95]
+                [1.0, 0.5, 0.0, 1.0]
             } else {
                 get_zone_color(zone_b)
             };
@@ -344,7 +344,7 @@ impl AdhesionLineRenderer {
             // between two 1-hop neighbours that never relayed signal to each other).
             let has_signal = state.signal_flow_tracker.has_flow(cell_a_idx, cell_b_idx);
             let signal_color = if is_barrier_ball {
-                [0.0, 0.0, 0.0, 0.95]
+                [1.0, 1.0, 1.0, 1.0] // White outline — matches GPU
             } else if has_signal {
                 [1.0, 0.9, 0.0, 0.9] // Yellow
             } else {

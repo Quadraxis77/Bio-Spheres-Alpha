@@ -943,7 +943,7 @@ impl App {
                     ui.separator();
 
                     if targets.is_empty() {
-                        ui.label("Select a second cell");
+                        ui.label("Select a second cell to link.");
                     } else {
                         ui.label(format!(
                             "{} target{}",
@@ -954,7 +954,8 @@ impl App {
 
                     if let Some(selection) = self.cell_link_selection.as_mut() {
                         ui.horizontal(|ui| {
-                            ui.label("Rest length");
+                            ui.label("Rest length")
+                                .on_hover_text("The equilibrium distance the scaffold bond tries to maintain. Shorter than the current distance pulls the cells together; longer pushes them apart.");
                             let response = ui.add(
                                 egui::Slider::new(
                                     &mut selection.rest_length,
@@ -978,9 +979,12 @@ impl App {
 
                     if let Some(selection) = self.cell_link_selection.as_mut() {
                         ui.horizontal(|ui| {
-                            ui.label("Rule:");
-                            ui.selectable_value(&mut selection.match_pattern, true, "Pattern");
-                            ui.selectable_value(&mut selection.match_pattern, false, "Specific");
+                            ui.label("Rule:")
+                                .on_hover_text("Pattern: connects all cells that share the same pair of modes — one bond per matching pair across every organism. Specific: connects only the exact developmental position of the selected cells — one bond per organism instance, always between the same lineage positions.");
+                            ui.selectable_value(&mut selection.match_pattern, true, "Pattern")
+                                .on_hover_text("ByModeIndex — the rule fires for every cell of the anchor's mode and every cell of the target's mode within the same organism. Use for repeating structures (spokes, rings, chains).");
+                            ui.selectable_value(&mut selection.match_pattern, false, "Specific")
+                                .on_hover_text("ByLineageHash/ByOrganismCellId — the rule fires for only the exact developmental position selected, identified by its division tree address. Use for unique structural joints that must connect specific named positions.");
                         });
                     }
 
@@ -988,41 +992,70 @@ impl App {
                         ui.label(format!(
                             "Distance {:.2} / max {:.2}",
                             distance, selection_snapshot.formation_range
-                        ));
+                        ))
+                        .on_hover_text("Current distance between cells and the maximum formation range. Bonds will only form during simulation when the cells are within range of each other.");
                     }
+
+                    // ── Rejection reasons ──────────────────────────────────
                     if out_of_range_count > 0 {
                         ui.colored_label(
                             egui::Color32::from_rgb(230, 170, 60),
-                            format!("{out_of_range_count} out of range"),
-                        );
+                            format!("⚠ {out_of_range_count} outside formation range"),
+                        )
+                        .on_hover_text("These pairs are further apart than the maximum formation range. The rule will still be created, but the bond will only form when the cells come within range during simulation. Increase the formation range or let the organism develop further before authoring.");
                     }
                     if wrong_organism_count > 0 {
                         ui.colored_label(
                             egui::Color32::from_rgb(230, 90, 80),
-                            format!("{wrong_organism_count} not same organism"),
-                        );
+                            format!("✗ {wrong_organism_count} from a different organism"),
+                        )
+                        .on_hover_text("Scaffold rules are developmental: they identify endpoints by position in the cell division tree. Cells from different organisms have completely unrelated division trees, so no rule can address both endpoints. These pairs cannot be linked. Only cells from the same organism (the same continuous chain of divisions from a single root) can be connected.");
                     }
                     if already_attached_count > 0 {
                         ui.colored_label(
                             egui::Color32::from_rgb(230, 170, 60),
-                            format!("{already_attached_count} already attached"),
-                        );
+                            format!("⚠ {already_attached_count} already have a normal adhesion bond"),
+                        )
+                        .on_hover_text("A regular adhesion bond (not a scaffold bond) already exists between these cells. The scaffold resolver will not create a structural bond alongside an existing normal bond — it would silently skip these pairs at runtime. The rule will still be created, but it will only activate if the normal bond is absent (e.g. after division breaks it or before it forms).");
+                    }
+                    if existing_count > 0 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(140, 200, 255),
+                            format!("● {existing_count} already have a scaffold bond"),
+                        )
+                        .on_hover_text("A scaffold bond from a previous rule already exists for these pairs. Clicking Update will change the rest length of the existing rule to the current value.");
+                    }
+
+                    // Summary when every selected pair is blocked
+                    if !targets.is_empty() && valid_count == 0 {
+                        ui.separator();
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 90, 80),
+                            "No valid pairs — all selections rejected.",
+                        )
+                        .on_hover_text("Every selected pair was rejected (see reasons above). No rule can be created until at least one pair passes all checks: same organism, with no blocking normal adhesion bond.");
                     }
 
                     ui.horizontal(|ui| {
-                        let label = if existing_count > 0 {
+                        let create_label = if existing_count > 0 && valid_count == existing_count {
                             "Update"
                         } else {
                             "Create"
                         };
                         if ui
-                            .add_enabled(valid_count > 0, egui::Button::new(label))
+                            .add_enabled(valid_count > 0, egui::Button::new(create_label))
+                            .on_hover_text(if existing_count > 0 {
+                                "Update the rest length of the existing scaffold rule to the current value."
+                            } else {
+                                "Create a scaffold rule in the genome. The bond will form during simulation whenever the cells are within the formation range and no normal bond blocks it."
+                            })
                             .clicked()
                         {
                             apply_clicked = true;
                         }
                         if ui
                             .add_enabled(existing_count > 0, egui::Button::new("Remove"))
+                            .on_hover_text("Remove the scaffold rule that created the bond between these cells. The physical bond will disappear on the next simulation rescan.")
                             .clicked()
                         {
                             remove_clicked = true;

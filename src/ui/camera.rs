@@ -408,10 +408,10 @@ impl CameraController {
                     }
                 }
             } else {
-                // FreeFly mode: free rotation
+                // FreeFly mode: yaw around world up to prevent roll accumulation,
+                // pitch around camera's local X axis.
                 let pitch = Quat::from_axis_angle(self.target_rotation * Vec3::X, -delta.y);
-                let local_up = self.target_rotation * Vec3::Y;
-                let free_yaw = Quat::from_axis_angle(local_up, -delta.x);
+                let free_yaw = Quat::from_axis_angle(self.up_direction, -delta.x);
 
                 self.target_rotation = (free_yaw * pitch) * self.target_rotation;
                 self.target_rotation = self.target_rotation.normalize();
