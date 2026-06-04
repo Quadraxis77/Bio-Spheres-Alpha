@@ -385,6 +385,8 @@ impl PreviewState {
             mode.myocyte_threshold.to_bits().hash(&mut hasher);
             mode.myocyte_pulse_rate.to_bits().hash(&mut hasher);
             mode.myocyte_pulse_phase.hash(&mut hasher);
+            mode.myocyte_grip_contracted.to_bits().hash(&mut hasher);
+            mode.myocyte_grip_extended.to_bits().hash(&mut hasher);
 
             // Hash embryocyte release trigger settings
             mode.embryocyte_use_timer.hash(&mut hasher);
@@ -437,6 +439,10 @@ impl PreviewState {
             mode.cognocyte_input_channel_b.hash(&mut hasher);
             mode.cognocyte_output_channel.hash(&mut hasher);
             mode.cognocyte_output_hops.hash(&mut hasher);
+            mode.cognocyte_oscillator_rate.to_bits().hash(&mut hasher);
+            mode.cognocyte_oscillator_phase.to_bits().hash(&mut hasher);
+            mode.cognocyte_oscillator_strength.to_bits().hash(&mut hasher);
+            mode.cognocyte_oscillator_step_count.hash(&mut hasher);
         }
 
         // Scaffold rules affect bond topology during resim.
