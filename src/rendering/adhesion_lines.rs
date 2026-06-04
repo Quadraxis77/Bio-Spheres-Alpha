@@ -212,8 +212,9 @@ impl AdhesionLineRenderer {
         perp: Vec3,
         zone_color: [f32; 4],
         signal_color: [f32; 4],
+        half_width: f32,
     ) {
-        let hw = LINE_HALF_WIDTH;
+        let hw = half_width;
         // Quad corners: left edge = +perp, right edge = -perp
         let v0 = start + perp * hw; // start, left  (edge=+1)
         let v1 = start - perp * hw; // start, right (edge=-1)
@@ -328,12 +329,12 @@ impl AdhesionLineRenderer {
             let is_barrier_ball =
                 (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) != 0;
             let zone_color_a = if is_barrier_ball {
-                [1.0, 0.5, 0.0, 1.0] // Orange — matches GPU scaffold bond colour
+                [0.0, 0.0, 0.0, 1.0]
             } else {
                 get_zone_color(zone_a)
             };
             let zone_color_b = if is_barrier_ball {
-                [1.0, 0.5, 0.0, 1.0]
+                [0.0, 0.0, 0.0, 1.0]
             } else {
                 get_zone_color(zone_b)
             };
@@ -344,11 +345,16 @@ impl AdhesionLineRenderer {
             // between two 1-hop neighbours that never relayed signal to each other).
             let has_signal = state.signal_flow_tracker.has_flow(cell_a_idx, cell_b_idx);
             let signal_color = if is_barrier_ball {
-                [1.0, 1.0, 1.0, 1.0] // White outline — matches GPU
+                [0.0, 0.0, 0.0, 1.0]
             } else if has_signal {
                 [1.0, 0.9, 0.0, 0.9] // Yellow
             } else {
                 [0.0, 0.0, 0.0, 0.6] // Black
+            };
+            let half_width = if is_barrier_ball {
+                LINE_HALF_WIDTH * 2.5
+            } else {
+                LINE_HALF_WIDTH
             };
 
             // Compute billboard perpendicular direction
@@ -368,6 +374,7 @@ impl AdhesionLineRenderer {
                 perp,
                 zone_color_a,
                 signal_color,
+                half_width,
             );
 
             // Half-segment 2: Midpoint -> Cell B (zone B color)
@@ -378,6 +385,7 @@ impl AdhesionLineRenderer {
                 perp,
                 zone_color_b,
                 signal_color,
+                half_width,
             );
         }
 
