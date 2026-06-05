@@ -425,8 +425,8 @@ impl CameraController {
             self.rotation = self.target_rotation;
         }
 
-        // 3. ROLL (Q/E) - Only in FreeFly mode
-        if self.mode == CameraMode::FreeFly {
+        // 3. ROLL (Q/E) - Only in radial FreeFly mode
+        if self.mode == CameraMode::FreeFly && self.gravity_mode == 3 {
             let mut roll_amount = 0.0;
             if self.keys_pressed.q {
                 roll_amount += 1.0;

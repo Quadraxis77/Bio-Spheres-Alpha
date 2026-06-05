@@ -527,10 +527,6 @@ pub struct GenomeEditorState {
     /// Processed in end_frame after the dock renders so scene_manager is accessible.
     pub request_toggle_water: bool,
 
-    /// Request to toggle volumetric fog (show_volumetric_fog) from the rail button.
-    /// Processed in end_frame after the dock renders so scene_manager is accessible.
-    pub request_toggle_fog: bool,
-
     /// Request to take a screenshot of the current viewport.
     /// Processed in app.rs after the frame is presented.
     pub request_screenshot: bool,
@@ -928,7 +924,6 @@ impl GenomeEditorState {
             mode_graph_panel_location: None,
             procedural_genome_seed: None,
             request_toggle_water: false,
-            request_toggle_fog: false,
             request_screenshot: false,
             request_gif_capture: false,
             gif_capture_save_path: None,

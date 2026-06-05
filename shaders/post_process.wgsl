@@ -78,12 +78,12 @@ fn fs_tonemap(in: VOut) -> @location(0) vec4<f32> {
         color *= e;
     }
 
-    // Gamma power curve.  gamma > 1 crushes shadows toward black while keeping
-    // whites near 1, maximising the perceived spread between dark and bright.
-    // gamma < 1 lifts shadows (lower contrast / softer look).
-    // gamma = 1 is the identity.
+    // Midpoint-pivot contrast. Values below the pivot move darker while values
+    // above it move brighter, so the control increases separation instead of
+    // dimming the whole image like a gamma power curve.
     if params.contrast != 1.0 {
-        color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(params.contrast));
+        let pivot = vec3<f32>(0.5);
+        color = max((color - pivot) * params.contrast + pivot, vec3<f32>(0.0));
     }
 
     return vec4<f32>(color, 1.0);

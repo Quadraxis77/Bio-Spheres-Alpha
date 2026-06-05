@@ -1155,7 +1155,10 @@ impl CaveSystemRenderer {
             // Calculate normal (ensure it points outward from solid)
             let edge1 = v1 - v0;
             let edge2 = v2 - v0;
-            let normal = edge1.cross(edge2).normalize();
+            let normal = edge1.cross(edge2).normalize_or_zero();
+            if normal.length_squared() < 0.0001 {
+                continue;
+            }
 
             // Get base index for this triangle
             let base_index = vertices.len() as u32;

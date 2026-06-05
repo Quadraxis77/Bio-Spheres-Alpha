@@ -319,7 +319,7 @@ impl VolumetricFogRenderer {
                     format: surface_format,
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            src_factor: wgpu::BlendFactor::One,
                             dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                             operation: wgpu::BlendOperation::Add,
                         },
@@ -635,7 +635,9 @@ impl VolumetricFogRenderer {
             water_wave_strength: self.water_wave_strength,
             water_wave_scale: self.water_wave_scale,
             smooth_light_field: self.smooth_light_field as u32,
-            _pad0: 0, _pad1: 0, _pad2: 0,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         queue.write_buffer(&self.fog_params_buffer, 0, bytemuck::bytes_of(&fog_params));
 
@@ -674,7 +676,11 @@ impl VolumetricFogRenderer {
 
         // Update composite params (blur radius).
         let composite_params: [f32; 4] = [self.composite_blur_radius, 0.0, 0.0, 0.0];
-        queue.write_buffer(&self.composite_params_buffer, 0, bytemuck::cast_slice(&composite_params));
+        queue.write_buffer(
+            &self.composite_params_buffer,
+            0,
+            bytemuck::cast_slice(&composite_params),
+        );
 
         // Pass 2: Composite half-res fog onto full-res scene with bilinear upscaling
         {

@@ -13,6 +13,9 @@ use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 
+const PREVIEW_LIGHT_COLOR: [f32; 3] = [6.0, 5.8, 5.4];
+const PREVIEW_LIGHT_DIR: [f32; 3] = [0.45, -0.75, -0.35];
+
 /// Preview scene for genome editing.
 ///
 /// Uses CPU physics for small-scale simulations with checkpoint
@@ -78,12 +81,15 @@ impl PreviewScene {
         state.genome_hash = PreviewState::compute_genome_hash(&genome);
         state.update_initial_state(&genome, &config);
 
-        let renderer = CellRenderer::new(device, queue, surface_config, capacity);
+        let mut renderer = CellRenderer::new(device, queue, surface_config, capacity);
+        renderer.set_light_color(PREVIEW_LIGHT_COLOR);
+        renderer.set_light_dir(PREVIEW_LIGHT_DIR);
         let adhesion_renderer =
             AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
-        let tail_renderer = TailRenderer::new(device, surface_config.format, capacity);
+        let mut tail_renderer = TailRenderer::new(device, surface_config.format, capacity);
+        tail_renderer.set_light_color(PREVIEW_LIGHT_COLOR);
         let fov_cone_renderer = FovConeRenderer::new(device, surface_config);
         let skybox_renderer = PreviewSkyboxRenderer::new(device, surface_config.format);
 

@@ -2265,14 +2265,6 @@ impl UiSystem {
             editor_state.save_fluid_settings();
         }
 
-        // Handle fog toggle request (GPU mode rail button)
-        if editor_state.request_toggle_fog {
-            editor_state.request_toggle_fog = false;
-            editor_state.show_volumetric_fog = !editor_state.show_volumetric_fog;
-            editor_state.light_params_dirty = true;
-            editor_state.save_light_settings();
-        }
-
         // Render radial menu overlay (GPU mode only)
         // Now editor_state is no longer borrowed by panel_context
         if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu
@@ -3362,12 +3354,6 @@ fn render_side_rail(
             let water_active = editor_state.fluid_continuous_spawn;
             if rail_button_toggle(ui, "🌊", "Toggle Water Fill", water_active, &p) {
                 editor_state.request_toggle_water = true;
-            }
-
-            // Fog toggle
-            let fog_active = editor_state.show_volumetric_fog;
-            if rail_button_toggle(ui, "🌫", "Toggle Volumetric Fog", fog_active, &p) {
-                editor_state.request_toggle_fog = true;
             }
 
             // Screenshot

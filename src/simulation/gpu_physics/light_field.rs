@@ -122,6 +122,7 @@ pub struct LightFieldSystem {
     light_field_buffer: wgpu::Buffer,
     light_color_field_buffer: wgpu::Buffer,
     light_color_accum_buffer: wgpu::Buffer,
+    light_intensity_accum_buffer: wgpu::Buffer,
     cell_occupancy_buffer: wgpu::Buffer,
     light_field_params_buffer: wgpu::Buffer,
     occupancy_params_buffer: wgpu::Buffer,
@@ -220,6 +221,13 @@ impl LightFieldSystem {
         let light_color_accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Luminocyte Light Color Accumulator"),
             size: (TOTAL_VOXELS * 4 * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let light_intensity_accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Luminocyte Light Intensity Accumulator"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -629,6 +637,17 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
+                    // Binding 13: light_intensity_accum (atomic read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -784,6 +803,7 @@ impl LightFieldSystem {
             light_field_buffer,
             light_color_field_buffer,
             light_color_accum_buffer,
+            light_intensity_accum_buffer,
             cell_occupancy_buffer,
             light_field_params_buffer,
             occupancy_params_buffer,
@@ -1390,6 +1410,10 @@ impl LightFieldSystem {
                     binding: 12,
                     resource: self.light_color_field_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: self.light_intensity_accum_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1481,6 +1505,7 @@ impl LightFieldSystem {
 
         // Step 4: Photocyte light consumption and luminocyte local light emission.
         encoder.clear_buffer(&self.light_color_accum_buffer, 0, None);
+        encoder.clear_buffer(&self.light_intensity_accum_buffer, 0, None);
         if cell_count > 0 {
             let cell_workgroups = (cell_count + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1553,6 +1578,7 @@ impl LightFieldSystem {
         );
 
         encoder.clear_buffer(&self.light_color_accum_buffer, 0, None);
+        encoder.clear_buffer(&self.light_intensity_accum_buffer, 0, None);
 
         {
             let cell_workgroups = (cell_count + 255) / 256;

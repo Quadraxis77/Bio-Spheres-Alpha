@@ -155,24 +155,59 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     return mix(c0, c1, fz);
 }
 
+fn light_color_load(ix: i32, iy: i32, iz: i32) -> vec4<f32> {
+    let res = shadow_params.grid_resolution;
+    let ires = i32(res);
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return vec4<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b, 0.0);
+    }
+    return light_color_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
+}
+
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     if (shadow_params.shadow_enabled == 0u) {
         return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     }
-    let res = shadow_params.grid_resolution;
-    let fres = f32(res);
-    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size;
-    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size;
-    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size;
-    let ix = i32(round(gx));
-    let iy = i32(round(gy));
-    let iz = i32(round(gz));
-    let ires = i32(res);
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
+    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size - 0.5;
+    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size - 0.5;
+
+    let x0 = i32(floor(gx)); let x1 = x0 + 1;
+    let y0 = i32(floor(gy)); let y1 = y0 + 1;
+    let z0 = i32(floor(gz)); let z1 = z0 + 1;
+    let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
+
+    let c000 = light_color_load(x0,y0,z0);
+    let c100 = light_color_load(x1,y0,z0);
+    let c010 = light_color_load(x0,y1,z0);
+    let c110 = light_color_load(x1,y1,z0);
+    let c001 = light_color_load(x0,y0,z1);
+    let c101 = light_color_load(x1,y0,z1);
+    let c011 = light_color_load(x0,y1,z1);
+    let c111 = light_color_load(x1,y1,z1);
+
+    let w000 = (1.0 - fx) * (1.0 - fy) * (1.0 - fz);
+    let w100 = fx * (1.0 - fy) * (1.0 - fz);
+    let w010 = (1.0 - fx) * fy * (1.0 - fz);
+    let w110 = fx * fy * (1.0 - fz);
+    let w001 = (1.0 - fx) * (1.0 - fy) * fz;
+    let w101 = fx * (1.0 - fy) * fz;
+    let w011 = (1.0 - fx) * fy * fz;
+    let w111 = fx * fy * fz;
+
+    let local_weight =
+        c000.w * w000 + c100.w * w100 + c010.w * w010 + c110.w * w110 +
+        c001.w * w001 + c101.w * w101 + c011.w * w011 + c111.w * w111;
+    if (local_weight > 0.0001) {
+        let local_color =
+            c000.rgb * c000.w * w000 + c100.rgb * c100.w * w100 +
+            c010.rgb * c010.w * w010 + c110.rgb * c110.w * w110 +
+            c001.rgb * c001.w * w001 + c101.rgb * c101.w * w101 +
+            c011.rgb * c011.w * w011 + c111.rgb * c111.w * w111;
+        return local_color / local_weight;
     }
-    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
-    return light_color_field[idx].rgb;
+
+    return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
 }
 
 // --- 3D Perlin noise implementation ---
@@ -338,6 +373,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Get base color from fluid type
     let base_color = get_fluid_color(in.fluid_type);
     let alpha = get_fluid_alpha(in.fluid_type, params.alpha);
+    let ft = u32(in.fluid_type + 0.5);
     
     // Use shadow field light direction if available, fall back to render params
     let light_dir = normalize(vec3<f32>(shadow_params.light_dir_x, shadow_params.light_dir_y, shadow_params.light_dir_z));
@@ -349,6 +385,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let light_value = sample_light_field(shadow_sample_pos);
     let shadow = mix(1.0, light_value, shadow_params.shadow_strength);
     let sun_color = sample_light_color_field(shadow_sample_pos);
+    let sampled_light = sun_color * shadow;
+    let sampled_light_strength = clamp(max(max(sampled_light.r, sampled_light.g), sampled_light.b), 0.0, 1.0);
     
     // Diffuse (Lambert)
     let n_dot_l = max(dot(normal, light_dir), 0.0);
@@ -366,7 +404,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.0) * params.rim;
     
     // Combine lighting with shadow applied to direct illumination
-    let ambient_light = params.ambient;
+    let ambient_light = select(params.ambient, 0.0, ft == 1u);
     let direct_light = diffuse * shadow;
     let lighting = ambient_light + direct_light;
     var final_color = base_color * sun_color * lighting;
@@ -375,7 +413,6 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     final_color += sun_color * specular * shadow;
     
     // Lava emissive glow (unaffected by shadow)
-    let ft = u32(in.fluid_type + 0.5);
     if ft == 2u {
         final_color += LAVA_COLOR * 0.5;
     }
@@ -386,7 +423,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let reflect_dir = reflect(-view_dir, reflect_normal);
     let env_color = textureSample(env_cubemap, env_sampler, reflect_dir).rgb;
     // Boost reflection brightness - cave walls are dark, need to be visible in reflection
-    let boosted_env = env_color * params.reflection_brightness;
+    let boosted_env = env_color * params.reflection_brightness * sampled_light_strength;
     // Waterline: tris facing against gravity (upward normals) are the water surface.
     // Faces below the waterline (sides + bottom) get transparent, non-reflective treatment.
     // Radial gravity: reflective faces are those aligned with the radial direction
@@ -405,12 +442,12 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     // Rim light: suppressed below waterline.
     let rim_color = mix(vec3<f32>(0.7, 0.85, 1.0), base_color, 0.5);
-    final_color += rim_color * rim * mix(0.3, 1.0, shadow) * (1.0 - submerged);
+    final_color += rim_color * rim * sampled_light_strength * (1.0 - submerged);
 
     // Subsurface scattering (water only, attenuated by shadow).
     if ft == 1u {
         let sss = pow(max(dot(view_dir, -light_dir), 0.0), 2.0) * 0.15;
-        final_color += vec3<f32>(0.0, 0.4, 0.6) * sss * shadow;
+        final_color += vec3<f32>(0.0, 0.4, 0.6) * sss * sampled_light_strength;
     }
 
     // Alpha: waterline/above = normal (boosted by reflection); below = very transparent.

@@ -566,28 +566,60 @@ fn internals_memorocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+fn light_color_load(ix: i32, iy: i32, iz: i32) -> vec4<f32> {
+    let res = shadow_params.grid_resolution;
+    let ires = i32(res);
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return vec4<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b, 0.0);
+    }
+    return light_color_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
+}
+
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     if (shadow_params.shadow_enabled == 0u) {
         return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     }
-    let res = shadow_params.grid_resolution;
-    let fres = f32(res);
 
-    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size;
-    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size;
-    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size;
-    let ix = i32(round(gx));
-    let iy = i32(round(gy));
-    let iz = i32(round(gz));
-    let ires = i32(res);
+    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
+    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size - 0.5;
+    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size - 0.5;
 
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    let x0 = i32(floor(gx)); let x1 = x0 + 1;
+    let y0 = i32(floor(gy)); let y1 = y0 + 1;
+    let z0 = i32(floor(gz)); let z1 = z0 + 1;
+    let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
+
+    let c000 = light_color_load(x0,y0,z0);
+    let c100 = light_color_load(x1,y0,z0);
+    let c010 = light_color_load(x0,y1,z0);
+    let c110 = light_color_load(x1,y1,z0);
+    let c001 = light_color_load(x0,y0,z1);
+    let c101 = light_color_load(x1,y0,z1);
+    let c011 = light_color_load(x0,y1,z1);
+    let c111 = light_color_load(x1,y1,z1);
+
+    let w000 = (1.0 - fx) * (1.0 - fy) * (1.0 - fz);
+    let w100 = fx * (1.0 - fy) * (1.0 - fz);
+    let w010 = (1.0 - fx) * fy * (1.0 - fz);
+    let w110 = fx * fy * (1.0 - fz);
+    let w001 = (1.0 - fx) * (1.0 - fy) * fz;
+    let w101 = fx * (1.0 - fy) * fz;
+    let w011 = (1.0 - fx) * fy * fz;
+    let w111 = fx * fy * fz;
+
+    let local_weight =
+        c000.w * w000 + c100.w * w100 + c010.w * w010 + c110.w * w110 +
+        c001.w * w001 + c101.w * w101 + c011.w * w011 + c111.w * w111;
+    if (local_weight > 0.0001) {
+        let local_color =
+            c000.rgb * c000.w * w000 + c100.rgb * c100.w * w100 +
+            c010.rgb * c010.w * w010 + c110.rgb * c110.w * w110 +
+            c001.rgb * c001.w * w001 + c101.rgb * c101.w * w101 +
+            c011.rgb * c011.w * w011 + c111.rgb * c111.w * w111;
+        return local_color / local_weight;
     }
 
-    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
-    let c = light_color_field[idx];
-    return c.rgb;
+    return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
 }
 
 // Type 16: Luminocyte - signal-reactive lantern body.

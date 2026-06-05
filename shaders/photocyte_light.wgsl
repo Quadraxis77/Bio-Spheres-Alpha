@@ -88,6 +88,9 @@ var<storage, read_write> light_color_accum: array<atomic<u32>>;
 @group(1) @binding(12)
 var<storage, read_write> light_color_field: array<vec4<f32>>;
 
+@group(1) @binding(13)
+var<storage, read_write> light_intensity_accum: array<atomic<u32>>;
+
 // Photocyte cell type constant
 const PHOTOCYTE_TYPE: u32 = 3u;
 const LUMINOCYTE_TYPE: u32 = 16u;
@@ -215,8 +218,14 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
     let cz = i32(center / (photocyte_params.grid_resolution * photocyte_params.grid_resolution));
     let cy = i32((center - u32(cz) * photocyte_params.grid_resolution * photocyte_params.grid_resolution) / photocyte_params.grid_resolution);
     let cx = i32(center - u32(cz) * photocyte_params.grid_resolution * photocyte_params.grid_resolution - u32(cy) * photocyte_params.grid_resolution);
+    let emitter_grid_pos = vec3<f32>(
+        (pos.x - photocyte_params.grid_origin_x) / photocyte_params.cell_size - 0.5,
+        (pos.y - photocyte_params.grid_origin_y) / photocyte_params.cell_size - 0.5,
+        (pos.z - photocyte_params.grid_origin_z) / photocyte_params.cell_size - 0.5,
+    );
 
-    let emit_radius: i32 = 7;
+    let emit_radius: i32 = 9;
+    let emit_radius_f = f32(emit_radius);
     for (var dz = -emit_radius; dz <= emit_radius; dz++) {
         for (var dy = -emit_radius; dy <= emit_radius; dy++) {
             for (var dx = -emit_radius; dx <= emit_radius; dx++) {
@@ -226,12 +235,15 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
                 if (x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res) {
                     continue;
                 }
-                let dist = length(vec3<f32>(f32(dx), f32(dy), f32(dz)));
-                if (dist > f32(emit_radius)) {
+                let voxel_center = vec3<f32>(f32(x), f32(y), f32(z));
+                let dist = length(voxel_center - emitter_grid_pos);
+                if (dist > emit_radius_f) {
                     continue;
                 }
-                // Soft falloff (exponent < 1) for a wide neon-style halo.
-                let falloff = pow(1.0 - dist / f32(emit_radius), 0.8);
+                // Center on the actual cell position instead of the containing voxel
+                // so luminocyte light does not stamp visible grid blocks.
+                let edge = 1.0 - smoothstep(0.0, 1.0, dist / emit_radius_f);
+                let falloff = edge * edge * (1.0 + 0.45 * (1.0 - dist / emit_radius_f));
                 let idx = u32(x) + u32(y) * photocyte_params.grid_resolution + u32(z) * photocyte_params.grid_resolution * photocyte_params.grid_resolution;
                 // Skip solid voxels — light_field == 0.0 means solid rock (set by
                 // compute_light_field). Injecting into them would make them pass the
@@ -240,7 +252,10 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
                     continue;
                 }
                 let local_light = effective_brightness * falloff;
-                light_field[idx] += local_light;
+                let intensity_weight = u32(max(local_light * COLOR_ACCUM_SCALE, 0.0));
+                if (intensity_weight > 0u) {
+                    atomicAdd(&light_intensity_accum[idx], intensity_weight);
+                }
 
                 let weight = u32(max(local_light * COLOR_ACCUM_SCALE, 0.0));
                 if (weight > 0u) {
@@ -266,7 +281,16 @@ fn resolve_luminocyte_light_color(@builtin(global_invocation_id) global_id: vec3
     let base = idx * 4u;
     let weight = atomicLoad(&light_color_accum[base + 3u]);
     if (weight == 0u) {
+        let intensity = atomicLoad(&light_intensity_accum[idx]);
+        if (intensity > 0u) {
+            light_field[idx] += f32(intensity) / COLOR_ACCUM_SCALE;
+        }
         return;
+    }
+
+    let intensity = atomicLoad(&light_intensity_accum[idx]);
+    if (intensity > 0u) {
+        light_field[idx] += f32(intensity) / COLOR_ACCUM_SCALE;
     }
 
     let inv_weight = 1.0 / f32(weight);

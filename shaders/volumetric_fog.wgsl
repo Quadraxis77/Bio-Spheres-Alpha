@@ -150,11 +150,37 @@ fn lf_color_trilinear(gx: f32, gy: f32, gz: f32) -> vec4<f32> {
     let y0 = i32(floor(gy)); let y1 = y0 + 1;
     let z0 = i32(floor(gz)); let z1 = z0 + 1;
     let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
-    let v00 = mix(lf_color_load(x0,y0,z0), lf_color_load(x1,y0,z0), fx);
-    let v10 = mix(lf_color_load(x0,y1,z0), lf_color_load(x1,y1,z0), fx);
-    let v01 = mix(lf_color_load(x0,y0,z1), lf_color_load(x1,y0,z1), fx);
-    let v11 = mix(lf_color_load(x0,y1,z1), lf_color_load(x1,y1,z1), fx);
-    return mix(mix(v00,v10,fy), mix(v01,v11,fy), fz);
+    let c000 = lf_color_load(x0,y0,z0);
+    let c100 = lf_color_load(x1,y0,z0);
+    let c010 = lf_color_load(x0,y1,z0);
+    let c110 = lf_color_load(x1,y1,z0);
+    let c001 = lf_color_load(x0,y0,z1);
+    let c101 = lf_color_load(x1,y0,z1);
+    let c011 = lf_color_load(x0,y1,z1);
+    let c111 = lf_color_load(x1,y1,z1);
+
+    let w000 = (1.0 - fx) * (1.0 - fy) * (1.0 - fz);
+    let w100 = fx * (1.0 - fy) * (1.0 - fz);
+    let w010 = (1.0 - fx) * fy * (1.0 - fz);
+    let w110 = fx * fy * (1.0 - fz);
+    let w001 = (1.0 - fx) * (1.0 - fy) * fz;
+    let w101 = fx * (1.0 - fy) * fz;
+    let w011 = (1.0 - fx) * fy * fz;
+    let w111 = fx * fy * fz;
+
+    let local_weight =
+        c000.w * w000 + c100.w * w100 + c010.w * w010 + c110.w * w110 +
+        c001.w * w001 + c101.w * w101 + c011.w * w011 + c111.w * w111;
+    if (local_weight > 0.0001) {
+        let local_color =
+            c000.rgb * c000.w * w000 + c100.rgb * c100.w * w100 +
+            c010.rgb * c010.w * w010 + c110.rgb * c110.w * w110 +
+            c001.rgb * c001.w * w001 + c101.rgb * c101.w * w101 +
+            c011.rgb * c011.w * w011 + c111.rgb * c111.w * w111;
+        return vec4<f32>(local_color / local_weight, local_weight);
+    }
+
+    return vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
 }
 
 fn world_to_grid_pos(world_pos: vec3<f32>) -> vec3<f32> {
