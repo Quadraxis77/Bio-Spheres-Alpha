@@ -6937,6 +6937,8 @@ impl GpuScene {
             fog_renderer.height_fog_falloff = editor_state.fog_height_falloff;
             fog_renderer.water_wave_strength = editor_state.fog_water_wave_strength;
             fog_renderer.water_wave_scale = editor_state.fog_water_wave_scale;
+            fog_renderer.smooth_light_field = editor_state.fog_smooth_light_field;
+            fog_renderer.composite_blur_radius = editor_state.fog_composite_blur;
         }
 
         // Combine sun color with intensity for all lighting

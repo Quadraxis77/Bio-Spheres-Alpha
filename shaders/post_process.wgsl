@@ -68,31 +68,22 @@ fn vs_tonemap(@builtin(vertex_index) vi: u32) -> VOut {
     return out;
 }
 
-// Smooth filmic S-curve contrast (keeps blacks black and whites white).
-fn contrast_curve(c: vec3<f32>, contrast: f32) -> vec3<f32> {
-    // Pivot around mid-grey (0.5).  contrast = 1.0 → identity.
-    let lifted = (c - 0.5) * contrast + 0.5;
-    // Soft-clip using a smooth curve to avoid hard clamp artefacts.
-    return vec3<f32>(
-        1.0 / (1.0 + exp(-10.0 * (lifted.r - 0.5))) * 0.96 + 0.02,
-        1.0 / (1.0 + exp(-10.0 * (lifted.g - 0.5))) * 0.96 + 0.02,
-        1.0 / (1.0 + exp(-10.0 * (lifted.b - 0.5))) * 0.96 + 0.02,
-    );
-}
-
 @fragment
 fn fs_tonemap(in: VOut) -> @location(0) vec4<f32> {
     var color = textureSample(scene_tex, scene_samp, in.uv).rgb;
 
-    // Apply eye-adaptation exposure.
+    // Eye-adaptation exposure.
     if params.adapt_enabled != 0u {
-        let exp = clamp(exposure_buf[0], params.adapt_min, params.adapt_max);
-        color *= exp;
+        let e = clamp(exposure_buf[0], params.adapt_min, params.adapt_max);
+        color *= e;
     }
 
-    // Apply contrast.
+    // Gamma power curve.  gamma > 1 crushes shadows toward black while keeping
+    // whites near 1, maximising the perceived spread between dark and bright.
+    // gamma < 1 lifts shadows (lower contrast / softer look).
+    // gamma = 1 is the identity.
     if params.contrast != 1.0 {
-        color = contrast_curve(color, params.contrast);
+        color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(params.contrast));
     }
 
     return vec4<f32>(color, 1.0);

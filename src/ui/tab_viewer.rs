@@ -5347,6 +5347,22 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
                 .changed();
 
             ui.add_space(4.0);
+            ui.add_space(4.0);
+            changed |= ui
+                .checkbox(&mut context.editor_state.fog_smooth_light_field, "Smooth Voxels")
+                .on_hover_text("Trilinear interpolation of the light field — eliminates hard blocky voxel edges on light shafts and luminocyte halos. Costs ~8x more light field reads per step.")
+                .changed();
+
+            ui.label("Blur Radius:")
+                .on_hover_text("Smoothing kernel applied to the half-res fog before upscaling. Higher values hide grain but soften beam edges. 0.5 = sharp, 1.5 = balanced, 3+ = very soft.");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.fog_composite_blur, 0.25..=4.0)
+                        .step_by(0.25)
+                        .fixed_decimals(2),
+                )
+                .changed();
+
             ui.label("Water Wave Strength:")
                 .on_hover_text("Distorts light shafts passing through water surfaces, creating caustic-like shimmer.");
             changed |= ui
@@ -5382,11 +5398,11 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.separator();
         ui.label(egui::RichText::new("Contrast & Eye Adaptation").strong());
 
-        // Contrast slider — always active.
-        ui.label("Contrast:")
-            .on_hover_text("Pushes darks darker and brights brighter. 1.0 = neutral.");
+        // Gamma slider — always active.
+        ui.label("Gamma:")
+            .on_hover_text("Power-curve tone control. >1 crushes shadows and widens the gap between dark and bright. <1 lifts shadows for a softer look. 1.0 = neutral.");
         if ui.add(egui::Slider::new(
-            &mut context.editor_state.pp_contrast, 0.5..=2.5
+            &mut context.editor_state.pp_contrast, 0.25..=4.0
         ).step_by(0.05).fixed_decimals(2)).changed() {
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 if let Some(pp) = gpu_scene.post_process.as_mut() {

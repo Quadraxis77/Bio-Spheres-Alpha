@@ -52,6 +52,11 @@ struct FogParams {
     // Wave distortion applied to light field samples (simulates refraction through water surface)
     water_wave_strength: f32,
     water_wave_scale: f32,
+    // 1 = trilinear interpolation of light field, 0 = nearest-neighbour
+    smooth_light_field: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 // Group 0: Camera
@@ -108,48 +113,84 @@ fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
     return (1.0 - g2) / (4.0 * 3.14159265 * denom * denom_sqrt);
 }
 
-// Sample light field at world position with nearest neighbor (fast, 1 read)
-fn sample_light_field(world_pos: vec3<f32>) -> f32 {
+// Raw voxel load helpers for trilinear sampling.
+fn lf_load(ix: i32, iy: i32, iz: i32) -> f32 {
     let res = fog_params.grid_resolution;
-    let fres = f32(res);
-    
-    // Convert to grid-space
-    let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size;
-    let gy = (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size;
-    let gz = (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size;
-    
-    // Round to nearest voxel
-    let ix = i32(round(gx));
-    let iy = i32(round(gy));
-    let iz = i32(round(gz));
     let ires = i32(res);
-    
-    // Bounds check - outside grid = fully lit
     if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
         return 1.0;
     }
-    
-    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
-    return light_field[idx];
+    return light_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
+}
+
+fn lf_color_load(ix: i32, iy: i32, iz: i32) -> vec4<f32> {
+    let res = fog_params.grid_resolution;
+    let ires = i32(res);
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
+    }
+    return light_color_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
+}
+
+// Trilinear interpolation of the light field — eliminates hard voxel boundaries.
+fn lf_trilinear(gx: f32, gy: f32, gz: f32) -> f32 {
+    let x0 = i32(floor(gx)); let x1 = x0 + 1;
+    let y0 = i32(floor(gy)); let y1 = y0 + 1;
+    let z0 = i32(floor(gz)); let z1 = z0 + 1;
+    let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
+    let v00 = mix(lf_load(x0,y0,z0), lf_load(x1,y0,z0), fx);
+    let v10 = mix(lf_load(x0,y1,z0), lf_load(x1,y1,z0), fx);
+    let v01 = mix(lf_load(x0,y0,z1), lf_load(x1,y0,z1), fx);
+    let v11 = mix(lf_load(x0,y1,z1), lf_load(x1,y1,z1), fx);
+    return mix(mix(v00,v10,fy), mix(v01,v11,fy), fz);
+}
+
+fn lf_color_trilinear(gx: f32, gy: f32, gz: f32) -> vec4<f32> {
+    let x0 = i32(floor(gx)); let x1 = x0 + 1;
+    let y0 = i32(floor(gy)); let y1 = y0 + 1;
+    let z0 = i32(floor(gz)); let z1 = z0 + 1;
+    let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
+    let v00 = mix(lf_color_load(x0,y0,z0), lf_color_load(x1,y0,z0), fx);
+    let v10 = mix(lf_color_load(x0,y1,z0), lf_color_load(x1,y1,z0), fx);
+    let v01 = mix(lf_color_load(x0,y0,z1), lf_color_load(x1,y0,z1), fx);
+    let v11 = mix(lf_color_load(x0,y1,z1), lf_color_load(x1,y1,z1), fx);
+    return mix(mix(v00,v10,fy), mix(v01,v11,fy), fz);
+}
+
+fn world_to_grid_pos(world_pos: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size - 0.5,
+        (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size - 0.5,
+        (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size - 0.5,
+    );
+}
+
+// Sample light field — trilinear or nearest depending on fog_params.smooth_light_field.
+fn sample_light_field(world_pos: vec3<f32>) -> f32 {
+    let gp = world_to_grid_pos(world_pos);
+    if (fog_params.smooth_light_field != 0u) {
+        return lf_trilinear(gp.x, gp.y, gp.z);
+    }
+    let res = fog_params.grid_resolution;
+    let ires = i32(res);
+    let ix = i32(round(gp.x + 0.5)); let iy = i32(round(gp.y + 0.5)); let iz = i32(round(gp.z + 0.5));
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) { return 1.0; }
+    return light_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
 }
 
 // Returns full vec4: rgb = light color, w = luminocyte emitter weight (0 = sun, >0 = local emitter)
 fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
+    let gp = world_to_grid_pos(world_pos);
+    if (fog_params.smooth_light_field != 0u) {
+        return lf_color_trilinear(gp.x, gp.y, gp.z);
+    }
     let res = fog_params.grid_resolution;
-    let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size;
-    let gy = (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size;
-    let gz = (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size;
-    let ix = i32(round(gx));
-    let iy = i32(round(gy));
-    let iz = i32(round(gz));
     let ires = i32(res);
-
+    let ix = i32(round(gp.x + 0.5)); let iy = i32(round(gp.y + 0.5)); let iz = i32(round(gp.z + 0.5));
     if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
         return vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
     }
-
-    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
-    return light_color_field[idx];
+    return light_color_field[u32(ix) + u32(iy)*res + u32(iz)*res*res];
 }
 
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {

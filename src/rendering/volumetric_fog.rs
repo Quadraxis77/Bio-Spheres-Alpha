@@ -48,6 +48,11 @@ pub struct FogParams {
     pub water_wave_strength: f32,
     /// Spatial frequency of the wave distortion
     pub water_wave_scale: f32,
+    /// 1 = trilinear interpolation of light field (smooth voxels), 0 = nearest
+    pub smooth_light_field: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
 }
 
 /// Volumetric fog renderer
@@ -74,6 +79,7 @@ pub struct VolumetricFogRenderer {
     composite_pipeline: wgpu::RenderPipeline,
     composite_bind_group_layout: wgpu::BindGroupLayout,
     composite_bind_group: wgpu::BindGroup,
+    composite_params_buffer: wgpu::Buffer,
     fog_sampler: wgpu::Sampler,
 
     // Cached bind groups (invalidated on resize)
@@ -97,6 +103,10 @@ pub struct VolumetricFogRenderer {
     pub water_wave_strength: f32,
     /// Spatial frequency of wave distortion
     pub water_wave_scale: f32,
+    /// Trilinear interpolation of light field (true = smooth voxels, false = hard edges)
+    pub smooth_light_field: bool,
+    /// Composite blur kernel radius in texels (0.5 = tight, 2.0 = very soft)
+    pub composite_blur_radius: f32,
 }
 
 impl VolumetricFogRenderer {
@@ -273,6 +283,16 @@ impl VolumetricFogRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -384,12 +404,21 @@ impl VolumetricFogRenderer {
             }],
         });
 
+        // Composite params buffer (blur_radius + pad)
+        let composite_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fog Composite Params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Composite bind group (references the fog texture)
         let composite_bind_group = Self::create_composite_bind_group(
             device,
             &composite_bind_group_layout,
             &fog_texture_view,
             &fog_sampler,
+            &composite_params_buffer,
         );
 
         Self {
@@ -406,6 +435,7 @@ impl VolumetricFogRenderer {
             composite_pipeline,
             composite_bind_group_layout,
             composite_bind_group,
+            composite_params_buffer,
             fog_sampler,
             cached_camera_bind_group,
             cached_fog_data_bind_group: None,
@@ -423,6 +453,8 @@ impl VolumetricFogRenderer {
             enabled: false,
             water_wave_strength: 0.4,
             water_wave_scale: 0.15,
+            smooth_light_field: true,
+            composite_blur_radius: 1.5,
         }
     }
 
@@ -454,6 +486,7 @@ impl VolumetricFogRenderer {
         layout: &wgpu::BindGroupLayout,
         fog_view: &wgpu::TextureView,
         fog_sampler: &wgpu::Sampler,
+        params_buf: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Fog Composite Bind Group"),
@@ -466,6 +499,10 @@ impl VolumetricFogRenderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(fog_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buf.as_entire_binding(),
                 },
             ],
         })
@@ -489,6 +526,7 @@ impl VolumetricFogRenderer {
             &self.composite_bind_group_layout,
             &self.fog_texture_view,
             &self.fog_sampler,
+            &self.composite_params_buffer,
         );
         // Invalidate cached fog data bind group (depth_view may have changed)
         self.cached_fog_data_bind_group = None;
@@ -596,6 +634,8 @@ impl VolumetricFogRenderer {
             ray_end: self.ray_end,
             water_wave_strength: self.water_wave_strength,
             water_wave_scale: self.water_wave_scale,
+            smooth_light_field: self.smooth_light_field as u32,
+            _pad0: 0, _pad1: 0, _pad2: 0,
         };
         queue.write_buffer(&self.fog_params_buffer, 0, bytemuck::bytes_of(&fog_params));
 
@@ -631,6 +671,10 @@ impl VolumetricFogRenderer {
             pass.set_bind_group(1, self.cached_fog_data_bind_group.as_ref().unwrap(), &[]);
             pass.draw(0..3, 0..1);
         }
+
+        // Update composite params (blur radius).
+        let composite_params: [f32; 4] = [self.composite_blur_radius, 0.0, 0.0, 0.0];
+        queue.write_buffer(&self.composite_params_buffer, 0, bytemuck::cast_slice(&composite_params));
 
         // Pass 2: Composite half-res fog onto full-res scene with bilinear upscaling
         {

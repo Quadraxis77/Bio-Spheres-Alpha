@@ -326,6 +326,10 @@ pub struct GenomeEditorState {
     pub fog_water_wave_strength: f32,
     /// Water wave distortion spatial scale
     pub fog_water_wave_scale: f32,
+    /// Trilinear light field interpolation (smooth voxel boundaries)
+    pub fog_smooth_light_field: bool,
+    /// Composite blur kernel radius (controls grain smoothing)
+    pub fog_composite_blur: f32,
     /// Light field max ray march steps
     pub light_field_max_steps: u32,
     /// Light field step size multiplier
@@ -837,6 +841,8 @@ impl GenomeEditorState {
             fog_height_falloff,
             fog_water_wave_strength: 0.4,
             fog_water_wave_scale: 0.15,
+            fog_smooth_light_field: true,
+            fog_composite_blur: 1.5,
             light_field_max_steps,
             light_field_step_size,
             light_field_absorption_solid,
@@ -850,7 +856,7 @@ impl GenomeEditorState {
             dof_focal_range: 30.0,
             dof_max_blur_radius: 8.0,
             dof_blur_strength: 1.0,
-            pp_contrast: 1.1,
+            pp_contrast: 1.0,
             pp_adapt_enabled: false,
             pp_adapt_speed: 0.05,
             pp_adapt_min: 0.1,
