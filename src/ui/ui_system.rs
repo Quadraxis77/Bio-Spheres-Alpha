@@ -2275,7 +2275,9 @@ impl UiSystem {
 
         // Render radial menu overlay (GPU mode only)
         // Now editor_state is no longer borrowed by panel_context
-        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu && !ui_state_copy.gpu_headless_mode {
+        if ui_state_copy.current_mode == crate::ui::types::SimulationMode::Gpu
+            && !ui_state_copy.gpu_headless_mode
+        {
             crate::ui::radial_menu::show_radial_menu(&self.ctx, &mut editor_state.radial_menu);
             // Only show the tool cursor icon when the pointer is over the viewport,
             // not over a panel - over panels the system cursor is visible instead.
@@ -3134,7 +3136,6 @@ fn topbar_divider(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 18.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 0.0, theme::BORDER_NORMAL);
 }
-
 
 pub(crate) fn headless_metric(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
     let p = palette();

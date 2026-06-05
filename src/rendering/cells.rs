@@ -224,6 +224,13 @@ impl CellRenderer {
             mapped_at_creation: false,
         });
 
+        let dummy_light_color_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Light Color Field Buffer"),
+            size: 16, // One vec4<f32>
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
         let dummy_shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Dummy Shadow Bind Group"),
             layout: &type_registry.shadow_bind_group_layout,
@@ -235,6 +242,10 @@ impl CellRenderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: dummy_light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: dummy_light_color_field_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -572,9 +583,16 @@ impl CellRenderer {
 
     /// Update lighting uniform buffer.
     fn update_lighting(&self, queue: &wgpu::Queue, outline_width: f32) {
+        // Ambient doubles as the shadow floor in the shader: ambient + (1-ambient)*diffuse.
+        // Scale it with sun intensity so cells go dark when sun = 0.
+        // At the reference sun (light brightness ~6.0), ambient hits 0.40 which matches the
+        // old formula's shadow floor (0.3 + 0.7*0.15 = 0.405).
+        let light_brightness =
+            (self.light_color[0] + self.light_color[1] + self.light_color[2]) / 3.0;
+        let ambient = (light_brightness * 0.067).clamp(0.0, 0.4);
         let lighting_uniform = LightingUniform {
             light_dir: self.light_dir,
-            ambient: 0.15,
+            ambient,
             light_color: self.light_color,
             outline_width,
         };
@@ -746,6 +764,7 @@ impl CellRenderer {
                     | CellType::Lipocyte
                     | CellType::Buoyocyte
                     | CellType::Devorocyte
+                    | CellType::Luminocyte
             ) {
                 // Types with dedicated param_a/b/c/d slots
                 data.data[0] = visuals.param_a;

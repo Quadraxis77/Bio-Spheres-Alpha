@@ -523,6 +523,28 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 20: signal_flags - per-cell signal state (cell_idx * 16 + channel)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 20,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 21: mode_properties_v7 - luminocyte signal params per mode [invert, unused, channel, threshold]
+                wgpu::BindGroupLayoutEntry {
+                    binding: 21,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1323,6 +1345,8 @@ impl InstanceBuilder {
         device: &wgpu::Device,
         cell_count_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
+        signal_flags_buffer: &wgpu::Buffer,
+        mode_properties_v7_buffer: &wgpu::Buffer,
     ) {
         // Create a dummy 1x1 texture for binding 11 (Hi-Z removed)
         let (_dummy_texture, dummy_view) = Self::create_dummy_hiz_texture(device);
@@ -1412,6 +1436,14 @@ impl InstanceBuilder {
                     binding: 19,
                     resource: self.mode_properties_v5_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 20,
+                    resource: signal_flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 21,
+                    resource: mode_properties_v7_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1466,6 +1498,8 @@ impl InstanceBuilder {
         screen_height: u32,
         cell_count_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
+        signal_flags_buffer: &wgpu::Buffer,
+        mode_properties_v7_buffer: &wgpu::Buffer,
         lod_scale_factor: f32,
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
@@ -1567,7 +1601,7 @@ impl InstanceBuilder {
 
         // Ensure bind group exists with cell_count_buffer and death_flags_buffer
         if self.bind_group.is_none() {
-            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer);
+            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer, signal_flags_buffer, mode_properties_v7_buffer);
         }
 
         let bind_group = self.bind_group.as_ref().unwrap();
@@ -1648,6 +1682,8 @@ impl InstanceBuilder {
         screen_height: u32,
         cell_count_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
+        signal_flags_buffer: &wgpu::Buffer,
+        mode_properties_v7_buffer: &wgpu::Buffer,
         lod_scale_factor: f32,
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
@@ -1657,7 +1693,7 @@ impl InstanceBuilder {
     ) {
         // Ensure bind group exists before creating encoder
         if self.bind_group.is_none() {
-            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer);
+            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer, signal_flags_buffer, mode_properties_v7_buffer);
         }
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1677,6 +1713,8 @@ impl InstanceBuilder {
             screen_height,
             cell_count_buffer,
             death_flags_buffer,
+            signal_flags_buffer,
+            mode_properties_v7_buffer,
             lod_scale_factor,
             lod_threshold_low,
             lod_threshold_medium,

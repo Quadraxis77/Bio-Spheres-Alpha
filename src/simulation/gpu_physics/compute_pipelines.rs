@@ -1940,6 +1940,7 @@ impl GpuPhysicsPipelines {
         signal_sense_world_params_buffer: &wgpu::Buffer,
         signal_sense_nutrient_buffer: &wgpu::Buffer,
         signal_sense_light_field_buffer: &wgpu::Buffer,
+        signal_sense_light_color_field_buffer: &wgpu::Buffer,
         signal_sense_solid_mask_buffer: &wgpu::Buffer,
         signal_sense_density_field_buffer: &wgpu::Buffer,
         organism_label_buffer: Option<&wgpu::Buffer>,
@@ -2243,6 +2244,7 @@ impl GpuPhysicsPipelines {
             signal_sense_world_params_buffer,
             signal_sense_nutrient_buffer,
             signal_sense_light_field_buffer,
+            signal_sense_light_color_field_buffer,
             signal_sense_solid_mask_buffer,
             signal_sense_density_field_buffer,
             boulder_buffers.map(|bb| &bb.boulder_state),
@@ -7639,6 +7641,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 7: oculocyte_light_filters ([target_rgb, tolerance] per mode)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -7649,6 +7662,7 @@ impl GpuPhysicsPipelines {
     /// binding 2: light_field (storage, read) - light detection
     /// binding 3: solid_mask (storage, read) - cave/barrier detection
     /// binding 4: density_field (storage, read) - water surface detection via surface nets isosurface
+    /// binding 7: light_color_field (storage, read) - color-filtered light detection
     fn create_signal_sense_world_data_bind_group_layout(
         device: &wgpu::Device,
     ) -> wgpu::BindGroupLayout {
@@ -7727,6 +7741,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 7: light_color_field (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -7740,6 +7765,7 @@ impl GpuPhysicsPipelines {
         world_params_buffer: &wgpu::Buffer,
         nutrient_voxels_buffer: &wgpu::Buffer,
         light_field_buffer: &wgpu::Buffer,
+        light_color_field_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
         density_field_buffer: &wgpu::Buffer,
         boulder_state_buffer: Option<&wgpu::Buffer>,
@@ -7801,6 +7827,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: bcount.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: light_color_field_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -7966,6 +7996,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: triple_buffers.oculocyte_signal_values.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: triple_buffers.oculocyte_light_filters.as_entire_binding(),
                 },
             ],
         })

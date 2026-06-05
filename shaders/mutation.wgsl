@@ -2,7 +2,7 @@
 //
 // Runs AFTER lifecycle_division_execute_ring.wgsl.
 // For each cell that just divided (both Child A and Child B), rolls a mutation
-// chance based on global radiation level. On hit:
+// chance based on global radiation level and genome-mode resistance. On hit:
 //   1. Allocates a new genome slot from the genome free ring buffer
 //   2. Copies all mode data from parent genome to new genome slot
 //   3. Selects a random mode and random parameter using hash-based PRNG
@@ -87,6 +87,16 @@ struct MutationParamEntry {
     //            9 = quat_snap (replace whole quaternion with snapped orientation),
     //            10 = mode_append, 11 = mode_trim
     data_type: u32,
+}
+
+// Earlier modes in the genome list act like protected core developmental modes.
+// Later modes remain more exposed, so radiation tends to explore appendages and
+// specializations before rewriting the root body plan.
+fn mode_radiation_exposure(local_mode: u32, mode_count: u32) -> f32 {
+    let denom = max(f32(mode_count - 1u), 1.0);
+    let rank = clamp(f32(local_mode) / denom, 0.0, 1.0);
+    let resistance = 1.0 - rank;
+    return mix(1.0, 0.25, resistance);
 }
 
 // ============================================================
@@ -1375,12 +1385,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = candidate.x;
     let parent_genome_id = candidate.y;
 
-    // Roll mutation chance - candidate_idx is unique per thread in this dispatch
-    let roll = rng_f32(candidate_idx, 1u);
-    if (roll >= mutation_params.radiation_level) {
-        return; // No mutation this time
-    }
-
     // Look up parent genome metadata
     let parent_meta = genome_meta[parent_genome_id];
     let parent_mode_count = parent_meta.x;
@@ -1388,6 +1392,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     if (parent_mode_count == 0u) {
         return;
+    }
+
+    var local_parent_mode = 0u;
+    let candidate_mode = mode_indices[cell_idx];
+    if (candidate_mode >= parent_base_offset && candidate_mode < parent_base_offset + parent_mode_count) {
+        local_parent_mode = candidate_mode - parent_base_offset;
+    }
+
+    let effective_radiation =
+        mutation_params.radiation_level * mode_radiation_exposure(local_parent_mode, parent_mode_count);
+
+    // Roll mutation chance - candidate_idx is unique per thread in this dispatch
+    let roll = rng_f32(candidate_idx, 1u);
+    if (roll >= effective_radiation) {
+        return; // No mutation this time
     }
 
     // Pick the mutation before reserving mode storage so MODE_APPEND can claim

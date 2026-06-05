@@ -271,6 +271,10 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_ray_length: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub oculocyte_light_target_color: Option<[f32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oculocyte_light_color_tolerance: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub regulation_emit_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regulation_emit_value: Option<f32>,
@@ -405,6 +409,12 @@ pub struct SerializableModeSettings {
     pub cognocyte_oscillator_strength: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cognocyte_oscillator_step_count: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub luminocyte_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub luminocyte_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub luminocyte_invert: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -746,6 +756,14 @@ fn mode_to_serializable(
         ),
         oculocyte_signal_hops: diff_i32(mode.oculocyte_signal_hops, default.oculocyte_signal_hops),
         oculocyte_ray_length: diff_f32(mode.oculocyte_ray_length, default.oculocyte_ray_length),
+        oculocyte_light_target_color: diff_vec3(
+            &mode.oculocyte_light_target_color,
+            &default.oculocyte_light_target_color,
+        ),
+        oculocyte_light_color_tolerance: diff_f32(
+            mode.oculocyte_light_color_tolerance,
+            default.oculocyte_light_color_tolerance,
+        ),
         regulation_emit_channel: diff_i32(
             mode.regulation_emit_channel,
             default.regulation_emit_channel,
@@ -945,6 +963,12 @@ fn mode_to_serializable(
             mode.cognocyte_oscillator_step_count,
             default.cognocyte_oscillator_step_count,
         ),
+        luminocyte_signal_channel: diff_i32(
+            mode.luminocyte_signal_channel,
+            default.luminocyte_signal_channel,
+        ),
+        luminocyte_threshold: diff_f32(mode.luminocyte_threshold, default.luminocyte_threshold),
+        luminocyte_invert: diff_bool(mode.luminocyte_invert, default.luminocyte_invert),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(
@@ -1018,6 +1042,8 @@ impl SerializableModeSettings {
             || self.oculocyte_signal_value.is_some()
             || self.oculocyte_signal_hops.is_some()
             || self.oculocyte_ray_length.is_some()
+            || self.oculocyte_light_target_color.is_some()
+            || self.oculocyte_light_color_tolerance.is_some()
             || self.regulation_emit_channel.is_some()
             || self.regulation_emit_value.is_some()
             || self.regulation_emit_hops.is_some()
@@ -1085,6 +1111,9 @@ impl SerializableModeSettings {
             || self.cognocyte_oscillator_phase.is_some()
             || self.cognocyte_oscillator_strength.is_some()
             || self.cognocyte_oscillator_step_count.is_some()
+            || self.luminocyte_signal_channel.is_some()
+            || self.luminocyte_threshold.is_some()
+            || self.luminocyte_invert.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -1309,6 +1338,12 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(len) = ser.oculocyte_ray_length {
         mode.oculocyte_ray_length = len;
+    }
+    if let Some(color) = ser.oculocyte_light_target_color {
+        mode.oculocyte_light_target_color = Vec3::from_array(color);
+    }
+    if let Some(tolerance) = ser.oculocyte_light_color_tolerance {
+        mode.oculocyte_light_color_tolerance = tolerance;
     }
     if let Some(v) = ser.regulation_emit_channel {
         mode.regulation_emit_channel = v;
@@ -1546,6 +1581,15 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.cognocyte_oscillator_step_count {
         mode.cognocyte_oscillator_step_count = v;
+    }
+    if let Some(v) = ser.luminocyte_signal_channel {
+        mode.luminocyte_signal_channel = v;
+    }
+    if let Some(v) = ser.luminocyte_threshold {
+        mode.luminocyte_threshold = v;
+    }
+    if let Some(v) = ser.luminocyte_invert {
+        mode.luminocyte_invert = v;
     }
     if let Some(ref child_a) = ser.child_a {
         apply_child_settings(&mut mode.child_a, child_a);

@@ -145,6 +145,7 @@ pub mod split_rings;
 pub mod steam_particles;
 pub mod sun_renderer;
 pub mod tail_renderer;
+pub mod post_process;
 pub mod volumetric_fog;
 pub mod voxel_renderer;
 pub mod water_particles;

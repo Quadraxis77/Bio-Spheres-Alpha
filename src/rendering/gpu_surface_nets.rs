@@ -178,7 +178,9 @@ pub struct DensityMeshParams {
     pub noise_persistence: f32,
     pub reflection_brightness: f32,
     pub light_dir: [f32; 3],
-    pub _pad: f32,
+    pub waterline_alpha: f32,
+    pub gravity: [f32; 3],
+    pub gravity_mode: u32,
 }
 
 impl Default for DensityMeshParams {
@@ -203,7 +205,9 @@ impl Default for DensityMeshParams {
             noise_persistence: 0.5,
             reflection_brightness: 10.0,
             light_dir: [0.5, 1.0, 0.3],
-            _pad: 0.0,
+            waterline_alpha: 0.05,
+            gravity: [0.0, 1.0, 0.0],
+            gravity_mode: 1,
         }
     }
 }
@@ -1387,7 +1391,9 @@ impl GpuSurfaceNets {
             noise_persistence: editor_state.fluid_noise_persistence,
             reflection_brightness: 10.0,
             light_dir: editor_state.light_dir,
-            _pad: 0.0,
+            waterline_alpha: editor_state.fluid_waterline_alpha,
+            gravity: [0.0, 1.0, 0.0],
+            gravity_mode: 1,
         };
         self.update_render_params(queue, &params);
     }

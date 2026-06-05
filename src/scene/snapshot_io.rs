@@ -31,15 +31,11 @@ use std::sync::mpsc;
 use image::ImageEncoder;
 
 use super::gpu_scene::GpuScene;
-use super::lineage::{
-    LineageAdultCellSnapshot, LineageAdultSnapshot, LineagePopulationSample,
-    LINEAGE_CAPTURE_INTERVAL_SECONDS,
-};
+use super::lineage::{LineageAdultCellSnapshot, LineageAdultSnapshot, LineagePopulationSample};
 use super::snapshot::{GpuSceneSnapshot, SnapshotError};
 use crate::genome::Genome;
 use crate::simulation::gpu_physics::GenomeMeta;
 use crate::simulation::CanonicalState;
-use crate::ui::camera::CameraMode;
 
 // --- helpers -----------------------------------------------------------------
 
@@ -485,94 +481,6 @@ fn blend_pixel(pixels: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 4]) {
     pixels[idx + 3] = 255;
 }
 
-fn readback_texture_png(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    format: wgpu::TextureFormat,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, SnapshotError> {
-    let bytes_per_pixel = 4u32;
-    let unpadded_bytes_per_row = width * bytes_per_pixel;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let padded_bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
-    let buffer_size = (padded_bytes_per_row * height) as u64;
-
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Lineage Scene Thumbnail Staging Buffer"),
-        size: buffer_size,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("Lineage Scene Thumbnail Readback Encoder"),
-    });
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &staging,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit(std::iter::once(encoder.finish()));
-
-    let slice = staging.slice(..);
-    let (tx, rx) = mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .map_err(|e| SnapshotError::GpuReadback(format!("device.poll failed: {e:?}")))?;
-    rx.recv()
-        .map_err(|_| SnapshotError::GpuReadback("thumbnail readback channel closed".into()))?
-        .map_err(|e| SnapshotError::GpuReadback(format!("thumbnail map_async error: {e:?}")))?;
-
-    let mapped = slice.get_mapped_range();
-    let is_bgra = matches!(
-        format,
-        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-    );
-    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-    for row in 0..height {
-        let row_start = (row * padded_bytes_per_row) as usize;
-        let row_bytes = &mapped[row_start..row_start + unpadded_bytes_per_row as usize];
-        if is_bgra {
-            for chunk in row_bytes.chunks_exact(4) {
-                rgba.push(chunk[2]);
-                rgba.push(chunk[1]);
-                rgba.push(chunk[0]);
-                rgba.push(chunk[3]);
-            }
-        } else {
-            rgba.extend_from_slice(row_bytes);
-        }
-    }
-    drop(mapped);
-    staging.unmap();
-
-    let mut png = Vec::new();
-    let encoder = image::codecs::png::PngEncoder::new(&mut png);
-    encoder
-        .write_image(&rgba, width, height, image::ColorType::Rgba8.into())
-        .map_err(|e| SnapshotError::GpuReadback(format!("thumbnail png encode failed: {e}")))?;
-    Ok(png)
-}
-
 fn read_sampled_mutation_parents(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -611,24 +519,94 @@ fn read_sampled_mutation_parents(
     parents
 }
 
+/// Score a sampled GPU mutation genome and decide whether it deserves a full
+/// lineage node.  Returns true only when the score clears the promotion
+/// threshold.
+///
+/// Scoring factors (all log-scaled to avoid a handful of huge populations
+/// crowding out everything else):
+///
+/// 1. **Multi-cellularity** — the primary signal of structural innovation.
+///    Single-celled mutations (avg ≤ 1.5 cells/organism) are immediately
+///    disqualified unless they have achieved true ecological dominance.
+/// 2. **Ecological spread** — independent organisms indicate the genome
+///    survives division and competes successfully.
+/// 3. **Persistence** — lineages seen across multiple scan intervals are much
+///    more likely to be stable innovations rather than transient drift.
+/// 4. **Vitality** — a lineage that is crashing toward zero is discounted;
+///    one that is holding or growing receives a bonus.
 fn sampled_mutation_is_meaningful(
     cells: u32,
     organisms: u32,
     prior: Option<&crate::scene::lineage::LineageGenomeStatSample>,
 ) -> bool {
-    const MIN_PROMOTION_CELLS: u32 = 25;
-    const MIN_PROMOTION_ORGANISMS: u32 = 3;
-    const MIN_PERSISTENT_CELLS: u32 = 8;
-    const MIN_PERSISTENT_OBSERVATIONS: u32 = 2;
+    // --- Hard gates -----------------------------------------------------------
 
-    cells >= MIN_PROMOTION_CELLS
-        || organisms >= MIN_PROMOTION_ORGANISMS
-        || prior
-            .map(|sample| {
-                sample.observations.saturating_add(1) >= MIN_PERSISTENT_OBSERVATIONS
-                    && sample.cells.max(cells) >= MIN_PERSISTENT_CELLS
-            })
-            .unwrap_or(false)
+    // Genome must have at least one organism with ≥ 2 cells on average.
+    // Single-cell → single-cell mutations are structurally trivial.
+    // Exception: extreme ecological dominance (≥ 400 cells) may still be
+    // worth tracking even for single-celled genomes.
+    let avg_body = if organisms > 0 {
+        cells as f32 / organisms as f32
+    } else {
+        cells as f32
+    };
+    const SINGLE_CELL_DOMINANCE: u32 = 400;
+    if avg_body < 2.0 && cells < SINGLE_CELL_DOMINANCE {
+        return false;
+    }
+
+    // Must be seen at least once before with a credible population, OR must
+    // already show substantial multi-cellular presence right now.  This
+    // filters one-frame transient blips.
+    const INSTANT_PROMOTION_ORGANISMS: u32 = 8;
+    const INSTANT_PROMOTION_AVG_BODY: f32 = 6.0;
+    let instant =
+        organisms >= INSTANT_PROMOTION_ORGANISMS && avg_body >= INSTANT_PROMOTION_AVG_BODY;
+    if prior.is_none() && !instant {
+        return false;
+    }
+
+    // --- Scoring --------------------------------------------------------------
+
+    // Multi-cellularity: log2 of avg body size above 1.  Zero for single-cell;
+    // 1.0 for 2 cells/organism; 2.0 for 4; 3.0 for 8; etc.
+    let complexity = (avg_body - 1.0).max(0.0).log2().max(0.0) * 5.0;
+
+    // Ecological spread: independent organisms competing in the world.
+    let spread = (organisms as f32 + 1.0).log2() * 2.5;
+
+    // Persistence and vitality from prior observations.
+    let (persistence, vitality_factor) = match prior {
+        Some(p) => {
+            // Each additional scan interval the lineage survives is strong
+            // evidence it is a stable innovation.
+            let obs = p.observations.saturating_add(1) as f32;
+            let persistence_score = obs.log2() * 4.0;
+
+            // Vitality: ratio of current cells to the peak ever seen.
+            // A declining lineage is discounted; a stable or growing one gets
+            // full weight.
+            let peak = p.cells.max(cells).max(1) as f32;
+            let vitality = (cells as f32 / peak).clamp(0.05, 1.0);
+            // Map vitality to [0.2, 1.0] so even declining lineages can pass
+            // if they are structurally complex and persistent enough.
+            let vf = 0.2 + vitality * 0.8;
+
+            (persistence_score, vf)
+        }
+        None => (0.0, 0.6), // instant promotion path: partial credit
+    };
+
+    let score = (complexity + spread + persistence) * vitality_factor;
+
+    // Threshold chosen so that:
+    // - A 4-cell avg / 5-organism / 2-scan genome scores ≈ 8 → promotes.
+    // - A 2-cell avg / 2-organism / 2-scan genome scores ≈ 3.8 → borderline.
+    // - Any single-scan observation of a modestly multi-cellular genome is
+    //   blocked by the prior==None gate above unless it's very large.
+    const THRESHOLD: f32 = 5.0;
+    score >= THRESHOLD
 }
 
 // --- GpuScene impl -----------------------------------------------------------
@@ -639,17 +617,15 @@ impl GpuScene {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<bool, SnapshotError> {
-        if self.current_time < LINEAGE_CAPTURE_INTERVAL_SECONDS {
+        let interval = self.lineage_capture_interval_seconds;
+        if self.current_time < interval {
             return Ok(false);
         }
 
         let due = self
             .lineage_archive
             .last_scan_frame
-            .map(|_| {
-                self.current_time - self.lineage_archive.last_scan_time
-                    >= LINEAGE_CAPTURE_INTERVAL_SECONDS
-            })
+            .map(|_| self.current_time - self.lineage_archive.last_scan_time >= interval)
             .unwrap_or(true);
 
         if due {
@@ -783,7 +759,7 @@ impl GpuScene {
 
         let organism_counts_reliable =
             organism_labels.is_some() && (live_cells == 0 || labeled_live_cells > 0);
-        let mut adult_snapshots = capture_gpu_adult_snapshots(
+        let adult_snapshots = capture_gpu_adult_snapshots(
             &self.genomes,
             &self.adhesion_buffers.snapshot_connections(),
             &self.adhesion_buffers.snapshot_cell_indices(),
@@ -800,7 +776,6 @@ impl GpuScene {
             self.current_time,
             slots_used,
         );
-        self.capture_scene_thumbnails_for_adult_snapshots(device, queue, &mut adult_snapshots);
         let mutation_parents = read_sampled_mutation_parents(
             device,
             queue,
@@ -903,8 +878,11 @@ impl GpuScene {
             }
 
             if let Some(snapshot) = adult_snapshots.get(&genome_id).cloned() {
-                self.lineage_archive
-                    .push_adult_snapshot_for_genome(genome_id, self.current_frame, snapshot);
+                self.lineage_archive.push_adult_snapshot_for_genome(
+                    genome_id,
+                    self.current_frame,
+                    snapshot,
+                );
             }
             tracked_cells = tracked_cells.saturating_add(cells);
             samples.push(LineagePopulationSample {
@@ -979,123 +957,6 @@ impl GpuScene {
         );
 
         Ok(())
-    }
-
-    fn capture_scene_thumbnails_for_adult_snapshots(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        snapshots: &mut HashMap<u32, LineageAdultSnapshot>,
-    ) {
-        if snapshots.is_empty() || self.headless_no_render {
-            return;
-        }
-
-        const THUMB_WIDTH: u32 = crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH;
-        const THUMB_HEIGHT: u32 = crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT;
-
-        let original_width = self.renderer.width.max(1);
-        let original_height = self.renderer.height.max(1);
-        let original_center = self.camera.center;
-        let original_distance = self.camera.distance;
-        let original_target_distance = self.camera.target_distance;
-        let original_rotation = self.camera.rotation;
-        let original_target_rotation = self.camera.target_rotation;
-        let original_mode = self.camera.mode;
-        let original_paused = self.paused;
-        let original_show_adhesion_lines = self.show_adhesion_lines;
-        let original_show_world_sphere = self.show_world_sphere;
-        let original_show_skybox = self.show_skybox;
-        let original_show_dof = self.show_dof;
-        let original_time_accumulator = self.time_accumulator;
-
-        self.paused = true;
-        self.show_adhesion_lines = true;
-        self.show_world_sphere = false;
-        self.show_skybox = false;
-        self.show_dof = false;
-        self.time_accumulator = 0.0;
-
-        <GpuScene as crate::scene::Scene>::resize(self, device, THUMB_WIDTH, THUMB_HEIGHT);
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Lineage Scene Thumbnail Texture"),
-            size: wgpu::Extent3d {
-                width: THUMB_WIDTH,
-                height: THUMB_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.surface_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        for snapshot in snapshots.values_mut() {
-            let center = glam::vec3(
-                snapshot.world_center[0],
-                snapshot.world_center[1],
-                snapshot.world_center[2],
-            );
-            let distance = (snapshot.world_radius * 5.5).clamp(12.0, 120.0);
-            let rotation = glam::Quat::from_rotation_y(0.55)
-                * glam::Quat::from_rotation_x(-0.58)
-                * glam::Quat::from_rotation_z(0.18);
-
-            self.camera.center = center;
-            self.camera.distance = distance;
-            self.camera.target_distance = distance;
-            self.camera.rotation = rotation;
-            self.camera.target_rotation = rotation;
-            self.camera.mode = CameraMode::Orbit;
-
-            <GpuScene as crate::scene::Scene>::render(
-                self,
-                device,
-                queue,
-                &view,
-                None,
-                self.config.sphere_radius * 2.0,
-                500.0,
-                10.0,
-                25.0,
-                50.0,
-                false,
-                0.08,
-            );
-
-            match readback_texture_png(
-                device,
-                queue,
-                &texture,
-                self.surface_format,
-                THUMB_WIDTH,
-                THUMB_HEIGHT,
-            ) {
-                Ok(png) => snapshot.scene_thumbnail_png = Some(png),
-                Err(error) => {
-                    log::warn!("[Lineage] Scene thumbnail capture failed: {error}");
-                }
-            }
-        }
-
-        self.camera.center = original_center;
-        self.camera.distance = original_distance;
-        self.camera.target_distance = original_target_distance;
-        self.camera.rotation = original_rotation;
-        self.camera.target_rotation = original_target_rotation;
-        self.camera.mode = original_mode;
-        self.paused = original_paused;
-        self.show_adhesion_lines = original_show_adhesion_lines;
-        self.show_world_sphere = original_show_world_sphere;
-        self.show_skybox = original_show_skybox;
-        self.show_dof = original_show_dof;
-        self.time_accumulator = original_time_accumulator;
-
-        <GpuScene as crate::scene::Scene>::resize(self, device, original_width, original_height);
     }
 
     /// Capture the current simulation state into a `GpuSceneSnapshot`.

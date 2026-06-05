@@ -2493,6 +2493,8 @@ impl App {
                     log::warn!("Periodic lineage capture failed: {err}");
                 }
 
+                self.editor_state.update_sun_rotation(dt);
+
                 // Apply light & fog parameters from UI if they changed
                 if self.editor_state.light_params_dirty {
                     gpu_scene.apply_light_params_from_editor(&self.editor_state);
@@ -2542,7 +2544,22 @@ impl App {
                         noise_persistence: self.editor_state.fluid_noise_persistence,
                         reflection_brightness: self.editor_state.fluid_reflection_brightness,
                         light_dir: self.editor_state.light_dir,
-                        _pad: 0.0,
+                        waterline_alpha: self.editor_state.fluid_waterline_alpha,
+                        gravity: {
+                            // up = -sign(gravity) * axis: negative gravity pulls down
+                            // the axis so up is positive; positive gravity inverts it.
+                            let s = if gpu_scene.gravity >= 0.0 {
+                                1.0_f32
+                            } else {
+                                -1.0_f32
+                            };
+                            match gpu_scene.gravity_mode {
+                                0 => [s, 0.0, 0.0],
+                                2 => [0.0, 0.0, s],
+                                _ => [0.0, s, 0.0],
+                            }
+                        },
+                        gravity_mode: gpu_scene.gravity_mode,
                     };
                     surface_nets.update_render_params(&self.queue, &params);
                 }
@@ -2862,6 +2879,7 @@ impl App {
                         let is_oculocyte = cell_type_idx == 7;
                         let is_photocyte = cell_type_idx == 3;
                         let is_lipocyte_s = cell_type_idx == 4; // lipocyte as signal sender
+                        let is_luminocyte = cell_type_idx == 16;
                         let can_send_test_signal = is_oculocyte
                             || (is_photocyte
                                 && mode.map(|m| m.photocyte_emit_enabled).unwrap_or(false))
@@ -3038,6 +3056,14 @@ impl App {
                                 .copied()
                                 .flatten()
                         });
+
+                        // Derive luminocyte brightness state from live signal value
+                        let luminocyte_bright = is_luminocyte && mode.map(|m| {
+                            let ch = m.luminocyte_signal_channel.clamp(0, 7) as usize;
+                            let sig_val = cell_signals[ch].unwrap_or(0.0);
+                            let above = sig_val >= m.luminocyte_threshold;
+                            above != m.luminocyte_invert
+                        }).unwrap_or(false);
 
                         let mut close_menu = false;
                         let mut send_test_signal = false;
@@ -3257,6 +3283,32 @@ impl App {
                                             }
                                         });
                                     ui.separator();
+
+                                    // --- Luminocyte brightness state ---
+                                    if is_luminocyte {
+                                        if let Some(m) = mode {
+                                            let ch = m.luminocyte_signal_channel.clamp(0, 7) as usize;
+                                            let (state_label, state_color) = if luminocyte_bright {
+                                                ("● Bright", egui::Color32::from_rgb(80, 220, 255))
+                                            } else {
+                                                ("○ Dim", egui::Color32::from_rgb(100, 140, 160))
+                                            };
+                                            egui::Grid::new("luminocyte_state_grid")
+                                                .num_columns(2)
+                                                .spacing([8.0, 2.0])
+                                                .show(ui, |ui| {
+                                                    ui.colored_label(dim, "Emission");
+                                                    ui.colored_label(state_color, state_label);
+                                                    ui.end_row();
+                                                    ui.colored_label(dim, "Watching");
+                                                    ui.colored_label(dim, format!("Ch {} (≥ {:.0}{})",
+                                                        ch, m.luminocyte_threshold,
+                                                        if m.luminocyte_invert { ", inv" } else { "" }));
+                                                    ui.end_row();
+                                                });
+                                        }
+                                        ui.separator();
+                                    }
 
                                     // --- Signal Channels (2 columns: Ch 0-7 left, Ch 8-15 right) ---
                                     ui.label("Signal Channels:");

@@ -30,6 +30,10 @@ struct LightFieldParams {
     scattering_coefficient: f32,
     // Current time for animation
     time: f32,
+    sun_color_r: f32,
+    sun_color_g: f32,
+    sun_color_b: f32,
+    _pad0: f32,
 }
 
 // Group 0: Parameters
@@ -48,6 +52,15 @@ var<storage, read> cell_occupancy: array<u32>;
 // Group 0: Output light field (f32 intensity per voxel)
 @group(0) @binding(3)
 var<storage, read_write> light_field: array<f32>;
+
+// Group 0: RGB color associated with the local light field.
+// xyz = resolved light color, w = local emitter weight.
+@group(0) @binding(4)
+var<storage, read_write> light_color_field: array<vec4<f32>>;
+
+// Group 0: Water density field. Values near 1.0 mean this voxel contains water.
+@group(0) @binding(5)
+var<storage, read> water_density: array<f32>;
 
 // Convert 3D grid coordinates to linear index
 fn grid_to_index(x: u32, y: u32, z: u32) -> u32 {
@@ -95,6 +108,14 @@ fn cell_count_at(x: i32, y: i32, z: i32) -> u32 {
     }
     let idx = grid_to_index(u32(x), u32(y), u32(z));
     return cell_occupancy[idx];
+}
+
+fn water_amount_at(x: i32, y: i32, z: i32) -> f32 {
+    if (!is_in_bounds(x, y, z)) {
+        return 0.0;
+    }
+    let idx = grid_to_index(u32(x), u32(y), u32(z));
+    return clamp(water_density[idx], 0.0, 1.0);
 }
 
 // Check if a grid-space position is inside the world sphere
@@ -173,6 +194,14 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
             let x = params.absorption_cell * f32(cells);
             transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
         }
+
+        let water_amount = water_amount_at(ix, iy, iz);
+        if (water_amount > 0.01) {
+            // Water transmits light, but not like empty air. It gently absorbs
+            // and scatters across each shared voxel rather than acting as a wall.
+            let x = 0.055 * water_amount * params.step_size;
+            transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+        }
         
         // Early exit if light is effectively blocked
         if (transmittance < 0.05) {
@@ -201,6 +230,7 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let grid_pos_f = vec3<f32>(f32(grid_pos.x) + 0.5, f32(grid_pos.y) + 0.5, f32(grid_pos.z) + 0.5);
     if (!is_inside_sphere(grid_pos_f.x, grid_pos_f.y, grid_pos_f.z)) {
         light_field[idx] = 1.0;
+        light_color_field[idx] = vec4<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b, 0.0);
         return;
     }
     
@@ -222,11 +252,13 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (is_solid(gx, gy, gz - 1)) { solid_neighbors += 1u; }
             if (solid_neighbors >= 3u) {
                 light_field[idx] = 0.0;
+                light_color_field[idx] = vec4<f32>(0.0);
                 return;
             }
         } else {
             // Deep interior solid = actual wall, skip expensive neighbor check
             light_field[idx] = 0.0;
+            light_color_field[idx] = vec4<f32>(0.0);
             return;
         }
     }
@@ -234,6 +266,11 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Ray march toward light to compute intensity
     let intensity = compute_light_at_voxel(grid_pos.x, grid_pos.y, grid_pos.z);
     light_field[idx] = intensity;
+    let water_tint = vec3<f32>(0.70, 0.92, 1.10);
+    let water_mix = clamp(water_density[idx], 0.0, 1.0) * 0.45;
+    let sun_color = vec3<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b);
+    let local_color = mix(sun_color, sun_color * water_tint, water_mix);
+    light_color_field[idx] = vec4<f32>(local_color, 0.0);
 }
 
 // === Cell Occupancy Grid Builder ===

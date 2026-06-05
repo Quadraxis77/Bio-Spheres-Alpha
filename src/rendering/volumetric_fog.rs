@@ -44,8 +44,10 @@ pub struct FogParams {
     pub height_fog_falloff: f32,
     pub ray_start: f32,
     pub ray_end: f32,
-    pub _pad0: f32,
-    pub _pad1: f32,
+    /// Amplitude of wave distortion applied to light field samples (0 = off)
+    pub water_wave_strength: f32,
+    /// Spatial frequency of the wave distortion
+    pub water_wave_scale: f32,
 }
 
 /// Volumetric fog renderer
@@ -91,6 +93,10 @@ pub struct VolumetricFogRenderer {
     pub ray_start: f32,
     pub ray_end: f32,
     pub enabled: bool,
+    /// Amplitude of wave distortion on light field samples (0 = off, ~0.5 = visible)
+    pub water_wave_strength: f32,
+    /// Spatial frequency of wave distortion
+    pub water_wave_scale: f32,
 }
 
 impl VolumetricFogRenderer {
@@ -162,6 +168,28 @@ impl VolumetricFogRenderer {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+                // Binding 4: light_color_field storage
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: water density field (attenuates light beams through water)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -393,6 +421,8 @@ impl VolumetricFogRenderer {
             ray_start: 1.0,
             ray_end: 1500.0,
             enabled: false,
+            water_wave_strength: 0.4,
+            water_wave_scale: 0.15,
         }
     }
 
@@ -469,7 +499,9 @@ impl VolumetricFogRenderer {
         &mut self,
         device: &wgpu::Device,
         light_field_buffer: &wgpu::Buffer,
+        light_color_field_buffer: &wgpu::Buffer,
         depth_view: &wgpu::TextureView,
+        water_density_buffer: &wgpu::Buffer,
     ) {
         if self.cached_fog_data_bind_group.is_none() {
             self.cached_fog_data_bind_group =
@@ -493,6 +525,14 @@ impl VolumetricFogRenderer {
                             binding: 3,
                             resource: wgpu::BindingResource::Sampler(&self.depth_sampler),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: light_color_field_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: water_density_buffer.as_entire_binding(),
+                        },
                     ],
                 }));
         }
@@ -507,6 +547,8 @@ impl VolumetricFogRenderer {
         depth_view: &wgpu::TextureView,
         device: &wgpu::Device,
         light_field_buffer: &wgpu::Buffer,
+        light_color_field_buffer: &wgpu::Buffer,
+        water_density_buffer: &wgpu::Buffer,
         view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
         time: f32,
@@ -552,13 +594,19 @@ impl VolumetricFogRenderer {
             height_fog_falloff: self.height_fog_falloff,
             ray_start: self.ray_start,
             ray_end: self.ray_end,
-            _pad0: 0.0,
-            _pad1: 0.0,
+            water_wave_strength: self.water_wave_strength,
+            water_wave_scale: self.water_wave_scale,
         };
         queue.write_buffer(&self.fog_params_buffer, 0, bytemuck::bytes_of(&fog_params));
 
         // Ensure cached fog data bind group exists
-        self.ensure_fog_data_bind_group(device, light_field_buffer, depth_view);
+        self.ensure_fog_data_bind_group(
+            device,
+            light_field_buffer,
+            light_color_field_buffer,
+            depth_view,
+            water_density_buffer,
+        );
 
         // Pass 1: Ray march fog at half resolution -> offscreen texture
         {

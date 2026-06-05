@@ -216,6 +216,8 @@ pub struct ModeSettings {
     pub oculocyte_signal_value: f32, // Signal value to send when target detected (-50.0 to 50.0)
     pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
     pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
+    pub oculocyte_light_target_color: Vec3, // RGB color that light-sensing oculocytes can see
+    pub oculocyte_light_color_tolerance: f32, // Max RGB distance from target color for light detection
 
     // Ciliocyte settings
     pub cilia_speed: f32, // Cilia force magnitude (-1.0 to +1.0, for Ciliocyte cells)
@@ -336,6 +338,11 @@ pub struct ModeSettings {
     /// creating an automatic phase gradient along the chain.
     pub cognocyte_oscillator_step_count: i32,
 
+    // Luminocyte settings
+    pub luminocyte_signal_channel: i32, // Signal channel to listen on (0-7)
+    pub luminocyte_threshold: f32,      // Signal value required to switch state
+    pub luminocyte_invert: bool,        // If true, bright by default and dims on signal (on without signal)
+
     // Child settings
     pub child_a: ChildSettings,
     pub child_b: ChildSettings,
@@ -413,6 +420,8 @@ impl Default for ModeSettings {
             oculocyte_signal_value: 10.0,        // Default: +10 signal
             oculocyte_signal_hops: 3,            // Default: 3 hops
             oculocyte_ray_length: 20.0,          // Default: 20 units ray length
+            oculocyte_light_target_color: Vec3::new(1.0, 0.95, 0.78), // Warm sun-like color
+            oculocyte_light_color_tolerance: 0.18, // Narrow band around sun color
             membrane_stiffness: 250.0,           // Default: moderate membrane stiffness
             myocyte_contraction: 0.5,            // Default: 50% contraction
             myocyte_use_signal: false, // Default: pulse timer mode (works without signals)
@@ -485,6 +494,9 @@ impl Default for ModeSettings {
             cognocyte_oscillator_phase: 0.0,
             cognocyte_oscillator_strength: 1.0,
             cognocyte_oscillator_step_count: 4,
+            luminocyte_signal_channel: 0,
+            luminocyte_threshold: 1.0,
+            luminocyte_invert: false,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

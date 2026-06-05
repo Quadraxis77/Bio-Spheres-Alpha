@@ -211,6 +211,15 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 // mode_properties_v5 per mode: [cilia_speed, cilia_push_bonded, cilia_use_signal, cilia_signal_channel]
 @group(0) @binding(19) var<storage, read> mode_properties_v5: array<vec4<f32>>;
 
+// Signal flags per cell: cell_idx * SIGNAL_CHANNELS + channel → packed u32 (bits 0-10 = signal value)
+@group(0) @binding(20) var<storage, read> signal_flags: array<u32>;
+
+// mode_properties_v7 per mode: [luminocyte_invert, unused, signal_channel, threshold]
+@group(0) @binding(21) var<storage, read> mode_properties_v7: array<vec4<f32>>;
+
+const SIGNAL_CHANNELS: u32 = 16u;
+const SIGNAL_VALUE_MASK: u32 = 2047u;
+
 // ============================================================================
 // Random Number Generation
 // ============================================================================
@@ -433,7 +442,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         color = mode_colors[mode_index].xyz;
         emissive = mode_emissive[mode_index].x;
     }
-    
+
+    // For luminocytes (type 16), gate visual emissive on signal state to match
+    // the light-field gating in photocyte_light.wgsl. In preview (no signals),
+    // signal value is 0 → dim glow unless threshold is also 0.
+    if (cell_type == 16u && mode_index < arrayLength(&mode_properties_v7)) {
+        let lum = mode_properties_v7[mode_index];
+        let invert = lum.x >= 0.5;
+        let channel = min(u32(clamp(lum.z, 0.0, 15.0)), SIGNAL_CHANNELS - 1u);
+        let threshold = lum.w;
+        var sig_val = 0.0;
+        let sig_idx = idx * SIGNAL_CHANNELS + channel;
+        if (sig_idx < arrayLength(&signal_flags)) {
+            sig_val = f32(signal_flags[sig_idx] & SIGNAL_VALUE_MASK);
+        }
+        let above = sig_val >= threshold;
+        emissive = select(emissive * 0.15, emissive, above != invert);
+    }
+
     // Look up cell type visuals (with bounds check)
     var specular_strength = 0.5;
     var specular_power = 32.0;
@@ -578,6 +604,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //   Lipocyte (4):    param_a/b/c/d -> [droplet_scale, droplet_threshold, boundary_sharpness, brightness]
         //   Buoyocyte (5):   param_a/b/c/d -> [bubble_scale, rotation_speed, wall_brightness, gas_brightness]
         //   Devorocyte (11): param_a/b/c/d -> [spike_height, spike_sharpness, spike_embed, tip_fade]
+        //   Luminocyte (16): param_a/b/c/d -> [band_frequency, band_width, core_glow, color_shift]
         //   Photocyte (3):   goldberg -> [subdivision, ridge_width, meander, ridge_strength]
         //   Glueocyte (6):   goldberg -> [voro_scale, border_width, meander, border_dark]
         //   Oculocyte (7):   goldberg -> [pupil_size, iris_freq, iris_texture, pupil_dark]
@@ -592,7 +619,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // For all others (Photocyte=3, Glueocyte=6, Oculocyte=7, Myocyte=9,
             // Embryocyte=10, Vasculocyte=12) use goldberg fields.
             let use_params = (cell_type == 0u || cell_type == 2u || cell_type == 4u
-                           || cell_type == 5u || cell_type == 11u);
+                           || cell_type == 5u || cell_type == 11u || cell_type == 16u);
             if (use_params) {
                 instance.type_data_0 = vec4<f32>(
                     visuals.param_a,

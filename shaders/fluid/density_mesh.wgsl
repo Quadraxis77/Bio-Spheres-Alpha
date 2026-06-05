@@ -28,7 +28,9 @@ struct RenderParams {
     noise_persistence: f32,
     reflection_brightness: f32,
     light_dir: vec3<f32>,
-    _pad: f32,
+    waterline_alpha: f32,
+    gravity: vec3<f32>,
+    gravity_mode: u32,
 }
 
 @group(0) @binding(0)
@@ -78,6 +80,7 @@ struct ShadowFieldParams {
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
 @group(1) @binding(1) var<storage, read> light_field: array<f32>;
+@group(1) @binding(2) var<storage, read> light_color_field: array<vec4<f32>>;
 
 // Environment cubemap for reflections
 @group(2) @binding(0) var env_cubemap: texture_cube<f32>;
@@ -150,6 +153,26 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     let c1 = mix(c01, c11, fy);
 
     return mix(c0, c1, fz);
+}
+
+fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
+    if (shadow_params.shadow_enabled == 0u) {
+        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    }
+    let res = shadow_params.grid_resolution;
+    let fres = f32(res);
+    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size;
+    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size;
+    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size;
+    let ix = i32(round(gx));
+    let iy = i32(round(gy));
+    let iz = i32(round(gz));
+    let ires = i32(res);
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    }
+    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    return light_color_field[idx].rgb;
 }
 
 // --- 3D Perlin noise implementation ---
@@ -318,7 +341,6 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     
     // Use shadow field light direction if available, fall back to render params
     let light_dir = normalize(vec3<f32>(shadow_params.light_dir_x, shadow_params.light_dir_y, shadow_params.light_dir_z));
-    let sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     
     // Sample shadow field at the water surface position
     // Offset slightly along normal to avoid self-shadowing artifacts
@@ -326,6 +348,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let shadow_sample_pos = in.world_position + normal * offset_distance;
     let light_value = sample_light_field(shadow_sample_pos);
     let shadow = mix(1.0, light_value, shadow_params.shadow_strength);
+    let sun_color = sample_light_color_field(shadow_sample_pos);
     
     // Diffuse (Lambert)
     let n_dot_l = max(dot(normal, light_dir), 0.0);
@@ -364,21 +387,35 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let env_color = textureSample(env_cubemap, env_sampler, reflect_dir).rgb;
     // Boost reflection brightness - cave walls are dark, need to be visible in reflection
     let boosted_env = env_color * params.reflection_brightness;
-    // Mirror blend: at reflection=1.0, surface is pure cubemap; at 0.0, pure lit surface
-    final_color = mix(final_color, boosted_env, params.reflection);
-    
-    // Rim light (colored by fluid type, attenuated by shadow)
+    // Waterline: tris facing against gravity (upward normals) are the water surface.
+    // Faces below the waterline (sides + bottom) get transparent, non-reflective treatment.
+    // Radial gravity: reflective faces are those aligned with the radial direction
+    // (pointing toward or away from the origin), so use abs(dot).
+    // Axial gravity: reflective faces are those pointing against gravity (upward).
+    let face_up = select(
+        dot(normal, normalize(params.gravity)),
+        abs(dot(normal, normalize(in.world_position))),
+        params.gravity_mode == 3u,
+    );
+    let submerged = smoothstep(0.15, -0.15, face_up); // 0 at waterline/top, 1 below
+
+    // Reflections: full on waterline surface, none below.
+    let reflection_contrib = mix(params.reflection, 0.0, submerged);
+    final_color = mix(final_color, boosted_env, reflection_contrib);
+
+    // Rim light: suppressed below waterline.
     let rim_color = mix(vec3<f32>(0.7, 0.85, 1.0), base_color, 0.5);
-    final_color += rim_color * rim * mix(0.3, 1.0, shadow);
-    
-    // Subsurface scattering (water only, attenuated by shadow)
+    final_color += rim_color * rim * mix(0.3, 1.0, shadow) * (1.0 - submerged);
+
+    // Subsurface scattering (water only, attenuated by shadow).
     if ft == 1u {
         let sss = pow(max(dot(view_dir, -light_dir), 0.0), 2.0) * 0.15;
         final_color += vec3<f32>(0.0, 0.4, 0.6) * sss * shadow;
     }
-    
-    // Mirror reflection makes the surface opaque
-    let final_alpha = clamp(alpha + params.reflection, alpha, 1.0);
+
+    // Alpha: waterline/above = normal (boosted by reflection); below = very transparent.
+    let surface_alpha = clamp(alpha + params.reflection, alpha, 1.0);
+    let final_alpha = mix(surface_alpha, params.waterline_alpha, submerged);
 
     // WBOIT weight function (McGuire & Bavoil 2013)
     let depth = in.clip_position.z;

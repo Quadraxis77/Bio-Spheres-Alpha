@@ -50,7 +50,7 @@ var<storage, read> cell_count_buffer: array<u32>;
 var<uniform> photocyte_params: PhotocyteParams;
 
 @group(1) @binding(1)
-var<storage, read> light_field: array<f32>;  // Per-voxel light intensity (0.0-1.0)
+var<storage, read_write> light_field: array<f32>;  // Per-voxel light intensity (0.0+)
 
 @group(1) @binding(2)
 var<storage, read> cell_types: array<u32>;  // Per-cell type ID
@@ -67,8 +67,36 @@ var<storage, read> split_nutrient_thresholds: array<f32>;
 @group(1) @binding(5)
 var<storage, read> death_flags: array<u32>;
 
+@group(1) @binding(6)
+var<storage, read> mode_indices: array<u32>;
+
+@group(1) @binding(7)
+var<storage, read> mode_properties_v7: array<vec4<f32>>;
+
+@group(1) @binding(8)
+var<storage, read> mode_emissive: array<vec4<f32>>;
+
+@group(1) @binding(9)
+var<storage, read_write> signal_flags: array<atomic<u32>>;
+
+@group(1) @binding(10)
+var<storage, read> mode_colors: array<vec4<f32>>;
+
+@group(1) @binding(11)
+var<storage, read_write> light_color_accum: array<atomic<u32>>;
+
+@group(1) @binding(12)
+var<storage, read_write> light_color_field: array<vec4<f32>>;
+
 // Photocyte cell type constant
 const PHOTOCYTE_TYPE: u32 = 3u;
+const LUMINOCYTE_TYPE: u32 = 16u;
+const SIGNAL_CHANNELS: u32 = 16u;
+const SIGNAL_VALUE_MASK: u32 = 2047u;
+// Keep luminocytes deliberately inefficient: at full brightness, they spend far
+// more nutrients than nearby photocytes can recover from the emitted light.
+const LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND: f32 = 40.0;
+const COLOR_ACCUM_SCALE: f32 = 4096.0;
 
 // Fixed-point conversion
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -130,6 +158,126 @@ fn sample_light(world_pos: vec3<f32>) -> f32 {
     return light_field[idx];
 }
 
+fn signal_value(cell_idx: u32, channel: u32) -> f32 {
+    let packed = atomicLoad(&signal_flags[cell_idx * SIGNAL_CHANNELS + min(channel, SIGNAL_CHANNELS - 1u)]);
+    return f32(packed & SIGNAL_VALUE_MASK);
+}
+
+fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
+    if (cell_idx >= arrayLength(&mode_indices)) {
+        return;
+    }
+
+    let mode_idx = mode_indices[cell_idx];
+    var signal_channel = 0u;
+    var threshold = 1.0;
+    var dim_level = 0.15;
+    var bright_level = 1.0;
+    var invert = false;
+    if (mode_idx < arrayLength(&mode_properties_v7)) {
+        let control = mode_properties_v7[mode_idx];
+        invert = control.x >= 0.5;
+        signal_channel = u32(clamp(control.z, 0.0, 15.0));
+        threshold = control.w;
+    }
+    if (mode_idx < arrayLength(&mode_emissive)) {
+        bright_level = max(mode_emissive[mode_idx].x, 0.0);
+        dim_level = bright_level * 0.15;
+    }
+
+    let incoming = signal_value(cell_idx, signal_channel);
+    let above = incoming >= threshold;
+    let brightness = select(dim_level, bright_level, above != invert);
+    if (brightness <= 0.001) {
+        return;
+    }
+
+    let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
+    let requested_cost = brightness * LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND * params.delta_time;
+    let paid_cost = min(requested_cost, max(current_nutrients - 1.0, 0.0));
+    if (paid_cost <= 0.0) {
+        return;
+    }
+
+    atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(paid_cost));
+    let effective_brightness = brightness * paid_cost / max(requested_cost, 0.001);
+    var emit_color = vec3<f32>(1.0, 1.0, 1.0);
+    if (mode_idx < arrayLength(&mode_colors)) {
+        emit_color = clamp(mode_colors[mode_idx].xyz, vec3<f32>(0.0), vec3<f32>(4.0));
+    }
+
+    let center = world_to_voxel_index(pos);
+    if (center == 0xFFFFFFFFu) {
+        return;
+    }
+
+    let res = i32(photocyte_params.grid_resolution);
+    let cz = i32(center / (photocyte_params.grid_resolution * photocyte_params.grid_resolution));
+    let cy = i32((center - u32(cz) * photocyte_params.grid_resolution * photocyte_params.grid_resolution) / photocyte_params.grid_resolution);
+    let cx = i32(center - u32(cz) * photocyte_params.grid_resolution * photocyte_params.grid_resolution - u32(cy) * photocyte_params.grid_resolution);
+
+    let emit_radius: i32 = 7;
+    for (var dz = -emit_radius; dz <= emit_radius; dz++) {
+        for (var dy = -emit_radius; dy <= emit_radius; dy++) {
+            for (var dx = -emit_radius; dx <= emit_radius; dx++) {
+                let x = cx + dx;
+                let y = cy + dy;
+                let z = cz + dz;
+                if (x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res) {
+                    continue;
+                }
+                let dist = length(vec3<f32>(f32(dx), f32(dy), f32(dz)));
+                if (dist > f32(emit_radius)) {
+                    continue;
+                }
+                // Soft falloff (exponent < 1) for a wide neon-style halo.
+                let falloff = pow(1.0 - dist / f32(emit_radius), 0.8);
+                let idx = u32(x) + u32(y) * photocyte_params.grid_resolution + u32(z) * photocyte_params.grid_resolution * photocyte_params.grid_resolution;
+                // Skip solid voxels — light_field == 0.0 means solid rock (set by
+                // compute_light_field). Injecting into them would make them pass the
+                // fog shader's solid-skip test and produce black fog blobs.
+                if (light_field[idx] < 0.001) {
+                    continue;
+                }
+                let local_light = effective_brightness * falloff;
+                light_field[idx] += local_light;
+
+                let weight = u32(max(local_light * COLOR_ACCUM_SCALE, 0.0));
+                if (weight > 0u) {
+                    let base = idx * 4u;
+                    atomicAdd(&light_color_accum[base + 0u], u32(emit_color.r * f32(weight)));
+                    atomicAdd(&light_color_accum[base + 1u], u32(emit_color.g * f32(weight)));
+                    atomicAdd(&light_color_accum[base + 2u], u32(emit_color.b * f32(weight)));
+                    atomicAdd(&light_color_accum[base + 3u], weight);
+                }
+            }
+        }
+    }
+}
+
+@compute @workgroup_size(256)
+fn resolve_luminocyte_light_color(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    let total = photocyte_params.grid_resolution * photocyte_params.grid_resolution * photocyte_params.grid_resolution;
+    if (idx >= total) {
+        return;
+    }
+
+    let base = idx * 4u;
+    let weight = atomicLoad(&light_color_accum[base + 3u]);
+    if (weight == 0u) {
+        return;
+    }
+
+    let inv_weight = 1.0 / f32(weight);
+    let color = vec3<f32>(
+        f32(atomicLoad(&light_color_accum[base + 0u])) * inv_weight,
+        f32(atomicLoad(&light_color_accum[base + 1u])) * inv_weight,
+        f32(atomicLoad(&light_color_accum[base + 2u])) * inv_weight,
+    );
+    light_color_field[idx] = vec4<f32>(color, f32(weight) / COLOR_ACCUM_SCALE);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -139,9 +287,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // Only photocytes gain nutrients from light
+    // Photocytes gain nutrients from light; luminocytes inject local light.
     let cell_type = cell_types[cell_idx];
-    if (cell_type != PHOTOCYTE_TYPE) {
+    if (cell_type != PHOTOCYTE_TYPE && cell_type != LUMINOCYTE_TYPE) {
         return;
     }
     
@@ -152,6 +300,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get cell position
     let pos = positions[cell_idx].xyz;
+
+    if (cell_type == LUMINOCYTE_TYPE) {
+        emit_luminocyte_light(cell_idx, pos);
+        return;
+    }
 
     // Read current nutrients from nutrients_buffer (fixed-point i32)
     let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));

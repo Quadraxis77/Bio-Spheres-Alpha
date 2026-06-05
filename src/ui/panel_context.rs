@@ -291,6 +291,8 @@ pub struct GenomeEditorState {
     pub fluid_noise_lacunarity: f32,
     /// Amplitude multiplier per octave
     pub fluid_noise_persistence: f32,
+    /// Alpha for faces below the waterline (sides + bottom)
+    pub fluid_waterline_alpha: f32,
 
     /// Flag to indicate mesh params need update
     pub fluid_mesh_params_dirty: bool,
@@ -320,6 +322,10 @@ pub struct GenomeEditorState {
     pub fog_height_density: f32,
     /// Height fog falloff
     pub fog_height_falloff: f32,
+    /// Water wave distortion strength for fog light shafts
+    pub fog_water_wave_strength: f32,
+    /// Water wave distortion spatial scale
+    pub fog_water_wave_scale: f32,
     /// Light field max ray march steps
     pub light_field_max_steps: u32,
     /// Light field step size multiplier
@@ -349,6 +355,13 @@ pub struct GenomeEditorState {
     /// Blur intensity multiplier
     pub dof_blur_strength: f32,
 
+    // Post-process settings
+    pub pp_contrast:     f32,
+    pub pp_adapt_enabled: bool,
+    pub pp_adapt_speed:  f32,
+    pub pp_adapt_min:    f32,
+    pub pp_adapt_max:    f32,
+
     // Sun renderer settings
     /// Whether the procedural sun is visible
     pub show_sun: bool,
@@ -358,6 +371,20 @@ pub struct GenomeEditorState {
     pub sun_angular_radius: f32,
     /// Sun intensity
     pub sun_intensity: f32,
+    /// Whether the sun/light direction rotates over time
+    pub sun_rotation_enabled: bool,
+    /// Axis used for sun/light direction rotation
+    pub sun_rotation_axis: [f32; 3],
+    /// Sun/light direction rotation speed in radians per second
+    pub sun_rotation_speed: f32,
+    /// Whether sun brightness cycles over time (seasons)
+    pub sun_cycle_enabled: bool,
+    /// Minimum sun intensity during the brightness cycle
+    pub sun_cycle_min: f32,
+    /// Maximum sun intensity during the brightness cycle
+    pub sun_cycle_max: f32,
+    /// Duration of one full brightness cycle in seconds
+    pub sun_cycle_period: f32,
 
     // Shadow settings
     /// Whether surface shadows are enabled
@@ -637,6 +664,13 @@ impl GenomeEditorState {
             sun_color,
             sun_angular_radius,
             sun_intensity,
+            sun_rotation_enabled,
+            sun_rotation_axis,
+            sun_rotation_speed,
+            sun_cycle_enabled,
+            sun_cycle_min,
+            sun_cycle_max,
+            sun_cycle_period,
             shadow_enabled,
             shadow_strength,
             shadow_quality,
@@ -787,6 +821,7 @@ impl GenomeEditorState {
             fluid_noise_octaves,
             fluid_noise_lacunarity,
             fluid_noise_persistence,
+            fluid_waterline_alpha: 0.05,
             fluid_mesh_params_dirty: true, // Trigger GPU upload on first frame
             fluid_mesh_needs_regen: false,
             light_dir,
@@ -800,6 +835,8 @@ impl GenomeEditorState {
             fog_absorption,
             fog_height_density,
             fog_height_falloff,
+            fog_water_wave_strength: 0.4,
+            fog_water_wave_scale: 0.15,
             light_field_max_steps,
             light_field_step_size,
             light_field_absorption_solid,
@@ -813,10 +850,22 @@ impl GenomeEditorState {
             dof_focal_range: 30.0,
             dof_max_blur_radius: 8.0,
             dof_blur_strength: 1.0,
+            pp_contrast: 1.1,
+            pp_adapt_enabled: false,
+            pp_adapt_speed: 0.05,
+            pp_adapt_min: 0.1,
+            pp_adapt_max: 8.0,
             show_sun,
             sun_color,
             sun_angular_radius,
             sun_intensity,
+            sun_rotation_enabled,
+            sun_rotation_axis,
+            sun_rotation_speed,
+            sun_cycle_enabled,
+            sun_cycle_min,
+            sun_cycle_max,
+            sun_cycle_period,
             shadow_enabled,
             shadow_strength,
             shadow_quality,
@@ -894,6 +943,24 @@ impl GenomeEditorState {
             panel_rects: std::collections::HashMap::new(),
         };
         state
+    }
+
+    /// Rotate the sun/light direction for animated day-cycle style lighting.
+    pub fn update_sun_rotation(&mut self, dt: f32) -> bool {
+        if !self.sun_rotation_enabled || self.sun_rotation_speed == 0.0 || dt <= 0.0 {
+            return false;
+        }
+
+        let axis = glam::Vec3::from_array(self.sun_rotation_axis).normalize_or_zero();
+        let dir = glam::Vec3::from_array(self.light_dir).normalize_or_zero();
+        if axis.length_squared() == 0.0 || dir.length_squared() == 0.0 {
+            return false;
+        }
+
+        let rotation = glam::Quat::from_axis_angle(axis, self.sun_rotation_speed * dt);
+        self.light_dir = (rotation * dir).normalize_or_zero().to_array();
+        self.light_params_dirty = true;
+        true
     }
 
     /// Save cell type visuals to disk.
@@ -1485,6 +1552,13 @@ impl GenomeEditorState {
             self.sun_color,
             self.sun_angular_radius,
             self.sun_intensity,
+            self.sun_rotation_enabled,
+            self.sun_rotation_axis,
+            self.sun_rotation_speed,
+            self.sun_cycle_enabled,
+            self.sun_cycle_min,
+            self.sun_cycle_max,
+            self.sun_cycle_period,
             // Shadow settings
             self.shadow_enabled,
             self.shadow_strength,
@@ -1523,6 +1597,13 @@ impl GenomeEditorState {
         sun_color: [f32; 3],
         sun_angular_radius: f32,
         sun_intensity: f32,
+        sun_rotation_enabled: bool,
+        sun_rotation_axis: [f32; 3],
+        sun_rotation_speed: f32,
+        sun_cycle_enabled: bool,
+        sun_cycle_min: f32,
+        sun_cycle_max: f32,
+        sun_cycle_period: f32,
         // Shadow settings
         shadow_enabled: bool,
         shadow_strength: f32,
@@ -1558,6 +1639,13 @@ impl GenomeEditorState {
             sun_color: [f32; 3],
             sun_angular_radius: f32,
             sun_intensity: f32,
+            sun_rotation_enabled: bool,
+            sun_rotation_axis: [f32; 3],
+            sun_rotation_speed: f32,
+            sun_cycle_enabled: bool,
+            sun_cycle_min: f32,
+            sun_cycle_max: f32,
+            sun_cycle_period: f32,
             // Shadow settings
             shadow_enabled: bool,
             shadow_strength: f32,
@@ -1592,6 +1680,13 @@ impl GenomeEditorState {
             sun_color,
             sun_angular_radius,
             sun_intensity,
+            sun_rotation_enabled,
+            sun_rotation_axis,
+            sun_rotation_speed,
+            sun_cycle_enabled,
+            sun_cycle_min,
+            sun_cycle_max,
+            sun_cycle_period,
             // Shadow settings
             shadow_enabled,
             shadow_strength,
@@ -1612,35 +1707,18 @@ impl GenomeEditorState {
     }
 
     /// Load light settings from disk, or return defaults if file doesn't exist.
+    #[allow(clippy::type_complexity)]
     pub fn load_light_settings() -> (
-        [f32; 3],
-        bool,
-        f32,
-        u32,
-        [f32; 3],
-        f32,
-        [f32; 3],
-        f32,
-        f32,
-        f32,
-        f32,
-        u32,
-        f32,
-        f32,
-        f32,
-        f32,
-        bool,
-        [f32; 3],
-        f32,
-        f32,
-        bool,
-        f32,
-        f32,
-        f32,
-        f32,
-        f32,
-        f32,
-        f32,
+        [f32; 3], bool, f32, u32,         // light_dir, show_fog, fog_density, fog_steps
+        [f32; 3], f32,                    // light_color, light_intensity
+        [f32; 3], f32, f32, f32, f32,     // fog_color, anisotropy, absorption, height_density, height_falloff
+        u32, f32, f32, f32, f32,          // lf_max_steps, step_size, absorb_solid, absorb_cell, ambient_floor
+        bool, [f32; 3], f32, f32,         // show_sun, sun_color, sun_angular_radius, sun_intensity
+        bool, [f32; 3], f32,              // rotation_enabled, rotation_axis, rotation_speed
+        bool, f32, f32, f32,              // cycle_enabled, cycle_min, cycle_max, cycle_period
+        bool, f32, f32,                   // shadow_enabled, shadow_strength, shadow_quality
+        f32, f32, f32,                    // caustic_intensity, scale, speed
+        f32, f32,                         // photocyte_mass, photocyte_threshold
     ) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
@@ -1669,6 +1747,20 @@ impl GenomeEditorState {
             sun_angular_radius: f32,
             #[serde(default)]
             sun_intensity: f32,
+            #[serde(default)]
+            sun_rotation_enabled: bool,
+            #[serde(default = "default_sun_rotation_axis")]
+            sun_rotation_axis: [f32; 3],
+            #[serde(default)]
+            sun_rotation_speed: f32,
+            #[serde(default)]
+            sun_cycle_enabled: bool,
+            #[serde(default)]
+            sun_cycle_min: f32,
+            #[serde(default = "default_sun_cycle_max")]
+            sun_cycle_max: f32,
+            #[serde(default = "default_sun_cycle_period")]
+            sun_cycle_period: f32,
             // Shadow settings
             #[serde(default = "default_shadow_enabled")]
             shadow_enabled: bool,
@@ -1711,6 +1803,15 @@ impl GenomeEditorState {
         fn default_photocyte_threshold() -> f32 {
             0.05
         }
+        fn default_sun_cycle_max() -> f32 {
+            15.0
+        }
+        fn default_sun_cycle_period() -> f32 {
+            120.0
+        }
+        fn default_sun_rotation_axis() -> [f32; 3] {
+            [0.0, 1.0, 0.0]
+        }
 
         let path = crate::app_dirs::config_file("light_settings.ron");
 
@@ -1741,6 +1842,13 @@ impl GenomeEditorState {
                                 s.sun_color,
                                 s.sun_angular_radius,
                                 s.sun_intensity,
+                                s.sun_rotation_enabled,
+                                s.sun_rotation_axis,
+                                s.sun_rotation_speed,
+                                s.sun_cycle_enabled,
+                                s.sun_cycle_min,
+                                s.sun_cycle_max,
+                                s.sun_cycle_period,
                                 // Shadow settings
                                 s.shadow_enabled,
                                 s.shadow_strength,
@@ -1788,6 +1896,13 @@ impl GenomeEditorState {
             [0.6, 0.4, 0.2], // sun_color
             0.05,            // sun_angular_radius
             15.0,            // sun_intensity
+            false,           // sun_rotation_enabled
+            [0.0, 1.0, 0.0], // sun_rotation_axis
+            0.0,             // sun_rotation_speed
+            false,           // sun_cycle_enabled
+            0.0,             // sun_cycle_min
+            15.0,            // sun_cycle_max
+            120.0,           // sun_cycle_period
             // Shadow settings
             true, // shadow_enabled
             0.7,  // shadow_strength
@@ -1889,6 +2004,9 @@ impl GenomeEditorState {
             sun_color: [f32; 3],
             sun_angular_radius: f32,
             sun_intensity: f32,
+            sun_rotation_enabled: bool,
+            sun_rotation_axis: [f32; 3],
+            sun_rotation_speed: f32,
         }
 
         let settings = SunSettings {
@@ -1896,6 +2014,9 @@ impl GenomeEditorState {
             sun_color: self.sun_color,
             sun_angular_radius: self.sun_angular_radius,
             sun_intensity: self.sun_intensity,
+            sun_rotation_enabled: self.sun_rotation_enabled,
+            sun_rotation_axis: self.sun_rotation_axis,
+            sun_rotation_speed: self.sun_rotation_speed,
         };
 
         let path = crate::app_dirs::config_file("sun_settings.ron");
@@ -2098,6 +2219,9 @@ impl GenomeEditorState {
             sun_color: [f32; 3],
             sun_angular_radius: f32,
             sun_intensity: f32,
+            sun_rotation_enabled: bool,
+            sun_rotation_axis: [f32; 3],
+            sun_rotation_speed: f32,
         }
         impl Default for SunSettings {
             fn default() -> Self {
@@ -2106,6 +2230,9 @@ impl GenomeEditorState {
                     sun_color: [1.0, 1.0, 0.85],
                     sun_angular_radius: 0.025,
                     sun_intensity: 10.0,
+                    sun_rotation_enabled: false,
+                    sun_rotation_axis: [0.0, 1.0, 0.0],
+                    sun_rotation_speed: 0.0,
                 }
             }
         }
@@ -2122,6 +2249,9 @@ impl GenomeEditorState {
                     self.sun_color = s.sun_color;
                     self.sun_angular_radius = s.sun_angular_radius;
                     self.sun_intensity = s.sun_intensity;
+                    self.sun_rotation_enabled = s.sun_rotation_enabled;
+                    self.sun_rotation_axis = s.sun_rotation_axis;
+                    self.sun_rotation_speed = s.sun_rotation_speed;
                 }
                 Err(e) => {
                     log::warn!("Failed to parse sun settings: {}. Using defaults.", e);

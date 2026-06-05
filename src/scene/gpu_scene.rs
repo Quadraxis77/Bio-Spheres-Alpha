@@ -148,6 +148,8 @@ pub struct GpuScene {
     pub time_scale: f32,
     /// When true, simulation work continues but visual scene render passes are skipped.
     pub headless_no_render: bool,
+    /// How many simulation seconds between lineage population scans.
+    pub lineage_capture_interval_seconds: f32,
     /// Pending inspect tool result (temporary until GPU spatial queries are integrated)
     pending_inspect_result: Option<usize>,
     /// Pending drag tool result (temporary until GPU spatial queries are integrated)
@@ -330,6 +332,9 @@ pub struct GpuScene {
     pending_gamete_merges: Vec<GameteMergeEvent>,
     /// Tracks whether a staging readback is in flight for gamete events
     gamete_readback_in_flight: bool,
+    /// Receiver for the gamete staging buffer map_async callback.
+    /// Some means map_async has already been called; None means it hasn't been called yet.
+    gamete_map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
@@ -374,14 +379,11 @@ pub struct GpuScene {
     pub mutation_system: Option<crate::simulation::gpu_physics::MutationSystem>,
     /// Light field system for photocyte nutrients and volumetric fog
     pub light_field_system: Option<LightFieldSystem>,
-    /// Cached light field bind group (solid_mask doesn't change per frame)
-    cached_light_field_bind_group: Option<wgpu::BindGroup>,
     /// Cached occupancy bind groups (one per triple buffer index, positions change)
     cached_occupancy_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached photocyte physics bind groups (one per triple buffer index)
     cached_photocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached photocyte system bind group (buffers don't change)
-    cached_photocyte_system_bind_group: Option<wgpu::BindGroup>,
     /// Volumetric fog renderer
     pub volumetric_fog_renderer: Option<VolumetricFogRenderer>,
     /// Whether to show volumetric fog
@@ -390,6 +392,8 @@ pub struct GpuScene {
     pub dof_renderer: Option<DepthOfFieldRenderer>,
     /// Whether depth of field is enabled
     pub show_dof: bool,
+    /// Post-process renderer (contrast + eye adaptation)
+    pub post_process: Option<crate::rendering::post_process::PostProcessRenderer>,
     /// Surface format (needed for DoF resize)
     pub(super) surface_format: wgpu::TextureFormat,
     /// Procedural sun renderer
@@ -438,6 +442,9 @@ pub struct GpuScene {
     /// Dummy light field buffer (used when light field system is not yet initialized)
     #[allow(dead_code)]
     signal_sense_dummy_light_buffer: wgpu::Buffer,
+    /// Dummy light color field buffer (used when light field system is not yet initialized)
+    #[allow(dead_code)]
+    signal_sense_dummy_light_color_buffer: wgpu::Buffer,
     /// Dummy solid mask buffer (used when fluid simulator is not yet initialized)
     #[allow(dead_code)]
     signal_sense_dummy_solid_buffer: wgpu::Buffer,
@@ -592,6 +599,12 @@ impl GpuScene {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let signal_sense_dummy_light_color_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Signal Sense Dummy Light Color Buffer"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let signal_sense_dummy_solid_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Signal Sense Dummy Solid Buffer"),
             size: 4,
@@ -626,6 +639,7 @@ impl GpuScene {
             &signal_sense_world_params_buffer,
             &signal_sense_dummy_nutrient_buffer,
             &signal_sense_dummy_light_buffer,
+            &signal_sense_dummy_light_color_buffer,
             &signal_sense_dummy_solid_buffer,
             &signal_sense_dummy_density_buffer,
             organism_label_system.as_ref().map(|s| &s.label_buffer),
@@ -693,6 +707,8 @@ impl GpuScene {
             readbacks_enabled: true,
             time_scale: 1.0,
             headless_no_render: false,
+            lineage_capture_interval_seconds:
+                crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS,
             pending_inspect_result: None,
             pending_drag_result: None,
             pending_remove_result: None,
@@ -793,6 +809,7 @@ impl GpuScene {
             gametocyte_physics_bind_groups: None,
             pending_gamete_merges: Vec::new(),
             gamete_readback_in_flight: false,
+            gamete_map_receiver: None,
             moss_system: None,
             show_moss: true,
             moss_needs_clear: false,
@@ -802,14 +819,18 @@ impl GpuScene {
             organism_label_system,
             mutation_system,
             light_field_system: None,
-            cached_light_field_bind_group: None,
             cached_occupancy_bind_groups: None,
             cached_photocyte_physics_bind_groups: None,
-            cached_photocyte_system_bind_group: None,
             volumetric_fog_renderer: None,
             show_volumetric_fog: false,
             dof_renderer: None,
             show_dof: false,
+            post_process: Some(crate::rendering::post_process::PostProcessRenderer::new(
+                device,
+                surface_config.width,
+                surface_config.height,
+                surface_config.format,
+            )),
             surface_format: surface_config.format,
             sun_renderer: None,
             show_sun: true,
@@ -836,6 +857,7 @@ impl GpuScene {
             signal_sense_world_params_buffer,
             signal_sense_dummy_nutrient_buffer,
             signal_sense_dummy_light_buffer,
+            signal_sense_dummy_light_color_buffer,
             signal_sense_dummy_solid_buffer,
             signal_sense_dummy_density_buffer,
             follow_organism_id: None,
@@ -1368,6 +1390,8 @@ impl GpuScene {
                 oculocyte_signal_value: 0.0,
                 oculocyte_signal_hops: oculocyte_params[i][2] as i32,
                 oculocyte_ray_length: f32::from_bits(oculocyte_params[i][1]),
+                oculocyte_light_target_color: glam::Vec3::new(1.0, 0.95, 0.78),
+                oculocyte_light_color_tolerance: 0.18,
                 membrane_stiffness: props[2],
                 regulation_emit_channel: {
                     let ch = regulation_params[i][0];
@@ -1443,6 +1467,9 @@ impl GpuScene {
                 cognocyte_oscillator_phase: 0.0,
                 cognocyte_oscillator_strength: 1.0,
                 cognocyte_oscillator_step_count: 4,
+                luminocyte_signal_channel: 0,
+                luminocyte_threshold: 1.0,
+                luminocyte_invert: false,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -2135,12 +2162,11 @@ impl GpuScene {
             ]);
         }
 
-        // Cache light field bind group (solid_mask buffer doesn't change)
-        if self.cached_light_field_bind_group.is_none() {
-            self.cached_light_field_bind_group = Some(
-                light_field.create_light_field_bind_group(device, fluid_sim.solid_mask_buffer()),
-            );
-        }
+        let water_density_buffer = self
+            .gpu_surface_nets
+            .as_ref()
+            .map(|sn| sn.density_buffer())
+            .unwrap_or(light_field.dummy_water_density());
 
         // Use cached bind groups instead of creating per-frame
         light_field.update_light_field_params(queue, self.current_time);
@@ -2158,7 +2184,11 @@ impl GpuScene {
         encoder.clear_buffer(light_field.light_field_buffer(), 0, None);
 
         let occupancy_bg = &self.cached_occupancy_bind_groups.as_ref().unwrap()[output_idx];
-        let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
+        let light_field_bg = light_field.create_light_field_bind_group(
+            device,
+            fluid_sim.solid_mask_buffer(),
+            water_density_buffer,
+        );
 
         if self.current_cell_count > 0 {
             let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
@@ -2186,7 +2216,7 @@ impl GpuScene {
                 timestamp_writes: None,
             });
             pass.set_pipeline(light_field.compute_light_pipeline_ref());
-            pass.set_bind_group(0, light_field_bg, &[]);
+            pass.set_bind_group(0, &light_field_bg, &[]);
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
     }
@@ -2235,38 +2265,62 @@ impl GpuScene {
             ]);
         }
 
-        // Cache photocyte system bind group (buffers don't change)
-        if self.cached_photocyte_system_bind_group.is_none() {
-            self.cached_photocyte_system_bind_group =
-                Some(light_field.create_photocyte_system_bind_group(
-                    device,
-                    &self.gpu_triple_buffers.cell_types,
-                    &self.gpu_triple_buffers.nutrients_buffer,
-                    &self.gpu_triple_buffers.split_nutrient_thresholds,
-                    &self.gpu_triple_buffers.death_flags,
-                ));
-        }
+        // Build the system bind group fresh each call: mode_colors_buffer and
+        // mode_emissive_buffer live in the instance builder and can be recreated
+        // when mode capacity grows. Caching the bind group would leave it pointing
+        // at the old (stale/empty) buffer, giving luminocytes black emit colors.
+        let photocyte_system_bg = light_field.create_photocyte_system_bind_group(
+            device,
+            &self.gpu_triple_buffers.cell_types,
+            &self.gpu_triple_buffers.nutrients_buffer,
+            &self.gpu_triple_buffers.split_nutrient_thresholds,
+            &self.gpu_triple_buffers.death_flags,
+            &self.gpu_triple_buffers.mode_indices,
+            &self.gpu_triple_buffers.mode_properties_v7,
+            self.instance_builder.mode_emissive_buffer(),
+            &self.adhesion_buffers.signal_flags,
+            self.instance_builder.mode_colors_buffer(),
+        );
 
-        // Use cached bind groups
         light_field.update_photocyte_params(queue);
 
         let photocyte_physics_bg =
             &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
-        let photocyte_system_bg = self.cached_photocyte_system_bind_group.as_ref().unwrap();
 
         // Dispatch at full capacity - the shader reads cell_count_buffer[0] (the GPU-side
         // high-water mark) for its own bounds check. Using total_cell_slots (the async
         // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
         // at higher slot indices during the lag window, causing them to receive no light.
+        // Clear the luminocyte color accumulator before each emission pass so it
+        // holds exactly one frame's worth of data for the resolve step below.
+        encoder.clear_buffer(light_field.light_color_accum_buffer_ref(), 0, None);
+
         let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Photocyte Light Consumption (physics step)"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(light_field.photocyte_light_pipeline_ref());
-        pass.set_bind_group(0, photocyte_physics_bg, &[]);
-        pass.set_bind_group(1, photocyte_system_bg, &[]);
-        pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Photocyte Light Consumption (physics step)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(light_field.photocyte_light_pipeline_ref());
+            pass.set_bind_group(0, photocyte_physics_bg, &[]);
+            pass.set_bind_group(1, &photocyte_system_bg, &[]);
+            pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+
+        // Resolve accumulated luminocyte color data into light_color_field so the
+        // volumetric fog renderer sees the correct emission color each frame.
+        let total_voxels = 128u32 * 128 * 128;
+        let color_workgroups = (total_voxels + 255) / 256;
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Resolve Luminocyte Light Color (physics step)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(light_field.resolve_light_color_pipeline_ref());
+            pass.set_bind_group(0, photocyte_physics_bg, &[]);
+            pass.set_bind_group(1, &photocyte_system_bg, &[]);
+            pass.dispatch_workgroups(color_workgroups, 1, 1);
+        }
     }
 
     /// Copy data from triple buffers to instance builder
@@ -2516,6 +2570,7 @@ impl GpuScene {
         let myocyte_type = CellType::Myocyte as u32 as i32;
         let devorocyte_type = CellType::Devorocyte as u32 as i32;
         let gametocyte_type = CellType::Gametocyte as u32 as i32;
+        let luminocyte_type = CellType::Luminocyte as u32 as i32;
         self.has_oculocytes = false;
         self.has_glueocytes = false;
         self.has_phagocytes = false;
@@ -2532,8 +2587,12 @@ impl GpuScene {
                 if m.cell_type == phagocyte_type {
                     self.has_phagocytes = true;
                 }
-                if m.cell_type == photocyte_type {
+                if m.cell_type == photocyte_type || m.cell_type == luminocyte_type {
                     self.has_photocytes = true;
+                }
+                if m.cell_type == luminocyte_type {
+                    self.has_oculocytes = true;
+                    self.max_signal_hops = self.max_signal_hops.max(1);
                 }
                 if m.cell_type == buoyocyte_type {
                     self.physics_features.has_buoyocytes = true;
@@ -2860,6 +2919,27 @@ impl GpuScene {
                 &self.gpu_triple_buffers.oculocyte_signal_values,
                 offset,
                 bytemuck::cast_slice(&oculo_signal_values),
+            );
+        }
+
+        let oculo_light_filters: Vec<[f32; 4]> = genome_ref
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.oculocyte_light_target_color.x.clamp(0.0, 4.0),
+                    mode.oculocyte_light_target_color.y.clamp(0.0, 4.0),
+                    mode.oculocyte_light_target_color.z.clamp(0.0, 4.0),
+                    mode.oculocyte_light_color_tolerance.clamp(0.0, 4.0),
+                ]
+            })
+            .collect();
+        if !oculo_light_filters.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(
+                &self.gpu_triple_buffers.oculocyte_light_filters,
+                offset,
+                bytemuck::cast_slice(&oculo_light_filters),
             );
         }
 
@@ -4631,6 +4711,7 @@ impl GpuScene {
                     &self.signal_sense_world_params_buffer,
                     nutrient_buf,
                     light_field_system.light_field_buffer(),
+                    light_field_system.light_color_field_buffer(),
                     solid_buf,
                     density_buf,
                     self.boulder_system
@@ -5387,6 +5468,11 @@ impl GpuScene {
                 .as_ref()
                 .map(|lfs| lfs.light_field_buffer())
                 .unwrap_or(&self.signal_sense_dummy_light_buffer);
+            let light_color_buf = self
+                .light_field_system
+                .as_ref()
+                .map(|lfs| lfs.light_color_field_buffer())
+                .unwrap_or(&self.signal_sense_dummy_light_color_buffer);
             let density_buf = self
                 .gpu_surface_nets
                 .as_ref()
@@ -5399,6 +5485,7 @@ impl GpuScene {
                     &self.signal_sense_world_params_buffer,
                     simulator.nutrient_voxels_buffer(),
                     light_buf,
+                    light_color_buf,
                     simulator.solid_mask_buffer(),
                     density_buf,
                     self.boulder_system
@@ -5688,15 +5775,31 @@ impl GpuScene {
         // Try to non-blockingly map the staging buffer and read events into a local Vec.
         // We scope the borrow on `gametocyte_merge_system` tightly so that `self` can be
         // mutated afterward without a live borrow conflict.
+        // Call map_async only once per readback cycle; store the receiver for subsequent polls.
+        if self.gamete_map_receiver.is_none() {
+            let system = self.gametocyte_merge_system.as_ref().unwrap();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            system
+                .staging_buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    let _ = sender.send(r);
+                });
+            self.gamete_map_receiver = Some(receiver);
+        }
+
+        let _ = device.poll(wgpu::PollType::Poll);
+
         let maybe_events: Option<Vec<GameteMergeEvent>> = {
             let system = self.gametocyte_merge_system.as_ref().unwrap();
-            let buffer_slice = system.staging_buffer.slice(..);
-            let (sender, receiver) = std::sync::mpsc::channel();
-            buffer_slice.map_async(wgpu::MapMode::Read, move |r| {
-                let _ = sender.send(r);
-            });
-            let _ = device.poll(wgpu::PollType::Poll);
-            if let Ok(Ok(())) = receiver.try_recv() {
+            let ready = self
+                .gamete_map_receiver
+                .as_ref()
+                .and_then(|rx| rx.try_recv().ok())
+                .map(|r| r.is_ok())
+                .unwrap_or(false);
+            if ready {
+                let buffer_slice = system.staging_buffer.slice(..);
                 let data = buffer_slice.get_mapped_range();
                 let evs = GametocyteMergeSystem::parse_events(&data);
                 drop(data);
@@ -5705,10 +5808,11 @@ impl GpuScene {
             } else {
                 None
             }
-        }; // borrow of gametocyte_merge_system ends here
+        };
 
         if let Some(new_events) = maybe_events {
             self.gamete_readback_in_flight = false;
+            self.gamete_map_receiver = None;
             self.pending_gamete_merges.extend(new_events);
         }
 
@@ -6016,6 +6120,11 @@ impl GpuScene {
                     .as_ref()
                     .map(|lfs| lfs.light_field_buffer())
                     .unwrap_or(&self.signal_sense_dummy_light_buffer);
+                let light_color_buf = self
+                    .light_field_system
+                    .as_ref()
+                    .map(|lfs| lfs.light_color_field_buffer())
+                    .unwrap_or(&self.signal_sense_dummy_light_color_buffer);
                 let solid_buf = self
                     .fluid_simulator
                     .as_ref()
@@ -6033,6 +6142,7 @@ impl GpuScene {
                         &self.signal_sense_world_params_buffer,
                         nutrient_buf,
                         light_buf,
+                        light_color_buf,
                         solid_buf,
                         density_buf,
                         self.boulder_system
@@ -6767,6 +6877,16 @@ impl GpuScene {
         &mut self,
         editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) {
+        // Compute effective sun intensity — season cycle overrides the static slider.
+        let effective_sun_intensity = if editor_state.sun_cycle_enabled {
+            let period = editor_state.sun_cycle_period.max(1.0);
+            let phase = (self.current_time / period * 2.0 * std::f32::consts::PI).sin();
+            let t = (phase + 1.0) * 0.5;
+            editor_state.sun_cycle_min + t * (editor_state.sun_cycle_max - editor_state.sun_cycle_min)
+        } else {
+            editor_state.sun_intensity
+        };
+
         // Update light field system parameters
         if let Some(ref mut light_field) = self.light_field_system {
             light_field.set_light_dir(editor_state.light_dir);
@@ -6775,7 +6895,7 @@ impl GpuScene {
             light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
             light_field.set_mass_per_second(
-                editor_state.photocyte_mass_per_second * editor_state.sun_intensity,
+                editor_state.photocyte_mass_per_second * effective_sun_intensity,
             );
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
@@ -6795,9 +6915,9 @@ impl GpuScene {
             light_field.set_moss_color_dark(editor_state.moss_color_dark);
             light_field.set_moss_color_bright(editor_state.moss_color_bright);
             light_field.set_sun_color([
-                editor_state.sun_color[0] * editor_state.sun_intensity,
-                editor_state.sun_color[1] * editor_state.sun_intensity,
-                editor_state.sun_color[2] * editor_state.sun_intensity,
+                editor_state.sun_color[0] * effective_sun_intensity,
+                editor_state.sun_color[1] * effective_sun_intensity,
+                editor_state.sun_color[2] * effective_sun_intensity,
             ]);
         }
 
@@ -6807,19 +6927,23 @@ impl GpuScene {
             fog_renderer.fog_density = editor_state.fog_density;
             fog_renderer.fog_steps = editor_state.fog_steps;
             fog_renderer.light_color = editor_state.sun_color;
-            fog_renderer.light_intensity = editor_state.sun_intensity * 0.1; // Scale down fog effect
+            // Use the fog's own light_intensity setting — sun brightness is already baked
+            // into light_color_field, so tying this to sun_intensity would zero luminocyte glow.
+            fog_renderer.light_intensity = editor_state.light_intensity;
             fog_renderer.fog_color = editor_state.fog_color;
             fog_renderer.scattering_anisotropy = editor_state.fog_scattering_anisotropy;
             fog_renderer.absorption = editor_state.fog_absorption;
             fog_renderer.height_fog_density = editor_state.fog_height_density;
             fog_renderer.height_fog_falloff = editor_state.fog_height_falloff;
+            fog_renderer.water_wave_strength = editor_state.fog_water_wave_strength;
+            fog_renderer.water_wave_scale = editor_state.fog_water_wave_scale;
         }
 
         // Combine sun color with intensity for all lighting
         let scaled_sun_color = [
-            editor_state.sun_color[0] * editor_state.sun_intensity,
-            editor_state.sun_color[1] * editor_state.sun_intensity,
-            editor_state.sun_color[2] * editor_state.sun_intensity,
+            editor_state.sun_color[0] * effective_sun_intensity,
+            editor_state.sun_color[1] * effective_sun_intensity,
+            editor_state.sun_color[2] * effective_sun_intensity,
         ];
 
         // Update cell renderer light color and direction
@@ -7683,6 +7807,8 @@ impl Scene for GpuScene {
             self.renderer.height,
             &self.gpu_triple_buffers.cell_count_buffer,
             &self.gpu_triple_buffers.death_flags,
+            &self.adhesion_buffers.signal_flags,
+            &self.gpu_triple_buffers.mode_properties_v7,
             self.lod_scale_factor,
             self.lod_threshold_low,
             self.lod_threshold_medium,
@@ -7696,16 +7822,27 @@ impl Scene for GpuScene {
         // When DoF is enabled, render the scene to an intermediate texture so the
         // DoF shader can read it. Otherwise render directly to the swapchain.
         let dof_enabled = self.show_dof && self.dof_renderer.is_some();
-        // Extract the DoF scene target view pointer before any mutable borrows.
-        // SAFETY: The texture view lives as long as self.dof_renderer, which lives for
-        // the entire render() call. We just need to avoid holding &self across &mut self.
+        let pp_enabled = self.post_process.is_some();
+
+        // Determine scene_target priority:
+        //   DoF on  → scene renders to DoF intermediate, DoF outputs to PP or swapchain
+        //   PP on   → scene / DoF renders to PP intermediate, PP outputs to swapchain
+        //   Neither → scene renders directly to swapchain
+        // Extract pointers before any mutable borrows.
         let dof_scene_view: Option<*const wgpu::TextureView> = if dof_enabled {
             Some(self.dof_renderer.as_ref().unwrap().scene_target_view() as *const _)
         } else {
             None
         };
+        let pp_scene_view: Option<*const wgpu::TextureView> = if pp_enabled && !dof_enabled {
+            Some(&self.post_process.as_ref().unwrap().scene_view as *const _)
+        } else {
+            None
+        };
+
         let scene_target: &wgpu::TextureView = if let Some(ptr) = dof_scene_view {
-            // SAFETY: dof_renderer is not dropped or moved during render()
+            unsafe { &*ptr }
+        } else if let Some(ptr) = pp_scene_view {
             unsafe { &*ptr }
         } else {
             view
@@ -8190,10 +8327,16 @@ impl Scene for GpuScene {
                 self.volumetric_fog_renderer.is_some(),
             ) {
                 let lf_buffer = light_field.light_field_buffer();
+                let lf_color_buffer = light_field.light_color_field_buffer();
                 let lf_dir = light_field.light_dir();
                 let lf_cell_size = light_field.cell_size();
                 let lf_origin = light_field.grid_origin();
                 let lf_radius = light_field.world_radius();
+                let water_density_buf = self
+                    .gpu_surface_nets
+                    .as_ref()
+                    .map(|sn| sn.density_buffer())
+                    .unwrap_or(light_field.dummy_water_density());
                 let depth_view = &self.renderer.depth_view;
                 let cam_pos = self.camera.position();
                 let time = self.current_time;
@@ -8204,6 +8347,8 @@ impl Scene for GpuScene {
                     depth_view,
                     device,
                     lf_buffer,
+                    lf_color_buffer,
+                    water_density_buf,
                     view_proj,
                     cam_pos,
                     time,
@@ -8216,19 +8361,30 @@ impl Scene for GpuScene {
             }
         }
 
-        // Render depth of field if enabled (post-process: reads scene_target, writes to swapchain)
+        // DoF: reads scene_target, writes to PP intermediate (or swapchain if PP off).
         if dof_enabled {
+            let dof_out: &wgpu::TextureView = if pp_enabled {
+                // SAFETY: post_process lives for the duration of render().
+                unsafe { &*(&self.post_process.as_ref().unwrap().scene_view as *const _) }
+            } else {
+                view
+            };
             let depth_view = &self.renderer.depth_view;
             let cam_pos = self.camera.position();
             self.dof_renderer.as_mut().unwrap().render(
                 &mut encoder,
                 queue,
-                view,
+                dof_out,
                 depth_view,
                 device,
                 view_proj,
                 cam_pos,
             );
+        }
+
+        // Post-process (contrast + eye adaptation): always writes to swapchain.
+        if let Some(pp) = self.post_process.as_mut() {
+            pp.render(&mut encoder, queue, view);
         }
 
         // Start async cell count readback (copy to readback buffer)
@@ -8356,6 +8512,11 @@ impl Scene for GpuScene {
         // Resize volumetric fog renderer (recreates half-res texture)
         if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
             fog_renderer.resize(device, width, height);
+        }
+
+        // Resize post-process renderer (recreates scene intermediate texture)
+        if let Some(ref mut pp) = self.post_process {
+            pp.resize(device, width, height);
         }
 
         // Resize depth of field renderer (recreates intermediate textures)

@@ -879,11 +879,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-fn render_headless_section(
-    ui: &mut Ui,
-    context: &mut PanelContext,
-    state: &mut GlobalUiState,
-) {
+fn render_headless_section(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     state.gpu_headless_mode = true;
 
     let p = palette();
@@ -931,7 +927,9 @@ fn render_headless_section(
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button(egui::RichText::new(if is_paused { "Resume" } else { "Pause" }).size(11.0))
+                    .button(
+                        egui::RichText::new(if is_paused { "Resume" } else { "Pause" }).size(11.0),
+                    )
                     .clicked()
                 {
                     *context.scene_request = SceneModeRequest::TogglePause;
@@ -941,9 +939,24 @@ fn render_headless_section(
 
         ui.add_space(8.0);
         ui.columns(4, |cols| {
-            headless_metric(&mut cols[0], "FPS", &format!("{:.1}", fps), fps_color(fps, p));
-            headless_metric(&mut cols[1], "Frame", &format!("{:.2} ms", frame_ms), p.text_primary);
-            headless_metric(&mut cols[2], "Speed", &format!("{:.2}x", sim_speed), p.accent_primary);
+            headless_metric(
+                &mut cols[0],
+                "FPS",
+                &format!("{:.1}", fps),
+                fps_color(fps, p),
+            );
+            headless_metric(
+                &mut cols[1],
+                "Frame",
+                &format!("{:.2} ms", frame_ms),
+                p.text_primary,
+            );
+            headless_metric(
+                &mut cols[2],
+                "Speed",
+                &format!("{:.2}x", sim_speed),
+                p.accent_primary,
+            );
             headless_metric(
                 &mut cols[3],
                 "Cells",
@@ -1001,8 +1014,9 @@ fn render_headless_section(
             if ui.button("Fast Forward").clicked() {
                 state.gpu_headless_auto_speed = true;
                 state.gpu_headless_target_fps = 30.0;
-                *context.scene_request =
-                    SceneModeRequest::SetSpeed(state.gpu_headless_max_speed.min(headless_speed_cap));
+                *context.scene_request = SceneModeRequest::SetSpeed(
+                    state.gpu_headless_max_speed.min(headless_speed_cap),
+                );
             }
         });
 
@@ -1070,11 +1084,7 @@ fn render_headless_section(
     });
 }
 
-fn render_lineage_viewer(
-    ui: &mut Ui,
-    context: &mut PanelContext,
-    state: &mut GlobalUiState,
-) {
+fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     if !context.is_gpu_mode() {
         section_header(ui, "SPECIES DOSSIER");
         ui.label(
@@ -1096,6 +1106,59 @@ fn render_lineage_viewer(
         .unwrap_or(false);
     if needs_initial_scan && matches!(context.scene_request, SceneModeRequest::None) {
         *context.scene_request = SceneModeRequest::ScanLineageForViewer;
+    }
+
+    // --- Snapshot interval control (mutable borrow of scene_manager must
+    //     finish before the immutable borrow below) --------------------------
+    {
+        let p = palette();
+        egui::Frame::new()
+            .fill(p.bg_panel)
+            .stroke(egui::Stroke::new(1.0, p.border_subtle))
+            .inner_margin(egui::Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("SCAN INTERVAL")
+                            .size(10.0)
+                            .color(p.accent_primary),
+                    );
+                    ui.add_space(8.0);
+                    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                        let resp = ui.add(
+                            egui::Slider::new(
+                                &mut gpu_scene.lineage_capture_interval_seconds,
+                                5.0_f32..=600.0,
+                            )
+                            .logarithmic(true)
+                            .suffix("s"),
+                        );
+                        if resp.changed() {
+                            // reset last_scan_time so we don't immediately fire
+                        }
+                        ui.add_space(8.0);
+                        let current = gpu_scene.lineage_capture_interval_seconds;
+                        for preset in [15.0_f32, 30.0, 60.0, 120.0, 300.0] {
+                            let label = if preset < 60.0 {
+                                format!("{:.0}s", preset)
+                            } else {
+                                format!("{:.0}m", preset / 60.0)
+                            };
+                            let active = (current - preset).abs() < 0.5;
+                            let btn = egui::Button::new(egui::RichText::new(label).size(10.5))
+                                .fill(if active {
+                                    p.accent_primary.linear_multiply(0.3)
+                                } else {
+                                    p.bg_widget
+                                });
+                            if ui.add(btn).clicked() {
+                                gpu_scene.lineage_capture_interval_seconds = preset;
+                            }
+                        }
+                    }
+                });
+            });
+        ui.add_space(6.0);
     }
 
     let Some(scene) = context.scene_manager.gpu_scene() else {
@@ -1237,7 +1300,11 @@ fn render_lineage_viewer(
                 lineage_metric_chip(
                     ui,
                     "Variants",
-                    format!("{}/{}", archive.unpromoted_genome_samples.len(), variant_cells),
+                    format!(
+                        "{}/{}",
+                        archive.unpromoted_genome_samples.len(),
+                        variant_cells
+                    ),
                     p.status_warn,
                 );
             }
@@ -1309,6 +1376,11 @@ fn render_lineage_viewer(
     }
 
     ui.add_space(8.0);
+    let capture_interval_secs = context
+        .scene_manager
+        .gpu_scene()
+        .map(|s| s.lineage_capture_interval_seconds)
+        .unwrap_or(crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS);
     render_lineage_map_panel(
         ui,
         archive,
@@ -1316,6 +1388,7 @@ fn render_lineage_viewer(
         selected_snap_key,
         &mut selected_lineage_id,
         &mut selected_snap_frame,
+        capture_interval_secs,
     );
 
     ui.add_space(8.0);
@@ -1511,7 +1584,8 @@ fn draw_lineage_specimen(
             painter.image(texture_id, draw_rect, full_uv, egui::Color32::WHITE);
             true
         } else {
-            draw_lineage_adult_snapshot(&painter, rect.shrink(18.0), snapshot, accent);
+            let hovered = ui.rect_contains_pointer(rect);
+            draw_lineage_adult_snapshot(&painter, rect.shrink(18.0), snapshot, accent, hovered);
             true
         }
     } else {
@@ -1594,8 +1668,9 @@ fn draw_lineage_adult_snapshot(
     rect: egui::Rect,
     snapshot: &crate::scene::lineage::LineageAdultSnapshot,
     fallback: egui::Color32,
+    hovered: bool,
 ) {
-    draw_lineage_adult_snapshot_scaled(painter, rect, snapshot, fallback, 3.0, 14.0, 0.45);
+    draw_lineage_adult_snapshot_scaled(painter, rect, snapshot, fallback, 3.0, 14.0, 0.45, hovered);
 }
 
 fn draw_lineage_adult_snapshot_scaled(
@@ -1606,28 +1681,49 @@ fn draw_lineage_adult_snapshot_scaled(
     min_radius: f32,
     max_radius: f32,
     radius_scale: f32,
+    hovered: bool,
 ) {
     if snapshot.cells.is_empty() {
         return;
     }
 
+    // Y-axis rotation angle driven by time when hovered.
+    let angle = if hovered {
+        painter.ctx().request_repaint();
+        painter.ctx().input(|i| i.time as f32) * 0.75
+    } else {
+        0.0_f32
+    };
+    let (sin_a, cos_a) = angle.sin_cos();
+
+    // Rotate a 3D point around the Y axis then return (x', y', z').
+    let rotate_y = |p: [f32; 3]| -> [f32; 3] {
+        [
+            p[0] * cos_a + p[2] * sin_a,
+            p[1],
+            -p[0] * sin_a + p[2] * cos_a,
+        ]
+    };
+
+    // Compute bounding box of rotated X/Y for stable scale.
     let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
     let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
     for cell in &snapshot.cells {
-        let p = egui::pos2(cell.position[0], cell.position[1]);
-        min.x = min.x.min(p.x);
-        min.y = min.y.min(p.y);
-        max.x = max.x.max(p.x);
-        max.y = max.y.max(p.y);
+        let r = rotate_y(cell.position);
+        min.x = min.x.min(r[0]);
+        min.y = min.y.min(r[1]);
+        max.x = max.x.max(r[0]);
+        max.y = max.y.max(r[1]);
     }
 
     let span = egui::vec2((max.x - min.x).max(1.0), (max.y - min.y).max(1.0));
     let scale = (rect.width() / span.x).min(rect.height() / span.y) * 0.72;
     let center = rect.center();
-    let project = |position: [f32; 3]| {
-        let x = (position[0] - (min.x + max.x) * 0.5) * scale;
-        let y = (position[1] - (min.y + max.y) * 0.5) * scale;
-        center + egui::vec2(x, y)
+    let project = |position: [f32; 3]| -> (egui::Pos2, f32) {
+        let r = rotate_y(position);
+        let x = (r[0] - (min.x + max.x) * 0.5) * scale;
+        let y = (r[1] - (min.y + max.y) * 0.5) * scale;
+        (center + egui::vec2(x, y), r[2])
     };
 
     for bond in &snapshot.bonds {
@@ -1635,17 +1731,21 @@ fn draw_lineage_adult_snapshot_scaled(
         let b = bond[1] as usize;
         if let (Some(cell_a), Some(cell_b)) = (snapshot.cells.get(a), snapshot.cells.get(b)) {
             painter.line_segment(
-                [project(cell_a.position), project(cell_b.position)],
+                [project(cell_a.position).0, project(cell_b.position).0],
                 egui::Stroke::new(1.0, palette().border_bright.linear_multiply(0.75)),
             );
         }
     }
 
     let mut order: Vec<_> = (0..snapshot.cells.len()).collect();
-    order.sort_by(|&a, &b| snapshot.cells[a].position[2].total_cmp(&snapshot.cells[b].position[2]));
+    order.sort_by(|&a, &b| {
+        let za = rotate_y(snapshot.cells[a].position)[2];
+        let zb = rotate_y(snapshot.cells[b].position)[2];
+        za.total_cmp(&zb)
+    });
     for i in order {
         let cell = &snapshot.cells[i];
-        let pos = project(cell.position);
+        let (pos, _) = project(cell.position);
         let radius = (cell.radius * scale * radius_scale).clamp(min_radius, max_radius);
         let color = egui::Color32::from_rgb(
             (cell.color[0].clamp(0.0, 1.0) * 255.0) as u8,
@@ -1706,18 +1806,21 @@ fn draw_lineage_timeline_snapshot(
             let full_uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
             // Clip to image_rect so the draw_rect bleed doesn't overwrite
             // adjacent timeline cards.
-            painter
-                .with_clip_rect(image_rect)
-                .image(texture_id, draw_rect, full_uv, egui::Color32::WHITE);
+            painter.with_clip_rect(image_rect).image(
+                texture_id,
+                draw_rect,
+                full_uv,
+                egui::Color32::WHITE,
+            );
         } else {
+            let hovered = painter.ctx().input(|i| {
+                i.pointer
+                    .hover_pos()
+                    .map(|p| rect.contains(p))
+                    .unwrap_or(false)
+            });
             draw_lineage_adult_snapshot_scaled(
-                painter,
-                image_rect,
-                snapshot,
-                accent,
-                1.2,
-                4.8,
-                0.36,
+                painter, image_rect, snapshot, accent, 1.2, 4.8, 0.36, hovered,
             );
         }
     } else {
@@ -1773,11 +1876,17 @@ fn thumbnail_cover_rect(display_rect: egui::Rect, img_w: f32, img_h: f32) -> egu
     if img_ar >= rect_ar {
         // Image wider than rect — scale to fill height, let width bleed left/right.
         let draw_w = display_rect.height() * img_ar;
-        egui::Rect::from_center_size(display_rect.center(), egui::vec2(draw_w, display_rect.height()))
+        egui::Rect::from_center_size(
+            display_rect.center(),
+            egui::vec2(draw_w, display_rect.height()),
+        )
     } else {
         // Image taller than rect — scale to fill width, let height bleed top/bottom.
         let draw_h = display_rect.width() / img_ar;
-        egui::Rect::from_center_size(display_rect.center(), egui::vec2(display_rect.width(), draw_h))
+        egui::Rect::from_center_size(
+            display_rect.center(),
+            egui::vec2(display_rect.width(), draw_h),
+        )
     }
 }
 
@@ -2056,6 +2165,18 @@ fn render_lineage_branch_row(
     clicked
 }
 
+fn count_subtree_size(root: u64, children_map: &std::collections::HashMap<u64, Vec<u64>>) -> usize {
+    let mut count = 0;
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if let Some(kids) = children_map.get(&id) {
+            count += kids.len();
+            stack.extend(kids.iter().copied());
+        }
+    }
+    count
+}
+
 fn render_lineage_map_panel(
     ui: &mut Ui,
     archive: &crate::scene::lineage::EcosystemLineageArchive,
@@ -2063,171 +2184,37 @@ fn render_lineage_map_panel(
     selected_snap_key: egui::Id,
     selected_lineage_id: &mut Option<u64>,
     selected_snap_frame: &mut Option<i32>,
+    capture_interval_secs: f32,
 ) {
     egui::Frame::new()
         .fill(palette().bg_panel)
         .stroke(egui::Stroke::new(1.0, palette().border_normal))
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new("EVOLUTION TIMELINE")
-                    .size(10.0)
-                    .color(palette().accent_primary),
-            );
-            ui.add_space(6.0);
-            egui::ScrollArea::horizontal()
-                .id_salt("lineage_timeline_horizontal_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    // Redirect vertical scroll wheel to horizontal scrolling so
-                    // the user doesn't need shift+scroll or a trackpad swipe.
-                    if ui.rect_contains_pointer(ui.max_rect()) {
-                        let dy = ui.input(|i| i.smooth_scroll_delta.y);
-                        if dy.abs() > 0.5 {
-                            ui.scroll_with_delta(egui::vec2(-dy * 2.5, 0.0));
-                        }
-                    }
-                    render_lineage_map(
-                        ui,
-                        archive,
-                        selected_id_key,
-                        selected_snap_key,
-                        selected_lineage_id,
-                        selected_snap_frame,
-                    );
-                });
-        });
-}
-
-/// A piecewise segment used to build the compressed timeline coordinate mapping.
-struct TimelineSpan {
-    frame_start: i32,
-    frame_end: i32,
-    x_start: f32,
-    x_end: f32,
-    /// True for compressed gap regions; false for proportional normal regions.
-    is_gap: bool,
-    /// Simulation time at span start (used for labelling gaps).
-    time_start: f32,
-    /// Simulation time at span end.
-    time_end: f32,
-}
-
-impl TimelineSpan {
-    fn project_frame(&self, frame: i32) -> f32 {
-        let span = (self.frame_end - self.frame_start).max(1) as f32;
-        let t = ((frame - self.frame_start) as f32 / span).clamp(0.0, 1.0);
-        self.x_start + (self.x_end - self.x_start) * t
-    }
-}
-
-fn build_timeline_spans(
-    min_frame: i32,
-    max_frame: i32,
-    gaps: &[crate::scene::lineage::LineageTimeGap],
-    inner_left: f32,
-    inner_width: f32,
-) -> Vec<TimelineSpan> {
-    const GAP_VISUAL_WIDTH: f32 = 32.0;
-
-    // Collect gaps that fall (even partially) within [min_frame, max_frame].
-    let mut active_gaps: Vec<_> = gaps
-        .iter()
-        .filter(|g| g.frame_span() > 0 && g.end_frame > min_frame && g.start_frame < max_frame)
-        .collect();
-    active_gaps.sort_by_key(|g| g.start_frame);
-
-    // Compute total frame-count that falls in gap regions vs. normal.
-    let total_gap_frames: i32 = active_gaps
-        .iter()
-        .map(|g| {
-            let s = g.start_frame.max(min_frame);
-            let e = g.end_frame.min(max_frame);
-            (e - s).max(0)
-        })
-        .sum();
-    let total_frame_span = (max_frame - min_frame).max(1);
-    let normal_frame_span = (total_frame_span - total_gap_frames).max(1);
-    let num_gaps = active_gaps.len();
-    let normal_pixels = (inner_width - num_gaps as f32 * GAP_VISUAL_WIDTH).max(1.0);
-    let pixels_per_normal_frame = normal_pixels / normal_frame_span as f32;
-
-    let mut spans = Vec::new();
-    let mut cursor_frame = min_frame;
-    let mut cursor_x = inner_left;
-
-    for gap in &active_gaps {
-        let gap_start = gap.start_frame.max(min_frame);
-        let gap_end = gap.end_frame.min(max_frame);
-        if gap_start >= gap_end {
-            continue;
-        }
-        // Normal span before this gap.
-        if cursor_frame < gap_start {
-            let width = (gap_start - cursor_frame) as f32 * pixels_per_normal_frame;
-            spans.push(TimelineSpan {
-                frame_start: cursor_frame,
-                frame_end: gap_start,
-                x_start: cursor_x,
-                x_end: cursor_x + width,
-                is_gap: false,
-                time_start: 0.0,
-                time_end: 0.0,
+            let p = palette();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("EVOLUTION TIMELINE")
+                        .size(10.0)
+                        .color(p.accent_primary),
+                );
+                ui.label(
+                    egui::RichText::new("scroll to zoom · drag to pan")
+                        .size(9.0)
+                        .color(p.text_dim),
+                );
             });
-            cursor_x += width;
-        }
-        // Gap span.
-        spans.push(TimelineSpan {
-            frame_start: gap_start,
-            frame_end: gap_end,
-            x_start: cursor_x,
-            x_end: cursor_x + GAP_VISUAL_WIDTH,
-            is_gap: true,
-            time_start: gap.start_time,
-            time_end: gap.end_time,
+            ui.add_space(6.0);
+            render_lineage_map(
+                ui,
+                archive,
+                selected_id_key,
+                selected_snap_key,
+                capture_interval_secs,
+                selected_lineage_id,
+                selected_snap_frame,
+            );
         });
-        cursor_x += GAP_VISUAL_WIDTH;
-        cursor_frame = gap_end; // used as the start of the next normal span
-    }
-    // Trailing normal span.
-    if cursor_frame < max_frame {
-        let width = (max_frame - cursor_frame) as f32 * pixels_per_normal_frame;
-        spans.push(TimelineSpan {
-            frame_start: cursor_frame,
-            frame_end: max_frame,
-            x_start: cursor_x,
-            x_end: cursor_x + width,
-            is_gap: false,
-            time_start: 0.0,
-            time_end: 0.0,
-        });
-    }
-    spans
-}
-
-fn project_compressed_frame(spans: &[TimelineSpan], frame: i32, left: f32) -> f32 {
-    if spans.is_empty() {
-        return left;
-    }
-    for span in spans {
-        if frame <= span.frame_start {
-            return span.x_start;
-        }
-        if frame < span.frame_end {
-            return span.project_frame(frame);
-        }
-    }
-    spans.last().map(|s| s.x_end).unwrap_or(left)
-}
-
-fn format_gap_duration(seconds: f32) -> String {
-    if seconds >= 3600.0 {
-        format!("{:.1}h", seconds / 3600.0)
-    } else if seconds >= 60.0 {
-        format!("{:.1}m", seconds / 60.0)
-    } else {
-        format!("{:.0}s", seconds)
-    }
 }
 
 fn nice_time_interval(total_seconds: f32) -> f32 {
@@ -2257,18 +2244,29 @@ fn render_lineage_map(
     archive: &crate::scene::lineage::EcosystemLineageArchive,
     selected_id_key: egui::Id,
     selected_snap_key: egui::Id,
+    capture_interval_secs: f32,
     selected_lineage_id: &mut Option<u64>,
     selected_snap_frame: &mut Option<i32>,
 ) {
     const TIME_STRIP_H: f32 = 20.0;
-    let map_height = 200.0; // 180px plot + 20px time strip
+    const ROW_H: f32 = 64.0;
+    const TOP_PAD: f32 = 22.0;
+    const MIN_HEIGHT: f32 = 220.0;
     let available_width = ui.available_width().max(240.0);
 
+    let zoom_key = egui::Id::new("lineage_timeline_zoom");
+    let pan_key = egui::Id::new("lineage_timeline_pan");
+    let collapsed_key = egui::Id::new("lineage_timeline_collapsed");
+    let mut zoom: f32 = ui.ctx().data(|d| d.get_temp(zoom_key)).unwrap_or(1.0_f32);
+    let mut pan_x: f32 = ui.ctx().data(|d| d.get_temp(pan_key)).unwrap_or(0.0_f32);
+    let mut collapsed: std::collections::HashSet<u64> = ui
+        .ctx()
+        .data(|d| d.get_temp::<std::collections::HashSet<u64>>(collapsed_key))
+        .unwrap_or_default();
+
     if archive.nodes.is_empty() {
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(available_width, map_height),
-            egui::Sense::hover(),
-        );
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(available_width, 120.0), egui::Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 4.0, palette().bg_darkest);
         painter.rect_stroke(
@@ -2287,13 +2285,8 @@ fn render_lineage_map(
         return;
     }
 
-    let generations: std::collections::HashMap<u64, u32> = archive
-        .nodes
-        .iter()
-        .map(|node| (node.id, archive.generation_for_lineage(node.id)))
-        .collect();
-
     let mut visible: Vec<_> = archive.nodes.iter().collect();
+    // Keep the highest-value branches, capped at 72.
     visible.sort_by(|a, b| {
         b.noteworthy_score
             .total_cmp(&a.noteworthy_score)
@@ -2301,25 +2294,77 @@ fn render_lineage_map(
             .then_with(|| a.first_frame.cmp(&b.first_frame))
     });
     visible.truncate(72);
-    visible.sort_by(|a, b| {
-        a.first_frame
-            .cmp(&b.first_frame)
-            .then_with(|| {
-                generations
-                    .get(&a.id)
-                    .copied()
-                    .unwrap_or(0)
-                    .cmp(&generations.get(&b.id).copied().unwrap_or(0))
-            })
+
+    // --- DFS row assignment: each lineage gets its own dedicated row --------
+    // Build a parent→children adjacency map restricted to visible nodes.
+    let visible_ids: std::collections::HashSet<u64> = visible.iter().map(|n| n.id).collect();
+    let mut children_map: std::collections::HashMap<u64, Vec<u64>> =
+        std::collections::HashMap::new();
+    let mut has_visible_parent: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for node in &visible {
+        for parent_id in [node.parent_a, node.parent_b].into_iter().flatten() {
+            if visible_ids.contains(&parent_id) {
+                children_map.entry(parent_id).or_default().push(node.id);
+                has_visible_parent.insert(node.id);
+            }
+        }
+    }
+    // Sort children by first_frame so earlier branches are on top.
+    for children in children_map.values_mut() {
+        children.sort_by_key(|&id| {
+            visible
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.first_frame)
+                .unwrap_or(0)
+        });
+    }
+
+    // Roots: visible nodes with no visible parent.
+    let mut roots: Vec<u64> = visible
+        .iter()
+        .filter(|n| !has_visible_parent.contains(&n.id))
+        .map(|n| n.id)
+        .collect();
+    roots.sort_by_key(|&id| {
+        visible
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.first_frame)
+            .unwrap_or(0)
     });
 
-    let max_generation = visible
+    // DFS to build row order. Collapsed nodes: their children are hidden.
+    let mut row_order: Vec<u64> = Vec::with_capacity(visible.len());
+    let mut stack: Vec<u64> = roots.into_iter().rev().collect();
+    while let Some(id) = stack.pop() {
+        if row_order.contains(&id) {
+            continue;
+        }
+        row_order.push(id);
+        if !collapsed.contains(&id) {
+            if let Some(kids) = children_map.get(&id) {
+                for &kid in kids.iter().rev() {
+                    stack.push(kid);
+                }
+            }
+        }
+    }
+    // Safety: append any unreached root-level nodes.
+    for node in &visible {
+        if !row_order.contains(&node.id) && !has_visible_parent.contains(&node.id) {
+            row_order.push(node.id);
+        }
+    }
+
+    let num_rows = row_order.len().max(1);
+    let map_height = (TOP_PAD + num_rows as f32 * ROW_H + TIME_STRIP_H + 8.0).max(MIN_HEIGHT);
+
+    let min_frame = visible
         .iter()
-        .filter_map(|node| generations.get(&node.id).copied())
-        .max()
-        .unwrap_or(0)
-        .max(1);
-    let min_frame = visible.iter().map(|node| node.first_frame).min().unwrap_or(0);
+        .map(|node| node.first_frame)
+        .min()
+        .unwrap_or(0);
     let branch_max_frame = visible
         .iter()
         .map(|node| node.first_frame)
@@ -2337,34 +2382,154 @@ fn render_lineage_map(
     } else {
         60.0
     };
-    let interval_frames =
-        (crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS * estimated_frames_per_second)
-            .round()
-            .max(1.0) as i32;
+    let interval_frames = (capture_interval_secs * estimated_frames_per_second)
+        .round()
+        .max(1.0) as i32;
 
-    // Count normal (non-gap) intervals to size the timeline width.
-    let active_gaps: Vec<_> = archive
-        .time_gaps
-        .iter()
-        .filter(|g| g.frame_span() > 0 && g.end_frame > min_frame && g.start_frame < max_frame)
-        .collect();
-    let total_gap_frames: i32 = active_gaps
-        .iter()
-        .map(|g| ((g.end_frame.min(max_frame)) - (g.start_frame.max(min_frame))).max(0))
-        .sum();
-    let normal_frame_span = ((max_frame - min_frame) - total_gap_frames).max(1);
-    let normal_interval_count = (normal_frame_span / interval_frames).max(1) + 1;
-    let gap_budget = active_gaps.len() as f32 * 32.0;
-    let timeline_width = available_width.max(280.0 + normal_interval_count as f32 * 120.0 + gap_budget);
-
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(timeline_width, map_height),
+    // Fixed viewport: always fills the available width; zoom/pan controls the virtual content.
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(available_width, map_height),
         egui::Sense::click_and_drag(),
     );
-    let painter = ui.painter_at(rect);
+
+    // --- Pan: left-click drag ---
+    if resp.dragged_by(egui::PointerButton::Primary) {
+        pan_x -= resp.drag_delta().x;
+    }
+
+    // --- Zoom: scroll wheel, centred on pointer ---
+    // Consume the scroll delta when hovered so it doesn't leak to the parent panel.
+    let scroll = if resp.hovered() {
+        ui.input_mut(|i| {
+            let dy = i.smooth_scroll_delta.y;
+            i.smooth_scroll_delta.y = 0.0;
+            dy
+        })
+    } else {
+        0.0_f32
+    };
+    if scroll.abs() > 0.1 {
+        let origin_x = rect.left() + 18.0;
+        let cursor_x = ui
+            .input(|i| i.pointer.hover_pos())
+            .map(|p| p.x)
+            .unwrap_or(rect.center().x);
+        let scale = (1.0 + scroll * 0.008).clamp(0.5, 2.0);
+        let new_zoom = (zoom * scale).clamp(0.25, 40.0);
+        // Keep the world point under the cursor fixed.
+        pan_x = (cursor_x - origin_x + pan_x) * (new_zoom / zoom) - (cursor_x - origin_x);
+        zoom = new_zoom;
+    }
+
+    // Clamp pan so you can't scroll past the content edges.
+    let base_inner_w = (available_width - 36.0).max(1.0);
+    let virtual_w = base_inner_w * zoom;
+    pan_x = pan_x.clamp(0.0, (virtual_w - base_inner_w).max(0.0));
+
+    // Persist updated values.
+    ui.ctx().data_mut(|d| d.insert_temp(zoom_key, zoom));
+    ui.ctx().data_mut(|d| d.insert_temp(pan_key, pan_x));
+
+    let inner_left = rect.left() + 18.0 - pan_x;
+    let inner_width = virtual_w;
+
+    let painter = ui.painter_at(rect).with_clip_rect(rect);
     painter.rect_filled(rect, 4.0, palette().bg_darkest);
-    for i in 1..6 {
-        let y = rect.top() + rect.height() * i as f32 / 6.0;
+    // Alternating row backgrounds.
+    for (row_idx, &node_id) in row_order.iter().enumerate() {
+        let row_top = rect.top() + TOP_PAD + row_idx as f32 * ROW_H;
+        let row_rect =
+            egui::Rect::from_x_y_ranges(rect.left()..=rect.right(), row_top..=(row_top + ROW_H));
+        if row_idx % 2 == 1 {
+            painter.rect_filled(row_rect, 0.0, palette().bg_widget.linear_multiply(0.18));
+        }
+        // Collapse toggle + row label on the left margin.
+        if let Some(node) = visible.iter().find(|n| n.id == node_id) {
+            let center_y = row_top + ROW_H * 0.5;
+            let has_children = children_map.contains_key(&node_id);
+            let is_collapsed = collapsed.contains(&node_id);
+
+            if has_children {
+                // Clickable triangle toggle (12×12 hit area).
+                let toggle_center = egui::pos2(rect.left() + 9.0, center_y);
+                let toggle_rect =
+                    egui::Rect::from_center_size(toggle_center, egui::vec2(14.0, 14.0));
+                let toggle_resp = ui.interact(
+                    toggle_rect,
+                    egui::Id::new(("lineage_collapse_toggle", node_id)),
+                    egui::Sense::click(),
+                );
+                if toggle_resp.clicked() {
+                    if is_collapsed {
+                        collapsed.remove(&node_id);
+                    } else {
+                        collapsed.insert(node_id);
+                    }
+                }
+                let tri_color = if toggle_resp.hovered() {
+                    palette().text_primary
+                } else {
+                    palette().text_dim
+                };
+                // Draw ▶ (collapsed) or ▼ (expanded).
+                let s = 4.5_f32;
+                if is_collapsed {
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            toggle_center + egui::vec2(-s * 0.7, -s),
+                            toggle_center + egui::vec2(-s * 0.7, s),
+                            toggle_center + egui::vec2(s, 0.0),
+                        ],
+                        tri_color,
+                        egui::Stroke::NONE,
+                    ));
+                } else {
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            toggle_center + egui::vec2(-s, -s * 0.7),
+                            toggle_center + egui::vec2(s, -s * 0.7),
+                            toggle_center + egui::vec2(0.0, s),
+                        ],
+                        tri_color,
+                        egui::Stroke::NONE,
+                    ));
+                }
+
+                // Hidden-count badge when collapsed.
+                if is_collapsed {
+                    let hidden = count_subtree_size(node_id, &children_map);
+                    if hidden > 0 {
+                        let badge_text = format!("+{}", hidden);
+                        let badge_pos = egui::pos2(rect.left() + 22.0, center_y);
+                        painter.text(
+                            badge_pos,
+                            egui::Align2::LEFT_CENTER,
+                            badge_text,
+                            egui::FontId::proportional(9.5),
+                            palette().accent_secondary,
+                        );
+                    }
+                }
+            }
+
+            // ID label (shifted right when there's a toggle).
+            let label_x = if has_children {
+                rect.left() + 38.0
+            } else {
+                rect.left() + 6.0
+            };
+            painter.text(
+                egui::pos2(label_x, center_y),
+                egui::Align2::LEFT_CENTER,
+                format!("L{}", node.id),
+                egui::FontId::monospace(7.5),
+                palette().text_dim.linear_multiply(0.7),
+            );
+        }
+    }
+    // Horizontal row separator lines.
+    for i in 0..=num_rows {
+        let y = rect.top() + TOP_PAD + i as f32 * ROW_H;
         painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
             egui::Stroke::new(0.5, palette().border_subtle.linear_multiply(0.45)),
@@ -2377,64 +2542,25 @@ fn render_lineage_map(
         egui::StrokeKind::Inside,
     );
 
-    let inner = rect.shrink2(egui::vec2(18.0, 16.0));
-    // Y range available for node placement, excluding the time strip at the bottom.
-    let plot_inner = egui::Rect::from_min_max(
-        inner.min,
-        egui::pos2(inner.max.x, rect.bottom() - TIME_STRIP_H - 4.0),
-    );
-    let spans = build_timeline_spans(
-        min_frame,
-        max_frame,
-        &archive.time_gaps,
-        inner.left(),
-        inner.width(),
-    );
+    // Linear frame → screen-x projection.
+    let project = |frame: i32| -> f32 {
+        let t = (frame - min_frame) as f32 / (max_frame - min_frame).max(1) as f32;
+        inner_left + t * inner_width
+    };
 
-    // Draw gap bands first (behind everything else).
-    for span in &spans {
-        if !span.is_gap {
-            continue;
-        }
-        let gap_rect = egui::Rect::from_x_y_ranges(
-            span.x_start..=span.x_end,
-            rect.top()..=rect.bottom(),
-        );
-        painter.rect_filled(gap_rect, 0.0, palette().bg_widget.linear_multiply(0.35));
-        // Diagonal hatching.
-        let stripe_step = 5.0_f32;
-        let h = gap_rect.height();
-        let mut sx = gap_rect.left() - h;
-        while sx < gap_rect.right() + h {
-            let p0 = egui::pos2(sx, gap_rect.top());
-            let p1 = egui::pos2(sx + h, gap_rect.bottom());
-            // Clip to gap rect horizontally.
-            let clip_left = gap_rect.left();
-            let clip_right = gap_rect.right();
-            let (p0c, p1c) = clip_line_horizontal(p0, p1, clip_left, clip_right, h);
-            painter.line_segment(
-                [p0c, p1c],
-                egui::Stroke::new(0.7, palette().border_subtle.linear_multiply(0.35)),
-            );
-            sx += stripe_step;
-        }
-        let duration = (span.time_end - span.time_start).max(0.0);
-        let label = format!("▶▶ {}", format_gap_duration(duration));
-        painter.text(
-            gap_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            label,
-            egui::FontId::monospace(7.5),
-            palette().text_dim.linear_multiply(1.4),
-        );
-    }
+    // Interval tick marks — density adapts to zoom so labels never cluster.
+    // Compute how many `interval_frames` steps fit in MIN_LABEL_PX pixels.
+    const MIN_LABEL_PX: f32 = 70.0;
+    let px_per_interval =
+        inner_width * interval_frames as f32 / (max_frame - min_frame).max(1) as f32;
+    let step_multiplier = ((MIN_LABEL_PX / px_per_interval).ceil() as i32).max(1);
+    let display_interval = interval_frames * step_multiplier;
 
-    // Interval tick marks (only in non-gap regions).
-    let first_interval = ((min_frame + interval_frames - 1) / interval_frames) * interval_frames;
+    let first_interval = ((min_frame + display_interval - 1) / display_interval) * display_interval;
     let mut interval_frame = first_interval;
     while interval_frame <= max_frame {
-        if !archive.frame_in_gap(interval_frame) {
-            let x = project_compressed_frame(&spans, interval_frame, inner.left());
+        let x = project(interval_frame);
+        if x >= rect.left() && x <= rect.right() {
             painter.line_segment(
                 [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
                 egui::Stroke::new(0.75, palette().accent_primary.linear_multiply(0.28)),
@@ -2442,47 +2568,27 @@ fn render_lineage_map(
             painter.text(
                 egui::pos2(x + 3.0, rect.top() + 5.0),
                 egui::Align2::LEFT_TOP,
-                format!("F{}", interval_frame),
+                format_sim_time(interval_frame as f32 / estimated_frames_per_second),
                 egui::FontId::monospace(8.5),
                 palette().text_dim,
             );
         }
-        interval_frame = interval_frame.saturating_add(interval_frames);
-        if interval_frames <= 0 {
+        interval_frame = interval_frame.saturating_add(display_interval);
+        if display_interval <= 0 {
             break;
         }
     }
 
-    let mut rows_by_generation: std::collections::HashMap<u32, usize> =
+    // Assign each node a position: X from its first_frame, Y from its row index.
+    let mut positions: std::collections::HashMap<u64, egui::Pos2> =
         std::collections::HashMap::new();
-    for node in &visible {
-        let generation = generations.get(&node.id).copied().unwrap_or(0);
-        *rows_by_generation.entry(generation).or_insert(0) += 1;
-    }
-
-    let mut seen_by_generation: std::collections::HashMap<u32, usize> =
-        std::collections::HashMap::new();
-    let mut positions = std::collections::HashMap::new();
-
-    for node in &visible {
-        let generation = generations.get(&node.id).copied().unwrap_or(0);
-        let row = seen_by_generation.entry(generation).or_insert(0);
-        let row_count = rows_by_generation.get(&generation).copied().unwrap_or(1);
-        let generation_fraction = generation as f32 / max_generation as f32;
-        let row_offset = if row_count > 1 {
-            ((*row as f32 + 1.0) / (row_count as f32 + 1.0) - 0.5) * 0.16
-        } else {
-            0.0
+    for (row_idx, &node_id) in row_order.iter().enumerate() {
+        let Some(node) = visible.iter().find(|n| n.id == node_id) else {
+            continue;
         };
-        let y_fraction = (generation_fraction + row_offset).clamp(0.05, 0.95);
-        *row += 1;
-        positions.insert(
-            node.id,
-            egui::pos2(
-                project_compressed_frame(&spans, node.first_frame, inner.left()),
-                plot_inner.top() + plot_inner.height() * y_fraction,
-            ),
-        );
+        let x = project(node.first_frame);
+        let y = rect.top() + TOP_PAD + row_idx as f32 * ROW_H + ROW_H * 0.5;
+        positions.insert(node_id, egui::pos2(x, y));
     }
 
     // Thumbnail dimensions.
@@ -2495,12 +2601,14 @@ fn render_lineage_map(
         let end_frame = node
             .extinct_frame
             .unwrap_or_else(|| node.last_seen_frame.max(max_frame));
-        project_compressed_frame(&spans, end_frame, inner.left())
+        project(end_frame)
     };
 
     // --- Pass 1: horizontal lifespan bars ---
     for node in &visible {
-        let Some(&pos) = positions.get(&node.id) else { continue };
+        let Some(&pos) = positions.get(&node.id) else {
+            continue;
+        };
         let color = lineage_color_for_node(node);
         let alive = node.current_cells > 0 || node.current_organisms > 0;
         let bar_alpha = if alive { 0.65 } else { 0.35 };
@@ -2522,12 +2630,16 @@ fn render_lineage_map(
     // Y to the child's Y at that x, then a short horizontal lead-in to the
     // child thumbnail.
     for node in &visible {
-        let Some(child_pos) = positions.get(&node.id).copied() else { continue };
+        let Some(child_pos) = positions.get(&node.id).copied() else {
+            continue;
+        };
         let color = lineage_color_for_node(node);
         for parent_id in [node.parent_a, node.parent_b].into_iter().flatten() {
-            let Some(parent_pos) = positions.get(&parent_id).copied() else { continue };
+            let Some(parent_pos) = positions.get(&parent_id).copied() else {
+                continue;
+            };
             let branch_x = child_pos.x - thumb_normal.x * 0.5; // left edge of child thumb
-            // Vertical from parent bar to child row.
+                                                               // Vertical from parent bar to child row.
             painter.line_segment(
                 [
                     egui::pos2(branch_x, parent_pos.y),
@@ -2551,7 +2663,9 @@ fn render_lineage_map(
     // (i.e., the node has actually been around for a while) and there's a
     // snapshot available.
     for node in &visible {
-        let Some(&pos) = positions.get(&node.id) else { continue };
+        let Some(&pos) = positions.get(&node.id) else {
+            continue;
+        };
         let alive = node.current_cells > 0 || node.current_organisms > 0;
         if !alive || node.latest_snapshot().is_none() {
             continue;
@@ -2571,10 +2685,12 @@ fn render_lineage_map(
     const MINI_THUMB: egui::Vec2 = egui::vec2(28.0, 25.0);
     let mut snap_interval_frame = first_interval;
     while snap_interval_frame <= max_frame {
-        if !archive.frame_in_gap(snap_interval_frame) {
-            let tick_x = project_compressed_frame(&spans, snap_interval_frame, inner.left());
+        {
+            let tick_x = project(snap_interval_frame);
             for node in &visible {
-                let Some(&pos) = positions.get(&node.id) else { continue };
+                let Some(&pos) = positions.get(&node.id) else {
+                    continue;
+                };
                 let end_x = bar_end_x(node);
                 // Only draw if this interval falls within the node's lifespan bar.
                 if tick_x <= pos.x + thumb_normal.x * 0.5 || tick_x > end_x + 1.0 {
@@ -2614,17 +2730,33 @@ fn render_lineage_map(
                     if let Some(snapshot) = snap {
                         let mini_rect = egui::Rect::from_center_size(dot_pos, MINI_THUMB);
                         let fill = if is_selected {
-                            palette().bg_panel
+                            palette().accent_primary.linear_multiply(0.18)
                         } else {
                             palette().bg_darkest
                         };
                         painter.rect_filled(mini_rect, 3.0, fill);
+                        if is_selected {
+                            // Bright outer glow rect.
+                            painter.rect_stroke(
+                                mini_rect.expand(2.0),
+                                4.0,
+                                egui::Stroke::new(
+                                    1.5,
+                                    palette().accent_primary.linear_multiply(0.55),
+                                ),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
                         painter.rect_stroke(
                             mini_rect,
                             3.0,
                             egui::Stroke::new(
-                                if is_selected { 1.5 } else { 0.8 },
-                                color.linear_multiply(if is_selected { 1.0 } else { 0.55 }),
+                                if is_selected { 2.0 } else { 0.8 },
+                                if is_selected {
+                                    palette().text_primary
+                                } else {
+                                    color.linear_multiply(0.55)
+                                },
                             ),
                             egui::StrokeKind::Inside,
                         );
@@ -2635,50 +2767,64 @@ fn render_lineage_map(
                             snapshot.captured_frame,
                             snapshot.scene_thumbnail_png.as_ref(),
                         ) {
-                            let thumb_w =
-                                crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH as f32;
-                            let thumb_h =
-                                crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT as f32;
-                            let draw_rect =
-                                thumbnail_cover_rect(image_rect, thumb_w, thumb_h);
-                            let full_uv = egui::Rect::from_min_max(
-                                egui::Pos2::ZERO,
-                                egui::pos2(1.0, 1.0),
+                            let thumb_w = crate::scene::lineage::LINEAGE_THUMBNAIL_WIDTH as f32;
+                            let thumb_h = crate::scene::lineage::LINEAGE_THUMBNAIL_HEIGHT as f32;
+                            let draw_rect = thumbnail_cover_rect(image_rect, thumb_w, thumb_h);
+                            let full_uv =
+                                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+                            painter.with_clip_rect(image_rect).image(
+                                texture_id,
+                                draw_rect,
+                                full_uv,
+                                egui::Color32::WHITE,
                             );
-                            painter
-                                .with_clip_rect(image_rect)
-                                .image(texture_id, draw_rect, full_uv, egui::Color32::WHITE);
                         } else {
+                            let hovered = painter.ctx().input(|i| {
+                                i.pointer
+                                    .hover_pos()
+                                    .map(|p| interact_rect.contains(p))
+                                    .unwrap_or(false)
+                            });
                             draw_lineage_adult_snapshot_scaled(
-                                &painter,
-                                image_rect,
-                                snapshot,
-                                color,
-                                0.8,
-                                3.5,
-                                0.3,
+                                &painter, image_rect, snapshot, color, 0.8, 3.5, 0.3, hovered,
                             );
                         }
                     }
                 } else {
                     // Plain dot
-                    let dot_color = color.linear_multiply(if is_selected { 1.0 } else { 0.55 });
-                    painter.circle_filled(dot_pos, DOT_R, dot_color);
+                    let dot_r = if is_selected { DOT_R * 1.5 } else { DOT_R };
+                    let dot_color = if is_selected {
+                        palette().accent_primary
+                    } else {
+                        color.linear_multiply(0.55)
+                    };
+                    painter.circle_filled(dot_pos, dot_r, dot_color);
                     if is_selected {
                         painter.circle_stroke(
                             dot_pos,
-                            DOT_R + 2.0,
+                            dot_r + 4.0,
                             egui::Stroke::new(1.2, palette().text_primary),
                         );
                     }
                 }
 
                 if resp.hovered() {
+                    let snap_time = if let Some(s) =
+                        snap.filter(|_| has_snap).filter(|s| s.captured_time > 0.0)
+                    {
+                        format_sim_time(s.captured_time)
+                    } else {
+                        format_sim_time(snap_interval_frame as f32 / estimated_frames_per_second)
+                    };
                     resp.on_hover_text(format!(
-                        "{} — frame {}{}\nClick to view snapshot",
+                        "{} — {}{}\nClick to view snapshot",
                         node.display_name,
-                        snap_interval_frame,
-                        if has_snap { " (snapshot)" } else { " (no snapshot)" }
+                        snap_time,
+                        if has_snap {
+                            " (snapshot)"
+                        } else {
+                            " (no snapshot)"
+                        }
                     ));
                 }
             }
@@ -2691,9 +2837,15 @@ fn render_lineage_map(
 
     // --- Pass 4: birth thumbnails and interaction ---
     for node in &visible {
-        let Some(pos) = positions.get(&node.id).copied() else { continue };
+        let Some(pos) = positions.get(&node.id).copied() else {
+            continue;
+        };
         let selected = Some(node.id) == *selected_lineage_id;
-        let thumb_size = if selected { thumb_selected } else { thumb_normal };
+        let thumb_size = if selected {
+            thumb_selected
+        } else {
+            thumb_normal
+        };
         let node_rect = egui::Rect::from_center_size(pos, thumb_size);
         let response = ui.interact(
             node_rect,
@@ -2742,65 +2894,96 @@ fn render_lineage_map(
         }
     }
 
+    // --- Vertical selection line at the active snap frame -------------------
+    if let (Some(_sel_id), Some(sel_frame)) = (*selected_lineage_id, *selected_snap_frame) {
+        let sx = project(sel_frame);
+        if sx >= rect.left() && sx <= rect.right() {
+            let p = palette();
+            // Soft backdrop line.
+            painter.line_segment(
+                [
+                    egui::pos2(sx, rect.top()),
+                    egui::pos2(sx, rect.bottom() - TIME_STRIP_H),
+                ],
+                egui::Stroke::new(6.0, p.accent_primary.linear_multiply(0.12)),
+            );
+            // Sharp foreground line.
+            painter.line_segment(
+                [
+                    egui::pos2(sx, rect.top()),
+                    egui::pos2(sx, rect.bottom() - TIME_STRIP_H),
+                ],
+                egui::Stroke::new(1.5, p.accent_primary.linear_multiply(0.9)),
+            );
+            // Label at the top.
+            let sel_label = format_sim_time(sel_frame as f32 / estimated_frames_per_second);
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(sx + 3.0, rect.top() + TOP_PAD - 14.0),
+                    egui::vec2(48.0, 13.0),
+                ),
+                2.0,
+                p.accent_primary.linear_multiply(0.25),
+            );
+            painter.text(
+                egui::pos2(sx + 5.0, rect.top() + TOP_PAD - 13.0),
+                egui::Align2::LEFT_TOP,
+                sel_label,
+                egui::FontId::monospace(9.0),
+                p.text_primary,
+            );
+        }
+    }
+
+    // Persist collapse state.
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(collapsed_key, collapsed));
+
     // --- Time strip along the bottom ---
     let time_strip_top = rect.bottom() - TIME_STRIP_H;
     painter.line_segment(
-        [egui::pos2(rect.left(), time_strip_top), egui::pos2(rect.right(), time_strip_top)],
+        [
+            egui::pos2(rect.left(), time_strip_top),
+            egui::pos2(rect.right(), time_strip_top),
+        ],
         egui::Stroke::new(0.5, palette().border_subtle.linear_multiply(0.6)),
     );
 
     let total_seconds = archive.last_scan_time.max(1.0);
     let fps = max_frame as f32 / total_seconds;
-    let tick_interval_secs = nice_time_interval(total_seconds);
-    let mut t = tick_interval_secs;
-    while t <= total_seconds + tick_interval_secs * 0.5 {
+
+    // Pick tick interval based on the visible time span (available_width / inner_width
+    // of total time), so density stays constant regardless of zoom.
+    let visible_seconds = total_seconds * available_width / inner_width.max(1.0);
+    let tick_interval_secs = nice_time_interval(visible_seconds);
+
+    // Start from the first whole-interval boundary ≥ time at left viewport edge.
+    let left_time = (pan_x / inner_width * total_seconds).max(0.0);
+    let t_start = (left_time / tick_interval_secs).floor() * tick_interval_secs;
+    let t_end = total_seconds + tick_interval_secs;
+
+    let mut t = t_start;
+    while t <= t_end {
         let tick_frame = (t * fps) as i32 + min_frame;
-        if !archive.frame_in_gap(tick_frame) {
-            let x = project_compressed_frame(&spans, tick_frame, inner.left());
-            if x >= rect.left() && x <= rect.right() {
-                painter.line_segment(
-                    [egui::pos2(x, time_strip_top), egui::pos2(x, time_strip_top + 5.0)],
-                    egui::Stroke::new(0.75, palette().accent_secondary.linear_multiply(0.6)),
-                );
-                painter.text(
-                    egui::pos2(x + 3.0, time_strip_top + 3.0),
-                    egui::Align2::LEFT_TOP,
-                    format_sim_time(t),
-                    egui::FontId::monospace(8.5),
-                    palette().text_secondary,
-                );
-            }
+        let x = project(tick_frame);
+        if x >= rect.left() && x <= rect.right() {
+            painter.line_segment(
+                [
+                    egui::pos2(x, time_strip_top),
+                    egui::pos2(x, time_strip_top + 5.0),
+                ],
+                egui::Stroke::new(0.75, palette().accent_secondary.linear_multiply(0.6)),
+            );
+            painter.text(
+                egui::pos2(x + 3.0, time_strip_top + 3.0),
+                egui::Align2::LEFT_TOP,
+                format_sim_time(t),
+                egui::FontId::monospace(8.5),
+                palette().text_secondary,
+            );
         }
         t += tick_interval_secs;
     }
-}
-
-/// Horizontally clip a diagonal line segment to [clip_left, clip_right].
-///
-/// Assumes the line goes from top-left to bottom-right (x increases as y increases).
-fn clip_line_horizontal(
-    p0: egui::Pos2,
-    p1: egui::Pos2,
-    clip_left: f32,
-    clip_right: f32,
-    height: f32,
-) -> (egui::Pos2, egui::Pos2) {
-    let dx = p1.x - p0.x;
-    let dy = p1.y - p0.y;
-    let t_for_x = |x: f32| if dx.abs() < 1e-6 { 0.0 } else { (x - p0.x) / dx };
-    let t0 = t_for_x(clip_left).max(0.0);
-    let t1 = t_for_x(clip_right).min(1.0);
-    if t0 > t1 {
-        // Degenerate — return a zero-length segment at center.
-        let cx = (clip_left + clip_right) * 0.5;
-        let cy = p0.y + dy * t_for_x(cx).clamp(0.0, 1.0);
-        return (egui::pos2(cx, cy), egui::pos2(cx, cy));
-    }
-    let _ = height; // kept for signature clarity
-    (
-        egui::pos2(p0.x + dx * t0, p0.y + dy * t0),
-        egui::pos2(p0.x + dx * t1, p0.y + dy * t1),
-    )
 }
 
 fn lineage_color_for_node(node: &crate::scene::lineage::LineageNode) -> egui::Color32 {
@@ -4378,6 +4561,20 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             context.editor_state.save_fluid_render_settings();
         }
 
+        ui.add_space(4.0);
+        ui.label("Below-Waterline Opacity:")
+            .on_hover_text("Transparency of faces below the water surface (sides and bottom). Set low to see inside the sphere");
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.fluid_waterline_alpha, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
+            context.editor_state.save_fluid_render_settings();
+        }
+
         // === Water Surface Waves ===
         ui.add_space(8.0);
         ui.separator();
@@ -4715,50 +4912,58 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
     ui.heading("Light Direction");
     ui.add_space(4.0);
 
-    ui.label("X:").on_hover_text(
-        "X component of the light direction vector. Negative = light comes from the right",
-    );
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2),
-        )
-        .changed();
-    ui.label("Y:").on_hover_text(
-        "Y component of the light direction vector. Positive = light comes from above (top-down)",
-    );
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2),
-        )
-        .changed();
-    ui.label("Z:")
-        .on_hover_text("Z component of the light direction vector");
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2),
-        )
-        .changed();
+    let rotating = context.editor_state.sun_rotation_enabled;
+    if rotating {
+        ui.label(egui::RichText::new("⟳ Controlled by rotation — disable rotation to set manually").italics().weak());
+        ui.add_space(2.0);
+    }
 
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        if ui.button("☀ Top-Down").clicked() {
-            context.editor_state.light_dir = [0.0, 1.0, 0.0];
-            changed = true;
-        }
-        if ui.button("🌅 Sunset").clicked() {
-            context.editor_state.light_dir = [-0.7, 0.3, 0.5];
-            changed = true;
-        }
-        if ui.button("↗ Default").clicked() {
-            context.editor_state.light_dir = [-0.5, 0.7, 0.5];
-            changed = true;
-        }
+    ui.add_enabled_ui(!rotating, |ui| {
+        ui.label("X:").on_hover_text(
+            "X component of the light direction vector. Negative = light comes from the right",
+        );
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed();
+        ui.label("Y:").on_hover_text(
+            "Y component of the light direction vector. Positive = light comes from above (top-down)",
+        );
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed();
+        ui.label("Z:")
+            .on_hover_text("Z component of the light direction vector");
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed();
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("☀ Top-Down").clicked() {
+                context.editor_state.light_dir = [0.0, 1.0, 0.0];
+                changed = true;
+            }
+            if ui.button("🌅 Sunset").clicked() {
+                context.editor_state.light_dir = [-0.7, 0.3, 0.5];
+                changed = true;
+            }
+            if ui.button("↗ Default").clicked() {
+                context.editor_state.light_dir = [-0.5, 0.7, 0.5];
+                changed = true;
+            }
+        });
     });
 
     // === Sun ===
@@ -4781,6 +4986,96 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.sun_intensity = context.editor_state.sun_intensity;
         }
+    }
+
+    changed |= ui
+        .checkbox(&mut context.editor_state.sun_cycle_enabled, "Cycle Brightness (Seasons)")
+        .on_hover_text("Oscillate sun brightness between Min and Max over the configured period. Simulates seasonal light variation.")
+        .changed();
+
+    if context.editor_state.sun_cycle_enabled {
+        ui.add_space(4.0);
+        ui.label("Min Brightness:").on_hover_text("Dimmest point of the season cycle");
+        changed |= ui
+            .add(egui::Slider::new(&mut context.editor_state.sun_cycle_min, 0.0..=20.0).step_by(0.1).fixed_decimals(1))
+            .changed();
+        ui.label("Max Brightness:").on_hover_text("Brightest point of the season cycle");
+        changed |= ui
+            .add(egui::Slider::new(&mut context.editor_state.sun_cycle_max, 0.0..=20.0).step_by(0.1).fixed_decimals(1))
+            .changed();
+        ui.label("Period (seconds):").on_hover_text("How long one full season cycle takes");
+        changed |= ui
+            .add(egui::Slider::new(&mut context.editor_state.sun_cycle_period, 10.0..=3600.0).step_by(1.0).fixed_decimals(0))
+            .changed();
+        ui.add_space(4.0);
+    }
+
+    changed |= ui
+        .checkbox(&mut context.editor_state.sun_rotation_enabled, "Rotate Sun")
+        .on_hover_text("Animate the sun and directional light around the configured axis")
+        .changed();
+
+    if context.editor_state.sun_rotation_enabled {
+        ui.add_space(4.0);
+        ui.label("Rotation Speed:").on_hover_text(
+            "Sun rotation speed in radians per second. Negative values reverse the orbit direction",
+        );
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.sun_rotation_speed, -2.0..=2.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed();
+
+        ui.label("Rotation Axis:").on_hover_text(
+            "Axis the sun direction rotates around. This vector is normalized automatically",
+        );
+        ui.horizontal(|ui| {
+            ui.label("X:");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.sun_rotation_axis[0], -1.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("Y:");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.sun_rotation_axis[1], -1.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
+        });
+        ui.horizontal(|ui| {
+            ui.label("Z:");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.sun_rotation_axis[2], -1.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed();
+        });
+
+        ui.horizontal(|ui| {
+            if ui.button("Y Axis").clicked() {
+                context.editor_state.sun_rotation_axis = [0.0, 1.0, 0.0];
+                changed = true;
+            }
+            if ui.button("X Axis").clicked() {
+                context.editor_state.sun_rotation_axis = [1.0, 0.0, 0.0];
+                changed = true;
+            }
+            if ui.button("Z Axis").clicked() {
+                context.editor_state.sun_rotation_axis = [0.0, 0.0, 1.0];
+                changed = true;
+            }
+        });
     }
 
     sun_changed |= ui
@@ -5006,37 +5301,33 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
                 )
                 .changed();
 
+            ui.label("Scatter Intensity:")
+                .on_hover_text("How brightly the fog glows when lit by a light source. Controls both sun god-rays and luminocyte halos.");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.light_intensity, 0.0..=20.0)
+                        .step_by(0.1)
+                        .fixed_decimals(1),
+                )
+                .changed();
+
             ui.add_space(4.0);
             let mut fog_col = context.editor_state.fog_color;
-            ui.label("Fog Color R:");
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut fog_col[0], 0.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-            ui.label("Fog Color G:");
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut fog_col[1], 0.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-            ui.label("Fog Color B:");
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut fog_col[2], 0.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
+            ui.label("Fog Colour:").on_hover_text("Ambient/shadow colour of the fog medium itself.");
+            let mut c32 = egui::Color32::from_rgb(
+                (fog_col[0] * 255.0) as u8,
+                (fog_col[1] * 255.0) as u8,
+                (fog_col[2] * 255.0) as u8,
+            );
+            if ui.color_edit_button_srgba(&mut c32).changed() {
+                fog_col = [c32.r() as f32 / 255.0, c32.g() as f32 / 255.0, c32.b() as f32 / 255.0];
+                changed = true;
+            }
             context.editor_state.fog_color = fog_col;
 
             ui.add_space(4.0);
             ui.label("Height Fog Density:")
-                .on_hover_text("Density of fog that accumulates at the bottom of the world (or toward the center in radial gravity mode). Creates a ground-hugging mist effect");
+                .on_hover_text("Density of fog that accumulates at the bottom of the world. Creates a ground-hugging mist effect.");
             changed |= ui
                 .add(
                     egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
@@ -5046,12 +5337,33 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
                 .changed();
 
             ui.label("Height Fog Falloff:")
-                .on_hover_text("How quickly the height fog thins out with altitude. Smaller values = fog extends higher; larger values = fog stays close to the ground");
+                .on_hover_text("How quickly the height fog thins with altitude. Smaller = fog extends higher.");
             changed |= ui
                 .add(
                     egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
                         .step_by(0.001)
                         .fixed_decimals(3),
+                )
+                .changed();
+
+            ui.add_space(4.0);
+            ui.label("Water Wave Strength:")
+                .on_hover_text("Distorts light shafts passing through water surfaces, creating caustic-like shimmer.");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.fog_water_wave_strength, 0.0..=2.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed();
+
+            ui.label("Water Wave Scale:")
+                .on_hover_text("Spatial frequency of the water wave distortion.");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.fog_water_wave_scale, 0.01..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
                 )
                 .changed();
         }
@@ -5065,6 +5377,75 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         changed |= ui.checkbox(&mut context.editor_state.show_dof, "Enable Depth of Field")
             .on_hover_text("Blur objects that are out of the camera's focal range, simulating a camera lens effect")
             .changed();
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.label(egui::RichText::new("Contrast & Eye Adaptation").strong());
+
+        // Contrast slider — always active.
+        ui.label("Contrast:")
+            .on_hover_text("Pushes darks darker and brights brighter. 1.0 = neutral.");
+        if ui.add(egui::Slider::new(
+            &mut context.editor_state.pp_contrast, 0.5..=2.5
+        ).step_by(0.05).fixed_decimals(2)).changed() {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                if let Some(pp) = gpu_scene.post_process.as_mut() {
+                    pp.contrast = context.editor_state.pp_contrast;
+                }
+            }
+        }
+
+        // Eye adaptation toggle.
+        if ui.checkbox(&mut context.editor_state.pp_adapt_enabled, "Eye Adaptation")
+            .on_hover_text("Camera gradually adjusts exposure when moving between bright and dark areas, like the human eye.")
+            .changed()
+        {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                if let Some(pp) = gpu_scene.post_process.as_mut() {
+                    pp.adapt_enabled = context.editor_state.pp_adapt_enabled;
+                }
+            }
+        }
+
+        if context.editor_state.pp_adapt_enabled {
+            ui.add_space(4.0);
+            ui.label("Adaptation Speed:")
+                .on_hover_text("How quickly the eye adjusts. 0.01 = very slow (cinematic), 0.3 = fast (arcade).");
+            if ui.add(egui::Slider::new(
+                &mut context.editor_state.pp_adapt_speed, 0.01..=0.4
+            ).step_by(0.01).fixed_decimals(2)).changed() {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    if let Some(pp) = gpu_scene.post_process.as_mut() {
+                        pp.adapt_speed = context.editor_state.pp_adapt_speed;
+                    }
+                }
+            }
+            ui.label("Min Exposure:")
+                .on_hover_text("Darkest the camera can get (e.g. 0.1 = very dark in full sunlight).");
+            if ui.add(egui::Slider::new(
+                &mut context.editor_state.pp_adapt_min, 0.05..=2.0
+            ).step_by(0.05).fixed_decimals(2)).changed() {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    if let Some(pp) = gpu_scene.post_process.as_mut() {
+                        pp.adapt_min = context.editor_state.pp_adapt_min;
+                    }
+                }
+            }
+            ui.label("Max Exposure:")
+                .on_hover_text("Brightest the camera can get (e.g. 6.0 = very bright in a dark cave).");
+            if ui.add(egui::Slider::new(
+                &mut context.editor_state.pp_adapt_max, 1.0..=20.0
+            ).step_by(0.5).fixed_decimals(1)).changed() {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    if let Some(pp) = gpu_scene.post_process.as_mut() {
+                        pp.adapt_max = context.editor_state.pp_adapt_max;
+                    }
+                }
+            }
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
 
         if context.editor_state.show_dof {
             ui.add_space(4.0);
@@ -5802,6 +6183,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     oculocyte_signal_value: 10.0,
                     oculocyte_signal_hops: 3,
                     oculocyte_ray_length: 20.0,
+                    oculocyte_light_target_color: glam::Vec3::new(1.0, 0.95, 0.78),
+                    oculocyte_light_color_tolerance: 0.18,
                     membrane_stiffness: 50.0,
                     regulation_emit_channel: -1,
                     regulation_emit_value: 10.0,
@@ -5845,6 +6228,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     cognocyte_oscillator_phase: 0.0,
                     cognocyte_oscillator_strength: 1.0,
                     cognocyte_oscillator_step_count: 4,
+                    luminocyte_signal_channel: 0,
+                    luminocyte_threshold: 1.0,
+                    luminocyte_invert: false,
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -6579,6 +6965,45 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         });
                     }
                 });
+            } else if mode.cell_type == 16 { // Luminocyte (cell_type == 16)
+                group_container(ui, "Luminocyte Functions", egui::Color32::from_rgb(80, 220, 240), |ui| {
+                    ui.label("Emits local light into the light field. Signal controls switch between dim and bright emission.");
+                    ui.separator();
+
+                    ui.label("Signal Channel:")
+                        .on_hover_text("Channel (0-7) read by this luminocyte.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        mode.luminocyte_signal_channel = mode.luminocyte_signal_channel.clamp(0, 7);
+                        ui.add(egui::Slider::new(&mut mode.luminocyte_signal_channel, 0..=7).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.luminocyte_signal_channel).speed(0.1).range(0..=7));
+                    });
+
+                    ui.label("Threshold:")
+                        .on_hover_text("Signal value required to switch state.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.luminocyte_threshold, 0.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.luminocyte_threshold).speed(0.5).range(0.0..=2047.0));
+                    });
+
+                    ui.checkbox(&mut mode.luminocyte_invert, "On without signal")
+                        .on_hover_text("When enabled, the luminocyte is bright by default and dims when it receives a signal above threshold. When disabled, it is dim by default and brightens on signal.");
+
+                    ui.label("Glow:")
+                        .on_hover_text("Maximum emitted light intensity when the signal is above threshold. The visible cell glow uses the same value.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.emissive, 0.0..=8.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.emissive).speed(0.05).range(0.0..=8.0));
+                    });
+                });
             } else if mode.cell_type == 4 { // Lipocyte (cell_type == 4)
                 group_container(ui, "Lipocyte Functions", egui::Color32::from_rgb(220, 180, 100), |ui| {
                     ui.label("Stores surplus nutrients as fat reserves. Can emit a signal based on storage level.");
@@ -6854,6 +7279,36 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::Slider::new(&mut mode.oculocyte_ray_length, 1.0..=100.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.oculocyte_ray_length).speed(0.1).range(1.0..=100.0));
                     });
+
+                    if (mode.oculocyte_sense_type & (1 << 2)) != 0 {
+                        ui.separator();
+                        ui.label("Light Color Filter:")
+                            .on_hover_text("Light detection only fires when the ray hits light close to this RGB color. The default is a narrow warm sun band");
+                        ui.horizontal(|ui| {
+                            ui.label("R");
+                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_target_color.x, 0.0..=2.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_target_color.x).speed(0.01).range(0.0..=2.0));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("G");
+                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_target_color.y, 0.0..=2.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_target_color.y).speed(0.01).range(0.0..=2.0));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("B");
+                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_target_color.z, 0.0..=2.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_target_color.z).speed(0.01).range(0.0..=2.0));
+                        });
+                        ui.label("Tolerance:")
+                            .on_hover_text("Maximum RGB distance from the target color. Lower values make the detectable color range narrower");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_color_tolerance, 0.0..=1.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_color_tolerance).speed(0.01).range(0.0..=1.0));
+                        });
+                    }
                 });
             } else if mode.cell_type == 8 { // Ciliocyte (cell_type == 8)
                 group_container(ui, "Ciliocyte Functions", egui::Color32::from_rgb(160, 200, 180), |ui| {
@@ -8385,6 +8840,18 @@ fn sync_mode_changes_to_others(
         }
         if (updated.oculocyte_ray_length - snapshot.oculocyte_ray_length).abs() > f32::EPSILON {
             other.oculocyte_ray_length = updated.oculocyte_ray_length;
+        }
+        if (updated.oculocyte_light_target_color - snapshot.oculocyte_light_target_color)
+            .length_squared()
+            > f32::EPSILON
+        {
+            other.oculocyte_light_target_color = updated.oculocyte_light_target_color;
+        }
+        if (updated.oculocyte_light_color_tolerance - snapshot.oculocyte_light_color_tolerance)
+            .abs()
+            > f32::EPSILON
+        {
+            other.oculocyte_light_color_tolerance = updated.oculocyte_light_color_tolerance;
         }
 
         // Ciliocyte

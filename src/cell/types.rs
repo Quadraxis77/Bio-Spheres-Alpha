@@ -425,6 +425,18 @@ impl CellTypeVisuals {
                 v.membrane_noise_strength = 0.04;
                 v.membrane_noise_speed = 0.3;
             }
+            CellType::Luminocyte => {
+                // Signal-reactive lantern cell: bright glass with flowing light bands.
+                v.param_a = 7.0; // band_frequency
+                v.param_b = 0.18; // band_width
+                v.param_c = 0.75; // core_glow
+                v.param_d = 0.45; // color_shift
+                v.specular_strength = 0.7;
+                v.specular_power = 96.0;
+                v.fresnel_strength = 0.65;
+                v.nucleus_scale = 0.5;
+                v.membrane_noise_speed = 1.7;
+            }
         }
         v
     }
@@ -579,11 +591,12 @@ pub enum CellType {
     Gametocyte = 13,
     Cognocyte = 14,
     Memorocyte = 15,
+    Luminocyte = 16,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 17;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -607,6 +620,7 @@ impl CellType {
             CellType::Gametocyte,
             CellType::Cognocyte,
             CellType::Memorocyte,
+            CellType::Luminocyte,
         ]
     }
 
@@ -634,6 +648,7 @@ impl CellType {
             CellType::Gametocyte => "Gametocyte",
             CellType::Cognocyte => "Cognocyte",
             CellType::Memorocyte => "Memorocyte",
+            CellType::Luminocyte => "Luminocyte",
         }
     }
 
@@ -656,6 +671,7 @@ impl CellType {
             "Gametocyte",
             "Cognocyte",
             "Memorocyte",
+            "Luminocyte",
         ]
     }
 
@@ -678,6 +694,7 @@ impl CellType {
             13 => Some(CellType::Gametocyte),
             14 => Some(CellType::Cognocyte),
             15 => Some(CellType::Memorocyte),
+            16 => Some(CellType::Luminocyte),
             _ => None,
         }
     }
@@ -781,6 +798,12 @@ impl CellType {
                  time and slowly forgets them. Decay and gain are independently \
                  configurable. Useful for smoothing noisy sensors, building timers, \
                  and creating hysteresis in decision circuits."
+            }
+
+            CellType::Luminocyte => {
+                "A signal-reactive lantern cell. Changes its glow intensity from \
+                 incoming signals and emits local light into the light field, letting \
+                 surrounding fog and surfaces receive rays and shadows."
             }
         }
     }
@@ -988,6 +1011,18 @@ impl CellType {
                 applies_muscle_contraction: 0,
                 _padding: [0; 7],
             },
+            CellType::Luminocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
         }
     }
 
@@ -1092,6 +1127,16 @@ impl CellType {
                 mode.memorocyte_input_channel = 0;
                 mode.memorocyte_output_channel = 9;
                 mode.memorocyte_output_hops = 5;
+            }
+            CellType::Luminocyte => {
+                mode.nutrient_priority = 1.6;
+                mode.max_cell_size = 1.8;
+                mode.split_mass = 3.1;
+                mode.emissive = 3.0;
+                mode.color = glam::Vec3::new(0.2, 0.85, 1.0);
+                mode.luminocyte_signal_channel = 0;
+                mode.luminocyte_threshold = 1.0;
+                mode.luminocyte_invert = false;
             }
             _ => {}
         }

@@ -3,4 +3,7 @@
     sun_color: (0.0, 0.97, 0.36),
     sun_angular_radius: 0.08,
     sun_intensity: 4.0,
+    sun_rotation_enabled: false,
+    sun_rotation_axis: (0.0, 1.0, 0.0),
+    sun_rotation_speed: 0.0,
 )

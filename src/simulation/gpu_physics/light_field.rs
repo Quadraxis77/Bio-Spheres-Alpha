@@ -32,6 +32,10 @@ pub struct LightFieldParams {
     pub ambient_floor: f32,
     pub scattering_coefficient: f32,
     pub time: f32,
+    pub sun_color_r: f32,
+    pub sun_color_g: f32,
+    pub sun_color_b: f32,
+    pub _pad0: f32,
 }
 
 /// Parameters for cell occupancy grid builder
@@ -116,6 +120,8 @@ pub struct ShadowFieldParams {
 pub struct LightFieldSystem {
     // Buffers
     light_field_buffer: wgpu::Buffer,
+    light_color_field_buffer: wgpu::Buffer,
+    light_color_accum_buffer: wgpu::Buffer,
     cell_occupancy_buffer: wgpu::Buffer,
     light_field_params_buffer: wgpu::Buffer,
     occupancy_params_buffer: wgpu::Buffer,
@@ -130,6 +136,7 @@ pub struct LightFieldSystem {
     build_occupancy_pipeline: wgpu::ComputePipeline,
     compute_light_pipeline: wgpu::ComputePipeline,
     photocyte_light_pipeline: wgpu::ComputePipeline,
+    resolve_light_color_pipeline: wgpu::ComputePipeline,
 
     // Bind group layouts
     light_field_layout: wgpu::BindGroupLayout,
@@ -199,6 +206,20 @@ impl LightFieldSystem {
         let light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Light Field Buffer"),
             size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let light_color_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Light Color Field Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<[f32; 4]>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let light_color_accum_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Luminocyte Light Color Accumulator"),
+            size: (TOTAL_VOXELS * 4 * std::mem::size_of::<u32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -285,6 +306,28 @@ impl LightFieldSystem {
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 4: light_color_field (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 5: water_density (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -454,12 +497,12 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 1: light_field (read-only storage)
+                    // Binding 1: light_field (read-write storage; luminocytes inject local light)
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -509,6 +552,83 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
+                    // Binding 6: mode_indices (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 7: mode_properties_v7 (myocyte signal channel/threshold reused by luminocyte)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 8: mode_emissive (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 9: signal_flags (atomic packed signal values)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 10: mode_colors (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 11: light_color_accum (atomic read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 12: light_color_field (read-write storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -525,6 +645,16 @@ impl LightFieldSystem {
                 layout: Some(&photocyte_pipeline_layout),
                 module: &photocyte_shader,
                 entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let resolve_light_color_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Resolve Luminocyte Light Color Pipeline"),
+                layout: Some(&photocyte_pipeline_layout),
+                module: &photocyte_shader,
+                entry_point: Some("resolve_luminocyte_light_color"),
                 compilation_options: Default::default(),
                 cache: None,
             });
@@ -548,6 +678,17 @@ impl LightFieldSystem {
                     // Binding 1: light_field (read-only storage)
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 2: light_color_field (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -603,7 +744,7 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 2: water_bitfield (read-only storage)
+                    // Binding 2: light_color_field (read-only storage)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -614,9 +755,20 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 3: moss_density (read-only storage)
+                    // Binding 3: water_bitfield (read-only storage)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 4: moss_density (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -630,6 +782,8 @@ impl LightFieldSystem {
 
         Self {
             light_field_buffer,
+            light_color_field_buffer,
+            light_color_accum_buffer,
             cell_occupancy_buffer,
             light_field_params_buffer,
             occupancy_params_buffer,
@@ -640,6 +794,7 @@ impl LightFieldSystem {
             build_occupancy_pipeline,
             compute_light_pipeline,
             photocyte_light_pipeline,
+            resolve_light_color_pipeline,
             light_field_layout,
             occupancy_layout,
             photocyte_physics_layout,
@@ -692,6 +847,10 @@ impl LightFieldSystem {
         &self.light_field_buffer
     }
 
+    pub fn light_color_field_buffer(&self) -> &wgpu::Buffer {
+        &self.light_color_field_buffer
+    }
+
     /// Get the cell occupancy buffer
     pub fn cell_occupancy_buffer(&self) -> &wgpu::Buffer {
         &self.cell_occupancy_buffer
@@ -715,6 +874,14 @@ impl LightFieldSystem {
     /// Get a reference to the photocyte light pipeline
     pub fn photocyte_light_pipeline_ref(&self) -> &wgpu::ComputePipeline {
         &self.photocyte_light_pipeline
+    }
+
+    pub fn resolve_light_color_pipeline_ref(&self) -> &wgpu::ComputePipeline {
+        &self.resolve_light_color_pipeline
+    }
+
+    pub fn light_color_accum_buffer_ref(&self) -> &wgpu::Buffer {
+        &self.light_color_accum_buffer
     }
 
     /// Set light direction (will be normalized)
@@ -871,6 +1038,10 @@ impl LightFieldSystem {
                     binding: 1,
                     resource: self.light_field_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.light_color_field_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -896,10 +1067,14 @@ impl LightFieldSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: water_density_buffer.as_entire_binding(),
+                    resource: self.light_color_field_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
+                    resource: water_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
                     resource: moss_density_buffer.as_entire_binding(),
                 },
             ],
@@ -999,6 +1174,10 @@ impl LightFieldSystem {
             ambient_floor: self.ambient_floor,
             scattering_coefficient: self.scattering_coefficient,
             time,
+            sun_color_r: self.sun_color[0],
+            sun_color_g: self.sun_color[1],
+            sun_color_b: self.sun_color[2],
+            _pad0: 0.0,
         };
         queue.write_buffer(
             &self.light_field_params_buffer,
@@ -1048,6 +1227,7 @@ impl LightFieldSystem {
         &self,
         device: &wgpu::Device,
         solid_mask_buffer: &wgpu::Buffer,
+        water_density_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Light Field Bind Group"),
@@ -1068,6 +1248,14 @@ impl LightFieldSystem {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: self.light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.light_color_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: water_density_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1140,6 +1328,11 @@ impl LightFieldSystem {
         nutrients_buffer: &wgpu::Buffer,
         split_nutrient_thresholds_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
+        mode_indices_buffer: &wgpu::Buffer,
+        mode_properties_v7_buffer: &wgpu::Buffer,
+        mode_emissive_buffer: &wgpu::Buffer,
+        signal_flags_buffer: &wgpu::Buffer,
+        mode_colors_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Photocyte System Bind Group"),
@@ -1169,6 +1362,34 @@ impl LightFieldSystem {
                     binding: 5,
                     resource: death_flags_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: mode_indices_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: mode_properties_v7_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: mode_emissive_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: signal_flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: mode_colors_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: self.light_color_accum_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: self.light_color_field_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1184,6 +1405,7 @@ impl LightFieldSystem {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         solid_mask_buffer: &wgpu::Buffer,
+        water_density_buffer: &wgpu::Buffer,
         positions_buffer: &wgpu::Buffer,
         cell_count_buffer: &wgpu::Buffer,
         physics_params_buffer: &wgpu::Buffer,
@@ -1191,6 +1413,11 @@ impl LightFieldSystem {
         nutrients_buffer: &wgpu::Buffer,
         split_nutrient_thresholds_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
+        mode_indices_buffer: &wgpu::Buffer,
+        mode_properties_v7_buffer: &wgpu::Buffer,
+        mode_emissive_buffer: &wgpu::Buffer,
+        signal_flags_buffer: &wgpu::Buffer,
+        mode_colors_buffer: &wgpu::Buffer,
         cell_count: u32,
         time: f32,
     ) {
@@ -1205,7 +1432,8 @@ impl LightFieldSystem {
         // Create bind groups
         let occupancy_bg =
             self.create_occupancy_bind_group(device, positions_buffer, cell_count_buffer);
-        let light_field_bg = self.create_light_field_bind_group(device, solid_mask_buffer);
+        let light_field_bg =
+            self.create_light_field_bind_group(device, solid_mask_buffer, water_density_buffer);
         let photocyte_physics_bg = self.create_photocyte_physics_bind_group(
             device,
             physics_params_buffer,
@@ -1218,6 +1446,11 @@ impl LightFieldSystem {
             nutrients_buffer,
             split_nutrient_thresholds_buffer,
             death_flags_buffer,
+            mode_indices_buffer,
+            mode_properties_v7_buffer,
+            mode_emissive_buffer,
+            signal_flags_buffer,
+            mode_colors_buffer,
         );
 
         // Step 1: Clear occupancy grid using DMA (faster than compute dispatch)
@@ -1246,7 +1479,8 @@ impl LightFieldSystem {
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
 
-        // Step 4: Photocyte light consumption
+        // Step 4: Photocyte light consumption and luminocyte local light emission.
+        encoder.clear_buffer(&self.light_color_accum_buffer, 0, None);
         if cell_count > 0 {
             let cell_workgroups = (cell_count + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1257,6 +1491,18 @@ impl LightFieldSystem {
             pass.set_bind_group(0, &photocyte_physics_bg, &[]);
             pass.set_bind_group(1, &photocyte_system_bg, &[]);
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+
+        {
+            let color_workgroups = (total_voxels + 255) / 256;
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Resolve Luminocyte Light Color"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.resolve_light_color_pipeline);
+            pass.set_bind_group(0, &photocyte_physics_bg, &[]);
+            pass.set_bind_group(1, &photocyte_system_bg, &[]);
+            pass.dispatch_workgroups(color_workgroups, 1, 1);
         }
     }
 
@@ -1275,6 +1521,11 @@ impl LightFieldSystem {
         nutrients_buffer: &wgpu::Buffer,
         split_nutrient_thresholds_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
+        mode_indices_buffer: &wgpu::Buffer,
+        mode_properties_v7_buffer: &wgpu::Buffer,
+        mode_emissive_buffer: &wgpu::Buffer,
+        signal_flags_buffer: &wgpu::Buffer,
+        mode_colors_buffer: &wgpu::Buffer,
         cell_count: u32,
     ) {
         // Note: Don't early-out on cell_count == 0. The caller passes capacity
@@ -1294,17 +1545,37 @@ impl LightFieldSystem {
             nutrients_buffer,
             split_nutrient_thresholds_buffer,
             death_flags_buffer,
+            mode_indices_buffer,
+            mode_properties_v7_buffer,
+            mode_emissive_buffer,
+            signal_flags_buffer,
+            mode_colors_buffer,
         );
 
-        let cell_workgroups = (cell_count + 255) / 256;
+        encoder.clear_buffer(&self.light_color_accum_buffer, 0, None);
+
+        {
+            let cell_workgroups = (cell_count + 255) / 256;
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Photocyte Light Consumption (physics step)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.photocyte_light_pipeline);
+            pass.set_bind_group(0, &photocyte_physics_bg, &[]);
+            pass.set_bind_group(1, &photocyte_system_bg, &[]);
+            pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+
+        let total_voxels = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
+        let color_workgroups = (total_voxels + 255) / 256;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Photocyte Light Consumption (physics step)"),
+            label: Some("Resolve Luminocyte Light Color (physics step)"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&self.photocyte_light_pipeline);
+        pass.set_pipeline(&self.resolve_light_color_pipeline);
         pass.set_bind_group(0, &photocyte_physics_bg, &[]);
         pass.set_bind_group(1, &photocyte_system_bg, &[]);
-        pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        pass.dispatch_workgroups(color_workgroups, 1, 1);
     }
 
     /// Run only the light field computation (without photocyte consumption)
@@ -1315,6 +1586,7 @@ impl LightFieldSystem {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         solid_mask_buffer: &wgpu::Buffer,
+        water_density_buffer: &wgpu::Buffer,
         positions_buffer: &wgpu::Buffer,
         cell_count_buffer: &wgpu::Buffer,
         cell_count: u32,
@@ -1328,7 +1600,8 @@ impl LightFieldSystem {
 
         let occupancy_bg =
             self.create_occupancy_bind_group(device, positions_buffer, cell_count_buffer);
-        let light_field_bg = self.create_light_field_bind_group(device, solid_mask_buffer);
+        let light_field_bg =
+            self.create_light_field_bind_group(device, solid_mask_buffer, water_density_buffer);
 
         // Clear occupancy grid using DMA (faster than compute dispatch)
         encoder.clear_buffer(&self.cell_occupancy_buffer, 0, None);

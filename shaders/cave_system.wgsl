@@ -130,8 +130,9 @@ struct ShadowFieldParams {
 
 @group(2) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
 @group(2) @binding(1) var<storage, read> light_field: array<f32>;
-@group(2) @binding(2) var<storage, read> water_density: array<f32>;
-@group(2) @binding(3) var<storage, read> moss_density: array<f32>;
+@group(2) @binding(2) var<storage, read> light_color_field: array<vec4<f32>>;
+@group(2) @binding(3) var<storage, read> water_density: array<f32>;
+@group(2) @binding(4) var<storage, read> moss_density: array<f32>;
 
 // Sample light field at world position - always trilinear.
 fn sample_light_field_lod(world_pos: vec3<f32>) -> f32 {
@@ -182,6 +183,26 @@ fn sample_light_field_lod(world_pos: vec3<f32>) -> f32 {
     let c0  = mix(c00, c10, fy);
     let c1  = mix(c01, c11, fy);
     return mix(c0, c1, fz);
+}
+
+fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
+    if (shadow_params.shadow_enabled == 0u) {
+        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    }
+    let res = shadow_params.grid_resolution;
+    let grid_origin = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
+    let gx = (world_pos.x - grid_origin.x) / shadow_params.cell_size;
+    let gy = (world_pos.y - grid_origin.y) / shadow_params.cell_size;
+    let gz = (world_pos.z - grid_origin.z) / shadow_params.cell_size;
+    let ix = i32(round(gx));
+    let iy = i32(round(gy));
+    let iz = i32(round(gz));
+    let ires = i32(res);
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    }
+    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    return light_color_field[idx].rgb;
 }
 
 @vertex
@@ -624,8 +645,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
     let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
     let shadow = mix(1.0, sample_light_field_lod(clamped_pos), shadow_params.shadow_strength);
-    let sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
-    let ambient = vec3<f32>(0.1) * ao;
+    let sun_color = sample_light_color_field(clamped_pos);
+    // Ambient scales with sun_color so cave walls go pitch black when sun is off.
+    let ambient = sun_color * 0.08 * ao;
     var final_color = final_base_color * (ambient + sun_color * diffuse * 0.7 * shadow) + sun_color * vec3<f32>(specular * 0.3 * shadow);
     
     // Apply underwater caustics on lit surfaces

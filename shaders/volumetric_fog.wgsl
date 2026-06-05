@@ -49,8 +49,9 @@ struct FogParams {
     // Near/far for ray march
     ray_start: f32,
     ray_end: f32,
-    _pad0: f32,
-    _pad1: f32,
+    // Wave distortion applied to light field samples (simulates refraction through water surface)
+    water_wave_strength: f32,
+    water_wave_scale: f32,
 }
 
 // Group 0: Camera
@@ -69,6 +70,12 @@ var depth_texture: texture_depth_2d;
 
 @group(1) @binding(3)
 var depth_sampler: sampler;
+
+@group(1) @binding(4)
+var<storage, read> light_color_field: array<vec4<f32>>;
+
+@group(1) @binding(5)
+var<storage, read> water_density_field: array<f32>;
 
 // Vertex output
 struct VertexOutput {
@@ -124,6 +131,45 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     
     let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
     return light_field[idx];
+}
+
+// Returns full vec4: rgb = light color, w = luminocyte emitter weight (0 = sun, >0 = local emitter)
+fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
+    let res = fog_params.grid_resolution;
+    let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size;
+    let gy = (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size;
+    let gz = (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size;
+    let ix = i32(round(gx));
+    let iy = i32(round(gy));
+    let iz = i32(round(gz));
+    let ires = i32(res);
+
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
+    }
+
+    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    return light_color_field[idx];
+}
+
+fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
+    return sample_light_color_field_full(world_pos).rgb;
+}
+
+fn sample_water_density_fog(world_pos: vec3<f32>) -> f32 {
+    let res = fog_params.grid_resolution;
+    let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size;
+    let gy = (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size;
+    let gz = (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size;
+    let ix = i32(round(gx));
+    let iy = i32(round(gy));
+    let iz = i32(round(gz));
+    let ires = i32(res);
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return 0.0;
+    }
+    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    return clamp(water_density_field[idx], 0.0, 1.0);
 }
 
 // Solid detection threshold: solid voxels have light_field = 0.0,
@@ -219,14 +265,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let light_color = vec3<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b);
     let fog_color = vec3<f32>(fog_params.fog_color_r, fog_params.fog_color_g, fog_params.fog_color_b);
     
-    // Phase function: blend between isotropic (even lighting) and directional (god rays)
-    // Isotropic phase = uniform scattering in all directions
+    // Phase function constants (directional component computed once; per-voxel blend happens in the loop)
     let isotropic_phase = 1.0 / (4.0 * 3.14159265);
-    // Directional phase = Henyey-Greenstein forward scattering (creates god rays)
     let cos_theta = dot(ray_dir, light_dir);
     let directed_phase = henyey_greenstein(cos_theta, fog_params.scattering_anisotropy);
-    // scattering_anisotropy controls the blend: 0 = perfectly even, 1 = full god rays
-    let phase = mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy);
     
     // Ray march through fog with adaptive step count
     // Reduce steps for longer rays to maintain consistent per-pixel cost
@@ -238,17 +280,33 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var accumulated_color = vec3<f32>(0.0);
     var transmittance = 1.0;
     
-    // Dithered start to reduce banding
-    let dither = fract(sin(dot(uv * 1000.0, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    // Interleaved gradient noise — lower visual frequency than white noise, smoother result.
+    let px = in.position.xy;
+    let dither = fract(52.9829189 * fract(dot(px, vec2<f32>(0.06711056, 0.00583715))));
     let start_offset = march_start + dither * step_size;
     
     for (var i = 0u; i < step_count; i++) {
         let t = start_offset + f32(i) * step_size;
         let sample_pos = camera.camera_pos + ray_dir * t;
         
+        // Distort the sample position to simulate light refracting through a moving water
+        // surface. Three overlapping wave trains (different frequencies/directions/speeds)
+        // cause the shafts to bend and swim organically.
+        var light_sample_pos = sample_pos;
+        if fog_params.water_wave_strength > 0.0 {
+            let s = fog_params.water_wave_scale;
+            let wt = camera.time;
+            let dx = sin(sample_pos.x * s * 2.3 + wt * 1.1) * cos(sample_pos.z * s * 1.7 + wt * 0.8)
+                   + sin(sample_pos.y * s * 1.9 - wt * 0.6) * 0.5;
+            let dz = cos(sample_pos.x * s * 1.9 + wt * 0.7) * sin(sample_pos.z * s * 2.1 + wt * 1.3)
+                   + cos(sample_pos.y * s * 2.5 - wt * 0.9) * 0.5;
+            light_sample_pos.x += dx * fog_params.water_wave_strength;
+            light_sample_pos.z += dz * fog_params.water_wave_strength;
+        }
+
         // Sample light field FIRST - also detects solid voxels (light = 0.0)
         // This single read replaces both the old solid_mask check and the light sample
-        let light_intensity = sample_light_field(sample_pos);
+        let light_intensity = sample_light_field(light_sample_pos);
         
         // Solid voxels have light = 0.0, non-solid have >= ambient_floor (0.02)
         if (light_intensity < SOLID_LIGHT_THRESHOLD) {
@@ -262,11 +320,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             continue;
         }
         
-        // In-scattered light: light that scatters toward camera at this point
-        let in_scattered = light_color * light_intensity * phase * fog_params.light_intensity;
+        // Water attenuates light beams — sample at the actual (undistorted) position
+        // so water volumes create realistic shadow falloff.
+        let water_amount = sample_water_density_fog(sample_pos);
+        let effective_light = light_intensity * (1.0 - water_amount * 0.9);
+
+        // In-scattered light: light that scatters toward camera at this point.
+        // Luminocyte-lit voxels (w > 0) use isotropic phase — their light radiates in
+        // all directions, so the sun angle must not create dark "beam" shadows.
+        let light_color_full = sample_light_color_field_full(light_sample_pos);
+        let local_light_color = light_color_full.rgb;
+        let is_luminocyte_lit = light_color_full.w > 0.0;
+        let phase = select(
+            mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy),
+            isotropic_phase,
+            is_luminocyte_lit,
+        );
+        let in_scattered = local_light_color * effective_light * phase * fog_params.light_intensity;
         
-        // Ambient fog color (visible even in shadow)
-        let ambient = fog_color * 0.1;
+        // Subtle atmospheric ambient: gives the fog medium a visible presence
+        // even between light beams without creating a bright light source.
+        let ambient = fog_color * 0.04;
         
         // Total light contribution at this sample
         let sample_color = in_scattered + ambient;

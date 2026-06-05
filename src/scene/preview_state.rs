@@ -202,6 +202,7 @@ impl PreviewState {
             mode.color.y.to_bits().hash(&mut hasher);
             mode.color.z.to_bits().hash(&mut hasher);
             mode.opacity.to_bits().hash(&mut hasher);
+            // Luminocyte uses emissive as its maximum light output.
             mode.emissive.to_bits().hash(&mut hasher);
             mode.cell_type.hash(&mut hasher);
             mode.parent_make_adhesion.hash(&mut hasher);
@@ -296,6 +297,10 @@ impl PreviewState {
             mode.oculocyte_signal_value.to_bits().hash(&mut hasher);
             mode.oculocyte_signal_hops.hash(&mut hasher);
             mode.oculocyte_ray_length.to_bits().hash(&mut hasher);
+            mode.oculocyte_light_target_color.x.to_bits().hash(&mut hasher);
+            mode.oculocyte_light_target_color.y.to_bits().hash(&mut hasher);
+            mode.oculocyte_light_target_color.z.to_bits().hash(&mut hasher);
+            mode.oculocyte_light_color_tolerance.to_bits().hash(&mut hasher);
 
             // Hash regulation emit settings
             mode.regulation_emit_channel.hash(&mut hasher);
@@ -376,7 +381,8 @@ impl PreviewState {
             mode.cilia_threshold.to_bits().hash(&mut hasher);
             mode.cilia_attract_force.to_bits().hash(&mut hasher);
 
-            // Hash myocyte settings
+            // Hash myocyte settings. Luminocyte reuses signal_channel and threshold
+            // as its brightness gate, so those fields must remain in the genome hash.
             mode.myocyte_contraction.to_bits().hash(&mut hasher);
             mode.myocyte_use_signal.hash(&mut hasher);
             mode.myocyte_signal_channel.hash(&mut hasher);
@@ -445,6 +451,11 @@ impl PreviewState {
                 .to_bits()
                 .hash(&mut hasher);
             mode.cognocyte_oscillator_step_count.hash(&mut hasher);
+
+            // Luminocyte signal settings
+            mode.luminocyte_signal_channel.hash(&mut hasher);
+            mode.luminocyte_threshold.to_bits().hash(&mut hasher);
+            mode.luminocyte_invert.hash(&mut hasher);
         }
 
         // Scaffold rules affect bond topology during resim.

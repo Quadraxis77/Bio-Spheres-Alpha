@@ -357,8 +357,9 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v5: wgpu::Buffer,
     pub mode_properties_v6: wgpu::Buffer,
 
-    /// Mode properties v7 for myocyte parameters (16 bytes per mode)
-    /// v7: [myocyte_contraction, myocyte_use_signal as f32, myocyte_signal_channel as f32, myocyte_threshold]
+    /// Mode properties v7 for myocyte/luminocyte parameters (16 bytes per mode)
+    /// Myocyte:    [myocyte_contraction, myocyte_use_signal as f32, myocyte_signal_channel as f32, myocyte_threshold]
+    /// Luminocyte: [luminocyte_invert as f32, 0.0, luminocyte_signal_channel as f32, luminocyte_threshold]
     /// v8: [myocyte_contraction_above, myocyte_contraction_below, myocyte_pulse_rate, myocyte_pulse_phase as f32]
     pub mode_properties_v7: wgpu::Buffer,
     pub mode_properties_v8: wgpu::Buffer,
@@ -464,6 +465,8 @@ pub struct GpuTripleBufferSystem {
     /// Per-mode oculocyte signal values: one f32 per mode (the value emitted when target detected)
     /// Stored separately from oculocyte_params to avoid breaking the mutation system's vec4<u32> stride.
     pub oculocyte_signal_values: wgpu::Buffer,
+    /// Per-mode oculocyte light color filters: [target_r, target_g, target_b, tolerance].
+    pub oculocyte_light_filters: wgpu::Buffer,
 
     /// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)] = 16 bytes per mode
     /// emit_channel: 0xFFFFFFFF = disabled, 8-15 = regulation channel
@@ -814,6 +817,9 @@ impl GpuTripleBufferSystem {
         let oculocyte_signal_values =
             Self::create_storage_buffer(device, max_modes * 4, "Oculocyte Signal Values");
 
+        let oculocyte_light_filters =
+            Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Light Filters");
+
         // Per-mode regulation emission parameters: vec4<u32> per mode (emit_channel, emit_value_bits, emit_hops, padding)
         let regulation_params =
             Self::create_storage_buffer(device, max_modes * 16, "Regulation Params");
@@ -936,6 +942,7 @@ impl GpuTripleBufferSystem {
             glueocyte_cell_adhesion_flags,
             oculocyte_params,
             oculocyte_signal_values,
+            oculocyte_light_filters,
             regulation_params,
             signal_settings_v0,
             signal_settings_v1,
@@ -1550,6 +1557,8 @@ impl GpuTripleBufferSystem {
         self.oculocyte_params = Self::create_storage_buffer(device, m16, "Oculocyte Params");
         self.oculocyte_signal_values =
             Self::create_storage_buffer(device, m4, "Oculocyte Signal Values");
+        self.oculocyte_light_filters =
+            Self::create_storage_buffer(device, m16, "Oculocyte Light Filters");
         self.regulation_params = Self::create_storage_buffer(device, m16, "Regulation Params");
 
         self.signal_settings_v0 = Self::create_storage_buffer(device, m16, "Signal Settings V0");
@@ -1871,12 +1880,21 @@ impl GpuTripleBufferSystem {
 
         for genome in genomes {
             for mode in &genome.modes {
-                v7.push([
-                    mode.myocyte_contraction,
-                    if mode.myocyte_use_signal { 1.0 } else { 0.0 },
-                    mode.myocyte_signal_channel as f32,
-                    mode.myocyte_threshold,
-                ]);
+                if mode.cell_type == 16 {
+                    v7.push([
+                        if mode.luminocyte_invert { 1.0 } else { 0.0 },
+                        0.0,
+                        mode.luminocyte_signal_channel.clamp(0, 7) as f32,
+                        mode.luminocyte_threshold,
+                    ]);
+                } else {
+                    v7.push([
+                        mode.myocyte_contraction,
+                        if mode.myocyte_use_signal { 1.0 } else { 0.0 },
+                        mode.myocyte_signal_channel as f32,
+                        mode.myocyte_threshold,
+                    ]);
+                }
                 v8.push([
                     mode.myocyte_contraction_above,
                     mode.myocyte_contraction_below,
@@ -1903,12 +1921,21 @@ impl GpuTripleBufferSystem {
         let mut v8: Vec<[f32; 4]> = Vec::new();
 
         for mode in &genome.modes {
-            v7.push([
-                mode.myocyte_contraction,
-                if mode.myocyte_use_signal { 1.0 } else { 0.0 },
-                mode.myocyte_signal_channel as f32,
-                mode.myocyte_threshold,
-            ]);
+            if mode.cell_type == 16 {
+                v7.push([
+                    if mode.luminocyte_invert { 1.0 } else { 0.0 },
+                    0.0,
+                    mode.luminocyte_signal_channel as f32,
+                    mode.luminocyte_threshold,
+                ]);
+            } else {
+                v7.push([
+                    mode.myocyte_contraction,
+                    if mode.myocyte_use_signal { 1.0 } else { 0.0 },
+                    mode.myocyte_signal_channel as f32,
+                    mode.myocyte_threshold,
+                ]);
+            }
             v8.push([
                 mode.myocyte_contraction_above,
                 mode.myocyte_contraction_below,
@@ -2343,6 +2370,27 @@ impl GpuTripleBufferSystem {
                 &self.oculocyte_signal_values,
                 0,
                 bytemuck::cast_slice(&signal_values),
+            );
+        }
+
+        let light_filters: Vec<[f32; 4]> = genomes
+            .iter()
+            .flat_map(|genome| {
+                genome.modes.iter().map(|mode| {
+                    [
+                        mode.oculocyte_light_target_color.x.clamp(0.0, 4.0),
+                        mode.oculocyte_light_target_color.y.clamp(0.0, 4.0),
+                        mode.oculocyte_light_target_color.z.clamp(0.0, 4.0),
+                        mode.oculocyte_light_color_tolerance.clamp(0.0, 4.0),
+                    ]
+                })
+            })
+            .collect();
+        if !light_filters.is_empty() {
+            queue.write_buffer(
+                &self.oculocyte_light_filters,
+                0,
+                bytemuck::cast_slice(&light_filters),
             );
         }
     }

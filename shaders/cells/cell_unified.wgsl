@@ -72,6 +72,7 @@ struct ShadowFieldParams {
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
 @group(1) @binding(1) var<storage, read> light_field: array<f32>;
+@group(1) @binding(2) var<storage, read> light_color_field: array<vec4<f32>>;
 
 // Sample light field at world position with optimized bilinear + linear interpolation
 fn sample_light_field(world_pos: vec3<f32>) -> f32 {
@@ -565,6 +566,49 @@ fn internals_memorocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
+    if (shadow_params.shadow_enabled == 0u) {
+        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    }
+    let res = shadow_params.grid_resolution;
+    let fres = f32(res);
+
+    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size;
+    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size;
+    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size;
+    let ix = i32(round(gx));
+    let iy = i32(round(gy));
+    let iz = i32(round(gz));
+    let ires = i32(res);
+
+    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
+        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    }
+
+    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
+    let c = light_color_field[idx];
+    return c.rgb;
+}
+
+// Type 16: Luminocyte - signal-reactive lantern body.
+// type_data_0: x=band_frequency, y=band_width, z=core_glow, w=color_shift
+fn internals_luminocyte(p: vec3<f32>, r: f32, current_time: f32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let band_freq = max(type_data_0.x, 1.0);
+    let band_width = clamp(type_data_0.y, 0.03, 0.45);
+    let core_glow = clamp(type_data_0.z, 0.0, 2.0);
+    let color_shift = clamp(type_data_0.w, 0.0, 1.0);
+
+    let radial = length(p);
+    let core = 1.0 - smoothstep(0.0, 0.58, radial);
+    let swirl = sin((p.x + p.y * 0.55 + p.z * 0.35) * band_freq + current_time * 3.0);
+    let bands = 1.0 - smoothstep(band_width, band_width + 0.08, abs(swirl));
+    let shell = smoothstep(0.35, 0.82, radial) * (1.0 - smoothstep(0.82, 0.98, radial));
+    let pulse = 0.75 + 0.25 * sin(current_time * 4.0 + p.z * 8.0);
+
+    let light = clamp(core * core_glow + bands * shell * pulse, 0.0, 1.8);
+    return vec3<f32>(light, color_shift * bands, 0.0);
+}
+
 // Type 14: Cognocyte - Signal-processing cell with a pulsing computational core
 // and three pairs of radiating signal traces (one per axis).
 // The traces pulse with 120-degree phase offsets suggesting active signal routing.
@@ -864,6 +908,7 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32, type_dat
         case 13u: { return internals_gametocyte(p, r, camera.time); }
         case 14u: { return internals_cognocyte(p, r, camera.time); }
         case 15u: { return internals_memorocyte(p, r, camera.time); }
+        case 16u: { return internals_luminocyte(p, r, camera.time, type_data_0); }
         default: { return internals_test(p, r, type_data_0); }
     }
 }
@@ -965,6 +1010,12 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.opacity = 0.28;
             m.rim_power = 2.0;
             m.color_darken = 0.12;
+        }
+        case 16u: { // Luminocyte - clear bright membrane with strong fresnel glow
+            m.thickness = 0.035;
+            m.opacity = 0.30;
+            m.rim_power = 1.7;
+            m.color_darken = 0.05;
         }
         default: {
             m.thickness = 0.06;
@@ -1420,16 +1471,19 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
     let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
     let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
+    let local_light_color = sample_light_color_field(clamped_pos);
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);
-    let front_diffuse = front_ndotl * lighting.light_color * shadow;
+    let front_diffuse = front_ndotl * local_light_color * shadow;
 
-    // Apply diffuse to the composited result
-    composited = composited * (0.3 + 0.7 * (lighting.ambient + front_diffuse));
+    // Apply diffuse to the composited result.
+    // ambient doubles as the shadow floor so both scale together with sun intensity.
+    let unlit_composited = composited;
+    composited = composited * (lighting.ambient + (1.0 - lighting.ambient) * front_diffuse);
 
     // Specular highlight on membrane surface (uses perturbed normal for ridge highlights)
     let half_vec = normalize(-light_dir + view_dir);
     let spec = pow(max(dot(perturbed_normal, half_vec), 0.0), in.visual_params.y);
-    let specular = spec * in.visual_params.x * lighting.light_color * shadow;
+    let specular = spec * in.visual_params.x * local_light_color * shadow;
 
     // Fresnel rim (membrane reflection)
     let fresnel = pow(1.0 - max(dot(perturbed_normal, view_dir), 0.0), 3.0);
@@ -1440,19 +1494,23 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let sss_color = base_color * sss;
 
     var final_color = composited + specular + fresnel_contribution + sss_color
-                    + composited * in.visual_params.w; // emissive
+                    + unlit_composited * in.visual_params.w; // emissive: uses pre-lighting color so cells glow in darkness
 
-    // Cel-shaded black outline: hard black band at the silhouette edge.
-    // Computed in r-space (radial distance from billboard centre) rather than
-    // z_front-space so that fwidth() is well-behaved even for small/distant cells.
-    // outline_width is the fraction of the sphere radius that becomes black (0=none, 1=full).
+    // Cel-shaded outline: dark band at the silhouette edge.
+    // Emissive cells use a dark-tinted version of their own colour instead of pure black,
+    // so bright luminocytes don't get an ugly hard black ring.
     if (lighting.outline_width > 0.0) {
-        // r is the normalised radial distance [0, 1] on the billboard.
-        // The outline occupies r in [1 - outline_width, 1].
         let outline_inner = 1.0 - lighting.outline_width;
-        let aa = fwidth(r) * 1.5; // fwidth(r) ~= constant ~= 1/screen_radius - well-behaved
+        let aa = fwidth(r) * 1.5;
         let outline = smoothstep(outline_inner - aa, outline_inner + aa, r);
-        final_color = mix(final_color, vec3<f32>(0.0, 0.0, 0.0), outline);
+        // Fade outline toward the cell's own dark colour on emissive cells.
+        let emissive = in.visual_params.w;
+        let outline_color = mix(
+            vec3<f32>(0.0),                     // black for non-emissive
+            unlit_composited * 0.08,            // dark cell tint for emissive
+            clamp(emissive * 0.4, 0.0, 1.0),
+        );
+        final_color = mix(final_color, outline_color, outline);
     }
 
     // Yellow outline for selected-mode cells (type_data_1.z == 1.0)

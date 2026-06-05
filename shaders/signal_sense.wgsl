@@ -49,6 +49,10 @@ var<storage, read> regulation_params: array<vec4<u32>>;
 @group(1) @binding(6)
 var<storage, read> oculocyte_signal_values: array<f32>;
 
+// Oculocyte light filters: [target_r, target_g, target_b, tolerance] per mode.
+@group(1) @binding(7)
+var<storage, read> oculocyte_light_filters: array<vec4<f32>>;
+
 // World data for barrier, food, and light sensing
 struct SignalSenseWorldParams {
     boundary_radius: f32,
@@ -92,6 +96,7 @@ struct SenseBoulder {
 }
 @group(2) @binding(5) var<storage, read> boulder_state_sense: array<SenseBoulder>;
 @group(2) @binding(6) var<storage, read> boulder_count_sense: array<u32>;
+@group(2) @binding(7) var<storage, read> light_color_field: array<vec4<f32>>;
 
 // Rotate vector by quaternion: q * v * q^-1
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -164,8 +169,8 @@ fn dda_march_food(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> boo
     return false;
 }
 
-// sense_type 2: DDA ray march for lit voxels
-fn dda_march_light(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool {
+// sense_type 2: DDA ray march for lit voxels matching the mode's light color filter.
+fn dda_march_light(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32, mode_idx: u32) -> bool {
     let res = i32(world_params.grid_resolution);
     if (res <= 0) { return false; }
     let grid_origin = vec3<f32>(world_params.grid_origin_x, world_params.grid_origin_y, world_params.grid_origin_z);
@@ -194,7 +199,14 @@ fn dda_march_light(my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bo
         if (any(cell_i < vec3<i32>(0)) || any(cell_i >= vec3<i32>(res))) { break; }
 
         let vi = u32(cell_i.x + cell_i.y * res + cell_i.z * res * res);
-        if (light_field[vi] > LIGHT_THRESHOLD) { return true; }
+        if (light_field[vi] > LIGHT_THRESHOLD) {
+            let light_filter = oculocyte_light_filters[mode_idx];
+            let tolerance = max(light_filter.a, 0.001);
+            let light_color = light_color_field[vi].rgb;
+            if (length(light_color - light_filter.rgb) <= tolerance) {
+                return true;
+            }
+        }
 
         if (t_max.x < t_max.y && t_max.x < t_max.z) {
             t = t_max.x; t_max.x += t_delta.x; cell_i.x += step.x;
@@ -332,7 +344,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var detected = false;
             if (!detected && (sense_mask & 1u) != 0u)  { detected = sense_cells(idx, my_pos, forward, ray_length, cell_count); }
             if (!detected && (sense_mask & 2u) != 0u)  { detected = dda_march_food(my_pos, forward, ray_length); }
-            if (!detected && (sense_mask & 4u) != 0u)  { detected = dda_march_light(my_pos, forward, ray_length); }
+            if (!detected && (sense_mask & 4u) != 0u)  { detected = dda_march_light(my_pos, forward, ray_length, mode_idx); }
             if (!detected && (sense_mask & 8u) != 0u)  { detected = sense_barrier(my_pos, forward, ray_length); }
             if (!detected && (sense_mask & 16u) != 0u) { detected = true; } // Self: always fires
             if (!detected && (sense_mask & 32u) != 0u) { detected = sense_boulders(my_pos, forward, ray_length); }
