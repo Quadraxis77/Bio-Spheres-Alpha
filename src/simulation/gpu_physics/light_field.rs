@@ -7,6 +7,7 @@
 //!   - Volumetric fog renderer for god rays and shadow casting
 
 use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
 
 /// Grid resolution (must match fluid simulation)
 const GRID_RESOLUTION: u32 = 128;
@@ -240,11 +241,22 @@ impl LightFieldSystem {
             mapped_at_creation: false,
         });
 
-        let occupancy_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        // OccupancyParams are derived purely from world geometry and never change
+        // after construction, so pre-populate the buffer at creation time.
+        let occupancy_params_init = OccupancyParams {
+            grid_resolution: GRID_RESOLUTION,
+            cell_size,
+            grid_origin_x: grid_origin[0],
+            grid_origin_y: grid_origin[1],
+            grid_origin_z: grid_origin[2],
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        let occupancy_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Occupancy Params"),
-            size: std::mem::size_of::<OccupancyParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+            contents: bytemuck::cast_slice(&[occupancy_params_init]),
+            usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let photocyte_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1421,9 +1433,8 @@ impl LightFieldSystem {
         cell_count: u32,
         time: f32,
     ) {
-        // Update all params
+        // Update all params (occupancy params are static, pre-initialized at construction)
         self.update_light_field_params(queue, time);
-        self.update_occupancy_params(queue);
         self.update_photocyte_params(queue);
 
         let total_voxels = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
@@ -1595,7 +1606,6 @@ impl LightFieldSystem {
         time: f32,
     ) {
         self.update_light_field_params(queue, time);
-        self.update_occupancy_params(queue);
 
         let total_voxels = GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION;
         let light_workgroups = (total_voxels + 63) / 64;

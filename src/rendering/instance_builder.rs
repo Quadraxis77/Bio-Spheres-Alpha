@@ -1573,8 +1573,8 @@ impl InstanceBuilder {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
         // Clear all counters: 4 general + MAX_TYPES per-type counters
-        let counter_count = 4 + CellType::MAX_TYPES;
-        let zero_counters: Vec<u32> = vec![0; counter_count];
+        const COUNTER_COUNT: usize = 4 + CellType::MAX_TYPES;
+        let zero_counters = [0u32; COUNTER_COUNT];
         queue.write_buffer(
             &self.counters_buffer,
             0,

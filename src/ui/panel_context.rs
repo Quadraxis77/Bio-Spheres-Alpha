@@ -385,6 +385,8 @@ pub struct GenomeEditorState {
     pub sun_rotation_speed: f32,
     /// Opacity of the in-scene orbit ring gizmo, decays to 0 automatically
     pub orbit_ring_opacity: f32,
+    /// Keep the orbit ring permanently visible when true
+    pub show_orbit_ring: bool,
     /// Whether sun brightness cycles over time (seasons)
     pub sun_cycle_enabled: bool,
     /// Minimum sun intensity during the brightness cycle
@@ -613,7 +615,7 @@ impl GenomeEditorState {
     }
 
     fn wrap_degrees(angle: f32) -> f32 {
-        (angle + 180.0).rem_euclid(360.0) - 180.0
+        angle.rem_euclid(360.0)
     }
 
     fn orbit_basis(axis: [f32; 3]) -> ([f32; 3], [f32; 3]) {
@@ -657,12 +659,7 @@ impl GenomeEditorState {
         self.sun_orbit_angle = Self::wrap_degrees(self.sun_orbit_angle);
         self.light_dir = Self::orbit_direction(axis, self.sun_orbit_angle);
 
-        (self.light_dir[0] - old_dir[0]).abs() > 1e-5
-            || (self.light_dir[1] - old_dir[1]).abs() > 1e-5
-            || (self.light_dir[2] - old_dir[2]).abs() > 1e-5
-            || (self.sun_rotation_axis[0] - old_axis[0]).abs() > 1e-5
-            || (self.sun_rotation_axis[1] - old_axis[1]).abs() > 1e-5
-            || (self.sun_rotation_axis[2] - old_axis[2]).abs() > 1e-5
+        self.light_dir != old_dir || self.sun_rotation_axis != old_axis
     }
 
     /// Preserve the current visible sun position when orbit mode is enabled.
@@ -671,7 +668,7 @@ impl GenomeEditorState {
         let axis = Self::normalized_vec3(self.sun_rotation_axis, [0.0, 1.0, 0.0]);
         self.sun_rotation_axis = axis;
         self.sun_orbit_angle = Self::orbit_angle_for_direction(axis, self.light_dir);
-        self.apply_sun_orbit() || (self.sun_orbit_angle - old_angle).abs() > 1e-5
+        self.apply_sun_orbit() || self.sun_orbit_angle != old_angle
     }
 
     /// Create a new genome editor state with default values.
@@ -956,6 +953,7 @@ impl GenomeEditorState {
             sun_orbit_angle,
             sun_rotation_speed,
             orbit_ring_opacity: 0.0,
+            show_orbit_ring: false,
             sun_cycle_enabled,
             sun_cycle_min,
             sun_cycle_max,
@@ -1038,19 +1036,20 @@ impl GenomeEditorState {
         state
     }
 
-    /// Rotate the sun/light direction for animated day-cycle style lighting.
-    pub fn update_sun_rotation(&mut self, dt: f32) -> bool {
-        // Decay orbit ring opacity toward zero (fade out ~3 seconds after last change).
-        if self.orbit_ring_opacity > 0.0 {
-            self.orbit_ring_opacity = (self.orbit_ring_opacity - dt / 3.0).max(0.0);
-        }
+    /// Update orbit ring opacity — driven purely by the show_orbit_ring toggle.
+    pub fn update_orbit_ring_opacity(&mut self, _wall_dt: f32) {
+        self.orbit_ring_opacity = if self.show_orbit_ring { 1.0 } else { 0.0 };
+    }
 
+    /// Rotate the sun/light direction for animated day-cycle style lighting.
+    /// `sim_dt` is simulation time elapsed this frame (fixed_timestep * physics_steps).
+    pub fn update_sun_rotation(&mut self, sim_dt: f32) -> bool {
         if !self.sun_rotation_enabled || self.sun_rotation_speed == 0.0 {
             return false;
         }
 
         self.sun_orbit_angle =
-            Self::wrap_degrees(self.sun_orbit_angle + self.sun_rotation_speed.to_degrees() * dt);
+            Self::wrap_degrees(self.sun_orbit_angle + self.sun_rotation_speed.to_degrees() * sim_dt);
         self.apply_sun_orbit();
         true
     }

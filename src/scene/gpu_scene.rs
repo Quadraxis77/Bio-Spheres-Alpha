@@ -148,6 +148,8 @@ pub struct GpuScene {
     readbacks_enabled: bool,
     /// Time scale multiplier (1.0 = normal, 2.0 = 2x speed)
     pub time_scale: f32,
+    /// Number of physics steps that ran during the most recent render frame
+    pub last_physics_steps: u32,
     /// When true, simulation work continues but visual scene render passes are skipped.
     pub headless_no_render: bool,
     /// How many simulation seconds between lineage population scans.
@@ -205,6 +207,10 @@ pub struct GpuScene {
     /// Metabolism multiplier for solo cells (1.0 = disabled/no penalty, >1.0 = increased drain).
     /// When 1.0, feature is off. When >1.0, cells with zero adhesions burn nutrients faster.
     pub solo_metabolism_multiplier: f32,
+    /// Light field recompute interval in render frames (1 = every frame, 2 = every other, etc.)
+    pub light_field_update_interval: u32,
+    /// Maximum physics steps per render frame at 1x speed.
+    pub max_physics_steps_per_frame: u32,
     /// Global radiation level controlling mutation probability per division (0.0 = off, 1.0 = always)
     pub radiation_level: f32,
     /// When true, mutations make small color perturbations instead of full re-rolls
@@ -383,6 +389,8 @@ pub struct GpuScene {
     pub light_field_system: Option<LightFieldSystem>,
     /// Cached occupancy bind groups (one per triple buffer index, positions change)
     cached_occupancy_bind_groups: Option<[wgpu::BindGroup; 3]>,
+    /// Cached light field bind group (all bound buffers have stable identity)
+    cached_light_field_bind_group: Option<wgpu::BindGroup>,
     /// Cached photocyte physics bind groups (one per triple buffer index)
     cached_photocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
     /// Cached photocyte system bind group (buffers don't change)
@@ -408,6 +416,12 @@ pub struct GpuScene {
     pub sun_light_dir: [f32; 3],
     /// Whether the sun is currently orbiting — prevents light field early-return skip.
     pub sun_rotating: bool,
+    /// Cached sky rotation quaternion; recomputed only when sun_light_dir or orbit_axis changes.
+    cached_sky_rotation: glam::Quat,
+    /// Last sun_light_dir used to compute cached_sky_rotation.
+    cached_sky_sun_dir: [f32; 3],
+    /// Last orbit_axis used to compute cached_sky_rotation.
+    cached_sky_orbit_axis: [f32; 3],
     /// Procedural space skybox renderer
     pub skybox_renderer: Option<SkyboxRenderer>,
     /// Whether to show the procedural skybox
@@ -713,6 +727,7 @@ impl GpuScene {
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
+            last_physics_steps: 0,
             headless_no_render: false,
             lineage_capture_interval_seconds:
                 crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS,
@@ -741,6 +756,8 @@ impl GpuScene {
             acceleration_damping: 0.98,
             water_viscosity: 0.0,
             solo_metabolism_multiplier: 1.0,
+            light_field_update_interval: 1,
+            max_physics_steps_per_frame: 4,
             radiation_level: 0.0,
             subtle_mutations: false,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
@@ -827,6 +844,7 @@ impl GpuScene {
             mutation_system,
             light_field_system: None,
             cached_occupancy_bind_groups: None,
+            cached_light_field_bind_group: None,
             cached_photocyte_physics_bind_groups: None,
             volumetric_fog_renderer: None,
             show_volumetric_fog: false,
@@ -844,6 +862,9 @@ impl GpuScene {
             sun_intensity: 10.0,
             sun_light_dir: [0.0, 1.0, 0.0],
             sun_rotating: false,
+            cached_sky_rotation: glam::Quat::IDENTITY,
+            cached_sky_sun_dir: [f32::NAN; 3],
+            cached_sky_orbit_axis: [f32::NAN; 3],
             skybox_renderer: None,
             show_skybox: true,
             dragged_cell_index: u32::MAX,
@@ -2189,7 +2210,6 @@ impl GpuScene {
 
         // Use cached bind groups instead of creating per-frame
         light_field.update_light_field_params(queue, self.current_time);
-        light_field.update_occupancy_params(queue);
 
         let total_voxels = 128u32 * 128 * 128;
         let light_workgroups = (total_voxels + 63) / 64;
@@ -2197,17 +2217,17 @@ impl GpuScene {
         // Clear occupancy grid using DMA (faster than compute dispatch)
         encoder.clear_buffer(light_field.cell_occupancy_buffer_ref(), 0, None);
 
-        // Clear light field buffer so stale values don't persist when the compute
-        // dispatch is skipped (e.g. no cells + fog off). Without this, the last
-        // frame's shadow pattern burns into the camera until cells reappear.
-        encoder.clear_buffer(light_field.light_field_buffer(), 0, None);
-
         let occupancy_bg = &self.cached_occupancy_bind_groups.as_ref().unwrap()[output_idx];
-        let light_field_bg = light_field.create_light_field_bind_group(
-            device,
-            fluid_sim.solid_mask_buffer(),
-            water_density_buffer,
-        );
+        // All buffers in the light field bind group have stable identity after init,
+        // so create it once and reuse.
+        if self.cached_light_field_bind_group.is_none() {
+            self.cached_light_field_bind_group = Some(light_field.create_light_field_bind_group(
+                device,
+                fluid_sim.solid_mask_buffer(),
+                water_density_buffer,
+            ));
+        }
+        let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
 
         if self.current_cell_count > 0 {
             let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
@@ -2227,7 +2247,7 @@ impl GpuScene {
                 timestamp_writes: None,
             });
             pass.set_pipeline(light_field.compute_light_pipeline_ref());
-            pass.set_bind_group(0, &light_field_bg, &[]);
+            pass.set_bind_group(0, light_field_bg, &[]);
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
         // Signal that the next per-step photocyte call should resolve luminocyte light.
@@ -2318,23 +2338,96 @@ impl GpuScene {
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
-        // Resolve luminocyte accumulator into light_field exactly once per render frame.
-        // The flag is set by run_light_field and cleared here so subsequent physics steps
-        // in the same frame skip the resolve, preventing light_field += from stacking.
-        if self.luminocyte_resolve_needed {
-            self.luminocyte_resolve_needed = false;
-            encoder.clear_buffer(light_field.light_color_field_buffer(), 0, None);
-            let total_voxels = 128u32 * 128 * 128;
-            let color_workgroups = (total_voxels + 255) / 256;
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Resolve Luminocyte Light Color"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(light_field.resolve_light_color_pipeline_ref());
-            pass.set_bind_group(0, photocyte_physics_bg, &[]);
-            pass.set_bind_group(1, &photocyte_system_bg, &[]);
-            pass.dispatch_workgroups(color_workgroups, 1, 1);
+        // Luminocyte resolve is now handled once per render frame in
+        // run_luminocyte_color_resolve(), called after the physics loop.
+        // This prevents flickering on high-FPS frames that skip physics steps.
+    }
+
+    /// Resolve the luminocyte light accumulator into light_color_field.
+    ///
+    /// Called ONCE per render frame after all physics steps, so the resolve always
+    /// runs even on frames where no physics step fired. This prevents flickering on
+    /// high-FPS setups (e.g. 120+ Hz) where the fixed-timestep accumulator sometimes
+    /// doesn't trigger a physics step, leaving luminocyte lights dark for that frame.
+    ///
+    /// light_color_accum holds either:
+    ///   - This frame's emission (if physics ran), or
+    ///   - Previous frame's emission (if no physics ran — not cleared without physics)
+    /// Either way it's stable and flicker-free.
+    ///
+    /// No clear_buffer(light_color_field) is needed here: compute_light_field already
+    /// wrote w=0 to every voxel this frame, so the resolve only needs to overwrite the
+    /// luminocyte-lit voxels with w>0.
+    fn run_luminocyte_color_resolve(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+    ) {
+        if !self.luminocyte_resolve_needed {
+            return;
         }
+        self.luminocyte_resolve_needed = false;
+
+        let light_field = match &self.light_field_system {
+            Some(l) => l,
+            None => return,
+        };
+
+        let output_idx = self.gpu_triple_buffers.output_buffer_index();
+
+        // Ensure physics bind group cache exists (may not exist if no physics step ran yet)
+        if self.cached_photocyte_physics_bind_groups.is_none() {
+            self.cached_photocyte_physics_bind_groups = Some([
+                light_field.create_photocyte_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[0],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                light_field.create_photocyte_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[1],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+                light_field.create_photocyte_physics_bind_group(
+                    device,
+                    &self.gpu_triple_buffers.physics_params,
+                    &self.gpu_triple_buffers.position_and_mass[2],
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                ),
+            ]);
+        }
+
+        let photocyte_physics_bg =
+            &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
+
+        light_field.update_photocyte_params(queue);
+
+        let photocyte_system_bg = light_field.create_photocyte_system_bind_group(
+            device,
+            &self.gpu_triple_buffers.cell_types,
+            &self.gpu_triple_buffers.nutrients_buffer,
+            &self.gpu_triple_buffers.split_nutrient_thresholds,
+            &self.gpu_triple_buffers.death_flags,
+            &self.gpu_triple_buffers.mode_indices,
+            &self.gpu_triple_buffers.mode_properties_v7,
+            self.instance_builder.mode_emissive_buffer(),
+            &self.adhesion_buffers.signal_flags,
+            self.instance_builder.mode_colors_buffer(),
+        );
+
+        let total_voxels = 128u32 * 128 * 128;
+        let color_workgroups = (total_voxels + 255) / 256;
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Resolve Luminocyte Light Color"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(light_field.resolve_light_color_pipeline_ref());
+        pass.set_bind_group(0, photocyte_physics_bg, &[]);
+        pass.set_bind_group(1, &photocyte_system_bg, &[]);
+        pass.dispatch_workgroups(color_workgroups, 1, 1);
     }
 
     /// Copy data from triple buffers to instance builder
@@ -7585,9 +7678,12 @@ impl Scene for GpuScene {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
-        // Compute light field once per frame BEFORE physics loop
+        // Compute light field BEFORE physics loop, throttled by light_field_update_interval.
         // Needed for: (1) photocyte consumption inside each physics step, (2) volumetric fog rendering
-        if !self.paused || self.show_volumetric_fog {
+        let lf_interval = self.light_field_update_interval.max(1);
+        if (!self.paused || self.show_volumetric_fog)
+            && (self.current_frame as u32 % lf_interval == 0)
+        {
             self.run_light_field(device, &mut encoder, queue);
         }
 
@@ -7636,8 +7732,8 @@ impl Scene for GpuScene {
         // Use fixed timestep accumulator for consistent physics behavior
         if !self.paused {
             let fixed_dt = self.config.fixed_timestep;
-            // Allow more steps when time_scale > 1 (fast forward)
-            let max_steps = (4.0 * self.time_scale).ceil() as i32;
+            let max_steps =
+                (self.max_physics_steps_per_frame as f32 * self.time_scale).ceil() as i32;
 
             while self.time_accumulator >= fixed_dt && physics_steps < max_steps {
                 self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
@@ -7651,6 +7747,7 @@ impl Scene for GpuScene {
                 self.time_accumulator -= fixed_dt;
                 physics_steps += 1;
             }
+            self.last_physics_steps = physics_steps as u32;
 
             // If we hit max steps, discard remaining accumulated time
             if physics_steps >= max_steps {
@@ -7680,6 +7777,11 @@ impl Scene for GpuScene {
         if physics_steps == 0 {
             self.dispatch_scaffold_rules(device, &mut encoder, queue);
         }
+
+        // Resolve luminocyte light accumulator once per render frame, regardless of whether
+        // a physics step fired. Fixes flicker on high-FPS displays where the fixed-timestep
+        // accumulator occasionally skips a physics step.
+        self.run_luminocyte_color_resolve(device, &mut encoder, queue);
 
         // Execute non-drag pending position updates (e.g. from other tools)
         let position_updated =
@@ -7901,15 +8003,52 @@ impl Scene for GpuScene {
 
         // Render procedural space skybox (before cells so geometry draws over it)
         if self.show_skybox {
-            if let Some(ref skybox_renderer) = self.skybox_renderer {
+            if let Some(ref mut skybox_renderer) = self.skybox_renderer {
+                let sun_dir = glam::Vec3::from_array(self.sun_light_dir).normalize_or_zero();
+                let orbit_axis = self
+                    .sun_renderer
+                    .as_ref()
+                    .map(|s| glam::Vec3::from_array(s.orbit_axis).normalize_or_zero())
+                    .filter(|a| a.length_squared() > 0.0)
+                    .unwrap_or(glam::Vec3::Y);
+
+                // Recompute sky rotation only when sun direction or orbit axis changes.
+                // Rotate the star field by spinning around the orbit axis only.
+                // from_rotation_arc(Y, sun_dir) introduces uncontrolled roll as the
+                // rotation axis shifts, causing stars to spin off-axis. Instead we
+                // project sun_dir onto the orbital plane and use the azimuthal angle
+                // for a pure from_axis_angle rotation — no roll, just orbit.
+                let orbit_axis_arr = orbit_axis.to_array();
+                if self.sun_light_dir != self.cached_sky_sun_dir
+                    || orbit_axis_arr != self.cached_sky_orbit_axis
+                {
+                    let sun_flat = sun_dir - orbit_axis * orbit_axis.dot(sun_dir);
+                    self.cached_sky_rotation = if sun_flat.length_squared() > 1e-6 {
+                        let sun_flat = sun_flat.normalize();
+                        let world_ref = if orbit_axis.dot(glam::Vec3::X).abs() < 0.9 {
+                            glam::Vec3::X
+                        } else {
+                            glam::Vec3::Z
+                        };
+                        let ref_dir = orbit_axis.cross(world_ref).normalize();
+                        let tangent = orbit_axis.cross(ref_dir);
+                        let angle = f32::atan2(tangent.dot(sun_flat), ref_dir.dot(sun_flat));
+                        glam::Quat::from_axis_angle(orbit_axis, angle)
+                    } else {
+                        glam::Quat::IDENTITY
+                    };
+                    self.cached_sky_sun_dir = self.sun_light_dir;
+                    self.cached_sky_orbit_axis = orbit_axis_arr;
+                }
+                let sky_rotation = self.cached_sky_rotation;
                 skybox_renderer.render(
                     &mut encoder,
                     queue,
                     scene_target,
-                    device,
                     view_proj,
                     self.camera.position(),
                     self.current_time,
+                    sky_rotation,
                 );
             }
         }
@@ -8022,7 +8161,7 @@ impl Scene for GpuScene {
         // Render procedural sun if enabled (after caves but before world sphere,
         // so caves occlude the sun but the translucent world sphere doesn't)
         if self.show_sun {
-            if let Some(ref sun_renderer) = self.sun_renderer {
+            if let Some(mut sun_renderer) = self.sun_renderer.take() {
                 sun_renderer.render(
                     &mut encoder,
                     queue,
@@ -8035,6 +8174,7 @@ impl Scene for GpuScene {
                     self.sun_light_dir,
                     self.sun_intensity,
                 );
+                self.sun_renderer = Some(sun_renderer);
             }
         }
 

@@ -334,6 +334,39 @@ fn sun_rays(uv_from_sun: vec2<f32>, time: f32) -> f32 {
     return rays * falloff * sun_params.ray_intensity;
 }
 
+fn screen_space_sun_shafts(uv: vec2<f32>, sun_screen: vec2<f32>, time: f32) -> f32 {
+    let to_sun = sun_screen - uv;
+    let dist = length(to_sun);
+    if (dist < 0.001) {
+        return 0.0;
+    }
+
+    let dir = to_sun / dist;
+    let angle = atan2(dir.y, dir.x);
+    let ray_count = sun_params.ray_count;
+
+    let band_a = pow(0.5 + 0.5 * sin(angle * ray_count + time * 0.35), 5.0);
+    let band_b = pow(0.5 + 0.5 * sin(angle * ray_count * 0.47 - time * 0.22 + 1.7), 7.0);
+    let drift = fbm2d(vec2<f32>(angle * 2.0 + time * 0.08, dist * 5.0 - time * 0.18), 3);
+    let bands = (band_a + band_b * 0.55) * (0.65 + 0.35 * drift);
+
+    var visibility = 0.0;
+    let sample_count = 8;
+    for (var i = 0; i < sample_count; i++) {
+        let t = (f32(i) + 0.5) / f32(sample_count);
+        let sample_uv = uv + to_sun * t;
+        if (sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0) {
+            let depth = textureSample(depth_texture, depth_sampler, sample_uv);
+            visibility += select(0.0, 1.0, depth > 0.99999);
+        }
+    }
+    visibility /= f32(sample_count);
+
+    let radial = exp(-dist * sun_params.ray_falloff);
+    let near_sun = smoothstep(0.02, 0.18, dist);
+    return bands * visibility * radial * near_sun * sun_params.ray_intensity;
+}
+
 // ============================================================
 // Lens flare effects
 // ============================================================
@@ -497,29 +530,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
     let time = camera.time;
 
-    // Get light direction (points toward sun)
-    let light_dir = normalize(vec3<f32>(sun_params.light_dir_x, sun_params.light_dir_y, sun_params.light_dir_z));
+    // light_dir is pre-normalized on the CPU (spherical coords → unit vector)
+    let light_dir = vec3<f32>(sun_params.light_dir_x, sun_params.light_dir_y, sun_params.light_dir_z);
 
-    // Project sun position to screen space
-    // Sun is at infinite distance, so we project the direction vector
-    let far_sun_pos = camera.camera_pos + light_dir * 500.0; // Far enough to be "at infinity"
-    let clip_pos = camera.view_proj * vec4<f32>(far_sun_pos, 1.0);
+    // Project as a direction at infinity. Using w=0 removes camera translation,
+    // so the visible sun follows only light_dir instead of wobbling with position.
+    let clip_pos = camera.view_proj * vec4<f32>(light_dir, 0.0);
 
-    // Check if sun is behind camera
-    if (clip_pos.w <= 0.0) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    var sun_screen = vec2<f32>(0.0);
+    var eclipse = 0.0;
+    let sun_in_front = clip_pos.w > 0.0;
+    if (sun_in_front) {
+        let ndc = clip_pos.xyz / clip_pos.w;
+        // Convert NDC to UV (flip Y for wgpu)
+        sun_screen = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+
+        // Compute eclipse factor from depth buffer
+        eclipse = compute_eclipse(sun_screen) * sun_params.eclipse_factor;
     }
-
-    let ndc = clip_pos.xyz / clip_pos.w;
-    // Convert NDC to UV (flip Y for wgpu)
-    let sun_screen = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-
-    // Compute eclipse factor from depth buffer
-    let eclipse = compute_eclipse(sun_screen) * sun_params.eclipse_factor;
-
-    if (eclipse < 0.001) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    let sun_visible = sun_in_front && eclipse >= 0.001;
 
     // UV relative to sun center
     let aspect = sun_params.screen_width / sun_params.screen_height;
@@ -550,10 +579,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var final_alpha = 0.0;
 
     // Sun-position effects only render where there is NO geometry
-    if (!has_geometry) {
+    if (sun_visible && !has_geometry) {
+        // Visual brightness scale — boosts the rendered sun without touching light projection.
+        let visual_scale = 8.0;
+
         // 1. Sun disk with surface detail
         let disk = sun_disk(sun_uv, dist_in_radii, time);
-        final_color += disk;
+        final_color += disk * visual_scale;
         if (dist_in_radii < 1.0) {
             final_alpha = 1.0;
         }
@@ -563,20 +595,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // 3. Corona
         let corona_color = corona(angle, dist_in_radii, time);
-        final_color += corona_color;
+        final_color += corona_color * visual_scale;
         final_alpha = max(final_alpha, length(corona_color) * 0.5);
 
-        // 4. Sun rays (volumetric-style radial beams)
-        let rays = sun_rays(uv_from_sun / sun_radius_screen * 0.15, time);
-        final_color += sun_color * rays * 0.5;
-        final_alpha = max(final_alpha, rays * 0.3);
-
-        // 5. Soft glow around sun (large-scale bloom approximation)
+        // 4. Soft glow around sun (large-scale bloom approximation)
         let glow_falloff = exp(-dist_in_radii * 0.8);
         let glow = sun_color * glow_falloff * sun_params.glow_intensity * sun_params.sun_intensity;
-        final_color += glow;
+        final_color += glow * visual_scale;
         final_alpha = max(final_alpha, glow_falloff * 0.1);
     }
+
+    // Screen-space sun shafts removed
 
     // 6. Lens flare removed
     // Note: lens_flare function still exists but is not called
@@ -604,17 +633,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Angular distance from the great circle (= |dot(ray, axis)|).
         let perp = abs(dot(ray_dir, orbit_axis));
 
-        // Neon ring: thin bright core with a soft outer glow.
-        let ring_half = 0.006;
-        let glow_half = 0.028;
+        // Thin dashed-look ring with minimal glow.
+        let ring_half = 0.002;
+        let glow_half = 0.008;
         let core  = smoothstep(ring_half, 0.0,       perp);
-        let glow  = smoothstep(glow_half, ring_half,  perp) * 0.35;
+        let glow  = smoothstep(glow_half, ring_half,  perp) * 0.15;
         let ring  = (core + glow) * sun_params.orbit_ring_opacity;
 
-        // Cyan-white neon tint.
-        let ring_color = vec3<f32>(0.4, 0.9, 1.0) * ring * 1.8;
+        // Muted blue-white tint at lower brightness.
+        let ring_color = vec3<f32>(0.5, 0.75, 1.0) * ring * 0.6;
         final_color += ring_color;
-        final_alpha = max(final_alpha, ring * sun_params.orbit_ring_opacity);
+        final_alpha = max(final_alpha, ring * sun_params.orbit_ring_opacity * 0.5);
     }
 
     // Tone map to prevent harsh clipping

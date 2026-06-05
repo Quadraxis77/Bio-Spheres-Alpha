@@ -71,13 +71,15 @@ impl Default for SkyboxParams {
 /// before any opaque geometry.
 pub struct SkyboxRenderer {
     pipeline: wgpu::RenderPipeline,
-    camera_layout: wgpu::BindGroupLayout,
-    params_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    params_bind_group: wgpu::BindGroup,
 
     /// Publicly configurable appearance parameters.
     pub params: SkyboxParams,
+    /// Set to true when `params` has been modified; cleared after GPU upload.
+    pub params_dirty: bool,
 }
 
 impl SkyboxRenderer {
@@ -180,13 +182,32 @@ impl SkyboxRenderer {
             mapped_at_creation: false,
         });
 
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Skybox Camera Bind Group"),
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+
+        let params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Skybox Params Bind Group"),
+            layout: &params_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
+        });
+
         Self {
             pipeline,
-            camera_layout,
-            params_layout,
             camera_buffer,
             params_buffer,
+            camera_bind_group,
+            params_bind_group,
             params: SkyboxParams::default(),
+            params_dirty: true,
         }
     }
 
@@ -198,14 +219,14 @@ impl SkyboxRenderer {
     /// strips the translation internally so the skybox never shakes as the
     /// camera moves.
     pub fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         color_view: &wgpu::TextureView,
-        device: &wgpu::Device,
         view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
         time: f32,
+        sky_rotation: glam::Quat,
     ) {
         // Build a rotation-only view-projection by cancelling the camera
         // translation. Multiplying view_proj by T(+camera_pos) on the right
@@ -217,7 +238,8 @@ impl SkyboxRenderer {
         // V * T(+cam) = R   (translation cancels)
         // rot_view_proj = P * R = view_proj * T(+cam)
         let rot_view_proj = view_proj * glam::Mat4::from_translation(camera_pos);
-        let inv_view_rot_proj = rot_view_proj.inverse();
+        let sky_sample_rotation = glam::Mat4::from_quat(sky_rotation.inverse());
+        let inv_view_rot_proj = sky_sample_rotation * rot_view_proj.inverse();
 
         let camera_uniform = SkyboxCameraUniforms {
             inv_view_rot_proj: inv_view_rot_proj.to_cols_array_2d(),
@@ -228,27 +250,11 @@ impl SkyboxRenderer {
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
-        // Upload appearance params
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
-
-        // Build bind groups (cheap - no textures, just two small uniforms)
-        let camera_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Skybox Camera Bind Group"),
-            layout: &self.camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.camera_buffer.as_entire_binding(),
-            }],
-        });
-
-        let params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Skybox Params Bind Group"),
-            layout: &self.params_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.params_buffer.as_entire_binding(),
-            }],
-        });
+        // Upload appearance params only when they have changed
+        if self.params_dirty {
+            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&self.params));
+            self.params_dirty = false;
+        }
 
         // Render pass - color only, no depth attachment
         {
@@ -271,8 +277,8 @@ impl SkyboxRenderer {
             });
 
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &camera_bg, &[]);
-            pass.set_bind_group(1, &params_bg, &[]);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.params_bind_group, &[]);
             pass.draw(0..3, 0..1); // fullscreen triangle
         }
     }

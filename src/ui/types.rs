@@ -362,6 +362,22 @@ pub struct WorldSettings {
     /// Range: 1.0 (no penalty) to 10.0 (extreme penalty).
     #[serde(default = "default_solo_metabolism_multiplier")]
     pub solo_metabolism_multiplier: f32,
+
+    /// How often the light field is recomputed, in render frames.
+    /// 1 = every frame (best quality), 2 = every other frame, 4 = every 4th frame.
+    /// Higher values reduce GPU cost but cause light/shadow to lag cell movement.
+    #[serde(default = "default_light_field_update_interval")]
+    pub light_field_update_interval: u32,
+
+    /// Physics simulation rate in Hz (32, 48, or 64).
+    /// Lower Hz = cheaper per real-time second but coarser timestep; changes simulation timing.
+    #[serde(default = "default_physics_hz")]
+    pub physics_hz: u32,
+
+    /// Maximum physics steps allowed per render frame at 1x speed.
+    /// Caps how much catch-up work can happen in a single frame; auto = 4.
+    #[serde(default = "default_max_physics_steps")]
+    pub max_physics_steps_per_frame: u32,
 }
 
 impl Default for WorldSettings {
@@ -378,6 +394,9 @@ impl Default for WorldSettings {
             world_radius: 200.0,
             solo_metabolism_enabled: false,
             solo_metabolism_multiplier: 3.0,
+            light_field_update_interval: 1,
+            physics_hz: 64,
+            max_physics_steps_per_frame: 4,
         }
     }
 }
@@ -595,6 +614,18 @@ fn default_acceleration_damping() -> f32 {
 
 fn default_solo_metabolism_multiplier() -> f32 {
     3.0
+}
+
+fn default_light_field_update_interval() -> u32 {
+    1
+}
+
+fn default_physics_hz() -> u32 {
+    64
+}
+
+fn default_max_physics_steps() -> u32 {
+    4
 }
 
 fn default_organism_grid_resolution() -> u32 {

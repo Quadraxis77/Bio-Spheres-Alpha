@@ -378,36 +378,51 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         
         let light_intensity = sample_light_field(light_sample_pos);
-        
-        // Water attenuates light beams — sample at the actual (undistorted) position
-        // so water volumes create realistic shadow falloff.
-        var sample_color = vec3<f32>(0.0);
-        if (light_intensity > 0.0 && fog_params.light_intensity > 0.0) {
-            let water_amount = sample_water_density_fog(sample_pos);
-            let effective_light = light_intensity * (1.0 - water_amount * 0.9);
+
+        // Water at this sample point: contributes its own scattering density and blue tint.
+        let water_amount = sample_water_density_fog(sample_pos);
+        // Effective density: base fog plus water-volume scattering contribution.
+        // Water acts as a participating medium even when base fog_density is low.
+        let effective_density = density + water_amount * 0.6;
 
         // In-scattered light: light that scatters toward camera at this point.
         // Luminocyte-lit voxels (w > 0) use isotropic phase — their light radiates in
         // all directions, so the sun angle must not create dark "beam" shadows.
-            if (effective_light > 0.0) {
-                let light_color_full = sample_light_color_field_full(light_sample_pos);
-                let local_light_color = light_color_full.rgb;
-                let is_luminocyte_lit = light_color_full.w > 0.0;
-                let phase = select(
-                    mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy),
-                    isotropic_phase,
-                    is_luminocyte_lit,
+        var sample_color = vec3<f32>(0.0);
+        if (light_intensity > 0.0 && fog_params.light_intensity > 0.0 && effective_density > 0.0) {
+            let light_color_full = sample_light_color_field_full(light_sample_pos);
+            var local_light_color = light_color_full.rgb;
+            let is_luminocyte_lit = light_color_full.w > 0.0;
+            let phase = select(
+                mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy),
+                isotropic_phase,
+                is_luminocyte_lit,
+            );
+
+            if (water_amount > 0.01) {
+                // Inside water: scatter with a blue tint rather than suppressing the beam.
+                // Water is a participating medium — it scatters light forward but absorbs
+                // red and green faster than blue, producing the characteristic deep-water color.
+                // light_color_field already carries ray-march tint; this adds per-voxel scattering tint.
+                let r_abs = water_amount * 2.2;
+                let g_abs = water_amount * 0.55;
+                let water_scatter_tint = vec3<f32>(
+                    1.0 / (1.0 + r_abs + r_abs * r_abs * 0.5),
+                    1.0 / (1.0 + g_abs + g_abs * g_abs * 0.5),
+                    1.0,
                 );
-                sample_color = local_light_color * effective_light * phase * fog_params.light_intensity;
+                local_light_color *= water_scatter_tint;
             }
+
+            sample_color = local_light_color * light_intensity * phase * fog_params.light_intensity;
         }
-        
+
         // Beer-Lambert absorption (fast exp approximation)
-        let sample_extinction = density * (fog_params.absorption + fog_params.fog_density) * step_size * 0.01;
+        let sample_extinction = effective_density * (fog_params.absorption + fog_params.fog_density) * step_size * 0.01;
         let sample_transmittance = 1.0 / (1.0 + sample_extinction + sample_extinction * sample_extinction * 0.5);
-        
+
         // Accumulate (energy-conserving integration)
-        let integrand = sample_color * density * step_size * 0.01;
+        let integrand = sample_color * effective_density * step_size * 0.01;
         accumulated_color += transmittance * integrand;
         transmittance *= sample_transmittance;
         

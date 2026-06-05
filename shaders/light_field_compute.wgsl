@@ -101,23 +101,6 @@ fn is_solid(x: i32, y: i32, z: i32) -> bool {
     return solid_mask[idx] != 0u;
 }
 
-// Sample cell occupancy at grid position (returns number of cells in voxel)
-fn cell_count_at(x: i32, y: i32, z: i32) -> u32 {
-    if (!is_in_bounds(x, y, z)) {
-        return 0u;
-    }
-    let idx = grid_to_index(u32(x), u32(y), u32(z));
-    return cell_occupancy[idx];
-}
-
-fn water_amount_at(x: i32, y: i32, z: i32) -> f32 {
-    if (!is_in_bounds(x, y, z)) {
-        return 0.0;
-    }
-    let idx = grid_to_index(u32(x), u32(y), u32(z));
-    return clamp(water_density[idx], 0.0, 1.0);
-}
-
 // Check if a grid-space position is inside the world sphere
 fn is_inside_sphere(gx: f32, gy: f32, gz: f32) -> bool {
     let fres = f32(params.grid_resolution);
@@ -143,39 +126,44 @@ fn is_near_sphere_boundary(gx: f32, gy: f32, gz: f32) -> bool {
     return dist_sq > (inner_radius * inner_radius);
 }
 
-// Ray march from voxel toward light source, accumulating occlusion
-fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
+// Ray march from voxel toward light source, accumulating occlusion.
+// Returns vec2(transmittance, water_column) where water_column is the
+// total integrated water density along the ray — used for chromatic tinting.
+fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
     // CPU-side LightFieldSystem::set_light_dir stores this normalized.
     let light_dir = vec3<f32>(params.light_dir_x, params.light_dir_y, params.light_dir_z);
-    
+
     // Start from voxel center, march in light direction
     var pos = vec3<f32>(f32(gx) + 0.5, f32(gy) + 0.5, f32(gz) + 0.5);
     let step = light_dir * params.step_size;
-    
+
     var transmittance = 1.0;
+    var water_column = 0.0; // integrated water density along the ray
     var consecutive_solid = 0u;
-    
+
     for (var i = 0u; i < params.max_steps; i++) {
         pos += step;
-        
+
         // Convert to integer grid coords
         let ix = i32(floor(pos.x));
         let iy = i32(floor(pos.y));
         let iz = i32(floor(pos.z));
-        
+
         // If we've left the grid, we've reached open sky - stop
         if (!is_in_bounds(ix, iy, iz)) {
             break;
         }
-        
+
         // If we've exited the world sphere, we've reached open sky - stop
         if (!is_inside_sphere(pos.x, pos.y, pos.z)) {
             break;
         }
-        
+
+        let sample_idx = grid_to_index(u32(ix), u32(iy), u32(iz));
+
         // Check solid (cave walls) - require consecutive solid hits to filter
         // out scattered noise voxels. Real cave walls are many voxels thick.
-        let solid_here = is_solid(ix, iy, iz) && !is_near_sphere_boundary(pos.x, pos.y, pos.z);
+        let solid_here = solid_mask[sample_idx] != 0u && !is_near_sphere_boundary(pos.x, pos.y, pos.z);
         if (solid_here) {
             consecutive_solid += 1u;
             // Only apply absorption after 2+ consecutive solid voxels (actual wall)
@@ -187,32 +175,34 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
         } else {
             consecutive_solid = 0u;
         }
-        
+
         // Check cell occupancy - cells block light
-        let cells = cell_count_at(ix, iy, iz);
+        let cells = cell_occupancy[sample_idx];
         if (cells > 0u) {
             // Fast exp approximation for multiple cells
             let x = params.absorption_cell * f32(cells);
             transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
         }
 
-        let water_amount = water_amount_at(ix, iy, iz);
+        let water_amount = clamp(water_density[sample_idx], 0.0, 1.0);
         if (water_amount > 0.01) {
             // Water transmits light, but not like empty air. It gently absorbs
             // and scatters across each shared voxel rather than acting as a wall.
             let x = 0.055 * water_amount * params.step_size;
             transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+            // Accumulate water column for downstream chromatic tinting
+            water_column += water_amount * params.step_size;
         }
-        
+
         // Early exit if light is effectively blocked
         if (transmittance < 0.05) {
             transmittance = 0.0;
             break;
         }
     }
-    
+
     // Apply ambient floor - even fully shadowed areas get some light
-    return max(transmittance, params.ambient_floor);
+    return vec2<f32>(max(transmittance, params.ambient_floor), water_column);
 }
 
 @compute @workgroup_size(64)
@@ -264,14 +254,30 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
-    // Ray march toward light to compute intensity
-    let intensity = compute_light_at_voxel(grid_pos.x, grid_pos.y, grid_pos.z);
+    // Ray march toward light to compute intensity and accumulated water depth
+    let result = compute_light_at_voxel(grid_pos.x, grid_pos.y, grid_pos.z);
+    let intensity = result.x;
+    let water_column = result.y;
     light_field[idx] = intensity;
-    let water_tint = vec3<f32>(0.70, 0.92, 1.10);
-    let water_mix = clamp(water_density[idx], 0.0, 1.0) * 0.45;
+
     let sun_color = vec3<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b);
-    let local_color = mix(sun_color, sun_color * water_tint, water_mix);
-    light_color_field[idx] = vec4<f32>(local_color, 0.0);
+
+    // Chromatic absorption: water filters out red then green as light travels through it,
+    // leaving a progressively bluer tint the more water the ray traversed.
+    // Uses the same fast exp approximation as transmittance: 1/(1 + x + x²/2).
+    let wc = water_column;
+    let r_abs = wc * 2.8;
+    let g_abs = wc * 0.65;
+    let r_atten = 1.0 / (1.0 + r_abs + r_abs * r_abs * 0.5);
+    let g_atten = 1.0 / (1.0 + g_abs + g_abs * g_abs * 0.5);
+    // Blue travels freely through water (attenuation ≈ 0)
+    let ray_tint = vec3<f32>(r_atten, g_atten, 1.0);
+
+    // Additional tint for voxels that are themselves submerged
+    let voxel_water = clamp(water_density[idx], 0.0, 1.0);
+    let voxel_tint = mix(vec3<f32>(1.0), vec3<f32>(0.70, 0.92, 1.10), voxel_water * 0.45);
+
+    light_color_field[idx] = vec4<f32>(sun_color * ray_tint * voxel_tint, 0.0);
 }
 
 // === Cell Occupancy Grid Builder ===

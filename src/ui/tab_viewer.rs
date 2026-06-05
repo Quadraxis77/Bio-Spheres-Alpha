@@ -5000,23 +5000,23 @@ fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
 
     ui.label("Direction")
         .on_hover_text("Pitch controls sun height. Yaw rotates the sun around the world.");
-    changed |= labeled_slider(
-        ui,
-        "Pitch",
-        egui::Slider::new(&mut pitch, -89.0..=89.0)
-            .text("Pitch")
-            .step_by(1.0)
-            .fixed_decimals(0),
-    )
+    ui.label("Pitch");
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut pitch, -89.0..=89.0)
+                .text("Pitch")
+                .step_by(1.0)
+                .fixed_decimals(0),
+        )
         .changed();
-    changed |= labeled_slider(
-        ui,
-        "Yaw",
-        egui::Slider::new(&mut yaw, -180.0..=180.0)
-            .text("Yaw")
-            .step_by(1.0)
-            .fixed_decimals(0),
-    )
+    ui.label("Yaw");
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut yaw, -180.0..=180.0)
+                .text("Yaw")
+                .step_by(1.0)
+                .fixed_decimals(0),
+        )
         .changed();
 
     ui.horizontal_wrapped(|ui| {
@@ -5044,18 +5044,6 @@ fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
     changed
 }
 
-fn labeled_slider(ui: &mut Ui, label: &str, slider: egui::Slider<'_>) -> egui::Response {
-    ui.horizontal(|ui| {
-        let label_width = 118.0;
-        ui.add_sized(
-            [label_width, ui.text_style_height(&egui::TextStyle::Body)],
-            egui::Label::new(label),
-        );
-        ui.add(slider)
-    })
-    .inner
-}
-
 trait AbsDiffEq {
     fn abs_diff_eq(self, other: Self, epsilon: Self) -> bool;
 }
@@ -5069,7 +5057,7 @@ impl AbsDiffEq for f32 {
 fn render_light_settings_organized(
     ui: &mut Ui,
     context: &mut PanelContext,
-    state: &GlobalUiState,
+    state: &mut GlobalUiState,
 ) {
     let sw = (ui.available_width() - 60.0).max(60.0);
     ui.style_mut().spacing.slider_width = sw;
@@ -5110,15 +5098,15 @@ fn render_light_settings_organized(
             });
 
             ui.add_space(4.0);
-            changed |= labeled_slider(
-                ui,
-                "Brightness",
-                egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=20.0)
-                    .logarithmic(true)
-                    .text("Brightness")
-                    .step_by(0.1)
-                    .fixed_decimals(1),
-            )
+            ui.label("Brightness");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=20.0)
+                        .logarithmic(true)
+                        .text("Brightness")
+                        .step_by(0.1)
+                        .fixed_decimals(1),
+                )
                 .on_hover_text("Directional sun intensity. Photocyte energy scales with this.")
                 .changed();
             if changed {
@@ -5147,35 +5135,39 @@ fn render_light_settings_organized(
                     .on_hover_text("Rotate the sun along the defined orbit path.");
                 if orbit_toggle.changed() && context.editor_state.sun_rotation_enabled {
                     context.editor_state.capture_sun_orbit_angle();
-                    context.editor_state.orbit_ring_opacity = 1.0;
                 }
                 changed |= orbit_toggle.changed();
+                changed |= ui
+                    .checkbox(&mut context.editor_state.show_orbit_ring, "Show Ring")
+                    .on_hover_text("Keep the orbit path ring visible in the scene.")
+                    .changed();
             });
             if context.editor_state.sun_rotation_enabled {
-                if labeled_slider(
-                    ui,
-                    "Position",
+                let mut orbit_angle = context.editor_state.sun_orbit_angle;
+                ui.label("Position");
+                if ui
+                    .add(
                         egui::Slider::new(
-                            &mut context.editor_state.sun_orbit_angle,
-                            -180.0..=180.0,
+                            &mut orbit_angle,
+                            0.0..=360.0,
                         )
                         .text("Position")
                         .suffix("°")
-                        .step_by(1.0)
-                        .fixed_decimals(0),
+                        .step_by(0.1)
+                        .fixed_decimals(1),
                     )
                     .on_hover_text("Sun position along the visible orbit ring.")
                     .changed()
                 {
+                    context.editor_state.sun_orbit_angle = orbit_angle;
                     context.editor_state.apply_sun_orbit();
-                    context.editor_state.orbit_ring_opacity = 1.0;
                     changed = true;
                 }
 
                 let mut speed_degrees = context.editor_state.sun_rotation_speed.to_degrees();
-                if labeled_slider(
-                    ui,
-                    "Speed",
+                ui.label("Speed");
+                if ui
+                    .add(
                         egui::Slider::new(&mut speed_degrees, -30.0..=30.0)
                             .text("Speed")
                             .suffix("°/s")
@@ -5194,9 +5186,9 @@ fn render_light_settings_organized(
                 let (mut orbit_pitch, mut orbit_yaw) =
                     light_dir_to_pitch_yaw(context.editor_state.sun_rotation_axis);
                 let mut orbit_changed = false;
-                orbit_changed |= labeled_slider(
-                    ui,
-                    "Path Tilt",
+                ui.label("Path Tilt");
+                orbit_changed |= ui
+                    .add(
                         egui::Slider::new(&mut orbit_pitch, -90.0..=90.0)
                             .text("Tilt")
                             .suffix("°")
@@ -5204,9 +5196,9 @@ fn render_light_settings_organized(
                     )
                     .on_hover_text("Tilt of the orbit plane. 0° = equatorial, 90° = polar.")
                     .changed();
-                orbit_changed |= labeled_slider(
-                    ui,
-                    "Path Yaw",
+                ui.label("Path Yaw");
+                orbit_changed |= ui
+                    .add(
                         egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
                             .text("Direction")
                             .suffix("°")
@@ -5218,7 +5210,6 @@ fn render_light_settings_organized(
                     context.editor_state.sun_rotation_axis =
                         pitch_yaw_to_light_dir(orbit_pitch, orbit_yaw);
                     context.editor_state.apply_sun_orbit();
-                    context.editor_state.orbit_ring_opacity = 1.0;
                     changed = true;
                 }
 
@@ -5692,6 +5683,53 @@ fn render_light_settings_organized(
                 }
             });
     }
+
+    // Performance section
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Performance");
+    ui.add_space(4.0);
+
+    // Read current values first; closures capture them by copy, write-back happens after.
+    let mut lf_interval = state.world_settings.light_field_update_interval;
+    let mut phz = state.world_settings.physics_hz;
+    let mut max_steps = state.world_settings.max_physics_steps_per_frame;
+
+    ui.label("Light Field Interval:")
+        .on_hover_text("Recompute the shadow/light voxel grid every N render frames. 1 = every frame (best quality). /2 /4 /8 = progressively cheaper with minor shadow lag on fast-moving organisms.");
+    ui.horizontal(|ui| {
+        for &n in &[1u32, 2, 4, 8] {
+            let label = if n == 1 { "Every".to_owned() } else { format!("/{n}") };
+            if ui.selectable_label(lf_interval == n, label).clicked() {
+                lf_interval = n;
+            }
+        }
+    });
+    ui.label(egui::RichText::new("Every = full quality  /2 /4 /8 = progressively cheaper").small());
+
+    ui.add_space(6.0);
+
+    ui.label("Physics Rate:")
+        .on_hover_text("Fixed timestep frequency. Lower Hz = cheaper but coarser integration; affects cell growth timing and spring stiffness. 64 Hz is the default.");
+    ui.horizontal(|ui| {
+        for &hz in &[32u32, 48, 64] {
+            if ui.selectable_label(phz == hz, format!("{hz} Hz")).clicked() {
+                phz = hz;
+            }
+        }
+    });
+    ui.label(egui::RichText::new("Lower Hz = faster but coarser simulation").small());
+
+    ui.add_space(6.0);
+
+    ui.label("Max Steps / Frame:")
+        .on_hover_text("Maximum physics steps per render frame at 1x speed. Lower = better frame times at high simulation speeds; higher = simulation keeps up during fast-forward.");
+    ui.add(egui::Slider::new(&mut max_steps, 1..=16));
+    ui.label(egui::RichText::new("Caps physics budget per frame (lower = smoother, may slow sim at high speed)").small());
+
+    state.world_settings.light_field_update_interval = lf_interval;
+    state.world_settings.physics_hz = phz;
+    state.world_settings.max_physics_steps_per_frame = max_steps;
 
     if sun_changed {
         changed = true;
@@ -11584,6 +11622,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             )
             .small(),
         );
+
     } // end advanced physics
 
     ui.add_space(12.0);

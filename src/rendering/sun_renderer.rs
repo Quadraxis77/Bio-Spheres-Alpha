@@ -122,11 +122,13 @@ impl Default for SunParams {
 /// Procedural sun renderer
 pub struct SunRenderer {
     pipeline: wgpu::RenderPipeline,
-    camera_layout: wgpu::BindGroupLayout,
     sun_data_layout: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     sun_params_buffer: wgpu::Buffer,
     depth_sampler: wgpu::Sampler,
+    camera_bind_group: wgpu::BindGroup,
+    sun_data_bind_group: Option<wgpu::BindGroup>,
+    sun_data_bg_dirty: bool,
 
     // Configurable parameters (exposed for UI)
     pub sun_angular_radius: f32,
@@ -139,6 +141,11 @@ pub struct SunRenderer {
     // Screen dimensions
     width: u32,
     height: u32,
+
+    /// Cached sun params uploaded last frame; upload skipped when nothing changes.
+    cached_sun_params: SunParams,
+    /// True when cached_sun_params needs to be reuploaded.
+    sun_params_dirty: bool,
 }
 
 impl SunRenderer {
@@ -281,13 +288,24 @@ impl SunRenderer {
             ..Default::default()
         });
 
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Sun Camera Bind Group"),
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+        });
+
         Self {
             pipeline,
-            camera_layout,
             sun_data_layout,
             camera_buffer,
             sun_params_buffer,
             depth_sampler,
+            camera_bind_group,
+            sun_data_bind_group: None,
+            sun_data_bg_dirty: true,
             sun_angular_radius: 0.025,
             sun_color: [1.0, 1.0, 0.85],
             enabled: true,
@@ -295,6 +313,8 @@ impl SunRenderer {
             orbit_ring_opacity: 0.0,
             width: 1280,
             height: 720,
+            cached_sun_params: SunParams::default(),
+            sun_params_dirty: true,
         }
     }
 
@@ -302,11 +322,13 @@ impl SunRenderer {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        self.sun_data_bg_dirty = true;
+        self.sun_params_dirty = true;
     }
 
     /// Render the sun as a full-screen post-process pass
     pub fn render(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         color_view: &wgpu::TextureView,
@@ -328,31 +350,10 @@ impl SunRenderer {
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
-        // Procedural sun settings
-        let corona_radius = 2.0;
-        let corona_intensity = 3.0;
-        let corona_falloff = 5.0;
-        let flare_intensity = 0.0;
-        let flare_ghost_count = 1.0;
-        let flare_ghost_dispersal = 3.0;
-        let flare_halo_radius = 0.05;
-        let ray_intensity = 0.0;
-        let ray_count = 8.0;
-        let ray_falloff = 6.0;
-        let flare_speed = 1.0;
-        let sunspot_scale = 20.0;
-        let starburst_intensity = 1.05;
-        let starburst_points = 6.0;
-        let starburst_falloff = 8.0;
-        let streak_intensity = 1.0;
-        let streak_width = 175.0;
-        let ghost_size = 0.005;
-        let chromatic_aberration = 0.29;
-        let prominence_intensity = 0.0;
-        let glow_intensity = 0.0;
-        let prominence_extent = 0.0;
-
-        // Update sun parameters
+        // Build sun parameters and upload only when something changed.
+        // The 22 hardcoded visual constants never change at runtime; the dynamic
+        // fields are light_dir, sun_intensity, angular_radius, color, screen size,
+        // and orbit axis/opacity.
         let params = SunParams {
             light_dir_x: light_dir[0],
             light_dir_y: light_dir[1],
@@ -362,67 +363,67 @@ impl SunRenderer {
             sun_color_g: self.sun_color[1],
             sun_color_b: self.sun_color[2],
             sun_intensity,
-            corona_radius,
-            corona_intensity,
-            corona_falloff,
-            flare_intensity,
-            flare_ghost_count,
-            flare_ghost_dispersal,
-            flare_halo_radius,
-            ray_intensity,
-            ray_count,
-            ray_falloff,
-            eclipse_factor: 1.0, // Shader computes eclipse from depth
+            corona_radius: 2.0,
+            corona_intensity: 3.0,
+            corona_falloff: 5.0,
+            flare_intensity: 0.0,
+            flare_ghost_count: 1.0,
+            flare_ghost_dispersal: 3.0,
+            flare_halo_radius: 0.05,
+            ray_intensity: 0.18,
+            ray_count: 9.0,
+            ray_falloff: 1.6,
+            eclipse_factor: 1.0,
             screen_width: self.width as f32,
             screen_height: self.height as f32,
-            flare_speed,
-            sunspot_scale,
-            starburst_intensity,
-            starburst_points,
-            starburst_falloff,
-            streak_intensity,
-            streak_width,
-            ghost_size,
-            chromatic_aberration,
-            prominence_intensity,
-            glow_intensity,
-            prominence_extent,
+            flare_speed: 1.0,
+            sunspot_scale: 20.0,
+            starburst_intensity: 1.05,
+            starburst_points: 6.0,
+            starburst_falloff: 8.0,
+            streak_intensity: 1.0,
+            streak_width: 175.0,
+            ghost_size: 0.005,
+            chromatic_aberration: 0.29,
+            prominence_intensity: 0.0,
+            glow_intensity: 0.0,
+            prominence_extent: 0.0,
             orbit_axis_x: self.orbit_axis[0],
             orbit_axis_y: self.orbit_axis[1],
             orbit_axis_z: self.orbit_axis[2],
             orbit_ring_opacity: self.orbit_ring_opacity,
         };
-        queue.write_buffer(&self.sun_params_buffer, 0, bytemuck::bytes_of(&params));
+        let params_bytes = bytemuck::bytes_of(&params);
+        if self.sun_params_dirty
+            || params_bytes != bytemuck::bytes_of(&self.cached_sun_params)
+        {
+            queue.write_buffer(&self.sun_params_buffer, 0, params_bytes);
+            self.cached_sun_params = params;
+            self.sun_params_dirty = false;
+        }
 
-        // Create camera bind group
-        let camera_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Sun Camera Bind Group"),
-            layout: &self.camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.camera_buffer.as_entire_binding(),
-            }],
-        });
-
-        // Create sun data bind group
-        let sun_data_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Sun Data Bind Group"),
-            layout: &self.sun_data_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.sun_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(depth_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.depth_sampler),
-                },
-            ],
-        });
+        // Recreate sun_data_bind_group only when depth texture changes (on resize)
+        if self.sun_data_bg_dirty || self.sun_data_bind_group.is_none() {
+            self.sun_data_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Sun Data Bind Group"),
+                layout: &self.sun_data_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.sun_params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.depth_sampler),
+                    },
+                ],
+            }));
+            self.sun_data_bg_dirty = false;
+        }
 
         // Render full-screen sun pass
         {
@@ -443,8 +444,8 @@ impl SunRenderer {
             });
 
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &camera_bg, &[]);
-            pass.set_bind_group(1, &sun_data_bg, &[]);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, self.sun_data_bind_group.as_ref().unwrap(), &[]);
             pass.draw(0..3, 0..1);
         }
     }

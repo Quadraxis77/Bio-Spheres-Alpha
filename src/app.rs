@@ -2493,10 +2493,23 @@ impl App {
                     log::warn!("Periodic lineage capture failed: {err}");
                 }
 
-                if self.editor_state.update_sun_rotation(dt) {
+                self.editor_state.update_orbit_ring_opacity(dt);
+                if !gpu_scene.paused
+                    && self.editor_state.update_sun_rotation(
+                        gpu_scene.config.fixed_timestep * gpu_scene.last_physics_steps as f32,
+                    )
+                {
+                    gpu_scene.sun_light_dir = self.editor_state.light_dir;
+                    gpu_scene.sun_rotating =
+                        self.editor_state.sun_rotation_enabled
+                            && self.editor_state.sun_rotation_speed != 0.0;
+                    if let Some(ref mut sun) = gpu_scene.sun_renderer {
+                        sun.orbit_axis = self.editor_state.sun_rotation_axis;
+                        sun.orbit_ring_opacity = self.editor_state.orbit_ring_opacity;
+                    }
                     self.editor_state.light_params_dirty = true;
                 }
-                if self.editor_state.sun_cycle_enabled || self.editor_state.orbit_ring_opacity > 0.0 {
+                if self.editor_state.sun_cycle_enabled {
                     self.editor_state.light_params_dirty = true;
                 }
 
@@ -2649,6 +2662,12 @@ impl App {
             gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
             gpu_scene.water_viscosity = self.ui.state.world_settings.water_viscosity;
+            gpu_scene.light_field_update_interval =
+                self.ui.state.world_settings.light_field_update_interval;
+            gpu_scene.max_physics_steps_per_frame =
+                self.ui.state.world_settings.max_physics_steps_per_frame;
+            let target_hz = self.ui.state.world_settings.physics_hz.max(1);
+            gpu_scene.config.fixed_timestep = 1.0 / target_hz as f32;
             gpu_scene.solo_metabolism_multiplier =
                 if self.ui.state.world_settings.solo_metabolism_enabled {
                     self.ui.state.world_settings.solo_metabolism_multiplier
