@@ -2496,7 +2496,7 @@ impl App {
                 if self.editor_state.update_sun_rotation(dt) {
                     self.editor_state.light_params_dirty = true;
                 }
-                if self.editor_state.sun_cycle_enabled {
+                if self.editor_state.sun_cycle_enabled || self.editor_state.orbit_ring_opacity > 0.0 {
                     self.editor_state.light_params_dirty = true;
                 }
 

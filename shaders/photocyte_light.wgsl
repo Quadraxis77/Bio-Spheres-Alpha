@@ -88,17 +88,15 @@ var<storage, read_write> light_color_accum: array<atomic<u32>>;
 @group(1) @binding(12)
 var<storage, read_write> light_color_field: array<vec4<f32>>;
 
-@group(1) @binding(13)
-var<storage, read_write> light_intensity_accum: array<atomic<u32>>;
-
 // Photocyte cell type constant
 const PHOTOCYTE_TYPE: u32 = 3u;
 const LUMINOCYTE_TYPE: u32 = 16u;
 const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
-// Keep luminocytes deliberately inefficient: at full brightness, they spend far
-// more nutrients than nearby photocytes can recover from the emitted light.
-const LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND: f32 = 40.0;
+// Luminocyte energy cost per second at full brightness.
+// Low enough for a decent glow to be affordable; the proportional photocyte
+// gain below prevents luminocyte light from becoming free energy.
+const LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND: f32 = 6.0;
 const COLOR_ACCUM_SCALE: f32 = 4096.0;
 
 // Fixed-point conversion
@@ -235,12 +233,20 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
     let emit_radius_f = f32(emit_radius);
     let emit_radius_sq = f32(emit_radius * emit_radius);
     for (var dz = -emit_radius; dz <= emit_radius; dz++) {
+        let z = cz + dz;
+        if (z < 0 || z >= res) {
+            continue;
+        }
         let vz = f32(dz) + fz;
         let vz_sq = vz * vz;
         if (vz_sq >= emit_radius_sq) { continue; }
         let ryz = emit_radius_sq - vz_sq;
 
         for (var dy = -emit_radius; dy <= emit_radius; dy++) {
+            let y = cy + dy;
+            if (y < 0 || y >= res) {
+                continue;
+            }
             let vy = f32(dy) + fy;
             let vy_sq = vy * vy;
             let rx = ryz - vy_sq;
@@ -250,11 +256,18 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
             let dx_min = i32(ceil(-half_span - fx));
             let dx_max = i32(floor(half_span - fx));
 
+            let yz_offset = u32(y) * photocyte_params.grid_resolution + u32(z) * photocyte_params.grid_resolution * photocyte_params.grid_resolution;
             for (var dx = max(dx_min, -emit_radius); dx <= min(dx_max, emit_radius); dx++) {
                 let x = cx + dx;
-                let y = cy + dy;
-                let z = cz + dz;
-                if (x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res) {
+                if (x < 0 || x >= res) {
+                    continue;
+                }
+                let idx = u32(x) + yz_offset;
+                let existing_light = light_field[idx];
+                let darkness = max(0.0, 1.0 - existing_light);
+                // light_field == 0.0 means solid rock. Reject it before the
+                // distance/falloff math so luminocytes do less work in caves.
+                if (existing_light < 0.001 || darkness <= 0.0) {
                     continue;
                 }
                 let vx = f32(dx) + fx;
@@ -263,21 +276,11 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
                 // so luminocyte light does not stamp visible grid blocks.
                 let edge = 1.0 - smoothstep(0.0, 1.0, dist / emit_radius_f);
                 let falloff = edge * edge * (1.0 + 0.45 * (1.0 - dist / emit_radius_f)) + 0.04;
-                let idx = u32(x) + u32(y) * photocyte_params.grid_resolution + u32(z) * photocyte_params.grid_resolution * photocyte_params.grid_resolution;
-                // Skip solid voxels — light_field == 0.0 means solid rock (set by
-                // compute_light_field). Injecting into them would make them pass the
-                // fog shader's solid-skip test and produce black fog blobs.
-                let existing_light = light_field[idx];
-                if (existing_light < 0.001) {
-                    continue;
-                }
                 // Scale contribution by how dark the voxel already is so luminocyte
                 // light fills shadow but gets washed out when the sun is bright.
-                let darkness = max(0.0, 1.0 - existing_light);
                 let local_light = effective_brightness * falloff * darkness;
                 let weight = u32(max(local_light * COLOR_ACCUM_SCALE, 0.0));
                 if (weight > 0u) {
-                    atomicAdd(&light_intensity_accum[idx], weight);
                     let base = idx * 4u;
                     atomicAdd(&light_color_accum[base + 0u], u32(emit_color.r * f32(weight)));
                     atomicAdd(&light_color_accum[base + 1u], u32(emit_color.g * f32(weight)));
@@ -301,17 +304,10 @@ fn resolve_luminocyte_light_color(@builtin(global_invocation_id) global_id: vec3
     let weight = atomicLoad(&light_color_accum[base + 3u]);
     // light_color_field is DMA-cleared before this pass, so skip writing zeros.
     if (weight == 0u) {
-        let intensity = atomicLoad(&light_intensity_accum[idx]);
-        if (intensity > 0u) {
-            light_field[idx] += f32(intensity) / COLOR_ACCUM_SCALE;
-        }
         return;
     }
 
-    let intensity = atomicLoad(&light_intensity_accum[idx]);
-    if (intensity > 0u) {
-        light_field[idx] += f32(intensity) / COLOR_ACCUM_SCALE;
-    }
+    light_field[idx] += f32(weight) / COLOR_ACCUM_SCALE;
 
     let inv_weight = 1.0 / f32(weight);
     let color = vec3<f32>(
@@ -366,12 +362,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // (which is base_rate * sun_intensity, set on the CPU).
     let light_intensity = sample_light(pos);
     let in_light = light_intensity >= photocyte_params.min_light_threshold;
-    
-    // Convert mass_per_second to nutrients per second (multiply by 100)
-    let nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0;
-    
+
+    // Convert mass_per_second to nutrients per second (multiply by 100).
+    // Scale gain proportionally to light intensity so a faint luminocyte glow
+    // cannot grant the same full-rate energy as direct sunlight.
+    let nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0
+                        * clamp(light_intensity, 0.0, 1.0);
+
     if (in_light) {
-        // In light: gain nutrients at the full rate from the brightness setting.
+        // In light: gain nutrients scaled by intensity.
         // Use atomicAdd of the delta - atomicStore would overwrite concurrent writes
         // from nutrient_transport running in the same frame.
         let nutrient_gain = min(nutrient_rate * params.delta_time, max(max_nutrients - current_nutrients, 0.0));

@@ -140,6 +140,8 @@ pub struct GpuScene {
     pub(super) time_accumulator: f32,
     /// Current frame counter (for shader time-based logic)
     pub(super) current_frame: i32,
+    /// Set by run_light_field each render frame; cleared after the resolve fires once.
+    luminocyte_resolve_needed: bool,
     /// Whether this is the first frame (no Hi-Z data yet)
     first_frame: bool,
     /// Whether GPU readbacks are enabled (cell count, etc.)
@@ -402,6 +404,10 @@ pub struct GpuScene {
     pub show_sun: bool,
     /// Sun intensity
     pub sun_intensity: f32,
+    /// Direction toward the visible sun, synced directly from the editor state.
+    pub sun_light_dir: [f32; 3],
+    /// Whether the sun is currently orbiting — prevents light field early-return skip.
+    pub sun_rotating: bool,
     /// Procedural space skybox renderer
     pub skybox_renderer: Option<SkyboxRenderer>,
     /// Whether to show the procedural skybox
@@ -703,6 +709,7 @@ impl GpuScene {
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
             current_frame: 0,
+            luminocyte_resolve_needed: false,
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
@@ -835,6 +842,8 @@ impl GpuScene {
             sun_renderer: None,
             show_sun: true,
             sun_intensity: 10.0,
+            sun_light_dir: [0.0, 1.0, 0.0],
+            sun_rotating: false,
             skybox_renderer: None,
             show_skybox: true,
             dragged_cell_index: u32::MAX,
@@ -2205,7 +2214,8 @@ impl GpuScene {
         // is not shown. The ray-march dispatches 32,768 workgroups (128^3/64) every frame;
         // with no photocytes the result is a uniform dark field, so the work is wasted.
         // Volumetric fog reads the light field, so we must still run it when fog is on.
-        if !self.has_photocytes && !self.type_mutations_enabled() && !self.show_volumetric_fog {
+        // Always run when the sun is rotating so shadow updates stay in sync with the disc.
+        if !self.has_photocytes && !self.type_mutations_enabled() && !self.show_volumetric_fog && !self.sun_rotating {
             return;
         }
 
@@ -2219,6 +2229,8 @@ impl GpuScene {
             pass.set_bind_group(0, &light_field_bg, &[]);
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
+        // Signal that the next per-step photocyte call should resolve luminocyte light.
+        self.luminocyte_resolve_needed = true;
     }
 
     /// Run photocyte light consumption compute shader.
@@ -2291,11 +2303,7 @@ impl GpuScene {
         // high-water mark) for its own bounds check. Using total_cell_slots (the async
         // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
         // at higher slot indices during the lag window, causing them to receive no light.
-        // Clear the luminocyte accumulators before each emission pass so they hold
-        // exactly one frame's worth of data for the resolve step below.
         encoder.clear_buffer(light_field.light_color_accum_buffer_ref(), 0, None);
-        encoder.clear_buffer(light_field.light_intensity_accum_buffer_ref(), 0, None);
-        encoder.clear_buffer(light_field.light_color_field_buffer(), 0, None);
 
         let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
         {
@@ -2309,13 +2317,16 @@ impl GpuScene {
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
-        // Resolve accumulated luminocyte color data into light_color_field so the
-        // volumetric fog renderer sees the correct emission color each frame.
-        let total_voxels = 128u32 * 128 * 128;
-        let color_workgroups = (total_voxels + 255) / 256;
-        {
+        // Resolve luminocyte accumulator into light_field exactly once per render frame.
+        // The flag is set by run_light_field and cleared here so subsequent physics steps
+        // in the same frame skip the resolve, preventing light_field += from stacking.
+        if self.luminocyte_resolve_needed {
+            self.luminocyte_resolve_needed = false;
+            encoder.clear_buffer(light_field.light_color_field_buffer(), 0, None);
+            let total_voxels = 128u32 * 128 * 128;
+            let color_workgroups = (total_voxels + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Resolve Luminocyte Light Color (physics step)"),
+                label: Some("Resolve Luminocyte Light Color"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(light_field.resolve_light_color_pipeline_ref());
@@ -6965,9 +6976,13 @@ impl GpuScene {
         // Update sun renderer parameters
         self.show_sun = editor_state.show_sun;
         self.sun_intensity = editor_state.sun_intensity;
+        self.sun_light_dir = editor_state.light_dir;
+        self.sun_rotating = editor_state.sun_rotation_enabled && editor_state.sun_rotation_speed != 0.0;
         if let Some(ref mut sun) = self.sun_renderer {
             sun.sun_color = editor_state.sun_color;
             sun.sun_angular_radius = editor_state.sun_angular_radius;
+            sun.orbit_axis = editor_state.sun_rotation_axis;
+            sun.orbit_ring_opacity = editor_state.orbit_ring_opacity;
         }
 
         // Update depth of field parameters
@@ -8007,13 +8022,6 @@ impl Scene for GpuScene {
         // so caves occlude the sun but the translucent world sphere doesn't)
         if self.show_sun {
             if let Some(ref sun_renderer) = self.sun_renderer {
-                // Get light direction from light field system, or use default
-                let light_dir = if let Some(ref light_field) = self.light_field_system {
-                    light_field.light_dir()
-                } else {
-                    [0.5, 0.8, 0.3]
-                };
-
                 sun_renderer.render(
                     &mut encoder,
                     queue,
@@ -8023,7 +8031,7 @@ impl Scene for GpuScene {
                     view_proj,
                     self.camera.position(),
                     self.current_time,
-                    light_dir,
+                    self.sun_light_dir,
                     self.sun_intensity,
                 );
             }

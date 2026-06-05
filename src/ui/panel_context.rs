@@ -381,6 +381,8 @@ pub struct GenomeEditorState {
     pub sun_rotation_axis: [f32; 3],
     /// Sun/light direction rotation speed in radians per second
     pub sun_rotation_speed: f32,
+    /// Opacity of the in-scene orbit ring gizmo, decays to 0 automatically
+    pub orbit_ring_opacity: f32,
     /// Whether sun brightness cycles over time (seasons)
     pub sun_cycle_enabled: bool,
     /// Minimum sun intensity during the brightness cycle
@@ -585,6 +587,53 @@ pub struct GenomeEditorState {
 }
 
 impl GenomeEditorState {
+    fn normalized_vec3(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if len > 1e-6 {
+            [v[0] / len, v[1] / len, v[2] / len]
+        } else {
+            fallback
+        }
+    }
+
+    fn perpendicular_to(axis: [f32; 3]) -> [f32; 3] {
+        let reference = if axis[1].abs() < 0.9 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        let cross = [
+            axis[1] * reference[2] - axis[2] * reference[1],
+            axis[2] * reference[0] - axis[0] * reference[2],
+            axis[0] * reference[1] - axis[1] * reference[0],
+        ];
+        Self::normalized_vec3(cross, [1.0, 0.0, 0.0])
+    }
+
+    /// Keep the sun exactly on the visible orbit ring.
+    pub fn align_sun_to_orbit_plane(&mut self) -> bool {
+        let old_axis = self.sun_rotation_axis;
+        let old_dir = self.light_dir;
+        let axis = Self::normalized_vec3(self.sun_rotation_axis, [0.0, 1.0, 0.0]);
+        self.sun_rotation_axis = axis;
+
+        let dir = Self::normalized_vec3(self.light_dir, [0.0, 1.0, 0.0]);
+        let dot = dir[0] * axis[0] + dir[1] * axis[1] + dir[2] * axis[2];
+        let projected = [
+            dir[0] - axis[0] * dot,
+            dir[1] - axis[1] * dot,
+            dir[2] - axis[2] * dot,
+        ];
+        self.light_dir = Self::normalized_vec3(projected, Self::perpendicular_to(axis));
+
+        (self.light_dir[0] - old_dir[0]).abs() > 1e-5
+            || (self.light_dir[1] - old_dir[1]).abs() > 1e-5
+            || (self.light_dir[2] - old_dir[2]).abs() > 1e-5
+            || (self.sun_rotation_axis[0] - old_axis[0]).abs() > 1e-5
+            || (self.sun_rotation_axis[1] - old_axis[1]).abs() > 1e-5
+            || (self.sun_rotation_axis[2] - old_axis[2]).abs() > 1e-5
+    }
+
     /// Create a new genome editor state with default values.
     pub fn new() -> Self {
         let (
@@ -864,6 +913,7 @@ impl GenomeEditorState {
             sun_rotation_enabled,
             sun_rotation_axis,
             sun_rotation_speed,
+            orbit_ring_opacity: 0.0,
             sun_cycle_enabled,
             sun_cycle_min,
             sun_cycle_max,
@@ -948,16 +998,17 @@ impl GenomeEditorState {
 
     /// Rotate the sun/light direction for animated day-cycle style lighting.
     pub fn update_sun_rotation(&mut self, dt: f32) -> bool {
+        // Decay orbit ring opacity toward zero (fade out ~3 seconds after last change).
+        if self.orbit_ring_opacity > 0.0 {
+            self.orbit_ring_opacity = (self.orbit_ring_opacity - dt / 3.0).max(0.0);
+        }
+
         if !self.sun_rotation_enabled || self.sun_rotation_speed == 0.0 {
             return false;
         }
 
-        let ax = self.sun_rotation_axis;
-        let len = (ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]).sqrt();
-        if len < 1e-6 {
-            return false;
-        }
-        let axis = [ax[0] / len, ax[1] / len, ax[2] / len];
+        self.align_sun_to_orbit_plane();
+        let axis = self.sun_rotation_axis;
 
         let theta = self.sun_rotation_speed * dt;
         let cos_t = theta.cos();
@@ -980,6 +1031,7 @@ impl GenomeEditorState {
         let rlen = (rotated[0] * rotated[0] + rotated[1] * rotated[1] + rotated[2] * rotated[2]).sqrt();
         if rlen > 1e-6 {
             self.light_dir = [rotated[0] / rlen, rotated[1] / rlen, rotated[2] / rlen];
+            self.align_sun_to_orbit_plane();
         }
         true
     }

@@ -61,6 +61,11 @@ struct SunParams {
     prominence_intensity: f32, // Solar flare/prominence brightness
     glow_intensity: f32,       // Soft bloom glow around sun
     prominence_extent: f32,    // How far prominences reach (falloff rate)
+    // Orbit ring gizmo
+    orbit_axis_x: f32,
+    orbit_axis_y: f32,
+    orbit_axis_z: f32,
+    orbit_ring_opacity: f32,
 }
 
 // Group 0: Camera
@@ -579,6 +584,38 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply eclipse factor
     final_color *= eclipse;
     final_alpha *= eclipse;
+
+    // ── Orbit ring gizmo ──────────────────────────────────────────────────
+    // Render a neon great circle on the sky sphere showing the orbit plane.
+    // Only visible on sky pixels (no geometry), fades out over time.
+    if (sun_params.orbit_ring_opacity > 0.001 && !has_geometry) {
+        // Reconstruct world-space ray direction for this fragment.
+        let ndc_pos = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+        let clip = vec4<f32>(ndc_pos, 1.0, 1.0);
+        let world_h = camera.inv_view_proj * clip;
+        let ray_dir = normalize(world_h.xyz / world_h.w - camera.camera_pos);
+
+        let orbit_axis = normalize(vec3<f32>(
+            sun_params.orbit_axis_x,
+            sun_params.orbit_axis_y,
+            sun_params.orbit_axis_z,
+        ));
+
+        // Angular distance from the great circle (= |dot(ray, axis)|).
+        let perp = abs(dot(ray_dir, orbit_axis));
+
+        // Neon ring: thin bright core with a soft outer glow.
+        let ring_half = 0.006;
+        let glow_half = 0.028;
+        let core  = smoothstep(ring_half, 0.0,       perp);
+        let glow  = smoothstep(glow_half, ring_half,  perp) * 0.35;
+        let ring  = (core + glow) * sun_params.orbit_ring_opacity;
+
+        // Cyan-white neon tint.
+        let ring_color = vec3<f32>(0.4, 0.9, 1.0) * ring * 1.8;
+        final_color += ring_color;
+        final_alpha = max(final_alpha, ring * sun_params.orbit_ring_opacity);
+    }
 
     // Tone map to prevent harsh clipping
     final_color = final_color / (1.0 + final_color);

@@ -4993,6 +4993,7 @@ fn pitch_yaw_to_light_dir(pitch_degrees: f32, yaw_degrees: f32) -> [f32; 3] {
     ]
 }
 
+
 fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
     let (mut pitch, mut yaw) = light_dir_to_pitch_yaw(*light_dir);
     let mut changed = false;
@@ -5100,7 +5101,7 @@ fn render_light_settings_organized(
             ui.label("Brightness");
             changed |= ui
                 .add(
-                    egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=20.0)
+                    egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=20.0).logarithmic(true)
                         .text("Brightness")
                         .step_by(0.1)
                         .fixed_decimals(1),
@@ -5113,18 +5114,73 @@ fn render_light_settings_organized(
                 }
             }
 
-            let mut sun_color = context.editor_state.sun_color;
-            sun_changed |= render_sun_tint_control(
-                ui,
-                &mut sun_color,
-                context.editor_state.sun_intensity,
-            );
-            context.editor_state.sun_color = sun_color;
+            ui.horizontal(|ui| {
+                ui.label("Tint");
+                let mut c = sun_tint_color32(context.editor_state.sun_color);
+                if ui.color_edit_button_srgba(&mut c).changed() {
+                    context.editor_state.sun_color = normalize_sun_tint([
+                        c.r() as f32 / 255.0,
+                        c.g() as f32 / 255.0,
+                        c.b() as f32 / 255.0,
+                    ]);
+                    sun_changed = true;
+                }
+            });
 
             ui.add_space(4.0);
-            context.editor_state.sun_rotation_enabled = false;
-            context.editor_state.sun_rotation_speed = 0.0;
             changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
+
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                let orbit_toggle = ui
+                    .checkbox(&mut context.editor_state.sun_rotation_enabled, "Orbit")
+                    .on_hover_text("Rotate the sun along the defined orbit path.");
+                if orbit_toggle.changed() && context.editor_state.sun_rotation_enabled {
+                    context.editor_state.align_sun_to_orbit_plane();
+                    context.editor_state.orbit_ring_opacity = 1.0;
+                }
+                changed |= orbit_toggle.changed();
+            });
+            if context.editor_state.sun_rotation_enabled {
+                let (mut orbit_pitch, mut orbit_yaw) =
+                    light_dir_to_pitch_yaw(context.editor_state.sun_rotation_axis);
+                let mut orbit_changed = false;
+                orbit_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut orbit_pitch, -90.0..=90.0)
+                            .text("Tilt")
+                            .suffix("°")
+                            .fixed_decimals(0),
+                    )
+                    .on_hover_text("Tilt of the orbit plane. 0° = equatorial, 90° = polar.")
+                    .changed();
+                orbit_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
+                            .text("Direction")
+                            .suffix("°")
+                            .fixed_decimals(0),
+                    )
+                    .on_hover_text("Compass direction the orbit tilts toward.")
+                    .changed();
+                if orbit_changed {
+                    context.editor_state.sun_rotation_axis =
+                        pitch_yaw_to_light_dir(orbit_pitch, orbit_yaw);
+                    context.editor_state.align_sun_to_orbit_plane();
+                    context.editor_state.orbit_ring_opacity = 1.0;
+                    changed = true;
+                }
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut context.editor_state.sun_rotation_speed, -0.5..=0.5)
+                            .text("Speed")
+                            .suffix(" rad/s")
+                            .fixed_decimals(4),
+                    )
+                    .on_hover_text("Orbit speed in radians per second. Negative = reverse.")
+                    .changed();
+
+            }
 
             if context.editor_state.sun_cycle_enabled {
                 ui.add_space(6.0);
@@ -6495,12 +6551,19 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             )
             .width(ui.available_width())
             .show_ui(ui, |ui| {
+                let item_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
                 for ct in cell_types.iter() {
-                    ui.selectable_value(
-                        &mut context.genome.modes[selected_index].cell_type,
-                        ct.to_index() as i32,
-                        ct.name(),
-                    );
+                    let selected =
+                        context.genome.modes[selected_index].cell_type == ct.to_index() as i32;
+                    let resp = ui
+                        .add_sized(
+                            [ui.available_width(), item_h],
+                            egui::Button::new(ct.name()).selected(selected),
+                        )
+                        .on_hover_text(ct.tooltip());
+                    if resp.clicked() {
+                        context.genome.modes[selected_index].cell_type = ct.to_index() as i32;
+                    }
                 }
             });
         // Propagate cell type change to all selected modes.
@@ -6518,21 +6581,6 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             .editor_state
             .panel_rects
             .insert("cell_type_dropdown".to_string(), combo_resp.response.rect);
-
-        // Description of the selected cell type — stable label avoids tooltip-induced jitter.
-        let selected_ct = cell_types
-            .iter()
-            .find(|ct| ct.to_index() as i32 == context.genome.modes[selected_index].cell_type);
-        if let Some(ct) = selected_ct {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(ct.tooltip())
-                        .size(10.0)
-                        .color(palette().text_secondary),
-                )
-                .wrap(),
-            );
-        }
 
         // Make Adhesion toggle - full width, teal when active
         let on = context.genome.modes[selected_index].parent_make_adhesion;

@@ -68,6 +68,11 @@ pub struct SunParams {
     pub prominence_intensity: f32,
     pub glow_intensity: f32,
     pub prominence_extent: f32,
+    // Orbit ring gizmo
+    pub orbit_axis_x: f32,
+    pub orbit_axis_y: f32,
+    pub orbit_axis_z: f32,
+    pub orbit_ring_opacity: f32,
 }
 
 impl Default for SunParams {
@@ -106,6 +111,10 @@ impl Default for SunParams {
             prominence_intensity: 1.0,
             glow_intensity: 0.15,
             prominence_extent: 3.0,
+            orbit_axis_x: 0.0,
+            orbit_axis_y: 1.0,
+            orbit_axis_z: 0.0,
+            orbit_ring_opacity: 0.0,
         }
     }
 }
@@ -123,6 +132,9 @@ pub struct SunRenderer {
     pub sun_angular_radius: f32,
     pub sun_color: [f32; 3],
     pub enabled: bool,
+    // Orbit ring gizmo
+    pub orbit_axis: [f32; 3],
+    pub orbit_ring_opacity: f32,
 
     // Screen dimensions
     width: u32,
@@ -279,6 +291,8 @@ impl SunRenderer {
             sun_angular_radius: 0.025,
             sun_color: [1.0, 1.0, 0.85],
             enabled: true,
+            orbit_axis: [0.0, 1.0, 0.0],
+            orbit_ring_opacity: 0.0,
             width: 1280,
             height: 720,
         }
@@ -373,6 +387,10 @@ impl SunRenderer {
             prominence_intensity,
             glow_intensity,
             prominence_extent,
+            orbit_axis_x: self.orbit_axis[0],
+            orbit_axis_y: self.orbit_axis[1],
+            orbit_axis_z: self.orbit_axis[2],
+            orbit_ring_opacity: self.orbit_ring_opacity,
         };
         queue.write_buffer(&self.sun_params_buffer, 0, bytemuck::bytes_of(&params));
 

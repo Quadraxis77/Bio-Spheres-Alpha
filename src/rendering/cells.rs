@@ -799,7 +799,21 @@ impl CellRenderer {
                     visuals.specular_strength,
                     visuals.specular_power,
                     visuals.fresnel_strength,
-                    mode_settings.emissive,
+                    {
+                        let base = if mode_settings.emissive < 0.001 && cell_type == CellType::Luminocyte {
+                            0.5
+                        } else {
+                            mode_settings.emissive
+                        };
+                        if cell_type == CellType::Luminocyte {
+                            let nutrients = state.nutrients.get(cell_index).copied().unwrap_or(100.0);
+                            let nutrient_factor = ((nutrients - 1.0) / 9.0).clamp(0.0, 1.0);
+                            let smoothed = nutrient_factor * nutrient_factor * (3.0 - 2.0 * nutrient_factor);
+                            base * smoothed
+                        } else {
+                            base
+                        }
+                    },
                 ],
                 rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
                 type_data: type_data.data,
