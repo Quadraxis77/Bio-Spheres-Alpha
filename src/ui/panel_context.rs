@@ -379,6 +379,8 @@ pub struct GenomeEditorState {
     pub sun_rotation_enabled: bool,
     /// Axis used for sun/light direction rotation
     pub sun_rotation_axis: [f32; 3],
+    /// Current sun position around the orbit path, in degrees.
+    pub sun_orbit_angle: f32,
     /// Sun/light direction rotation speed in radians per second
     pub sun_rotation_speed: f32,
     /// Opacity of the in-scene orbit ring gizmo, decays to 0 automatically
@@ -610,21 +612,50 @@ impl GenomeEditorState {
         Self::normalized_vec3(cross, [1.0, 0.0, 0.0])
     }
 
-    /// Keep the sun exactly on the visible orbit ring.
-    pub fn align_sun_to_orbit_plane(&mut self) -> bool {
+    fn wrap_degrees(angle: f32) -> f32 {
+        (angle + 180.0).rem_euclid(360.0) - 180.0
+    }
+
+    fn orbit_basis(axis: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+        let u = Self::perpendicular_to(axis);
+        let v = [
+            axis[1] * u[2] - axis[2] * u[1],
+            axis[2] * u[0] - axis[0] * u[2],
+            axis[0] * u[1] - axis[1] * u[0],
+        ];
+        (u, Self::normalized_vec3(v, [0.0, 0.0, 1.0]))
+    }
+
+    fn orbit_direction(axis: [f32; 3], angle_degrees: f32) -> [f32; 3] {
+        let axis = Self::normalized_vec3(axis, [0.0, 1.0, 0.0]);
+        let (u, v) = Self::orbit_basis(axis);
+        let a = angle_degrees.to_radians();
+        let c = a.cos();
+        let s = a.sin();
+        [
+            u[0] * c + v[0] * s,
+            u[1] * c + v[1] * s,
+            u[2] * c + v[2] * s,
+        ]
+    }
+
+    fn orbit_angle_for_direction(axis: [f32; 3], dir: [f32; 3]) -> f32 {
+        let axis = Self::normalized_vec3(axis, [0.0, 1.0, 0.0]);
+        let dir = Self::normalized_vec3(dir, Self::perpendicular_to(axis));
+        let (u, v) = Self::orbit_basis(axis);
+        let x = dir[0] * u[0] + dir[1] * u[1] + dir[2] * u[2];
+        let y = dir[0] * v[0] + dir[1] * v[1] + dir[2] * v[2];
+        Self::wrap_degrees(y.atan2(x).to_degrees())
+    }
+
+    /// Derive the sun direction from the explicit orbit controls.
+    pub fn apply_sun_orbit(&mut self) -> bool {
         let old_axis = self.sun_rotation_axis;
         let old_dir = self.light_dir;
         let axis = Self::normalized_vec3(self.sun_rotation_axis, [0.0, 1.0, 0.0]);
         self.sun_rotation_axis = axis;
-
-        let dir = Self::normalized_vec3(self.light_dir, [0.0, 1.0, 0.0]);
-        let dot = dir[0] * axis[0] + dir[1] * axis[1] + dir[2] * axis[2];
-        let projected = [
-            dir[0] - axis[0] * dot,
-            dir[1] - axis[1] * dot,
-            dir[2] - axis[2] * dot,
-        ];
-        self.light_dir = Self::normalized_vec3(projected, Self::perpendicular_to(axis));
+        self.sun_orbit_angle = Self::wrap_degrees(self.sun_orbit_angle);
+        self.light_dir = Self::orbit_direction(axis, self.sun_orbit_angle);
 
         (self.light_dir[0] - old_dir[0]).abs() > 1e-5
             || (self.light_dir[1] - old_dir[1]).abs() > 1e-5
@@ -632,6 +663,15 @@ impl GenomeEditorState {
             || (self.sun_rotation_axis[0] - old_axis[0]).abs() > 1e-5
             || (self.sun_rotation_axis[1] - old_axis[1]).abs() > 1e-5
             || (self.sun_rotation_axis[2] - old_axis[2]).abs() > 1e-5
+    }
+
+    /// Preserve the current visible sun position when orbit mode is enabled.
+    pub fn capture_sun_orbit_angle(&mut self) -> bool {
+        let old_angle = self.sun_orbit_angle;
+        let axis = Self::normalized_vec3(self.sun_rotation_axis, [0.0, 1.0, 0.0]);
+        self.sun_rotation_axis = axis;
+        self.sun_orbit_angle = Self::orbit_angle_for_direction(axis, self.light_dir);
+        self.apply_sun_orbit() || (self.sun_orbit_angle - old_angle).abs() > 1e-5
     }
 
     /// Create a new genome editor state with default values.
@@ -715,6 +755,7 @@ impl GenomeEditorState {
             sun_intensity,
             sun_rotation_enabled,
             sun_rotation_axis,
+            sun_orbit_angle,
             sun_rotation_speed,
             sun_cycle_enabled,
             sun_cycle_min,
@@ -912,6 +953,7 @@ impl GenomeEditorState {
             sun_intensity,
             sun_rotation_enabled,
             sun_rotation_axis,
+            sun_orbit_angle,
             sun_rotation_speed,
             orbit_ring_opacity: 0.0,
             sun_cycle_enabled,
@@ -1007,32 +1049,9 @@ impl GenomeEditorState {
             return false;
         }
 
-        self.align_sun_to_orbit_plane();
-        let axis = self.sun_rotation_axis;
-
-        let theta = self.sun_rotation_speed * dt;
-        let cos_t = theta.cos();
-        let sin_t = theta.sin();
-
-        let v = self.light_dir;
-        // Rodrigues' rotation formula — rotates light_dir around axis by theta
-        let dot = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
-        let cross = [
-            axis[1] * v[2] - axis[2] * v[1],
-            axis[2] * v[0] - axis[0] * v[2],
-            axis[0] * v[1] - axis[1] * v[0],
-        ];
-        let rotated = [
-            v[0] * cos_t + cross[0] * sin_t + axis[0] * dot * (1.0 - cos_t),
-            v[1] * cos_t + cross[1] * sin_t + axis[1] * dot * (1.0 - cos_t),
-            v[2] * cos_t + cross[2] * sin_t + axis[2] * dot * (1.0 - cos_t),
-        ];
-        // Re-normalize to prevent drift
-        let rlen = (rotated[0] * rotated[0] + rotated[1] * rotated[1] + rotated[2] * rotated[2]).sqrt();
-        if rlen > 1e-6 {
-            self.light_dir = [rotated[0] / rlen, rotated[1] / rlen, rotated[2] / rlen];
-            self.align_sun_to_orbit_plane();
-        }
+        self.sun_orbit_angle =
+            Self::wrap_degrees(self.sun_orbit_angle + self.sun_rotation_speed.to_degrees() * dt);
+        self.apply_sun_orbit();
         true
     }
 
@@ -1627,6 +1646,7 @@ impl GenomeEditorState {
             self.sun_intensity,
             self.sun_rotation_enabled,
             self.sun_rotation_axis,
+            self.sun_orbit_angle,
             self.sun_rotation_speed,
             self.sun_cycle_enabled,
             self.sun_cycle_min,
@@ -1672,6 +1692,7 @@ impl GenomeEditorState {
         sun_intensity: f32,
         sun_rotation_enabled: bool,
         sun_rotation_axis: [f32; 3],
+        sun_orbit_angle: f32,
         sun_rotation_speed: f32,
         sun_cycle_enabled: bool,
         sun_cycle_min: f32,
@@ -1714,6 +1735,7 @@ impl GenomeEditorState {
             sun_intensity: f32,
             sun_rotation_enabled: bool,
             sun_rotation_axis: [f32; 3],
+            sun_orbit_angle: f32,
             sun_rotation_speed: f32,
             sun_cycle_enabled: bool,
             sun_cycle_min: f32,
@@ -1755,6 +1777,7 @@ impl GenomeEditorState {
             sun_intensity,
             sun_rotation_enabled,
             sun_rotation_axis,
+            sun_orbit_angle,
             sun_rotation_speed,
             sun_cycle_enabled,
             sun_cycle_min,
@@ -1787,7 +1810,7 @@ impl GenomeEditorState {
         [f32; 3], f32, f32, f32, f32,     // fog_color, anisotropy, absorption, height_density, height_falloff
         u32, f32, f32, f32, f32,          // lf_max_steps, step_size, absorb_solid, absorb_cell, ambient_floor
         bool, [f32; 3], f32, f32,         // show_sun, sun_color, sun_angular_radius, sun_intensity
-        bool, [f32; 3], f32,              // rotation_enabled, rotation_axis, rotation_speed
+        bool, [f32; 3], f32, f32,         // rotation_enabled, rotation_axis, orbit_angle, rotation_speed
         bool, f32, f32, f32,              // cycle_enabled, cycle_min, cycle_max, cycle_period
         bool, f32, f32,                   // shadow_enabled, shadow_strength, shadow_quality
         f32, f32, f32,                    // caustic_intensity, scale, speed
@@ -1824,6 +1847,8 @@ impl GenomeEditorState {
             sun_rotation_enabled: bool,
             #[serde(default = "default_sun_rotation_axis")]
             sun_rotation_axis: [f32; 3],
+            #[serde(default)]
+            sun_orbit_angle: f32,
             #[serde(default)]
             sun_rotation_speed: f32,
             #[serde(default)]
@@ -1917,6 +1942,7 @@ impl GenomeEditorState {
                                 s.sun_intensity,
                                 s.sun_rotation_enabled,
                                 s.sun_rotation_axis,
+                                s.sun_orbit_angle,
                                 s.sun_rotation_speed,
                                 s.sun_cycle_enabled,
                                 s.sun_cycle_min,
@@ -1971,6 +1997,7 @@ impl GenomeEditorState {
             15.0,            // sun_intensity
             false,           // sun_rotation_enabled
             [0.0, 1.0, 0.0], // sun_rotation_axis
+            0.0,             // sun_orbit_angle
             0.0,             // sun_rotation_speed
             false,           // sun_cycle_enabled
             0.0,             // sun_cycle_min
@@ -2079,6 +2106,7 @@ impl GenomeEditorState {
             sun_intensity: f32,
             sun_rotation_enabled: bool,
             sun_rotation_axis: [f32; 3],
+            sun_orbit_angle: f32,
             sun_rotation_speed: f32,
         }
 
@@ -2089,6 +2117,7 @@ impl GenomeEditorState {
             sun_intensity: self.sun_intensity,
             sun_rotation_enabled: self.sun_rotation_enabled,
             sun_rotation_axis: self.sun_rotation_axis,
+            sun_orbit_angle: self.sun_orbit_angle,
             sun_rotation_speed: self.sun_rotation_speed,
         };
 
@@ -2294,6 +2323,7 @@ impl GenomeEditorState {
             sun_intensity: f32,
             sun_rotation_enabled: bool,
             sun_rotation_axis: [f32; 3],
+            sun_orbit_angle: f32,
             sun_rotation_speed: f32,
         }
         impl Default for SunSettings {
@@ -2305,6 +2335,7 @@ impl GenomeEditorState {
                     sun_intensity: 10.0,
                     sun_rotation_enabled: false,
                     sun_rotation_axis: [0.0, 1.0, 0.0],
+                    sun_orbit_angle: 0.0,
                     sun_rotation_speed: 0.0,
                 }
             }
@@ -2324,6 +2355,7 @@ impl GenomeEditorState {
                     self.sun_intensity = s.sun_intensity;
                     self.sun_rotation_enabled = s.sun_rotation_enabled;
                     self.sun_rotation_axis = s.sun_rotation_axis;
+                    self.sun_orbit_angle = s.sun_orbit_angle;
                     self.sun_rotation_speed = s.sun_rotation_speed;
                 }
                 Err(e) => {
@@ -2538,3 +2570,4 @@ mod tests {
         assert_eq!(state.time_value, 0.0);
     }
 }
+

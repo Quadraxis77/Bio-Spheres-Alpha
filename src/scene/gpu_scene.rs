@@ -2148,6 +2148,16 @@ impl GpuScene {
             _ => return,
         };
 
+        // Compute light field only when something will consume it. Put this before
+        // buffer clears and bind-group setup so skipped frames are genuinely cheap.
+        if !self.has_photocytes
+            && !self.type_mutations_enabled()
+            && !self.show_volumetric_fog
+            && !self.sun_rotating
+        {
+            return;
+        }
+
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
 
         // Cache occupancy bind groups (one per triple buffer index)
@@ -2208,15 +2218,6 @@ impl GpuScene {
             pass.set_pipeline(light_field.build_occupancy_pipeline_ref());
             pass.set_bind_group(0, occupancy_bg, &[]);
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        }
-
-        // Compute light field - skip entirely when there are no cells and volumetric fog
-        // is not shown. The ray-march dispatches 32,768 workgroups (128^3/64) every frame;
-        // with no photocytes the result is a uniform dark field, so the work is wasted.
-        // Volumetric fog reads the light field, so we must still run it when fog is on.
-        // Always run when the sun is rotating so shadow updates stay in sync with the disc.
-        if !self.has_photocytes && !self.type_mutations_enabled() && !self.show_volumetric_fog && !self.sun_rotating {
-            return;
         }
 
         // Compute light field

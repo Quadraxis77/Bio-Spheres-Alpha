@@ -5000,23 +5000,23 @@ fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
 
     ui.label("Direction")
         .on_hover_text("Pitch controls sun height. Yaw rotates the sun around the world.");
-    ui.label("Pitch");
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut pitch, -89.0..=89.0)
-                .text("Pitch")
-                .step_by(1.0)
-                .fixed_decimals(0),
-        )
+    changed |= labeled_slider(
+        ui,
+        "Pitch",
+        egui::Slider::new(&mut pitch, -89.0..=89.0)
+            .text("Pitch")
+            .step_by(1.0)
+            .fixed_decimals(0),
+    )
         .changed();
-    ui.label("Yaw");
-    changed |= ui
-        .add(
-            egui::Slider::new(&mut yaw, -180.0..=180.0)
-                .text("Yaw")
-                .step_by(1.0)
-                .fixed_decimals(0),
-        )
+    changed |= labeled_slider(
+        ui,
+        "Yaw",
+        egui::Slider::new(&mut yaw, -180.0..=180.0)
+            .text("Yaw")
+            .step_by(1.0)
+            .fixed_decimals(0),
+    )
         .changed();
 
     ui.horizontal_wrapped(|ui| {
@@ -5042,6 +5042,18 @@ fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
     }
 
     changed
+}
+
+fn labeled_slider(ui: &mut Ui, label: &str, slider: egui::Slider<'_>) -> egui::Response {
+    ui.horizontal(|ui| {
+        let label_width = 118.0;
+        ui.add_sized(
+            [label_width, ui.text_style_height(&egui::TextStyle::Body)],
+            egui::Label::new(label),
+        );
+        ui.add(slider)
+    })
+    .inner
 }
 
 trait AbsDiffEq {
@@ -5098,14 +5110,15 @@ fn render_light_settings_organized(
             });
 
             ui.add_space(4.0);
-            ui.label("Brightness");
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=20.0).logarithmic(true)
-                        .text("Brightness")
-                        .step_by(0.1)
-                        .fixed_decimals(1),
-                )
+            changed |= labeled_slider(
+                ui,
+                "Brightness",
+                egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=20.0)
+                    .logarithmic(true)
+                    .text("Brightness")
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
                 .on_hover_text("Directional sun intensity. Photocyte energy scales with this.")
                 .changed();
             if changed {
@@ -5128,25 +5141,62 @@ fn render_light_settings_organized(
             });
 
             ui.add_space(4.0);
-            changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
-
-            ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 let orbit_toggle = ui
                     .checkbox(&mut context.editor_state.sun_rotation_enabled, "Orbit")
                     .on_hover_text("Rotate the sun along the defined orbit path.");
                 if orbit_toggle.changed() && context.editor_state.sun_rotation_enabled {
-                    context.editor_state.align_sun_to_orbit_plane();
+                    context.editor_state.capture_sun_orbit_angle();
                     context.editor_state.orbit_ring_opacity = 1.0;
                 }
                 changed |= orbit_toggle.changed();
             });
             if context.editor_state.sun_rotation_enabled {
+                if labeled_slider(
+                    ui,
+                    "Position",
+                        egui::Slider::new(
+                            &mut context.editor_state.sun_orbit_angle,
+                            -180.0..=180.0,
+                        )
+                        .text("Position")
+                        .suffix("°")
+                        .step_by(1.0)
+                        .fixed_decimals(0),
+                    )
+                    .on_hover_text("Sun position along the visible orbit ring.")
+                    .changed()
+                {
+                    context.editor_state.apply_sun_orbit();
+                    context.editor_state.orbit_ring_opacity = 1.0;
+                    changed = true;
+                }
+
+                let mut speed_degrees = context.editor_state.sun_rotation_speed.to_degrees();
+                if labeled_slider(
+                    ui,
+                    "Speed",
+                        egui::Slider::new(&mut speed_degrees, -30.0..=30.0)
+                            .text("Speed")
+                            .suffix("°/s")
+                            .step_by(0.5)
+                            .fixed_decimals(1),
+                    )
+                    .on_hover_text("How fast the sun moves along the orbit. 0 keeps it parked.")
+                    .changed()
+                {
+                    context.editor_state.sun_rotation_speed = speed_degrees.to_radians();
+                    changed = true;
+                }
+
+                ui.add_space(4.0);
+                ui.label("Path");
                 let (mut orbit_pitch, mut orbit_yaw) =
                     light_dir_to_pitch_yaw(context.editor_state.sun_rotation_axis);
                 let mut orbit_changed = false;
-                orbit_changed |= ui
-                    .add(
+                orbit_changed |= labeled_slider(
+                    ui,
+                    "Path Tilt",
                         egui::Slider::new(&mut orbit_pitch, -90.0..=90.0)
                             .text("Tilt")
                             .suffix("°")
@@ -5154,8 +5204,9 @@ fn render_light_settings_organized(
                     )
                     .on_hover_text("Tilt of the orbit plane. 0° = equatorial, 90° = polar.")
                     .changed();
-                orbit_changed |= ui
-                    .add(
+                orbit_changed |= labeled_slider(
+                    ui,
+                    "Path Yaw",
                         egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
                             .text("Direction")
                             .suffix("°")
@@ -5166,20 +5217,14 @@ fn render_light_settings_organized(
                 if orbit_changed {
                     context.editor_state.sun_rotation_axis =
                         pitch_yaw_to_light_dir(orbit_pitch, orbit_yaw);
-                    context.editor_state.align_sun_to_orbit_plane();
+                    context.editor_state.apply_sun_orbit();
                     context.editor_state.orbit_ring_opacity = 1.0;
                     changed = true;
                 }
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut context.editor_state.sun_rotation_speed, -0.5..=0.5)
-                            .text("Speed")
-                            .suffix(" rad/s")
-                            .fixed_decimals(4),
-                    )
-                    .on_hover_text("Orbit speed in radians per second. Negative = reverse.")
-                    .changed();
 
+            } else {
+                ui.add_space(4.0);
+                changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
             }
 
             if context.editor_state.sun_cycle_enabled {

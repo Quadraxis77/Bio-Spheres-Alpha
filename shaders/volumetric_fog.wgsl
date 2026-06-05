@@ -371,37 +371,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             light_sample_pos.z += dz * fog_params.water_wave_strength;
         }
 
-        // Sample light field FIRST - also detects solid voxels (light = 0.0)
-        // This single read replaces both the old solid_mask check and the light sample
-        let light_intensity = sample_light_field(light_sample_pos);
-        
-        // Get fog density at this position (no solid check needed)
+        // Get fog density before lighting so density-free samples avoid light-field reads.
         let density = fog_density_at(sample_pos);
-        
         if (density <= 0.0) {
             continue;
         }
         
+        let light_intensity = sample_light_field(light_sample_pos);
+        
         // Water attenuates light beams — sample at the actual (undistorted) position
         // so water volumes create realistic shadow falloff.
-        let water_amount = sample_water_density_fog(sample_pos);
-        let effective_light = light_intensity * (1.0 - water_amount * 0.9);
+        var sample_color = vec3<f32>(0.0);
+        if (light_intensity > 0.0 && fog_params.light_intensity > 0.0) {
+            let water_amount = sample_water_density_fog(sample_pos);
+            let effective_light = light_intensity * (1.0 - water_amount * 0.9);
 
         // In-scattered light: light that scatters toward camera at this point.
         // Luminocyte-lit voxels (w > 0) use isotropic phase — their light radiates in
         // all directions, so the sun angle must not create dark "beam" shadows.
-        let light_color_full = sample_light_color_field_full(light_sample_pos);
-        let local_light_color = light_color_full.rgb;
-        let is_luminocyte_lit = light_color_full.w > 0.0;
-        let phase = select(
-            mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy),
-            isotropic_phase,
-            is_luminocyte_lit,
-        );
-        let in_scattered = local_light_color * effective_light * phase * fog_params.light_intensity;
-        
-        // Total light contribution at this sample
-        let sample_color = in_scattered;
+            if (effective_light > 0.0) {
+                let light_color_full = sample_light_color_field_full(light_sample_pos);
+                let local_light_color = light_color_full.rgb;
+                let is_luminocyte_lit = light_color_full.w > 0.0;
+                let phase = select(
+                    mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy),
+                    isotropic_phase,
+                    is_luminocyte_lit,
+                );
+                sample_color = local_light_color * effective_light * phase * fog_params.light_intensity;
+            }
+        }
         
         // Beer-Lambert absorption (fast exp approximation)
         let sample_extinction = density * (fog_params.absorption + fog_params.fog_density) * step_size * 0.01;

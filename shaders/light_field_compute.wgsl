@@ -145,7 +145,8 @@ fn is_near_sphere_boundary(gx: f32, gy: f32, gz: f32) -> bool {
 
 // Ray march from voxel toward light source, accumulating occlusion
 fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> f32 {
-    let light_dir = normalize(vec3<f32>(params.light_dir_x, params.light_dir_y, params.light_dir_z));
+    // CPU-side LightFieldSystem::set_light_dir stores this normalized.
+    let light_dir = vec3<f32>(params.light_dir_x, params.light_dir_y, params.light_dir_z);
     
     // Start from voxel center, march in light direction
     var pos = vec3<f32>(f32(gx) + 0.5, f32(gy) + 0.5, f32(gz) + 0.5);

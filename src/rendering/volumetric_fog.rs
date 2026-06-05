@@ -596,6 +596,10 @@ impl VolumetricFogRenderer {
         grid_origin: [f32; 3],
         world_radius: f32,
     ) {
+        if self.fog_density <= 0.0 && self.height_fog_density <= 0.0 {
+            return;
+        }
+
         // Update camera uniforms
         let inv_view_proj = view_proj.inverse();
         let camera_uniform = FogCameraUniforms {
