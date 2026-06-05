@@ -577,7 +577,7 @@ fn light_color_load(ix: i32, iy: i32, iz: i32) -> vec4<f32> {
 
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     if (shadow_params.shadow_enabled == 0u) {
-        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+        return vec3<f32>(1.0, 1.0, 1.0);
     }
 
     let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
@@ -625,20 +625,25 @@ fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
 // Type 16: Luminocyte - signal-reactive lantern body.
 // type_data_0: x=band_frequency, y=band_width, z=core_glow, w=color_shift
 fn internals_luminocyte(p: vec3<f32>, r: f32, current_time: f32, type_data_0: vec4<f32>) -> vec3<f32> {
-    let band_freq = max(type_data_0.x, 1.0);
-    let band_width = clamp(type_data_0.y, 0.03, 0.45);
-    let core_glow = clamp(type_data_0.z, 0.0, 2.0);
+    let ring_freq  = max(type_data_0.x, 1.0);
+    let ring_width = clamp(type_data_0.y, 0.03, 0.45);
+    let core_glow  = clamp(type_data_0.z, 0.0, 2.0);
     let color_shift = clamp(type_data_0.w, 0.0, 1.0);
 
     let radial = length(p);
-    let core = 1.0 - smoothstep(0.0, 0.58, radial);
-    let swirl = sin((p.x + p.y * 0.55 + p.z * 0.35) * band_freq + current_time * 3.0);
-    let bands = 1.0 - smoothstep(band_width, band_width + 0.08, abs(swirl));
-    let shell = smoothstep(0.35, 0.82, radial) * (1.0 - smoothstep(0.82, 0.98, radial));
-    let pulse = 0.75 + 0.25 * sin(current_time * 4.0 + p.z * 8.0);
 
-    let light = clamp(core * core_glow + bands * shell * pulse, 0.0, 1.8);
-    return vec3<f32>(light, color_shift * bands, 0.0);
+    // Radial core glow — bright centre fading outward.
+    let core = 1.0 - smoothstep(0.0, 0.55, radial);
+
+    // Concentric rings that pulse outward from the centre.
+    let ring_phase = radial * ring_freq - current_time * 2.0;
+    let ring_raw   = 0.5 + 0.5 * sin(ring_phase * 6.2831853);
+    let rings      = 1.0 - smoothstep(ring_width, ring_width + 0.12, 1.0 - ring_raw);
+    // Rings live in the mid-shell zone, not in the bright core or at the edge.
+    let ring_zone  = smoothstep(0.15, 0.40, radial) * (1.0 - smoothstep(0.70, 0.92, radial));
+
+    let light = clamp(core * core_glow + rings * ring_zone * 0.9, 0.0, 1.8);
+    return vec3<f32>(light, color_shift * rings * ring_zone, 0.0);
 }
 
 // Type 14: Cognocyte - Signal-processing cell with a pulsing computational core

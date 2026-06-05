@@ -375,11 +375,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // This single read replaces both the old solid_mask check and the light sample
         let light_intensity = sample_light_field(light_sample_pos);
         
-        // Solid voxels have light = 0.0, non-solid have >= ambient_floor (0.02)
-        if (light_intensity < SOLID_LIGHT_THRESHOLD) {
-            continue;
-        }
-        
         // Get fog density at this position (no solid check needed)
         let density = fog_density_at(sample_pos);
         
@@ -405,12 +400,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
         let in_scattered = local_light_color * effective_light * phase * fog_params.light_intensity;
         
-        // Subtle atmospheric ambient: gives the fog medium a visible presence
-        // even between light beams without creating a bright light source.
-        let ambient = fog_color * 0.04;
-        
         // Total light contribution at this sample
-        let sample_color = in_scattered + ambient;
+        let sample_color = in_scattered;
         
         // Beer-Lambert absorption (fast exp approximation)
         let sample_extinction = density * (fog_params.absorption + fog_params.fog_density) * step_size * 0.01;

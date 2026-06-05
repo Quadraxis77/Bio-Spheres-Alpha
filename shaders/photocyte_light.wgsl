@@ -184,7 +184,8 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
         threshold = control.w;
     }
     if (mode_idx < arrayLength(&mode_emissive)) {
-        bright_level = max(mode_emissive[mode_idx].x, 0.0);
+        let raw = mode_emissive[mode_idx].x;
+        bright_level = select(0.5, raw, raw > 0.001); // default brightness when unset
         dim_level = bright_level * 0.15;
     }
 
@@ -196,69 +197,87 @@ fn emit_luminocyte_light(cell_idx: u32, pos: vec3<f32>) {
     }
 
     let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
-    let requested_cost = brightness * LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND * params.delta_time;
-    let paid_cost = min(requested_cost, max(current_nutrients - 1.0, 0.0));
-    if (paid_cost <= 0.0) {
+    // Smooth ramp: zero at 1 nutrient, full brightness above ~10. Eliminates hard on/off flicker.
+    let nutrient_factor = smoothstep(1.0, 10.0, current_nutrients);
+    let effective_brightness = brightness * nutrient_factor;
+    if (effective_brightness <= 0.001) {
         return;
     }
 
-    atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(paid_cost));
-    let effective_brightness = brightness * paid_cost / max(requested_cost, 0.001);
+    let requested_cost = effective_brightness * LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND * params.delta_time;
+    let paid_cost = min(requested_cost, max(current_nutrients - 1.0, 0.0));
+    if (paid_cost > 0.0) {
+        atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(paid_cost));
+    }
     var emit_color = vec3<f32>(1.0, 1.0, 1.0);
     if (mode_idx < arrayLength(&mode_colors)) {
         emit_color = clamp(mode_colors[mode_idx].xyz, vec3<f32>(0.0), vec3<f32>(4.0));
     }
 
-    let center = world_to_voxel_index(pos);
-    if (center == 0xFFFFFFFFu) {
+    let res = i32(photocyte_params.grid_resolution);
+    // Compute grid position directly — avoids round-trip through flat index.
+    let gx = (pos.x - photocyte_params.grid_origin_x) / photocyte_params.cell_size;
+    let gy = (pos.y - photocyte_params.grid_origin_y) / photocyte_params.cell_size;
+    let gz = (pos.z - photocyte_params.grid_origin_z) / photocyte_params.cell_size;
+    if (gx < 0.0 || gx >= f32(res) || gy < 0.0 || gy >= f32(res) || gz < 0.0 || gz >= f32(res)) {
         return;
     }
+    let cx = i32(gx);
+    let cy = i32(gy);
+    let cz = i32(gz);
+    // Sub-voxel offset of the emitter from the integer grid position.
+    // Matches the original emitter_grid_pos convention (voxel centers at integer coords).
+    let fx = f32(cx) - gx + 0.5;
+    let fy = f32(cy) - gy + 0.5;
+    let fz = f32(cz) - gz + 0.5;
 
-    let res = i32(photocyte_params.grid_resolution);
-    let cz = i32(center / (photocyte_params.grid_resolution * photocyte_params.grid_resolution));
-    let cy = i32((center - u32(cz) * photocyte_params.grid_resolution * photocyte_params.grid_resolution) / photocyte_params.grid_resolution);
-    let cx = i32(center - u32(cz) * photocyte_params.grid_resolution * photocyte_params.grid_resolution - u32(cy) * photocyte_params.grid_resolution);
-    let emitter_grid_pos = vec3<f32>(
-        (pos.x - photocyte_params.grid_origin_x) / photocyte_params.cell_size - 0.5,
-        (pos.y - photocyte_params.grid_origin_y) / photocyte_params.cell_size - 0.5,
-        (pos.z - photocyte_params.grid_origin_z) / photocyte_params.cell_size - 0.5,
-    );
-
-    let emit_radius: i32 = 9;
+    let emit_radius: i32 = 4;
     let emit_radius_f = f32(emit_radius);
+    let emit_radius_sq = f32(emit_radius * emit_radius);
     for (var dz = -emit_radius; dz <= emit_radius; dz++) {
+        let vz = f32(dz) + fz;
+        let vz_sq = vz * vz;
+        if (vz_sq >= emit_radius_sq) { continue; }
+        let ryz = emit_radius_sq - vz_sq;
+
         for (var dy = -emit_radius; dy <= emit_radius; dy++) {
-            for (var dx = -emit_radius; dx <= emit_radius; dx++) {
+            let vy = f32(dy) + fy;
+            let vy_sq = vy * vy;
+            let rx = ryz - vy_sq;
+            if (rx < 0.0) { continue; }
+            // Tight dx range: only iterate voxels whose center lies within the sphere.
+            let half_span = sqrt(rx);
+            let dx_min = i32(ceil(-half_span - fx));
+            let dx_max = i32(floor(half_span - fx));
+
+            for (var dx = max(dx_min, -emit_radius); dx <= min(dx_max, emit_radius); dx++) {
                 let x = cx + dx;
                 let y = cy + dy;
                 let z = cz + dz;
                 if (x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res) {
                     continue;
                 }
-                let voxel_center = vec3<f32>(f32(x), f32(y), f32(z));
-                let dist = length(voxel_center - emitter_grid_pos);
-                if (dist > emit_radius_f) {
-                    continue;
-                }
+                let vx = f32(dx) + fx;
+                let dist = sqrt(vx * vx + vy_sq + vz_sq);
                 // Center on the actual cell position instead of the containing voxel
                 // so luminocyte light does not stamp visible grid blocks.
                 let edge = 1.0 - smoothstep(0.0, 1.0, dist / emit_radius_f);
-                let falloff = edge * edge * (1.0 + 0.45 * (1.0 - dist / emit_radius_f));
+                let falloff = edge * edge * (1.0 + 0.45 * (1.0 - dist / emit_radius_f)) + 0.04;
                 let idx = u32(x) + u32(y) * photocyte_params.grid_resolution + u32(z) * photocyte_params.grid_resolution * photocyte_params.grid_resolution;
                 // Skip solid voxels — light_field == 0.0 means solid rock (set by
                 // compute_light_field). Injecting into them would make them pass the
                 // fog shader's solid-skip test and produce black fog blobs.
-                if (light_field[idx] < 0.001) {
+                let existing_light = light_field[idx];
+                if (existing_light < 0.001) {
                     continue;
                 }
-                let local_light = effective_brightness * falloff;
-                let intensity_weight = u32(max(local_light * COLOR_ACCUM_SCALE, 0.0));
-                if (intensity_weight > 0u) {
-                    atomicAdd(&light_intensity_accum[idx], intensity_weight);
-                }
-
+                // Scale contribution by how dark the voxel already is so luminocyte
+                // light fills shadow but gets washed out when the sun is bright.
+                let darkness = max(0.0, 1.0 - existing_light);
+                let local_light = effective_brightness * falloff * darkness;
                 let weight = u32(max(local_light * COLOR_ACCUM_SCALE, 0.0));
                 if (weight > 0u) {
+                    atomicAdd(&light_intensity_accum[idx], weight);
                     let base = idx * 4u;
                     atomicAdd(&light_color_accum[base + 0u], u32(emit_color.r * f32(weight)));
                     atomicAdd(&light_color_accum[base + 1u], u32(emit_color.g * f32(weight)));
@@ -280,6 +299,7 @@ fn resolve_luminocyte_light_color(@builtin(global_invocation_id) global_id: vec3
 
     let base = idx * 4u;
     let weight = atomicLoad(&light_color_accum[base + 3u]);
+    // light_color_field is DMA-cleared before this pass, so skip writing zeros.
     if (weight == 0u) {
         let intensity = atomicLoad(&light_intensity_accum[idx]);
         if (intensity > 0u) {

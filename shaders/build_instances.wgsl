@@ -447,6 +447,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // the light-field gating in photocyte_light.wgsl. In preview (no signals),
     // signal value is 0 → dim glow unless threshold is also 0.
     if (cell_type == 16u && mode_index < arrayLength(&mode_properties_v7)) {
+        if (emissive < 0.001) { emissive = 0.5; } // default brightness when unset
         let lum = mode_properties_v7[mode_index];
         let invert = lum.x >= 0.5;
         let channel = min(u32(clamp(lum.z, 0.0, 15.0)), SIGNAL_CHANNELS - 1u);

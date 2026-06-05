@@ -2291,9 +2291,11 @@ impl GpuScene {
         // high-water mark) for its own bounds check. Using total_cell_slots (the async
         // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
         // at higher slot indices during the lag window, causing them to receive no light.
-        // Clear the luminocyte color accumulator before each emission pass so it
-        // holds exactly one frame's worth of data for the resolve step below.
+        // Clear the luminocyte accumulators before each emission pass so they hold
+        // exactly one frame's worth of data for the resolve step below.
         encoder.clear_buffer(light_field.light_color_accum_buffer_ref(), 0, None);
+        encoder.clear_buffer(light_field.light_intensity_accum_buffer_ref(), 0, None);
+        encoder.clear_buffer(light_field.light_color_field_buffer(), 0, None);
 
         let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
         {
@@ -6921,12 +6923,19 @@ impl GpuScene {
             ]);
         }
 
+        // Combine sun color with intensity for all lighting
+        let scaled_sun_color = [
+            editor_state.sun_color[0] * effective_sun_intensity,
+            editor_state.sun_color[1] * effective_sun_intensity,
+            editor_state.sun_color[2] * effective_sun_intensity,
+        ];
+
         // Update volumetric fog renderer parameters
         if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
             fog_renderer.enabled = editor_state.show_volumetric_fog;
             fog_renderer.fog_density = editor_state.fog_density;
             fog_renderer.fog_steps = editor_state.fog_steps;
-            fog_renderer.light_color = editor_state.sun_color;
+            fog_renderer.light_color = scaled_sun_color;
             // Use the fog's own light_intensity setting — sun brightness is already baked
             // into light_color_field, so tying this to sun_intensity would zero luminocyte glow.
             fog_renderer.light_intensity = editor_state.light_intensity;
@@ -6940,13 +6949,6 @@ impl GpuScene {
             fog_renderer.smooth_light_field = editor_state.fog_smooth_light_field;
             fog_renderer.composite_blur_radius = editor_state.fog_composite_blur;
         }
-
-        // Combine sun color with intensity for all lighting
-        let scaled_sun_color = [
-            editor_state.sun_color[0] * effective_sun_intensity,
-            editor_state.sun_color[1] * effective_sun_intensity,
-            editor_state.sun_color[2] * effective_sun_intensity,
-        ];
 
         // Update cell renderer light color and direction
         self.renderer.set_light_color(scaled_sun_color);

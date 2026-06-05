@@ -96,6 +96,10 @@ pub struct CellRenderer {
     /// Light direction
     light_dir: [f32; 3],
 
+    /// Ambient floor for cell shading. GPU simulation keeps this at 0.0 so
+    /// cells only receive explicit scene light; preview/menu scenes opt in.
+    ambient: f32,
+
     /// Bind group for camera and lighting uniforms
     bind_group: wgpu::BindGroup,
 
@@ -261,6 +265,7 @@ impl CellRenderer {
             lighting_buffer,
             light_color: [1.0, 0.98, 0.95], // Default warm white
             light_dir: [-0.5, -0.7, -0.5],  // Default light direction
+            ambient: 0.0,
             bind_group,
             instance_buffer,
             instance_capacity: capacity,
@@ -581,18 +586,16 @@ impl CellRenderer {
         self.light_dir = dir;
     }
 
+    /// Set the ambient floor for cell shading.
+    pub fn set_ambient(&mut self, ambient: f32) {
+        self.ambient = ambient.clamp(0.0, 1.0);
+    }
+
     /// Update lighting uniform buffer.
     fn update_lighting(&self, queue: &wgpu::Queue, outline_width: f32) {
-        // Ambient doubles as the shadow floor in the shader: ambient + (1-ambient)*diffuse.
-        // Scale it with sun intensity so cells go dark when sun = 0.
-        // At the reference sun (light brightness ~6.0), ambient hits 0.40 which matches the
-        // old formula's shadow floor (0.3 + 0.7*0.15 = 0.405).
-        let light_brightness =
-            (self.light_color[0] + self.light_color[1] + self.light_color[2]) / 3.0;
-        let ambient = (light_brightness * 0.067).clamp(0.0, 0.4);
         let lighting_uniform = LightingUniform {
             light_dir: self.light_dir,
-            ambient,
+            ambient: self.ambient,
             light_color: self.light_color,
             outline_width,
         };

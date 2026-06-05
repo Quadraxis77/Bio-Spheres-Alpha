@@ -904,6 +904,10 @@ impl LightFieldSystem {
         &self.light_color_accum_buffer
     }
 
+    pub fn light_intensity_accum_buffer_ref(&self) -> &wgpu::Buffer {
+        &self.light_intensity_accum_buffer
+    }
+
     /// Set light direction (will be normalized)
     pub fn set_light_dir(&mut self, dir: [f32; 3]) {
         self.light_dir = Self::normalize_dir(dir);
@@ -1506,6 +1510,7 @@ impl LightFieldSystem {
         // Step 4: Photocyte light consumption and luminocyte local light emission.
         encoder.clear_buffer(&self.light_color_accum_buffer, 0, None);
         encoder.clear_buffer(&self.light_intensity_accum_buffer, 0, None);
+        encoder.clear_buffer(&self.light_color_field_buffer, 0, None);
         if cell_count > 0 {
             let cell_workgroups = (cell_count + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1579,6 +1584,7 @@ impl LightFieldSystem {
 
         encoder.clear_buffer(&self.light_color_accum_buffer, 0, None);
         encoder.clear_buffer(&self.light_intensity_accum_buffer, 0, None);
+        encoder.clear_buffer(&self.light_color_field_buffer, 0, None);
 
         {
             let cell_workgroups = (cell_count + 255) / 256;

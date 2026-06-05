@@ -2493,7 +2493,12 @@ impl App {
                     log::warn!("Periodic lineage capture failed: {err}");
                 }
 
-                self.editor_state.update_sun_rotation(dt);
+                if self.editor_state.update_sun_rotation(dt) {
+                    self.editor_state.light_params_dirty = true;
+                }
+                if self.editor_state.sun_cycle_enabled {
+                    self.editor_state.light_params_dirty = true;
+                }
 
                 // Apply light & fog parameters from UI if they changed
                 if self.editor_state.light_params_dirty {

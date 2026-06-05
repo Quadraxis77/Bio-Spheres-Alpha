@@ -948,19 +948,39 @@ impl GenomeEditorState {
 
     /// Rotate the sun/light direction for animated day-cycle style lighting.
     pub fn update_sun_rotation(&mut self, dt: f32) -> bool {
-        if !self.sun_rotation_enabled || self.sun_rotation_speed == 0.0 || dt <= 0.0 {
+        if !self.sun_rotation_enabled || self.sun_rotation_speed == 0.0 {
             return false;
         }
 
-        let axis = glam::Vec3::from_array(self.sun_rotation_axis).normalize_or_zero();
-        let dir = glam::Vec3::from_array(self.light_dir).normalize_or_zero();
-        if axis.length_squared() == 0.0 || dir.length_squared() == 0.0 {
+        let ax = self.sun_rotation_axis;
+        let len = (ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]).sqrt();
+        if len < 1e-6 {
             return false;
         }
+        let axis = [ax[0] / len, ax[1] / len, ax[2] / len];
 
-        let rotation = glam::Quat::from_axis_angle(axis, self.sun_rotation_speed * dt);
-        self.light_dir = (rotation * dir).normalize_or_zero().to_array();
-        self.light_params_dirty = true;
+        let theta = self.sun_rotation_speed * dt;
+        let cos_t = theta.cos();
+        let sin_t = theta.sin();
+
+        let v = self.light_dir;
+        // Rodrigues' rotation formula — rotates light_dir around axis by theta
+        let dot = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
+        let cross = [
+            axis[1] * v[2] - axis[2] * v[1],
+            axis[2] * v[0] - axis[0] * v[2],
+            axis[0] * v[1] - axis[1] * v[0],
+        ];
+        let rotated = [
+            v[0] * cos_t + cross[0] * sin_t + axis[0] * dot * (1.0 - cos_t),
+            v[1] * cos_t + cross[1] * sin_t + axis[1] * dot * (1.0 - cos_t),
+            v[2] * cos_t + cross[2] * sin_t + axis[2] * dot * (1.0 - cos_t),
+        ];
+        // Re-normalize to prevent drift
+        let rlen = (rotated[0] * rotated[0] + rotated[1] * rotated[1] + rotated[2] * rotated[2]).sqrt();
+        if rlen > 1e-6 {
+            self.light_dir = [rotated[0] / rlen, rotated[1] / rlen, rotated[2] / rlen];
+        }
         true
     }
 

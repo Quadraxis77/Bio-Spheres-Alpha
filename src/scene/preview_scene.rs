@@ -13,8 +13,9 @@ use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 
-const PREVIEW_LIGHT_COLOR: [f32; 3] = [6.0, 5.8, 5.4];
-const PREVIEW_LIGHT_DIR: [f32; 3] = [0.45, -0.75, -0.35];
+const PREVIEW_LIGHT_COLOR: [f32; 3] = [5.2, 5.0, 4.6];
+const PREVIEW_LIGHT_DIR: [f32; 3] = [0.35, -0.78, -0.52];
+const PREVIEW_CELL_AMBIENT: f32 = 0.32;
 
 /// Preview scene for genome editing.
 ///
@@ -84,6 +85,7 @@ impl PreviewScene {
         let mut renderer = CellRenderer::new(device, queue, surface_config, capacity);
         renderer.set_light_color(PREVIEW_LIGHT_COLOR);
         renderer.set_light_dir(PREVIEW_LIGHT_DIR);
+        renderer.set_ambient(PREVIEW_CELL_AMBIENT);
         let adhesion_renderer =
             AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);

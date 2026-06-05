@@ -4883,6 +4883,176 @@ fn render_organism_skin_settings(
 }
 
 /// Render the organized lighting settings panel.
+fn normalize_sun_tint(color: [f32; 3]) -> [f32; 3] {
+    let max_channel = color[0].max(color[1]).max(color[2]);
+    if max_channel > 0.001 {
+        [
+            color[0] / max_channel,
+            color[1] / max_channel,
+            color[2] / max_channel,
+        ]
+    } else {
+        [1.0, 1.0, 1.0]
+    }
+}
+
+fn sun_tint_color32(color: [f32; 3]) -> egui::Color32 {
+    egui::Color32::from_rgb(
+        (color[0].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[1].clamp(0.0, 1.0) * 255.0) as u8,
+        (color[2].clamp(0.0, 1.0) * 255.0) as u8,
+    )
+}
+
+fn render_sun_tint_control(ui: &mut Ui, tint: &mut [f32; 3], sun_intensity: f32) -> bool {
+    let mut changed = false;
+    let presets = [
+        ("White", [1.0, 1.0, 1.0]),
+        ("Warm", [1.0, 0.86, 0.62]),
+        ("Gold", [1.0, 0.66, 0.28]),
+        ("Dusk", [1.0, 0.42, 0.22]),
+        ("Cool", [0.72, 0.86, 1.0]),
+    ];
+
+    ui.label("Sun Tint")
+        .on_hover_text("Hue of the sun. Brightness is controlled by the Brightness slider above.");
+    ui.horizontal_wrapped(|ui| {
+        for (name, preset) in presets {
+            let selected = (*tint)[0].abs_diff_eq(preset[0], 0.01)
+                && (*tint)[1].abs_diff_eq(preset[1], 0.01)
+                && (*tint)[2].abs_diff_eq(preset[2], 0.01);
+            let button = egui::Button::new(name)
+                .fill(sun_tint_color32(preset))
+                .stroke(if selected {
+                    egui::Stroke::new(2.0, ui.visuals().text_color())
+                } else {
+                    ui.visuals().widgets.inactive.bg_stroke
+                });
+            if ui.add(button).clicked() {
+                *tint = preset;
+                changed = true;
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("Custom");
+        let mut c = sun_tint_color32(*tint);
+        if ui.color_edit_button_srgba(&mut c).changed() {
+            *tint = normalize_sun_tint([
+                c.r() as f32 / 255.0,
+                c.g() as f32 / 255.0,
+                c.b() as f32 / 255.0,
+            ]);
+            changed = true;
+        }
+
+        let effective = [
+            tint[0] * sun_intensity,
+            tint[1] * sun_intensity,
+            tint[2] * sun_intensity,
+        ];
+        let preview = [
+            1.0 - (-effective[0] * 0.18).exp(),
+            1.0 - (-effective[1] * 0.18).exp(),
+            1.0 - (-effective[2] * 0.18).exp(),
+        ];
+        ui.label("Output");
+        ui.add(
+            egui::Button::new("")
+                .fill(sun_tint_color32(preview))
+                .min_size(egui::vec2(30.0, 18.0)),
+        )
+        .on_hover_text(format!(
+            "Actual sun color: {:.2}, {:.2}, {:.2}",
+            effective[0], effective[1], effective[2]
+        ));
+    });
+
+    changed
+}
+
+fn light_dir_to_pitch_yaw(dir: [f32; 3]) -> (f32, f32) {
+    let d = glam::Vec3::from_array(dir).normalize_or_zero();
+    if d.length_squared() == 0.0 {
+        return (45.0, -45.0);
+    }
+    let pitch = d.y.clamp(-1.0, 1.0).asin().to_degrees();
+    let yaw = d.x.atan2(d.z).to_degrees();
+    (pitch, yaw)
+}
+
+fn pitch_yaw_to_light_dir(pitch_degrees: f32, yaw_degrees: f32) -> [f32; 3] {
+    let pitch = pitch_degrees.to_radians();
+    let yaw = yaw_degrees.to_radians();
+    let horizontal = pitch.cos();
+    [
+        horizontal * yaw.sin(),
+        pitch.sin(),
+        horizontal * yaw.cos(),
+    ]
+}
+
+fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
+    let (mut pitch, mut yaw) = light_dir_to_pitch_yaw(*light_dir);
+    let mut changed = false;
+
+    ui.label("Direction")
+        .on_hover_text("Pitch controls sun height. Yaw rotates the sun around the world.");
+    ui.label("Pitch");
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut pitch, -89.0..=89.0)
+                .text("Pitch")
+                .step_by(1.0)
+                .fixed_decimals(0),
+        )
+        .changed();
+    ui.label("Yaw");
+    changed |= ui
+        .add(
+            egui::Slider::new(&mut yaw, -180.0..=180.0)
+                .text("Yaw")
+                .step_by(1.0)
+                .fixed_decimals(0),
+        )
+        .changed();
+
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Top").on_hover_text("Overhead light").clicked() {
+            pitch = 89.0;
+            yaw = 0.0;
+            changed = true;
+        }
+        if ui.button("Low").on_hover_text("Low angled light").clicked() {
+            pitch = 20.0;
+            yaw = -55.0;
+            changed = true;
+        }
+        if ui.button("Default").on_hover_text("Default angled light").clicked() {
+            pitch = 44.0;
+            yaw = -45.0;
+            changed = true;
+        }
+    });
+
+    if changed {
+        *light_dir = pitch_yaw_to_light_dir(pitch, yaw);
+    }
+
+    changed
+}
+
+trait AbsDiffEq {
+    fn abs_diff_eq(self, other: Self, epsilon: Self) -> bool;
+}
+
+impl AbsDiffEq for f32 {
+    fn abs_diff_eq(self, other: Self, epsilon: Self) -> bool {
+        (self - other).abs() <= epsilon
+    }
+}
+
 fn render_light_settings_organized(
     ui: &mut Ui,
     context: &mut PanelContext,
@@ -4921,10 +5091,6 @@ fn render_light_settings_organized(
                     .on_hover_text("Render the visible sun disc in the sky.")
                     .changed();
                 changed |= ui
-                    .checkbox(&mut context.editor_state.sun_rotation_enabled, "Rotate")
-                    .on_hover_text("Animate the light direction around an axis.")
-                    .changed();
-                changed |= ui
                     .checkbox(&mut context.editor_state.sun_cycle_enabled, "Cycle")
                     .on_hover_text("Oscillate sun brightness between Min and Max.")
                     .changed();
@@ -4948,140 +5114,17 @@ fn render_light_settings_organized(
             }
 
             let mut sun_color = context.editor_state.sun_color;
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                let mut c = egui::Color32::from_rgb(
-                    (sun_color[0] * 255.0) as u8,
-                    (sun_color[1] * 255.0) as u8,
-                    (sun_color[2] * 255.0) as u8,
-                );
-                if ui.color_edit_button_srgba(&mut c).changed() {
-                    sun_color = [
-                        c.r() as f32 / 255.0,
-                        c.g() as f32 / 255.0,
-                        c.b() as f32 / 255.0,
-                    ];
-                    sun_changed = true;
-                }
-            });
+            sun_changed |= render_sun_tint_control(
+                ui,
+                &mut sun_color,
+                context.editor_state.sun_intensity,
+            );
             context.editor_state.sun_color = sun_color;
 
             ui.add_space(4.0);
-            let rotating = context.editor_state.sun_rotation_enabled;
-            ui.add_enabled_ui(!rotating, |ui| {
-                ui.label("Direction")
-                    .on_hover_text("Vector pointing toward the sun. Rotation overrides manual direction.");
-                ui.label("X");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut context.editor_state.light_dir[0], -1.0..=1.0)
-                            .text("X")
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Y");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut context.editor_state.light_dir[1], -1.0..=1.0)
-                            .text("Y")
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Z");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut context.editor_state.light_dir[2], -1.0..=1.0)
-                            .text("Z")
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Top").on_hover_text("Overhead light").clicked() {
-                        context.editor_state.light_dir = [0.0, 1.0, 0.0];
-                        changed = true;
-                    }
-                    if ui.button("Low").on_hover_text("Low angled light").clicked() {
-                        context.editor_state.light_dir = [-0.7, 0.3, 0.5];
-                        changed = true;
-                    }
-                    if ui.button("Default").on_hover_text("Default angled light").clicked() {
-                        context.editor_state.light_dir = [-0.5, 0.7, 0.5];
-                        changed = true;
-                    }
-                });
-            });
-
-            if rotating {
-                ui.label(egui::RichText::new("Manual direction is controlled by rotation.").weak());
-            }
-
-            if context.editor_state.sun_rotation_enabled {
-                ui.add_space(6.0);
-                ui.label("Rotation");
-                ui.label("Speed");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut context.editor_state.sun_rotation_speed, -2.0..=2.0)
-                            .text("Speed")
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Axis X");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(
-                            &mut context.editor_state.sun_rotation_axis[0],
-                            -1.0..=1.0,
-                        )
-                        .text("Axis X")
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Axis Y");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(
-                            &mut context.editor_state.sun_rotation_axis[1],
-                            -1.0..=1.0,
-                        )
-                        .text("Axis Y")
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Axis Z");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(
-                            &mut context.editor_state.sun_rotation_axis[2],
-                            -1.0..=1.0,
-                        )
-                        .text("Axis Z")
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Y Axis").clicked() {
-                        context.editor_state.sun_rotation_axis = [0.0, 1.0, 0.0];
-                        changed = true;
-                    }
-                    if ui.button("X Axis").clicked() {
-                        context.editor_state.sun_rotation_axis = [1.0, 0.0, 0.0];
-                        changed = true;
-                    }
-                    if ui.button("Z Axis").clicked() {
-                        context.editor_state.sun_rotation_axis = [0.0, 0.0, 1.0];
-                        changed = true;
-                    }
-                });
-            }
+            context.editor_state.sun_rotation_enabled = false;
+            context.editor_state.sun_rotation_speed = 0.0;
+            changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
 
             if context.editor_state.sun_cycle_enabled {
                 ui.add_space(6.0);
@@ -5600,6 +5643,11 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
     ui.heading("Light Direction");
     ui.add_space(4.0);
 
+    context.editor_state.sun_rotation_enabled = false;
+    context.editor_state.sun_rotation_speed = 0.0;
+    changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
+
+    if false {
     let rotating = context.editor_state.sun_rotation_enabled;
     if rotating {
         ui.label(egui::RichText::new("⟳ Controlled by rotation — disable rotation to set manually").italics().weak());
@@ -5654,6 +5702,8 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         });
     });
 
+    }
+
     // === Sun ===
     ui.add_space(8.0);
     ui.separator();
@@ -5698,74 +5748,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.add_space(4.0);
     }
 
-    changed |= ui
-        .checkbox(&mut context.editor_state.sun_rotation_enabled, "Rotate Sun")
-        .on_hover_text("Animate the sun and directional light around the configured axis")
-        .changed();
-
-    if context.editor_state.sun_rotation_enabled {
-        ui.add_space(4.0);
-        ui.label("Rotation Speed:").on_hover_text(
-            "Sun rotation speed in radians per second. Negative values reverse the orbit direction",
-        );
-        changed |= ui
-            .add(
-                egui::Slider::new(&mut context.editor_state.sun_rotation_speed, -2.0..=2.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed();
-
-        ui.label("Rotation Axis:").on_hover_text(
-            "Axis the sun direction rotates around. This vector is normalized automatically",
-        );
-        ui.horizontal(|ui| {
-            ui.label("X:");
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut context.editor_state.sun_rotation_axis[0], -1.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Y:");
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut context.editor_state.sun_rotation_axis[1], -1.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("Z:");
-            changed |= ui
-                .add(
-                    egui::Slider::new(&mut context.editor_state.sun_rotation_axis[2], -1.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-        });
-
-        ui.horizontal(|ui| {
-            if ui.button("Y Axis").clicked() {
-                context.editor_state.sun_rotation_axis = [0.0, 1.0, 0.0];
-                changed = true;
-            }
-            if ui.button("X Axis").clicked() {
-                context.editor_state.sun_rotation_axis = [1.0, 0.0, 0.0];
-                changed = true;
-            }
-            if ui.button("Z Axis").clicked() {
-                context.editor_state.sun_rotation_axis = [0.0, 0.0, 1.0];
-                changed = true;
-            }
-        });
-    }
-
     sun_changed |= ui
         .checkbox(&mut context.editor_state.show_sun, "Show Sun Disc")
         .on_hover_text("Render a visible sun disc in the skybox at the light direction position")
@@ -5774,37 +5756,7 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
     if context.editor_state.show_sun {
         ui.add_space(4.0);
         let mut sc = context.editor_state.sun_color;
-        ui.label("Sun Color:");
-        ui.horizontal(|ui| {
-            ui.label("R:");
-            sun_changed |= ui
-                .add(
-                    egui::Slider::new(&mut sc[0], 0.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("G:");
-            sun_changed |= ui
-                .add(
-                    egui::Slider::new(&mut sc[1], 0.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-        });
-        ui.horizontal(|ui| {
-            ui.label("B:");
-            sun_changed |= ui
-                .add(
-                    egui::Slider::new(&mut sc[2], 0.0..=1.0)
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-        });
+        sun_changed |= render_sun_tint_control(ui, &mut sc, context.editor_state.sun_intensity);
         context.editor_state.sun_color = sc;
 
         if state.show_advanced_options {
@@ -6548,8 +6500,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                         &mut context.genome.modes[selected_index].cell_type,
                         ct.to_index() as i32,
                         ct.name(),
-                    )
-                    .on_hover_text(ct.tooltip());
+                    );
                 }
             });
         // Propagate cell type change to all selected modes.
@@ -6567,6 +6518,21 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             .editor_state
             .panel_rects
             .insert("cell_type_dropdown".to_string(), combo_resp.response.rect);
+
+        // Description of the selected cell type — stable label avoids tooltip-induced jitter.
+        let selected_ct = cell_types
+            .iter()
+            .find(|ct| ct.to_index() as i32 == context.genome.modes[selected_index].cell_type);
+        if let Some(ct) = selected_ct {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(ct.tooltip())
+                        .size(10.0)
+                        .color(palette().text_secondary),
+                )
+                .wrap(),
+            );
+        }
 
         // Make Adhesion toggle - full width, teal when active
         let on = context.genome.modes[selected_index].parent_make_adhesion;
