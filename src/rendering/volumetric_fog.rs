@@ -82,9 +82,8 @@ pub struct VolumetricFogRenderer {
     composite_params_buffer: wgpu::Buffer,
     fog_sampler: wgpu::Sampler,
 
-    // Cached bind groups (invalidated on resize)
+    // Cached bind groups
     cached_camera_bind_group: wgpu::BindGroup,
-    cached_fog_data_bind_group: Option<wgpu::BindGroup>,
 
     // Configurable parameters
     pub fog_density: f32,
@@ -438,7 +437,6 @@ impl VolumetricFogRenderer {
             composite_params_buffer,
             fog_sampler,
             cached_camera_bind_group,
-            cached_fog_data_bind_group: None,
             fog_density: 0.5,
             fog_steps: 32,
             light_color: [1.0, 0.95, 0.85],
@@ -528,52 +526,46 @@ impl VolumetricFogRenderer {
             &self.fog_sampler,
             &self.composite_params_buffer,
         );
-        // Invalidate cached fog data bind group (depth_view may have changed)
-        self.cached_fog_data_bind_group = None;
     }
 
-    /// Ensure the fog data bind group is created and cached
-    fn ensure_fog_data_bind_group(
-        &mut self,
+    fn create_fog_data_bind_group(
+        &self,
         device: &wgpu::Device,
         light_field_buffer: &wgpu::Buffer,
         light_color_field_buffer: &wgpu::Buffer,
         depth_view: &wgpu::TextureView,
         water_density_buffer: &wgpu::Buffer,
-    ) {
-        if self.cached_fog_data_bind_group.is_none() {
-            self.cached_fog_data_bind_group =
-                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Fog Data Bind Group (cached)"),
-                    layout: &self.fog_data_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.fog_params_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: light_field_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(depth_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&self.depth_sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: light_color_field_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: water_density_buffer.as_entire_binding(),
-                        },
-                    ],
-                }));
-        }
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Fog Data Bind Group"),
+            layout: &self.fog_data_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.fog_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.depth_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: light_color_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: water_density_buffer.as_entire_binding(),
+                },
+            ],
+        })
     }
 
     /// Update camera and fog parameters, then render at half resolution + composite
@@ -645,8 +637,9 @@ impl VolumetricFogRenderer {
         };
         queue.write_buffer(&self.fog_params_buffer, 0, bytemuck::bytes_of(&fog_params));
 
-        // Ensure cached fog data bind group exists
-        self.ensure_fog_data_bind_group(
+        // Build fog data bind group fresh each frame so depth_view and buffer
+        // references are always current (no stale ghost from a previous frame).
+        let fog_data_bind_group = self.create_fog_data_bind_group(
             device,
             light_field_buffer,
             light_color_field_buffer,
@@ -674,7 +667,7 @@ impl VolumetricFogRenderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.cached_camera_bind_group, &[]);
-            pass.set_bind_group(1, self.cached_fog_data_bind_group.as_ref().unwrap(), &[]);
+            pass.set_bind_group(1, &fog_data_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 

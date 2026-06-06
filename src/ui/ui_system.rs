@@ -1694,13 +1694,13 @@ impl UiSystem {
                         // so the brackets are never clipped by any panel's clip rect.
                         // Fall back to the previous frame's rect on the first frame
                         // after switching to GPU mode (before the Viewport tab renders).
-                        if current_mode == crate::ui::types::SimulationMode::Gpu {
+                        if current_mode == crate::ui::types::SimulationMode::Gpu && !hide_ui {
                             // Only paint brackets when we have a rect from THIS frame's
                             // Viewport tab render. Never fall back to a stale rect from
                             // a different scene - one missed frame is fine.
                             if let Some(viewport_rect) = vp_rect {
                                 let bracket_painter = ui.ctx().layer_painter(egui::LayerId::new(
-                                    egui::Order::Foreground,
+                                    egui::Order::Middle,
                                     egui::Id::new("viewport_brackets"),
                                 ));
                                 paint_viewport_brackets(&bracket_painter, viewport_rect);
@@ -3551,8 +3551,8 @@ fn paint_viewport_brackets(painter: &egui::Painter, viewport_rect: egui::Rect) {
         return;
     }
 
-    // Arm length: 4% of the smaller dimension, clamped 20-50px.
-    let arm = (r.width().min(r.height()) * 0.04).clamp(20.0, 50.0);
+    // Arm length: 4% of the smaller dimension, clamped 20-80px.
+    let arm = (r.width().min(r.height()) * 0.04).clamp(20.0, 80.0);
 
     let color = theme::ACCENT_TEAL;
     let stroke = egui::Stroke::new(1.5, color);
