@@ -217,6 +217,20 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 // mode_properties_v7 per mode: [luminocyte_invert, unused, signal_channel, threshold]
 @group(0) @binding(21) var<storage, read> mode_properties_v7: array<vec4<f32>>;
 
+// Cave solid-mask culling (bindings 22-23)
+struct CaveCullParams {
+    enabled: u32,           // 0 = disabled (no cave), 1 = enabled
+    grid_resolution: u32,   // voxel grid side length (128)
+    cell_size: f32,
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
+@group(0) @binding(22) var<uniform> cave_cull: CaveCullParams;
+@group(0) @binding(23) var<storage, read> cave_solid_mask: array<u32>;
+
 const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
 
@@ -393,6 +407,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Death flags are set when nutrients < 1.0 (DEATH_NUTRIENT_THRESHOLD)
     if (death_flags[idx] == 1u) {
         return;
+    }
+
+    // Cave solid-mask cull: skip cells whose voxel is inside solid rock.
+    if (cave_cull.enabled != 0u) {
+        let res = i32(cave_cull.grid_resolution);
+        let gx = i32((position.x - cave_cull.origin_x) / cave_cull.cell_size);
+        let gy = i32((position.y - cave_cull.origin_y) / cave_cull.cell_size);
+        let gz = i32((position.z - cave_cull.origin_z) / cave_cull.cell_size);
+        if (gx >= 0 && gx < res && gy >= 0 && gy < res && gz >= 0 && gz < res) {
+            let solid_idx = u32(gx + gy * res + gz * res * res);
+            if (cave_solid_mask[solid_idx] != 0u) {
+                atomicAdd(&counters[3], 1u); // occluded counter
+                return;
+            }
+        }
     }
     
     let rotation = rotations[idx];

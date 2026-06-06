@@ -122,6 +122,10 @@ struct CaveSpatialCell {
 /// Cave system renderer with GPU SDF-based collision
 pub struct CaveSystemRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// Depth-only pipeline with no face culling.
+    /// Renders before the main pass to write depth for exterior cave surfaces so
+    /// that bloom depth occlusion works correctly when the camera is outside the cave.
+    depth_prepass_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
@@ -303,6 +307,9 @@ impl CaveSystemRenderer {
         });
 
         // Create render pipeline
+        // Note: depth_compare is LessEqual (not Less) because the depth prepass
+        // already writes identical depth values for the interior faces. Strict Less
+        // would fail for equal depths and the interior faces would not draw.
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Cave Pipeline"),
             layout: Some(&pipeline_layout),
@@ -345,7 +352,7 @@ impl CaveSystemRenderer {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -353,6 +360,56 @@ impl CaveSystemRenderer {
             multiview: None,
             cache: None,
         });
+
+        // Depth-only prepass pipeline: no face culling, no fragment, no color outputs.
+        // Writes depth for ALL cave surfaces (interior AND exterior) so that bloom
+        // depth occlusion works when the camera is outside the cave looking in.
+        let depth_prepass_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Cave Depth Prepass Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let depth_prepass_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Cave Depth Prepass Pipeline"),
+                layout: Some(&depth_prepass_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<CaveVertex>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x3, // position
+                            1 => Float32x3, // normal
+                            2 => Float32x2, // uv
+                        ],
+                    }],
+                    compilation_options: Default::default(),
+                },
+                fragment: None, // depth-only: no color output
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None, // render BOTH sides to write depth from any view direction
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
         // Create physics bind group layout for cave collision
         // This matches what the cave_collision.wgsl shader expects in group(0)
@@ -472,6 +529,7 @@ impl CaveSystemRenderer {
 
         Self {
             pipeline,
+            depth_prepass_pipeline,
             vertex_buffer,
             index_buffer,
             params_buffer,
@@ -588,6 +646,33 @@ impl CaveSystemRenderer {
             0,
             bytemuck::cast_slice(&[camera_uniform]),
         );
+
+        // Depth-only prepass: write depth for all cave surfaces (no face culling).
+        // This ensures that exterior cave walls have depth written even when the
+        // camera is outside the cave, so the luminocyte bloom's per-fragment depth
+        // test correctly occludes halos behind solid rock.
+        {
+            let mut depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cave Depth Prepass"),
+                color_attachments: &[], // depth-only, no color output
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            depth_pass.set_pipeline(&self.depth_prepass_pipeline);
+            depth_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            depth_pass.set_bind_group(1, &self.params_bind_group, &[]);
+            depth_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            depth_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            depth_pass.draw_indexed(0..self.index_count, 0, 0..1);
+        }
 
         // Begin render pass
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

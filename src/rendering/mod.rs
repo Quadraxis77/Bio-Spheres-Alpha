@@ -134,6 +134,7 @@ pub mod depth_of_field;
 pub mod fov_cone;
 pub mod gpu_adhesion_lines;
 pub mod gpu_surface_nets;
+pub mod luminocyte_bloom;
 pub mod instance_builder;
 pub mod nutrient_particles;
 pub mod organism_skin;

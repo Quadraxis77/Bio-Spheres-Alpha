@@ -5532,6 +5532,45 @@ fn render_light_settings_organized(
             });
         });
 
+    ui.separator();
+
+    egui::CollapsingHeader::new("Luminocyte Glow")
+        .default_open(true)
+        .show(ui, |ui| {
+            changed |= ui
+                .checkbox(&mut context.editor_state.luminocyte_bloom_enabled, "Enabled")
+                .on_hover_text("Screen-space bloom halo around glowing luminocytes.")
+                .changed();
+
+            ui.add_enabled_ui(context.editor_state.luminocyte_bloom_enabled, |ui| {
+                ui.label("Halo Radius");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut context.editor_state.luminocyte_bloom_radius,
+                            0.02..=0.8,
+                        )
+                        .text("Radius")
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                    )
+                    .on_hover_text("Halo size as a fraction of screen height. Larger = bigger glow.")
+                    .changed();
+            });
+
+            if changed {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    if let Some(ref mut bloom) = gpu_scene.luminocyte_bloom {
+                        bloom.bloom_radius = if context.editor_state.luminocyte_bloom_enabled {
+                            context.editor_state.luminocyte_bloom_radius
+                        } else {
+                            0.0
+                        };
+                    }
+                }
+            }
+        });
+
     if state.show_advanced_options {
         ui.separator();
 

@@ -141,6 +141,10 @@ pub struct InstanceBuilder {
     // Async stats readback state
     stats_map_pending: bool,
     stats_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+
+    // Cave solid-mask culling
+    cave_cull_params_buffer: wgpu::Buffer,
+    dummy_solid_mask_buffer: wgpu::Buffer,
 }
 
 /// Frustum plane representation (normal + distance from origin).
@@ -148,6 +152,19 @@ pub struct InstanceBuilder {
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct FrustumPlane {
     normal_and_dist: [f32; 4], // xyz = normal, w = distance
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct CaveCullParams {
+    pub enabled: u32,
+    pub grid_resolution: u32,
+    pub cell_size: f32,
+    pub origin_x: f32,
+    pub origin_y: f32,
+    pub origin_z: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
 }
 
 #[repr(C)]
@@ -545,6 +562,28 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 22: cave_cull_params - grid resolution/size/origin + enabled flag
+                wgpu::BindGroupLayoutEntry {
+                    binding: 22,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 23: cave_solid_mask - u32 per voxel, non-zero = solid rock
+                wgpu::BindGroupLayoutEntry {
+                    binding: 23,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -679,6 +718,26 @@ impl InstanceBuilder {
             mapped_at_creation: false,
         });
 
+        let cave_cull_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Cull Params"),
+            contents: bytemuck::bytes_of(&CaveCullParams {
+                enabled: 0,
+                grid_resolution: 128,
+                cell_size: 1.0,
+                origin_x: 0.0,
+                origin_y: 0.0,
+                origin_z: 0.0,
+                _pad0: 0.0,
+                _pad1: 0.0,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let dummy_solid_mask_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Dummy Solid Mask"),
+            contents: bytemuck::cast_slice(&[0u32]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
         Self {
             pipeline,
             bind_group_layout,
@@ -733,7 +792,20 @@ impl InstanceBuilder {
             temp_mode_indices: Vec::new(),
             temp_genome_ids: Vec::new(),
             temp_cell_types: Vec::new(),
+            cave_cull_params_buffer,
+            dummy_solid_mask_buffer,
         }
+    }
+
+    /// Enable cave solid-mask culling. Call once after the cave is initialized.
+    /// Invalidates the bind group so it gets recreated with the correct solid mask buffer.
+    pub fn set_cave_cull_params(&mut self, queue: &wgpu::Queue, params: CaveCullParams) {
+        queue.write_buffer(&self.cave_cull_params_buffer, 0, bytemuck::bytes_of(&params));
+        self.bind_group = None; // force recreate with new solid mask reference
+    }
+
+    pub fn dummy_solid_mask_buffer(&self) -> &wgpu::Buffer {
+        &self.dummy_solid_mask_buffer
     }
 
     fn create_storage_buffer(device: &wgpu::Device, label: &str, size: usize) -> wgpu::Buffer {
@@ -1347,6 +1419,7 @@ impl InstanceBuilder {
         death_flags_buffer: &wgpu::Buffer,
         signal_flags_buffer: &wgpu::Buffer,
         mode_properties_v7_buffer: &wgpu::Buffer,
+        solid_mask_buffer: &wgpu::Buffer,
     ) {
         // Create a dummy 1x1 texture for binding 11 (Hi-Z removed)
         let (_dummy_texture, dummy_view) = Self::create_dummy_hiz_texture(device);
@@ -1444,6 +1517,14 @@ impl InstanceBuilder {
                     binding: 21,
                     resource: mode_properties_v7_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 22,
+                    resource: self.cave_cull_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 23,
+                    resource: solid_mask_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1506,6 +1587,7 @@ impl InstanceBuilder {
         lod_threshold_high: f32,
         lod_debug_colors: bool,
         cell_count_hint: u32, // Live cell count for dispatch scaling
+        solid_mask_buffer: &wgpu::Buffer,
     ) {
         if cell_capacity == 0 {
             self.last_visible_count = 0;
@@ -1601,7 +1683,7 @@ impl InstanceBuilder {
 
         // Ensure bind group exists with cell_count_buffer and death_flags_buffer
         if self.bind_group.is_none() {
-            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer, signal_flags_buffer, mode_properties_v7_buffer);
+            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer, signal_flags_buffer, mode_properties_v7_buffer, solid_mask_buffer);
         }
 
         let bind_group = self.bind_group.as_ref().unwrap();
@@ -1690,12 +1772,8 @@ impl InstanceBuilder {
         lod_threshold_high: f32,
         lod_debug_colors: bool,
         cell_count_hint: u32,
+        solid_mask_buffer: &wgpu::Buffer,
     ) {
-        // Ensure bind group exists before creating encoder
-        if self.bind_group.is_none() {
-            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer, signal_flags_buffer, mode_properties_v7_buffer);
-        }
-
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Instance Builder Encoder"),
         });
@@ -1721,6 +1799,7 @@ impl InstanceBuilder {
             lod_threshold_high,
             lod_debug_colors,
             cell_count_hint,
+            solid_mask_buffer,
         );
 
         queue.submit(std::iter::once(encoder.finish()));

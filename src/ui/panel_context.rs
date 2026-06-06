@@ -346,6 +346,10 @@ pub struct GenomeEditorState {
     pub photocyte_min_light_threshold: f32,
     /// Flag to indicate light params need GPU update
     pub light_params_dirty: bool,
+    /// Whether luminocyte screen-space bloom is enabled
+    pub luminocyte_bloom_enabled: bool,
+    /// Bloom halo radius in NDC y-units (screen height = 2.0)
+    pub luminocyte_bloom_radius: f32,
 
     // Depth of field settings
     /// Whether depth of field is enabled
@@ -766,6 +770,8 @@ impl GenomeEditorState {
             caustic_speed,
             photocyte_mass_per_second,
             photocyte_min_light_threshold,
+            luminocyte_bloom_enabled,
+            luminocyte_bloom_radius,
         ) = Self::load_light_settings();
 
         let (
@@ -934,6 +940,8 @@ impl GenomeEditorState {
             photocyte_mass_per_second,
             photocyte_min_light_threshold,
             light_params_dirty: true,
+            luminocyte_bloom_enabled,
+            luminocyte_bloom_radius,
             show_dof: false,
             dof_focal_distance: 50.0,
             dof_focal_range: 30.0,
@@ -1662,6 +1670,9 @@ impl GenomeEditorState {
             // Photocyte settings
             self.photocyte_mass_per_second,
             self.photocyte_min_light_threshold,
+            // Luminocyte bloom
+            self.luminocyte_bloom_enabled,
+            self.luminocyte_bloom_radius,
         ) {
             log::warn!("Failed to save light settings: {}", e);
         }
@@ -1708,6 +1719,9 @@ impl GenomeEditorState {
         // Photocyte settings
         photocyte_mass_per_second: f32,
         photocyte_min_light_threshold: f32,
+        // Luminocyte bloom
+        luminocyte_bloom_enabled: bool,
+        luminocyte_bloom_radius: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct LightSettings {
@@ -1750,6 +1764,9 @@ impl GenomeEditorState {
             // Photocyte settings
             photocyte_mass_per_second: f32,
             photocyte_min_light_threshold: f32,
+            // Luminocyte bloom
+            luminocyte_bloom_enabled: bool,
+            luminocyte_bloom_radius: f32,
         }
 
         let settings = LightSettings {
@@ -1793,6 +1810,9 @@ impl GenomeEditorState {
             // Photocyte settings
             photocyte_mass_per_second,
             photocyte_min_light_threshold,
+            // Luminocyte bloom
+            luminocyte_bloom_enabled,
+            luminocyte_bloom_radius,
         };
 
         let path = crate::app_dirs::config_file("light_settings.ron");
@@ -1814,6 +1834,7 @@ impl GenomeEditorState {
         bool, f32, f32,                   // shadow_enabled, shadow_strength, shadow_quality
         f32, f32, f32,                    // caustic_intensity, scale, speed
         f32, f32,                         // photocyte_mass, photocyte_threshold
+        bool, f32,                        // luminocyte_bloom_enabled, luminocyte_bloom_radius
     ) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
@@ -1875,6 +1896,10 @@ impl GenomeEditorState {
             photocyte_mass_per_second: f32,
             #[serde(default = "default_photocyte_threshold")]
             photocyte_min_light_threshold: f32,
+            #[serde(default = "default_bloom_enabled")]
+            luminocyte_bloom_enabled: bool,
+            #[serde(default = "default_bloom_radius")]
+            luminocyte_bloom_radius: f32,
         }
         fn default_shadow_enabled() -> bool {
             true
@@ -1908,6 +1933,12 @@ impl GenomeEditorState {
         }
         fn default_sun_rotation_axis() -> [f32; 3] {
             [0.0, 1.0, 0.0]
+        }
+        fn default_bloom_enabled() -> bool {
+            true
+        }
+        fn default_bloom_radius() -> f32 {
+            0.02
         }
 
         let path = crate::app_dirs::config_file("light_settings.ron");
@@ -1958,6 +1989,9 @@ impl GenomeEditorState {
                                 // Photocyte settings
                                 s.photocyte_mass_per_second,
                                 s.photocyte_min_light_threshold,
+                                // Luminocyte bloom
+                                s.luminocyte_bloom_enabled,
+                                s.luminocyte_bloom_radius,
                             );
                         }
                         Err(e) => {
@@ -2013,6 +2047,9 @@ impl GenomeEditorState {
             // Photocyte settings
             0.012, // photocyte_mass_per_second (scaled by sun_intensity at sync)
             0.05,  // photocyte_min_light_threshold
+            // Luminocyte bloom
+            true,  // luminocyte_bloom_enabled
+            0.02,  // luminocyte_bloom_radius
         )
     }
 

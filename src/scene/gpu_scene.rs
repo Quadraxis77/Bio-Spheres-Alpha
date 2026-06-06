@@ -141,7 +141,6 @@ pub struct GpuScene {
     /// Current frame counter (for shader time-based logic)
     pub(super) current_frame: i32,
     /// Set by run_light_field each render frame; cleared after the resolve fires once.
-    luminocyte_resolve_needed: bool,
     /// Whether this is the first frame (no Hi-Z data yet)
     first_frame: bool,
     /// Whether GPU readbacks are enabled (cell count, etc.)
@@ -404,6 +403,7 @@ pub struct GpuScene {
     pub show_dof: bool,
     /// Post-process renderer (contrast + eye adaptation)
     pub post_process: Option<crate::rendering::post_process::PostProcessRenderer>,
+    pub luminocyte_bloom: Option<crate::rendering::luminocyte_bloom::LuminocyteBloomRenderer>,
     /// Surface format (needed for DoF resize)
     pub(super) surface_format: wgpu::TextureFormat,
     /// Procedural sun renderer
@@ -723,7 +723,6 @@ impl GpuScene {
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
             current_frame: 0,
-            luminocyte_resolve_needed: false,
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
@@ -854,6 +853,10 @@ impl GpuScene {
                 device,
                 surface_config.width,
                 surface_config.height,
+                surface_config.format,
+            )),
+            luminocyte_bloom: Some(crate::rendering::luminocyte_bloom::LuminocyteBloomRenderer::new(
+                device,
                 surface_config.format,
             )),
             surface_format: surface_config.format,
@@ -2250,8 +2253,6 @@ impl GpuScene {
             pass.set_bind_group(0, light_field_bg, &[]);
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
-        // Signal that the next per-step photocyte call should resolve luminocyte light.
-        self.luminocyte_resolve_needed = true;
     }
 
     /// Run photocyte light consumption compute shader.
@@ -2324,9 +2325,11 @@ impl GpuScene {
         // high-water mark) for its own bounds check. Using total_cell_slots (the async
         // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
         // at higher slot indices during the lag window, causing them to receive no light.
-        encoder.clear_buffer(light_field.light_color_accum_buffer_ref(), 0, None);
-
         let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+
+        // Clear glow_flags so dead/off luminocytes don't leave stale values.
+        encoder.clear_buffer(&light_field.glow_flags_buffer, 0, None);
+
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Photocyte Light Consumption (physics step)"),
@@ -2338,96 +2341,27 @@ impl GpuScene {
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
-        // Luminocyte resolve is now handled once per render frame in
-        // run_luminocyte_color_resolve(), called after the physics loop.
-        // This prevents flickering on high-FPS frames that skip physics steps.
-    }
-
-    /// Resolve the luminocyte light accumulator into light_color_field.
-    ///
-    /// Called ONCE per render frame after all physics steps, so the resolve always
-    /// runs even on frames where no physics step fired. This prevents flickering on
-    /// high-FPS setups (e.g. 120+ Hz) where the fixed-timestep accumulator sometimes
-    /// doesn't trigger a physics step, leaving luminocyte lights dark for that frame.
-    ///
-    /// light_color_accum holds either:
-    ///   - This frame's emission (if physics ran), or
-    ///   - Previous frame's emission (if no physics ran — not cleared without physics)
-    /// Either way it's stable and flicker-free.
-    ///
-    /// No clear_buffer(light_color_field) is needed here: compute_light_field already
-    /// wrote w=0 to every voxel this frame, so the resolve only needs to overwrite the
-    /// luminocyte-lit voxels with w>0.
-    fn run_luminocyte_color_resolve(
-        &mut self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
-    ) {
-        if !self.luminocyte_resolve_needed {
-            return;
-        }
-        self.luminocyte_resolve_needed = false;
-
-        let light_field = match &self.light_field_system {
-            Some(l) => l,
-            None => return,
-        };
-
-        let output_idx = self.gpu_triple_buffers.output_buffer_index();
-
-        // Ensure physics bind group cache exists (may not exist if no physics step ran yet)
-        if self.cached_photocyte_physics_bind_groups.is_none() {
-            self.cached_photocyte_physics_bind_groups = Some([
-                light_field.create_photocyte_physics_bind_group(
-                    device,
-                    &self.gpu_triple_buffers.physics_params,
-                    &self.gpu_triple_buffers.position_and_mass[0],
-                    &self.gpu_triple_buffers.cell_count_buffer,
-                ),
-                light_field.create_photocyte_physics_bind_group(
-                    device,
-                    &self.gpu_triple_buffers.physics_params,
-                    &self.gpu_triple_buffers.position_and_mass[1],
-                    &self.gpu_triple_buffers.cell_count_buffer,
-                ),
-                light_field.create_photocyte_physics_bind_group(
-                    device,
-                    &self.gpu_triple_buffers.physics_params,
-                    &self.gpu_triple_buffers.position_and_mass[2],
-                    &self.gpu_triple_buffers.cell_count_buffer,
-                ),
-            ]);
-        }
-
-        let photocyte_physics_bg =
-            &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
-
-        light_field.update_photocyte_params(queue);
-
-        let photocyte_system_bg = light_field.create_photocyte_system_bind_group(
+        // Sense pass: photocytes detect nearby luminocyte glow via spatial grid
+        let sense_bg = light_field.create_sense_bind_group(
             device,
             &self.gpu_triple_buffers.cell_types,
             &self.gpu_triple_buffers.nutrients_buffer,
-            &self.gpu_triple_buffers.split_nutrient_thresholds,
             &self.gpu_triple_buffers.death_flags,
-            &self.gpu_triple_buffers.mode_indices,
-            &self.gpu_triple_buffers.mode_properties_v7,
-            self.instance_builder.mode_emissive_buffer(),
-            &self.adhesion_buffers.signal_flags,
-            self.instance_builder.mode_colors_buffer(),
+            &self.gpu_triple_buffers.split_nutrient_thresholds,
+            &self.gpu_triple_buffers.spatial_grid_counts,
+            &self.gpu_triple_buffers.spatial_grid_cells,
         );
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Sense Luminocyte (physics step)"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(light_field.sense_luminocyte_pipeline_ref());
+            pass.set_bind_group(0, photocyte_physics_bg, &[]);
+            pass.set_bind_group(1, &sense_bg, &[]);
+            pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
-        let total_voxels = 128u32 * 128 * 128;
-        let color_workgroups = (total_voxels + 255) / 256;
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Resolve Luminocyte Light Color"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(light_field.resolve_light_color_pipeline_ref());
-        pass.set_bind_group(0, photocyte_physics_bg, &[]);
-        pass.set_bind_group(1, &photocyte_system_bg, &[]);
-        pass.dispatch_workgroups(color_workgroups, 1, 1);
     }
 
     /// Copy data from triple buffers to instance builder
@@ -4433,6 +4367,25 @@ impl GpuScene {
             // Reset shadow bind group flag so it gets recreated with the new cave renderer
             self.cave_shadow_bind_group_set = false;
 
+            // Enable cave solid-mask culling in the instance builder
+            {
+                use crate::rendering::instance_builder::CaveCullParams;
+                let world_diam = world_diameter;
+                let grid_res = 128u32;
+                let cell_size = world_diam / grid_res as f32;
+                let origin = -world_diam * 0.5;
+                self.instance_builder.set_cave_cull_params(queue, CaveCullParams {
+                    enabled: 1,
+                    grid_resolution: grid_res,
+                    cell_size,
+                    origin_x: origin,
+                    origin_y: origin,
+                    origin_z: origin,
+                    _pad0: 0.0,
+                    _pad1: 0.0,
+                });
+            }
+
             // Create cave-specific physics bind groups
             self.create_cave_physics_bind_groups(device);
 
@@ -4792,7 +4745,7 @@ impl GpuScene {
         self.solid_mask_generator = Some(solid_mask_generator);
 
         // Create light field system for photocyte nutrients and volumetric fog
-        let light_field_system = LightFieldSystem::new(device, world_radius);
+        let light_field_system = LightFieldSystem::new(device, world_radius, self.gpu_triple_buffers.capacity);
 
         // Rebuild signal sense world data bind group with real light field buffer
         {
@@ -7035,6 +6988,15 @@ impl GpuScene {
             editor_state.sun_color[2] * effective_sun_intensity,
         ];
 
+        // Update luminocyte bloom parameters
+        if let Some(ref mut bloom) = self.luminocyte_bloom {
+            bloom.bloom_radius = if editor_state.luminocyte_bloom_enabled {
+                editor_state.luminocyte_bloom_radius
+            } else {
+                0.0
+            };
+        }
+
         // Update volumetric fog renderer parameters
         if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
             fog_renderer.enabled = editor_state.show_volumetric_fog;
@@ -7778,10 +7740,6 @@ impl Scene for GpuScene {
             self.dispatch_scaffold_rules(device, &mut encoder, queue);
         }
 
-        // Resolve luminocyte light accumulator once per render frame, regardless of whether
-        // a physics step fired. Fixes flicker on high-FPS displays where the fixed-timestep
-        // accumulator occasionally skips a physics step.
-        self.run_luminocyte_color_resolve(device, &mut encoder, queue);
 
         // Execute non-drag pending position updates (e.g. from other tools)
         let position_updated =
@@ -7916,6 +7874,14 @@ impl Scene for GpuScene {
                 .update_cell_type_visuals_direct(device, queue, visuals);
         }
 
+        // Resolve solid mask buffer before the mutable borrow of instance_builder
+        let solid_mask_buf: *const wgpu::Buffer = self.fluid_buffers
+            .as_ref()
+            .map(|fb| fb.solid_mask() as *const _)
+            .unwrap_or(self.instance_builder.dummy_solid_mask_buffer() as *const _);
+        // SAFETY: the buffer lives for the duration of this call and is only read
+        let solid_mask_buf = unsafe { &*solid_mask_buf };
+
         self.instance_builder.build_instances_with_encoder(
             device,
             &mut encoder,
@@ -7939,6 +7905,7 @@ impl Scene for GpuScene {
             // Use max(1) when a cell was just inserted so the instance builder
             // doesn't early-out before the async readback has caught up.
             self.total_cell_slots.max(if cell_inserted { 1 } else { 0 }),
+            solid_mask_buf,
         );
 
         // When DoF is enabled, render the scene to an intermediate texture so the
@@ -8058,6 +8025,55 @@ impl Scene for GpuScene {
         // Update shadow bind group for cell renderer - created once and cached.
         // The light field buffers never change after initialization, so there is no
         // need to recreate this bind group every frame.
+        // Render cave system before cells so cave walls write depth first.
+        // Cell depth prepass uses Load (not Clear) and will respect these depths,
+        // correctly occluding cells that are inside cave geometry.
+        if let Some(ref mut cave_renderer) = self.cave_renderer {
+            if let Some(ref light_field) = self.light_field_system {
+                light_field.update_shadow_params(queue);
+                if !self.cave_shadow_bind_group_set {
+                    let density_buf = self
+                        .gpu_surface_nets
+                        .as_ref()
+                        .map(|sn| sn.smoothed_density_buffer())
+                        .unwrap_or(light_field.dummy_water_density());
+                    let moss_buf = self
+                        .moss_system
+                        .as_ref()
+                        .map(|ms| ms.moss_density_buffer())
+                        .unwrap_or(light_field.dummy_water_density());
+                    let shadow_bg =
+                        light_field.create_cave_shadow_bind_group(device, density_buf, moss_buf);
+                    cave_renderer.set_shadow_bind_group(shadow_bg);
+                    self.cave_shadow_bind_group_set = true;
+                }
+            }
+            cave_renderer.render(
+                &mut encoder,
+                queue,
+                scene_target,
+                &self.renderer.depth_view,
+                self.camera.position(),
+                self.camera.rotation,
+            );
+        }
+
+        // Boulders also before cells for the same reason.
+        if self.show_boulders {
+            if let Some(ref mut bs) = self.boulder_system {
+                bs.update_bubbles(&mut encoder, queue, self.last_delta_time, self.gravity_mode);
+                bs.render(
+                    &mut encoder,
+                    queue,
+                    scene_target,
+                    &self.renderer.depth_view,
+                    self.camera.position(),
+                    self.camera.rotation,
+                    self.current_time,
+                );
+            }
+        }
+
         if !self.cell_shadow_bind_group_set {
             if let Some(ref light_field) = self.light_field_system {
                 let shadow_bg = light_field.create_shadow_bind_group(device);
@@ -8106,56 +8122,6 @@ impl Scene for GpuScene {
         // Update light field time for caustic animation
         if let Some(ref mut light_field) = self.light_field_system {
             light_field.set_time(self.current_time);
-        }
-
-        // Render cave system if initialized (before sun so caves occlude it)
-        if let Some(ref mut cave_renderer) = self.cave_renderer {
-            // Update shadow bind group from light field system (with water bitfield for caustics)
-            if let Some(ref light_field) = self.light_field_system {
-                light_field.update_shadow_params(queue);
-                // Create and set shadow bind group once (buffers never change, params updated via write_buffer)
-                if !self.cave_shadow_bind_group_set {
-                    let density_buf = self
-                        .gpu_surface_nets
-                        .as_ref()
-                        .map(|sn| sn.smoothed_density_buffer())
-                        .unwrap_or(light_field.dummy_water_density());
-                    let moss_buf = self
-                        .moss_system
-                        .as_ref()
-                        .map(|ms| ms.moss_density_buffer())
-                        .unwrap_or(light_field.dummy_water_density());
-                    let shadow_bg =
-                        light_field.create_cave_shadow_bind_group(device, density_buf, moss_buf);
-                    cave_renderer.set_shadow_bind_group(shadow_bg);
-                    self.cave_shadow_bind_group_set = true;
-                }
-            }
-            cave_renderer.render(
-                &mut encoder,
-                queue,
-                scene_target,
-                &self.renderer.depth_view,
-                self.camera.position(),
-                self.camera.rotation,
-            );
-        }
-
-        // Render boulders after cave (they share the same depth buffer)
-        if self.show_boulders {
-            if let Some(ref mut bs) = self.boulder_system {
-                // Run bubble compute passes before rendering
-                bs.update_bubbles(&mut encoder, queue, self.last_delta_time, self.gravity_mode);
-                bs.render(
-                    &mut encoder,
-                    queue,
-                    scene_target,
-                    &self.renderer.depth_view,
-                    self.camera.position(),
-                    self.camera.rotation,
-                    self.current_time,
-                );
-            }
         }
 
         // Render procedural sun if enabled (after caves but before world sphere,
@@ -8512,6 +8478,30 @@ impl Scene for GpuScene {
                     lf_radius,
                 );
             }
+        }
+
+        // Luminocyte bloom: additive gaussian halo sprites over glowing cells.
+        if let (Some(ref bloom), Some(ref light_field)) =
+            (&self.luminocyte_bloom, &self.light_field_system)
+        {
+            let output_idx = self.gpu_triple_buffers.output_buffer_index();
+            let positions_buf = &self.gpu_triple_buffers.position_and_mass[output_idx];
+            let width = self.renderer.width as f32;
+            let height = self.renderer.height as f32;
+            let aspect = if height > 0.0 { width / height } else { 1.0 };
+            bloom.render(
+                &mut encoder,
+                queue,
+                device,
+                scene_target,
+                &self.renderer.depth_view,
+                view_proj,
+                aspect,
+                &light_field.glow_flags_buffer,
+                positions_buf,
+                &self.gpu_triple_buffers.cell_count_buffer,
+                self.gpu_triple_buffers.capacity,
+            );
         }
 
         // DoF: reads scene_target, writes to PP intermediate (or swapchain if PP off).
