@@ -1177,6 +1177,8 @@ impl UiSystem {
                         .stroke(egui::Stroke::new(1.0, p.border_subtle)),
                 )
                 .show(&self.ctx, |ui| {
+                    let bar_rect = ui.max_rect();
+
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
 
@@ -1334,6 +1336,95 @@ impl UiSystem {
                                 );
                             });
                         });
+                    });
+
+                    // Centered water/air rolling-average temperature readout with a
+                    // F/C unit toggle between the two values. Drawn as an overlay so
+                    // it stays centered on the bar regardless of how much space the
+                    // left- and right-flowing status fields consume.
+                    let (live_avg_water_temp_c, live_avg_air_temp_c) = scene_manager
+                        .gpu_scene()
+                        .and_then(|s| s.fluid_simulator.as_ref())
+                        .map(|sim| (sim.avg_water_temp_c(), sim.avg_air_temp_c()))
+                        .unwrap_or((0.0, 0.0));
+
+                    let group_size = egui::vec2(220.0, bar_rect.height());
+                    let group_rect = egui::Rect::from_center_size(
+                        egui::pos2(bar_rect.center().x, bar_rect.center().y),
+                        group_size,
+                    );
+                    ui.put(group_rect, |ui: &mut egui::Ui| -> egui::Response {
+                        ui.with_layout(
+                            egui::Layout::left_to_right(egui::Align::Center)
+                                .with_main_align(egui::Align::Center),
+                            |ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+
+                                let fahrenheit = editor_state.temp_display_fahrenheit;
+                                let unit_label = if fahrenheit { "°F" } else { "°C" };
+                                let format_temp = |celsius: f32| -> String {
+                                    if fahrenheit {
+                                        format!("{:.0}{}", celsius * 9.0 / 5.0 + 32.0, unit_label)
+                                    } else {
+                                        format!("{:.0}{}", celsius, unit_label)
+                                    }
+                                };
+
+                                // Fixed-width, center-aligned containers so both readouts
+                                // occupy equal space and the toggle button sits exactly
+                                // between the two numbers (label text lengths differ).
+                                let field_width = 84.0;
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(field_width, ui.available_height()),
+                                    egui::Layout::top_down(egui::Align::Center),
+                                    |ui| {
+                                        status_field(ui, "AVG WATER TEMP", &|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format_temp(
+                                                    live_avg_water_temp_c,
+                                                ))
+                                                .strong()
+                                                .size(11.5)
+                                                .color(p.status_info),
+                                            );
+                                        });
+                                    },
+                                );
+
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new(if fahrenheit { "F" } else { "C" })
+                                                .strong()
+                                                .size(11.0),
+                                        )
+                                        .small(),
+                                    )
+                                    .on_hover_text("Toggle temperature units (°F / °C)")
+                                    .clicked()
+                                {
+                                    editor_state.temp_display_fahrenheit = !fahrenheit;
+                                }
+
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(field_width, ui.available_height()),
+                                    egui::Layout::top_down(egui::Align::Center),
+                                    |ui| {
+                                        status_field(ui, "AVG AIR TEMP", &|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format_temp(
+                                                    live_avg_air_temp_c,
+                                                ))
+                                                .strong()
+                                                .size(11.5)
+                                                .color(p.text_primary),
+                                            );
+                                        });
+                                    },
+                                );
+                            },
+                        )
+                        .response
                     });
                 });
         } // end if !ui_state_copy.hide_ui (top bar and status bar)

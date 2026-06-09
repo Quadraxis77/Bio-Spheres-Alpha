@@ -91,7 +91,7 @@ fn should_render_as_particle(x: u32, y: u32, z: u32) -> bool {
         if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
             let neighbor_idx = u32(nx) + u32(ny) * res + u32(nz) * res * res;
             let neighbor_state = fluid_state[neighbor_idx];
-            let neighbor_type = neighbor_state & 0xFFFFu;
+            let neighbor_type = neighbor_state & 0x7u;
             
             if neighbor_type == 1u {  // Water
                 water_neighbors++;
@@ -159,7 +159,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let state = fluid_state[idx];
 
     // Fluid type is stored in lower 16 bits
-    let fluid_type = state & 0xFFFFu;
+    let fluid_type = state & 0x7u;
 
     // Check if this is a water voxel (fluid_type == 1)
     if fluid_type != 1u {

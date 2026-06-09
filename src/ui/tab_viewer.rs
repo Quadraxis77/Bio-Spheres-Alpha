@@ -4351,57 +4351,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         }
     } // end advanced fluid physics
 
-    // Condensation probability (steam to water)
-    ui.add_space(4.0);
-    ui.label("Condensation Probability:")
-        .on_hover_text("Probability per step that a steam voxel converts to water. Higher values cause steam to condense into water more quickly");
-    if ui
-        .add(
-            egui::Slider::new(
-                &mut context.editor_state.fluid_condensation_probability,
-                0.0..=0.05,
-            )
-            .step_by(0.001)
-            .fixed_decimals(3),
-        )
-        .changed()
-    {
-        // Update GPU scene phase change probabilities
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.set_phase_change_probabilities(
-                context.editor_state.fluid_condensation_probability,
-                context.editor_state.fluid_vaporization_probability,
-            );
-        }
-        // Save fluid settings
-        context.editor_state.save_fluid_settings();
-    }
-
-    // Vaporization probability (water to steam)
-    ui.add_space(4.0);
-    ui.label("Vaporization Probability:")
-        .on_hover_text("Probability per step that a water voxel converts to steam. Higher values cause water to evaporate into steam more quickly");
-    if ui
-        .add(
-            egui::Slider::new(
-                &mut context.editor_state.fluid_vaporization_probability,
-                0.0..=0.05,
-            )
-            .step_by(0.001)
-            .fixed_decimals(3),
-        )
-        .changed()
-    {
-        // Update GPU scene phase change probabilities
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.set_phase_change_probabilities(
-                context.editor_state.fluid_condensation_probability,
-                context.editor_state.fluid_vaporization_probability,
-            );
-        }
-        // Save fluid settings
-        context.editor_state.save_fluid_settings();
-    }
+    // Condensation and vaporization are now purely a consequence of local
+    // temperature and contact with air (see thermal model in fluid_sim.wgsl) -
+    // no manual probability controls needed.
 
     // === Water Surface Lighting & Reflection ===
     ui.add_space(8.0);

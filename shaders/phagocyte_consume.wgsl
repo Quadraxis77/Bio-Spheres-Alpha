@@ -112,7 +112,7 @@ fn is_water_voxel(voxel_index: u32) -> bool {
         return false;
     }
     let state = fluid_state[voxel_index];
-    let fluid_type = state & 0xFFFFu;
+    let fluid_type = state & 0x7u;
     return fluid_type == 1u;
 }
 

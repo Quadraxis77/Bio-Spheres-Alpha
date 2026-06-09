@@ -54,7 +54,7 @@ fn fluid_type_at(x: i32, y: i32, z: i32) -> u32 {
     if (x < 0 || x >= res || y < 0 || y >= res || z < 0 || z >= res) {
         return 0u;
     }
-    return fluid_state[voxel_index(u32(x), u32(y), u32(z))] & 0xFFFFu;
+    return fluid_state[voxel_index(u32(x), u32(y), u32(z))] & 0x7u;
 }
 
 fn is_water_at(x: i32, y: i32, z: i32) -> bool {

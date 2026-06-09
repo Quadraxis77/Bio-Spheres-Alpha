@@ -142,7 +142,7 @@ fn voxel_to_world(voxel_index: u32) -> vec3<f32> {
 }
 
 fn is_water_voxel(voxel_index: u32) -> bool {
-    return (fluid_state[voxel_index] & 0xFFFFu) == 1u;
+    return (fluid_state[voxel_index] & 0x7u) == 1u;
 }
 
 fn is_water_isolated(x: u32, y: u32, z: u32) -> bool {

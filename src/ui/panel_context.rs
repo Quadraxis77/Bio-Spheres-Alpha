@@ -208,10 +208,6 @@ pub struct GenomeEditorState {
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub fluid_lateral_flow_probabilities: [f32; 4],
-    /// Condensation probability for steam to water conversion (0.0 to 1.0)
-    pub fluid_condensation_probability: f32,
-    /// Vaporization probability for water to steam conversion (0.0 to 1.0)
-    pub fluid_vaporization_probability: f32,
     /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
     pub nutrient_density: f32,
     /// Nutrient epoch duration in seconds
@@ -239,6 +235,9 @@ pub struct GenomeEditorState {
     pub fluid_water_mass: f32,
     pub fluid_lava_mass: f32,
     pub fluid_steam_mass: f32,
+
+    /// Display unit for the temperature readouts in the bottom status bar.
+    pub temp_display_fahrenheit: bool,
 
     // Fluid initialization
     pub fluid_water_percent: f32,
@@ -728,8 +727,6 @@ impl GenomeEditorState {
             fluid_lateral_flow_probabilities,
             _fluid_continuous_spawn,
             selected_fluid_type,
-            fluid_condensation_probability,
-            fluid_vaporization_probability,
             nutrient_density,
         ) = Self::load_fluid_settings();
 
@@ -870,8 +867,6 @@ impl GenomeEditorState {
             fluid_vorticity_epsilon,
             fluid_pressure_iterations,
             fluid_lateral_flow_probabilities,
-            fluid_condensation_probability,
-            fluid_vaporization_probability,
             nutrient_density,
             nutrient_epoch_duration: 10.0,
             nutrient_epoch_spacing: 7.0,
@@ -890,6 +885,7 @@ impl GenomeEditorState {
             fluid_water_mass: 0.0,
             fluid_lava_mass: 0.0,
             fluid_steam_mass: 0.0,
+            temp_display_fahrenheit: false,
             fluid_water_percent: 25.0,
             fluid_lava_percent: 25.0,
             fluid_steam_percent: 25.0,
@@ -1130,8 +1126,6 @@ impl GenomeEditorState {
             self.fluid_lateral_flow_probabilities,
             self.fluid_continuous_spawn,
             self.selected_fluid_type,
-            self.fluid_condensation_probability,
-            self.fluid_vaporization_probability,
             self.nutrient_density,
         ) {
             log::error!("Failed to save fluid settings: {}", e);
@@ -1277,8 +1271,6 @@ impl GenomeEditorState {
         lateral_flow_probabilities: [f32; 4],
         continuous_spawn: bool,
         selected_fluid_type: u32,
-        condensation_probability: f32,
-        vaporization_probability: f32,
         nutrient_density: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
@@ -1292,8 +1284,6 @@ impl GenomeEditorState {
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
             selected_fluid_type: u32,
-            condensation_probability: f32,
-            vaporization_probability: f32,
             nutrient_density: f32,
         }
 
@@ -1307,8 +1297,6 @@ impl GenomeEditorState {
             lateral_flow_probabilities,
             continuous_spawn,
             selected_fluid_type,
-            condensation_probability,
-            vaporization_probability,
             nutrient_density,
         };
 
@@ -2065,8 +2053,6 @@ impl GenomeEditorState {
         bool,
         u32,
         f32,
-        f32,
-        f32,
     ) {
         #[derive(serde::Deserialize)]
         struct FluidSettings {
@@ -2079,7 +2065,11 @@ impl GenomeEditorState {
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
             selected_fluid_type: u32,
+            #[serde(default)]
+            #[allow(dead_code)]
             condensation_probability: f32,
+            #[serde(default)]
+            #[allow(dead_code)]
             vaporization_probability: f32,
             nutrient_density: f32,
         }
@@ -2100,8 +2090,6 @@ impl GenomeEditorState {
                             settings.lateral_flow_probabilities,
                             settings.continuous_spawn,
                             settings.selected_fluid_type,
-                            settings.condensation_probability,
-                            settings.vaporization_probability,
                             settings.nutrient_density,
                         );
                     }
@@ -2126,8 +2114,6 @@ impl GenomeEditorState {
             [1.0, 0.8, 0.6, 0.9],
             false,
             1,
-            0.1,
-            0.1,
             0.2,
         )
     }

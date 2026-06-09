@@ -1220,8 +1220,6 @@ impl GpuScene {
             radiation_level: self.radiation_level,
             subtle_mutations: self.subtle_mutations,
             lateral_flow_probabilities: self.lateral_flow_probabilities,
-            condensation_probability: self.condensation_probability,
-            vaporization_probability: self.vaporization_probability,
             nutrient_density: self.nutrient_density,
             nutrient_epoch_duration: self.nutrient_epoch_duration,
             nutrient_epoch_spacing: self.nutrient_epoch_spacing,
@@ -1301,8 +1299,6 @@ impl GpuScene {
         self.radiation_level = snapshot.radiation_level;
         self.subtle_mutations = snapshot.subtle_mutations;
         self.lateral_flow_probabilities = snapshot.lateral_flow_probabilities;
-        self.condensation_probability = snapshot.condensation_probability;
-        self.vaporization_probability = snapshot.vaporization_probability;
         self.nutrient_density = snapshot.nutrient_density;
         self.nutrient_epoch_duration = snapshot.nutrient_epoch_duration;
         self.nutrient_epoch_spacing = snapshot.nutrient_epoch_spacing;

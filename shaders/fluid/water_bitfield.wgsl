@@ -21,7 +21,7 @@ struct BitfieldParams {
 
 // Extract fluid type from voxel state (lower 16 bits)
 fn get_fluid_type(state: u32) -> u32 {
-    return state & 0xFFFFu;
+    return state & 0x7u;
 }
 
 // Each thread processes one u32 in the bitfield (32 voxels)

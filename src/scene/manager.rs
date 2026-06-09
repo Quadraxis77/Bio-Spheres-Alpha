@@ -283,8 +283,6 @@ impl SceneManager {
             gpu_scene.lod_threshold_high = old_scene.lod_threshold_high;
             gpu_scene.lod_debug_colors = old_scene.lod_debug_colors;
             gpu_scene.lateral_flow_probabilities = old_scene.lateral_flow_probabilities;
-            gpu_scene.condensation_probability = old_scene.condensation_probability;
-            gpu_scene.vaporization_probability = old_scene.vaporization_probability;
             gpu_scene.nutrient_density = old_scene.nutrient_density;
             gpu_scene.nutrient_epoch_duration = old_scene.nutrient_epoch_duration;
             gpu_scene.nutrient_epoch_spacing = old_scene.nutrient_epoch_spacing;

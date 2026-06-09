@@ -38,10 +38,6 @@ pub struct GpuFluidParams {
     pub lateral_flow_probability_lava: f32,
     pub lateral_flow_probability_steam: f32,
 
-    // Phase change probabilities (0.0 to 1.0)
-    pub condensation_probability: f32, // Steam to Water
-    pub vaporization_probability: f32, // Water to Steam
-
     // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
     pub spawn_fluid_type: u32,
 
@@ -51,7 +47,9 @@ pub struct GpuFluidParams {
     // Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     pub gravity_mode: u32,
     pub surface_pressure: f32, // Tangential smoothing strength for radial mode (0.0-1.0)
-    pub _pad_rg1: u32,
+    // Overall sun brightness driving the thermal model's baseline air temperature
+    // (0 = dark, 3 = comfortable max, >3 = extreme heat). Mirrors editor_state.sun_intensity.
+    pub sun_brightness: f32,
     pub _pad_rg2: u32,
 }
 
@@ -145,9 +143,12 @@ pub struct GpuFluidSimulator {
 
     // Surface pressure: tangential smoothing strength for radial mode (0.0-1.0)
     surface_pressure: std::cell::Cell<f32>,
+    /// Overall sun brightness driving the thermal model's baseline air temperature.
+    sun_brightness: std::cell::Cell<f32>,
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
+    update_temperature_pipeline: wgpu::ComputePipeline,
     init_sphere_pipeline: wgpu::ComputePipeline,
     spawn_continuous_pipeline: wgpu::ComputePipeline,
     clear_pipeline: wgpu::ComputePipeline,
@@ -192,6 +193,17 @@ pub struct GpuFluidSimulator {
 
     /// Whether simulation is paused
     pub paused: bool,
+
+    // -- Rolling-average temperature readback --
+    temp_stats_buffer: wgpu::Buffer,
+    temp_stats_staging_buffer: wgpu::Buffer,
+    temp_stats_copy_pending: std::cell::Cell<bool>,
+    temp_stats_map_receiver:
+        std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
+    /// Exponential moving average of water temperature, in Celsius.
+    avg_water_temp_c: std::cell::Cell<f32>,
+    /// Exponential moving average of air (empty-voxel) temperature, in Celsius.
+    avg_air_temp_c: std::cell::Cell<f32>,
 }
 
 impl GpuFluidSimulator {
@@ -234,13 +246,11 @@ impl GpuFluidSimulator {
             lateral_flow_probability_water: 0.8,
             lateral_flow_probability_lava: 0.6,
             lateral_flow_probability_steam: 0.9, // [Empty, Water, Lava, Steam]
-            condensation_probability: 0.1,       // Default condensation probability
-            vaporization_probability: 0.1,       // Default vaporization probability
             spawn_fluid_type: 1u32,              // Default to water
             sub_step: 0,
             gravity_mode: 1, // default Y axis
             surface_pressure: 0.5,
-            _pad_rg1: 0,
+            sun_brightness: 3.0,
             _pad_rg2: 0,
         };
 
@@ -264,6 +274,23 @@ impl GpuFluidSimulator {
             label: Some("Water Velocity Buffer"),
             size: buffer_size, // Same as state buffer: TOTAL_VOXELS * sizeof(u32)
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Temperature accumulator: 4 atomic u32 slots (16 bytes), cleared and
+        // accumulated each tick by update_temperature, then copied to a small
+        // staging buffer for async CPU readback to drive the rolling averages.
+        const TEMP_STATS_SIZE: u64 = 4 * std::mem::size_of::<u32>() as u64;
+        let temp_stats_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Temperature Stats Buffer"),
+            size: TEMP_STATS_SIZE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let temp_stats_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Temperature Stats Staging Buffer"),
+            size: TEMP_STATS_SIZE,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
@@ -312,6 +339,19 @@ impl GpuFluidSimulator {
                     },
                     count: None,
                 },
+                // Binding 4: Temperature rolling-average accumulator
+                // [water_temp_sum, water_count, air_temp_sum, air_count] (atomic u32 each;
+                // temperatures stored as rounded-Celsius + 50 to keep values unsigned).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -339,6 +379,16 @@ impl GpuFluidSimulator {
             compilation_options: Default::default(),
             cache: None,
         });
+
+        let update_temperature_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Update Temperature Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("update_temperature"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
 
         let init_sphere_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -698,6 +748,10 @@ impl GpuFluidSimulator {
                     binding: 3,
                     resource: water_velocity_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: temp_stats_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -748,6 +802,7 @@ impl GpuFluidSimulator {
             time: std::cell::Cell::new(0.0),
             continuous_spawn_enabled: std::cell::Cell::new(false),
             swap_pipeline,
+            update_temperature_pipeline,
             init_sphere_pipeline,
             spawn_continuous_pipeline,
             clear_pipeline,
@@ -774,7 +829,14 @@ impl GpuFluidSimulator {
             gravity_mode: std::cell::Cell::new(1),  // default Y axis
             gravity_magnitude: std::cell::Cell::new(9.8), // default gravity
             surface_pressure: std::cell::Cell::new(0.5),
+            sun_brightness: std::cell::Cell::new(3.0),
             paused: false,
+            temp_stats_buffer,
+            temp_stats_staging_buffer,
+            temp_stats_copy_pending: std::cell::Cell::new(false),
+            temp_stats_map_receiver: std::cell::RefCell::new(None),
+            avg_water_temp_c: std::cell::Cell::new(0.0),
+            avg_air_temp_c: std::cell::Cell::new(0.0),
         }
     }
 
@@ -800,6 +862,10 @@ impl GpuFluidSimulator {
                     binding: 3,
                     resource: self.water_velocity_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.temp_stats_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -813,8 +879,6 @@ impl GpuFluidSimulator {
         gravity_magnitude: f32,
         gravity_dir: [bool; 3],
         lateral_flow_probabilities: [f32; 4],
-        condensation_probability: f32,
-        vaporization_probability: f32,
     ) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
@@ -852,13 +916,11 @@ impl GpuFluidSimulator {
             lateral_flow_probability_water: lateral_flow_probabilities[1],
             lateral_flow_probability_lava: lateral_flow_probabilities[2],
             lateral_flow_probability_steam: lateral_flow_probabilities[3],
-            condensation_probability,
-            vaporization_probability,
             spawn_fluid_type: self.fluid_type.get(),
             sub_step: 0,
             gravity_mode: self.gravity_mode.get(),
             surface_pressure: self.surface_pressure.get(),
-            _pad_rg1: 0,
+            sun_brightness: self.sun_brightness.get(),
             _pad_rg2: 0,
         };
 
@@ -879,8 +941,6 @@ impl GpuFluidSimulator {
             9.8,
             [false, true, false],
             [1.0, 0.8, 0.6, 0.9],
-            0.1,
-            0.1,
         );
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
@@ -909,8 +969,6 @@ impl GpuFluidSimulator {
             9.8,
             [false, true, false],
             [1.0, 0.8, 0.6, 0.9],
-            0.1,
-            0.1,
         );
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
@@ -938,8 +996,6 @@ impl GpuFluidSimulator {
             9.8,
             [false, true, false],
             [1.0, 0.8, 0.6, 0.9],
-            0.1,
-            0.1,
         );
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
@@ -989,6 +1045,12 @@ impl GpuFluidSimulator {
         self.surface_pressure.set(pressure);
     }
 
+    /// Set the overall sun brightness (drives the thermal model's baseline air
+    /// temperature: 0 = dark, 3 = comfortable max, >3 = extreme heat).
+    pub fn set_sun_brightness(&self, brightness: f32) {
+        self.sun_brightness.set(brightness);
+    }
+
     /// Get the current simulation time (seconds).
     pub fn time(&self) -> f32 {
         self.time.get()
@@ -1010,8 +1072,6 @@ impl GpuFluidSimulator {
         gravity_magnitude: f32,
         gravity_dir: [bool; 3],
         lateral_flow_probabilities: [f32; 4],
-        condensation_probability: f32,
-        vaporization_probability: f32,
     ) {
         if self.paused {
             return;
@@ -1034,8 +1094,6 @@ impl GpuFluidSimulator {
             gravity_magnitude,
             gravity_dir,
             lateral_flow_probabilities,
-            condensation_probability,
-            vaporization_probability,
         );
 
         // Clear water velocity field before simulation (DMA zero-fill)
@@ -1054,6 +1112,34 @@ impl GpuFluidSimulator {
             pass.set_pipeline(&self.spawn_continuous_pipeline);
             pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+
+        // Per-tick thermal drift: water/ice ease toward ambient temperature with
+        // inertia. Runs once per step (not per sub-step) since thermal change is
+        // gradual relative to fluid movement, and as its own pass so it never
+        // contends with the swap CAS loops below. The accumulator is cleared
+        // immediately before so each tick's pass produces a fresh sum/count
+        // snapshot, then copied out for async readback (the rolling average
+        // itself is maintained as an EMA on the CPU side in poll_temperature_stats).
+        encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Fluid Update Temperature Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.update_temperature_pipeline);
+            pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+        if !self.temp_stats_copy_pending.get() && self.temp_stats_map_receiver.borrow().is_none() {
+            encoder.copy_buffer_to_buffer(
+                &self.temp_stats_buffer,
+                0,
+                &self.temp_stats_staging_buffer,
+                0,
+                self.temp_stats_buffer.size(),
+            );
+            self.temp_stats_copy_pending.set(true);
         }
 
         // Multi-pass fluid simulation with alternating checker phase
@@ -1306,6 +1392,77 @@ impl GpuFluidSimulator {
         pass.set_pipeline(&self.nutrient_populate_pipeline);
         pass.set_bind_group(0, &self.cached_nutrient_bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+    }
+
+    /// Polls the async readback of the rolling temperature accumulator and,
+    /// once mapped, blends the snapshot into the exponential moving averages.
+    pub fn poll_temperature_stats(&self, device: &wgpu::Device) {
+        if self.temp_stats_copy_pending.get() && self.temp_stats_map_receiver.borrow().is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.temp_stats_staging_buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    tx.send(r).ok();
+                });
+            *self.temp_stats_map_receiver.borrow_mut() = Some(rx);
+            self.temp_stats_copy_pending.set(false);
+        }
+
+        let mut finished = false;
+        if let Some(rx) = self.temp_stats_map_receiver.borrow().as_ref() {
+            let _ = device.poll(wgpu::PollType::Poll);
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    {
+                        let view = self
+                            .temp_stats_staging_buffer
+                            .slice(..)
+                            .get_mapped_range();
+                        let stats: &[u32] = bytemuck::cast_slice(&view);
+                        // Water has real thermal mass (THERMAL_INERTIA_RATE in the sim
+                        // is intentionally tiny), so its displayed rolling average is
+                        // smoothed heavily too - it should visibly lag and change far
+                        // slower than air. Air has no per-voxel inertia at all (it's a
+                        // direct ambient derivation), so it can react comparatively
+                        // quickly and still read as a believable "rolling average"
+                        // rather than flickering with every light change.
+                        const WATER_EMA_RATE: f32 = 0.01;
+                        const AIR_EMA_RATE: f32 = 0.05;
+
+                        if stats[1] > 0 {
+                            let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;
+                            let prev = self.avg_water_temp_c.get();
+                            self.avg_water_temp_c.set(prev + (avg_c - prev) * WATER_EMA_RATE);
+                        }
+                        if stats[3] > 0 {
+                            let avg_c = (stats[2] as f32 / stats[3] as f32) - 50.0;
+                            let prev = self.avg_air_temp_c.get();
+                            self.avg_air_temp_c.set(prev + (avg_c - prev) * AIR_EMA_RATE);
+                        }
+                    }
+                    self.temp_stats_staging_buffer.unmap();
+                    finished = true;
+                }
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.temp_stats_staging_buffer.unmap();
+                    finished = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if finished {
+            *self.temp_stats_map_receiver.borrow_mut() = None;
+        }
+    }
+
+    /// Rolling average water temperature, in Celsius.
+    pub fn avg_water_temp_c(&self) -> f32 {
+        self.avg_water_temp_c.get()
+    }
+
+    /// Rolling average air (empty-voxel) temperature, in Celsius.
+    pub fn avg_air_temp_c(&self) -> f32 {
+        self.avg_air_temp_c.get()
     }
 }
 

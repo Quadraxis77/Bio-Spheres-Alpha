@@ -26,10 +26,6 @@ struct FluidParams {
     lateral_flow_probability_lava: f32,
     lateral_flow_probability_steam: f32,
     
-    // Phase change probabilities (0.0 to 1.0)
-    condensation_probability: f32,  // Steam to Water
-    vaporization_probability: f32,  // Water to Steam
-    
     // Fluid type for spawning (0=Empty, 1=Water, 2=Lava, 3=Steam)
     spawn_fluid_type: u32,
 
@@ -39,7 +35,9 @@ struct FluidParams {
     // Radial: world sphere boundary is the effective shell. gravity_magnitude controls strength.
     gravity_mode: u32,
     surface_pressure: f32,  // Tangential smoothing strength for radial mode (0.0-1.0)
-    _pad_rg1: u32,
+    // Overall sun brightness driving the thermal model's baseline air temperature
+    // (0 = dark, 3 = comfortable max, >3 = extreme heat).
+    sun_brightness: f32,
     _pad_rg2: u32,
 }
 
@@ -54,6 +52,10 @@ struct ExtractParams {
 @group(0) @binding(1) var<storage, read_write> voxels: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read> solid_mask: array<u32>;
 @group(0) @binding(3) var<storage, read_write> water_velocity: array<atomic<u32>>;
+// Rolling-average accumulator: [water_temp_sum, water_count, air_temp_sum, air_count].
+// Temperatures are stored as round(celsius) + 50 (range 0..200) to keep sums
+// safely within u32 range without needing 64-bit atomics.
+@group(0) @binding(4) var<storage, read_write> temp_stats: array<atomic<u32>>;
 
 // Encode a displacement vector (dx, dy, dz each in {-1, 0, +1}) into a packed u32.
 // Encoding: 2 bits per axis. 0b00=0, 0b01=+1, 0b10=-1.
@@ -96,8 +98,96 @@ fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     return x + y * res + z * res * res;
 }
 
+// Voxel state word layout (32 bits):
+//   bits 0-2:   fluid_type (0-7; only 0-3 currently used: empty/water/ice/steam)
+//   bits 3-10:  quantized temperature (8 bits, see TEMP_MIN_C/TEMP_MAX_C)
+//   bits 11-15: unused
+//   bits 16-31: fill_fraction (16 bits, 0-65535 -> 0.0-1.0)
+//
+// Packing temperature into the same word that gets atomically swapped means
+// it travels with the fluid through every existing move/swap site for free —
+// no swap call site needs to change.
+const FLUID_TYPE_MASK: u32 = 0x7u;
+const TEMP_MASK: u32 = 0xFFu;
+const TEMP_SHIFT: u32 = 3u;
+const TEMP_MIN_C: f32 = -50.0;
+const TEMP_MAX_C: f32 = 150.0;
+
 fn get_fluid_type(state: u32) -> u32 {
-    return state & 0xFFFFu;
+    return state & FLUID_TYPE_MASK;
+}
+
+// Unpack the 8-bit quantized temperature field to degrees Celsius.
+fn get_temperature_c(state: u32) -> f32 {
+    let q = (state >> TEMP_SHIFT) & TEMP_MASK;
+    return TEMP_MIN_C + (f32(q) / 255.0) * (TEMP_MAX_C - TEMP_MIN_C);
+}
+
+// Quantize a Celsius value into the 8-bit temperature field (bits already shifted into place).
+fn pack_temperature_c(temp_c: f32) -> u32 {
+    let t = saturate((temp_c - TEMP_MIN_C) / (TEMP_MAX_C - TEMP_MIN_C));
+    let q = u32(t * 255.0 + 0.5);
+    return (q & TEMP_MASK) << TEMP_SHIFT;
+}
+
+// Replace just the temperature bits of a state word, preserving fluid_type and fill_fraction.
+fn with_temperature_c(state: u32, temp_c: f32) -> u32 {
+    return (state & ~(TEMP_MASK << TEMP_SHIFT)) | pack_temperature_c(temp_c);
+}
+
+// ---- Thermal model constants ----
+// Comfortable sun brightness spans 0 (dark) to 3 (bright); above 3 is extreme heat.
+const COMFORTABLE_BRIGHTNESS_MAX: f32 = 3.0;
+const DARK_BASELINE_C: f32 = -10.0;        // sun_brightness = 0 reference; well below freezing
+const EVAPORATION_FLOOR_C: f32 = 15.6;     // 60°F - dark-voxel floor; no passive evaporation below this
+const BOILING_POINT_C: f32 = 100.0;        // steam stays vapor at/above this; condensation possible at any cooler ambient
+const SNOW_FALL_PROBABILITY: f32 = 0.04;   // snow drifts down far slower than water/rain
+const EVAPORATION_BRISK_C: f32 = 29.4;     // ~85°F - brightness 3 reference; "decent rainfall" territory
+const EXTREME_HEAT_SLOPE_C: f32 = 25.0;    // °C added per unit of brightness above the comfortable ceiling
+const EVAPORATION_CURVE_POWER: f32 = 2.5;  // shapes the floor->brisk evaporation ramp (gentle at the low end)
+const FREEZE_POINT_C: f32 = 0.0;
+const FREEZE_HYSTERESIS_C: f32 = 2.0;      // water freezes below (FREEZE_POINT - this); ice melts above (FREEZE_POINT + this) - prevents flicker at the boundary
+const THERMAL_INERTIA_RATE: f32 = 0.0015;  // per-tick lerp factor toward ambient - water has real thermal mass and should drift far slower than air (which has none and tracks ambient instantly)
+const NATURAL_VAPORIZATION_RATE: f32 = 0.15;  // base per-tick chance scalar once warm enough to evaporate
+const NATURAL_CONDENSATION_RATE: f32 = 0.15;  // base per-tick chance scalar once cool enough to condense
+
+const DARKNESS_PENALTY_MAX_C: f32 = 25.0; // unlit voxels run at most this much colder than baseline - large enough that prolonged local darkness can push water below freezing even when overall brightness is moderate
+
+// Baseline air temperature, derived from overall sun brightness (0 = dark,
+// 3 = comfortable max, >3 = extreme heat). This is the "reference" temperature
+// for fully-lit conditions; individual voxels then sit at-or-below this based
+// on their own local light level (see ambient_temp_c).
+// TODO: drive `sun_brightness` from the actual sun/light-field intensity once
+// that's available in this pass — exposed as a pure function for now so the
+// mapping is correct and ready to wire up.
+fn baseline_air_temp_c(sun_brightness: f32) -> f32 {
+    if sun_brightness <= COMFORTABLE_BRIGHTNESS_MAX {
+        return mix(DARK_BASELINE_C, EVAPORATION_BRISK_C, saturate(sun_brightness / COMFORTABLE_BRIGHTNESS_MAX));
+    }
+    let excess = sun_brightness - COMFORTABLE_BRIGHTNESS_MAX;
+    return EVAPORATION_BRISK_C + excess * EXTREME_HEAT_SLOPE_C;
+}
+
+// Temporary stand-in for the light-field brightness sample at a world position:
+// approximates "upper/sunlit regions are brighter, lower/shadowed regions are
+// darker" using height within the world sphere. Replace with an actual
+// light-field lookup (see organism_labels-style buffer binding pattern).
+fn approx_local_brightness(world_pos: vec3<f32>) -> f32 {
+    let height_norm = clamp(world_pos.y / params.world_radius, -1.0, 1.0);
+    return saturate(height_norm * 0.5 + 0.5) * params.sun_brightness;
+}
+
+// Per-voxel ambient air temperature: starts from the brightness-derived
+// baseline, then voxels that receive less local light run cooler — clamped
+// to at most DARKNESS_PENALTY_MAX_C below baseline (a fully dark voxel is
+// never colder than "baseline minus 10", not an independently-floored value).
+fn ambient_temp_c(world_pos: vec3<f32>) -> f32 {
+    let baseline_c = baseline_air_temp_c(params.sun_brightness);
+
+    let local_brightness = approx_local_brightness(world_pos);
+    let brightness_scale = max(params.sun_brightness, 0.001);
+    let darkness = saturate(1.0 - local_brightness / brightness_scale);
+    return baseline_c - darkness * DARKNESS_PENALTY_MAX_C;
 }
 
 // Check if a grid position is solid based on the solid mask
@@ -283,116 +373,89 @@ fn get_steam_dispersion_bias(gid: vec3<u32>, direction: u32) -> f32 {
     }
 }
 
+// True if any of the 6 face-neighbors of this voxel is empty (air). Used to
+// gate evaporation - water needs an open surface to vaporize from, the same
+// way real water evaporates from its exposed surface rather than its interior.
+fn in_contact_with_air(gid: vec3<u32>) -> bool {
+    let res = params.grid_resolution;
+    let neighbor_offsets = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),
+        vec3<i32>(-1, 0, 0),
+        vec3<i32>(0, 1, 0),
+        vec3<i32>(0, -1, 0),
+        vec3<i32>(0, 0, 1),
+        vec3<i32>(0, 0, -1)
+    );
+    for (var i = 0u; i < 6u; i++) {
+        let nx = i32(gid.x) + neighbor_offsets[i].x;
+        let ny = i32(gid.y) + neighbor_offsets[i].y;
+        let nz = i32(gid.z) + neighbor_offsets[i].z;
+        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+            let n_state = atomicLoad(&voxels[grid_index(u32(nx), u32(ny), u32(nz))]);
+            if get_fluid_type(n_state) == 0u {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // Condensation mechanic - steam can condense back to water when contacting solids or boundaries
 fn should_condense_steam(gid: vec3<u32>) -> bool {
     let res = params.grid_resolution;
-    
-    // Check if steam voxel is near the spherical world boundary (edge of simulation)
+
+    // Steam needs a surface to condense onto: near the world boundary or
+    // touching a solid (cave wall, rock, etc). Floating mid-air steam stays
+    // vapor regardless of temperature.
     let world_pos = grid_to_world(gid.x, gid.y, gid.z);
     let distance_from_center = length(world_pos);
     let boundary_threshold = params.world_radius - params.cell_size;
     let near_boundary = distance_from_center > boundary_threshold;
-    
-    // Check if steam voxel is adjacent to solid surfaces
+
     let solid_neighbors = array<vec3<i32>, 6>(
-        vec3<i32>(1, 0, 0),   // +X
-        vec3<i32>(-1, 0, 0),  // -X
-        vec3<i32>(0, 1, 0),   // +Y
-        vec3<i32>(0, -1, 0),  // -Y
-        vec3<i32>(0, 0, 1),   // +Z
-        vec3<i32>(0, 0, -1)   // -Z
+        vec3<i32>(1, 0, 0),
+        vec3<i32>(-1, 0, 0),
+        vec3<i32>(0, 1, 0),
+        vec3<i32>(0, -1, 0),
+        vec3<i32>(0, 0, 1),
+        vec3<i32>(0, 0, -1)
     );
-    
+
     var adjacent_solids = 0u;
     for (var i = 0u; i < 6u; i++) {
         let nx = i32(gid.x) + solid_neighbors[i].x;
         let ny = i32(gid.y) + solid_neighbors[i].y;
         let nz = i32(gid.z) + solid_neighbors[i].z;
-        
+
         if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
             if is_solid(u32(nx), u32(ny), u32(nz)) {
                 adjacent_solids++;
             }
         }
     }
-    
-    // Condense if near boundary or adjacent to solids
+
     if !near_boundary && adjacent_solids == 0u {
         return false;
     }
-    
-    // Use condensation probability from uniform parameters
-    let condensation_probability = params.condensation_probability;
-    
-    // Use hash-based randomization for natural variation
-    let pos_hash = hash_position(gid);
-    let time_hash = u32(params.time * 1000.0);
-    let combined_hash = pos_hash ^ time_hash;
-    
-    return (combined_hash & 255u) < u32(condensation_probability * 255.0);
-}
 
-// Water-to-steam conversion - water converts to steam when touching hot red cave rocks in bottom quarter
-fn should_convert_to_steam(gid: vec3<u32>) -> bool {
-    let res = params.grid_resolution;
-    
-    // Check if water voxel is adjacent to solid surfaces that are in the red layer
-    let solid_neighbors = array<vec3<i32>, 6>(
-        vec3<i32>(1, 0, 0),   // +X
-        vec3<i32>(-1, 0, 0),  // -X
-        vec3<i32>(0, 1, 0),   // +Y
-        vec3<i32>(0, -1, 0),  // -Y
-        vec3<i32>(0, 0, 1),   // +Z
-        vec3<i32>(0, 0, -1)   // -Z
-    );
-    
-    var touching_red_rocks = false;
-    var adjacent_solids = 0u;
-    
-    for (var i = 0u; i < 6u; i++) {
-        let nx = i32(gid.x) + solid_neighbors[i].x;
-        let ny = i32(gid.y) + solid_neighbors[i].y;
-        let nz = i32(gid.z) + solid_neighbors[i].z;
-        
-        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
-            if is_solid(u32(nx), u32(ny), u32(nz)) {
-                adjacent_solids++;
-                
-                // Check if this solid is in the red layer AND bottom quarter
-                let solid_world_pos = grid_to_world(u32(nx), u32(ny), u32(nz));
-                let solid_distance_from_center = length(solid_world_pos);
-                let red_layer_start = params.world_radius * 0.9;
-                
-                // Check if in bottom quarter (simplified - just check Y position)
-                let is_in_outer_layer = solid_distance_from_center >= red_layer_start && solid_distance_from_center <= params.world_radius;
-                
-                // Simple bottom quarter check: Y must be negative enough (bottom 25%)
-                let y_normalized = solid_world_pos.y / params.world_radius;
-                let is_bottom_quarter = y_normalized < -0.5; // Bottom quarter
-                
-                if is_in_outer_layer && is_bottom_quarter {
-                    touching_red_rocks = true;
-                }
-            }
-        }
-    }
-    
-    // Convert only if touching red cave rocks in bottom quarter
-    if !touching_red_rocks {
+    // Purely thermal: steam can condense at any ambient temperature below
+    // boiling - all the way down through freezing (where it forms snow
+    // instead of liquid water; see fluid_swap). It is NOT gated by the
+    // much-higher evaporation floor - that threshold only governs whether
+    // liquid water passively evaporates, not whether vapor condenses back.
+    let ambient_c = ambient_temp_c(world_pos);
+    if ambient_c >= BOILING_POINT_C {
         return false;
     }
-    
-    // Conversion probability based on how many red rocks are touching
-    // Use vaporization probability from uniform parameters
-    let conversion_probability = params.vaporization_probability;
-    
+
     // Use hash-based randomization for natural variation
     let pos_hash = hash_position(gid);
     let time_hash = u32(params.time * 1000.0);
     let combined_hash = pos_hash ^ time_hash;
-    
-    return (combined_hash & 255u) < u32(conversion_probability * 255.0);
+
+    return (combined_hash & 255u) < u32(NATURAL_CONDENSATION_RATE * 255.0);
 }
+
 
 // Check if water voxel is supported from below (in the gravity direction)
 // Only water resting on solid or other water should spread laterally.
@@ -643,6 +706,54 @@ fn radial_move(gid: vec3<u32>) {
     write_water_velocity(target_idx, fluid_type, best_dx, best_dy, best_dz);
 }
 
+// Per-tick thermal update: water and ice drift toward ambient temperature with
+// inertia (Newton's-law-of-cooling style exponential approach). Runs as its own
+// pass, separate from fluid_swap, so the read-modify-write here never contends
+// with the swap CAS loops — if a voxel moves away mid-tick, the CAS below simply
+// loses the race harmlessly and the new occupant picks up the drift next tick.
+//
+// Temperature is packed into the same word that gets atomically swapped
+// (see with_temperature_c), so once set here it travels with the fluid through
+// every existing move/swap site for free.
+@compute @workgroup_size(4, 4, 4)
+fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = params.grid_resolution;
+    if gid.x >= res || gid.y >= res || gid.z >= res {
+        return;
+    }
+
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let state = atomicLoad(&voxels[idx]);
+    let fluid_type = get_fluid_type(state);
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+    let ambient_c = ambient_temp_c(world_pos);
+
+    // Only water and ice carry tracked thermal mass; empty space, steam and
+    // solids derive/ignore temperature rather than storing it.
+    if fluid_type != 1u && fluid_type != 2u {
+        // Empty/air voxel: contribute the ambient temperature to the air
+        // rolling-average accumulator.
+        if fluid_type == 0u {
+            let encoded = u32(round(ambient_c) + 50.0);
+            atomicAdd(&temp_stats[2], encoded);
+            atomicAdd(&temp_stats[3], 1u);
+        }
+        return;
+    }
+
+    let current_c = get_temperature_c(state);
+    let new_c = mix(current_c, ambient_c, THERMAL_INERTIA_RATE);
+
+    let new_state = with_temperature_c(state, new_c);
+    if new_state != state {
+        atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+    }
+
+    let encoded_water = u32(round(new_c) + 50.0);
+    atomicAdd(&temp_stats[0], encoded_water);
+    atomicAdd(&temp_stats[1], 1u);
+}
+
 // Main simulation pass - GPU handles all movement with proper physics order
 @compute @workgroup_size(4, 4, 4)
 fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -662,23 +773,146 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let state = atomicLoad(&voxels[idx]);
     let fluid_type = get_fluid_type(state);
     
-    // Steam condensation check - convert steam back to water when contacting solids
-    // Guard: skip the expensive neighbor scan entirely when probability is zero
-    if fluid_type == 3u && params.condensation_probability > 0.0 && should_condense_steam(gid) {
-        // Try to condense steam back to water
-        let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 1u);
+    // Steam condensation check - convert steam back to water when contacting solids.
+    // Condensed water inherits the ambient temperature of the spot it forms at
+    // (steam itself doesn't track temperature) rather than an arbitrary default.
+    if fluid_type == 3u && should_condense_steam(gid) {
+        let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+        let condensed_c = ambient_temp_c(world_pos);
+        // Below freezing, vapor condenses directly into snow rather than
+        // liquid water - condensation itself never stops in cold weather,
+        // only evaporation does.
+        var condensed_type = 1u;
+        if condensed_c < FREEZE_POINT_C {
+            condensed_type = 4u;
+        }
+        let new_state = (65535u << 16u) | pack_temperature_c(condensed_c) | condensed_type;
+        let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
         if result.exchanged {
             return; // Successfully condensed, no further processing needed
         }
     }
 
-    // Water-to-steam conversion check - convert water to steam when touching hot surfaces near boundary
-    // Guard: skip the expensive neighbor scan entirely when probability is zero
-    if fluid_type == 1u && params.vaporization_probability > 0.0 && should_convert_to_steam(gid) {
-        // Try to convert water to steam
-        let result = atomicCompareExchangeWeak(&voxels[idx], state, (65535u << 16u) | 3u);
-        if result.exchanged {
-            return; // Successfully converted to steam, no further processing needed
+    // --- Snow: drifts down slowly, and turns directly to ice on contact
+    // with liquid water or any solid surface (it doesn't melt to water first). ---
+    if fluid_type == 4u {
+        let res_snow = params.grid_resolution;
+        let neighbor_offsets_snow = array<vec3<i32>, 6>(
+            vec3<i32>(1, 0, 0), vec3<i32>(-1, 0, 0),
+            vec3<i32>(0, 1, 0), vec3<i32>(0, -1, 0),
+            vec3<i32>(0, 0, 1), vec3<i32>(0, 0, -1)
+        );
+        var touches_water_or_solid = false;
+        for (var i = 0u; i < 6u; i++) {
+            let nx = i32(gid.x) + neighbor_offsets_snow[i].x;
+            let ny = i32(gid.y) + neighbor_offsets_snow[i].y;
+            let nz = i32(gid.z) + neighbor_offsets_snow[i].z;
+            if nx < 0 || nx >= i32(res_snow) || ny < 0 || ny >= i32(res_snow) || nz < 0 || nz >= i32(res_snow) {
+                continue;
+            }
+            if is_solid(u32(nx), u32(ny), u32(nz)) {
+                touches_water_or_solid = true;
+                break;
+            }
+            let n_state_snow = atomicLoad(&voxels[grid_index(u32(nx), u32(ny), u32(nz))]);
+            if get_fluid_type(n_state_snow) == 1u {
+                touches_water_or_solid = true;
+                break;
+            }
+        }
+
+        if touches_water_or_solid {
+            let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
+            let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+            if result.exchanged { return; }
+        } else {
+            // Drift slowly downward in the gravity direction into empty space.
+            let pos_hash_snow = hash_position(gid);
+            let time_hash_snow = u32(params.time * 1000.0);
+            if ((pos_hash_snow ^ time_hash_snow) & 255u) < u32(SNOW_FALL_PROBABILITY * 255.0) {
+                let grav_dir_snow = get_effective_gravity(gid);
+                let gravity_dir_index_snow = gravity_dir_to_index(grav_dir_snow);
+                let down_snow = get_offset(gravity_dir_index_snow);
+                let dx = i32(gid.x) + down_snow.x;
+                let dy = i32(gid.y) + down_snow.y;
+                let dz = i32(gid.z) + down_snow.z;
+                if dx >= 0 && dx < i32(res_snow) && dy >= 0 && dy < i32(res_snow) && dz >= 0 && dz < i32(res_snow) {
+                    if !is_solid(u32(dx), u32(dy), u32(dz)) {
+                        let down_idx = grid_index(u32(dx), u32(dy), u32(dz));
+                        let down_state = atomicLoad(&voxels[down_idx]);
+                        let down_type = get_fluid_type(down_state);
+                        // Snow falls freely through both empty space and steam -
+                        // it's denser than vapor and shouldn't be held up by it.
+                        if down_type == 0u || down_type == 3u {
+                            let claim = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
+                            if claim.exchanged {
+                                let result_down = atomicCompareExchangeWeak(&voxels[down_idx], down_state, state);
+                                if result_down.exchanged {
+                                    atomicStore(&voxels[idx], down_state);
+                                } else {
+                                    atomicStore(&voxels[idx], state);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // Thermally-driven phase changes for water and ice.
+    if fluid_type == 1u || fluid_type == 2u {
+        let temp_c = get_temperature_c(state);
+
+        // --- Vaporization: passive evaporation ramping toward a rolling boil. ---
+        // Purely thermal now - no rock proximity and no manual control. Below
+        // the floor (60°F/15.6°C) nothing evaporates; the rate ramps with a
+        // curve that stays nearly imperceptible just above the floor and
+        // climbs toward saturation as the water approaches the brisk/boiling
+        // reference. Also requires the voxel to actually be in contact with
+        // air (steam needs somewhere to go) - water buried deep in a pool
+        // doesn't spontaneously vaporize.
+        if fluid_type == 1u && in_contact_with_air(gid) {
+            if temp_c > EVAPORATION_FLOOR_C {
+                let warmth = saturate((temp_c - EVAPORATION_FLOOR_C) / (EVAPORATION_BRISK_C - EVAPORATION_FLOOR_C));
+                let rate = NATURAL_VAPORIZATION_RATE * pow(warmth, EVAPORATION_CURVE_POWER);
+                let pos_hash = hash_position(gid);
+                let time_hash = u32(params.time * 1000.0);
+                let combined_hash = pos_hash ^ time_hash;
+                if (combined_hash & 255u) < u32(rate * 255.0) {
+                    // Steam carries no tracked temperature - clear the field.
+                    let new_state = (65535u << 16u) | 3u;
+                    let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+                    if result.exchanged {
+                        return;
+                    }
+                }
+            }
+        }
+
+        // --- Freezing / melting with hysteresis. ---
+        // In-place 1:1 phase flip (water <-> ice occupy the same fluid slot,
+        // no displacement). Temperature is preserved across the flip so the
+        // voxel keeps drifting thermally afterward without a discontinuity.
+        // Freeze and melt use offset thresholds (FREEZE_POINT ± hysteresis)
+        // rather than a single shared point - this stops a voxel hovering
+        // right at 0°C from flickering between water and ice every tick.
+        // Ice always claims the FULL voxel volume (fill = 1.0) when it forms,
+        // replacing the water's volume outright rather than inheriting a
+        // possibly-partial fill fraction (ice expands to fill its space).
+        if fluid_type == 1u && temp_c < FREEZE_POINT_C - FREEZE_HYSTERESIS_C {
+            let new_state = (65535u << 16u) | (state & (TEMP_MASK << TEMP_SHIFT)) | 2u;
+            let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+            if result.exchanged {
+                return;
+            }
+        } else if fluid_type == 2u && temp_c > FREEZE_POINT_C + FREEZE_HYSTERESIS_C {
+            let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
+            let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+            if result.exchanged {
+                return;
+            }
         }
     }
 
@@ -1198,8 +1432,10 @@ fn fluid_init_sphere(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dist = length(world_pos - sphere_center);
 
     if dist < sphere_radius && is_in_bounds(world_pos) && !is_solid(gid.x, gid.y, gid.z) {
-        // Water: type=1, fill=1.0 -> packed as (65535 << 16) | 1
-        atomicStore(&voxels[idx], (65535u << 16u) | 1u);
+        // Water: type=1, fill=1.0, seeded at the local ambient temperature
+        // -> packed as (65535 << 16) | temperature_bits | 1
+        let init_temp = pack_temperature_c(ambient_temp_c(world_pos));
+        atomicStore(&voxels[idx], (65535u << 16u) | init_temp | 1u);
     } else {
         atomicStore(&voxels[idx], 0u);
     }
@@ -1264,23 +1500,12 @@ fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Only spawn if current cell is empty
         let current_state = atomicLoad(&voxels[idx]);
         if get_fluid_type(current_state) == 0u {
-            // Spawn selected fluid type with full fill
-            atomicStore(&voxels[idx], (65535u << 16u) | params.spawn_fluid_type);
+            // Spawn selected fluid type with full fill, seeded at the local
+            // ambient temperature (only meaningful for water/ice; harmless
+            // padding for other types since they don't read the field).
+            let init_temp = pack_temperature_c(ambient_temp_c(probed_world_pos));
+            atomicStore(&voxels[idx], (65535u << 16u) | init_temp | params.spawn_fluid_type);
         }
-
-        let idx = gid.x + gid.y * res + gid.z * res * res;
-        let state = atomicLoad(&voxels[idx]);
-
-        let fluid_type = state & 0xFFFFu;
-        let fill = f32((state >> 16u) & 0xFFFFu) / 65535.0;
-
-        if (fluid_type == 1u || fluid_type == 2u) && fill > 0.0 {
-            // This was trying to write to density_out, but that's not available in this shader
-            // We'll just spawn the fluid and return
-        }
-
-        // Spawn selected fluid type with full fill
-        atomicStore(&voxels[idx], (65535u << 16u) | params.spawn_fluid_type);
     }
 }
 

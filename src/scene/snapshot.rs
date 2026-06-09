@@ -140,8 +140,6 @@ pub struct GpuSceneSnapshot {
     pub radiation_level: f32,
     pub subtle_mutations: bool,
     pub lateral_flow_probabilities: [f32; 4],
-    pub condensation_probability: f32,
-    pub vaporization_probability: f32,
     pub nutrient_density: f32,
     pub nutrient_epoch_duration: f32,
     pub nutrient_epoch_spacing: f32,

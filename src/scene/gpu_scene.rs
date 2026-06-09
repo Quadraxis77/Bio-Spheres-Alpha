@@ -217,9 +217,6 @@ pub struct GpuScene {
     /// Per-fluid-type lateral flow probabilities for fluid simulation (0.0 to 1.0)
     /// Index: 0=Empty (unused), 1=Water, 2=Lava, 3=Steam
     pub lateral_flow_probabilities: [f32; 4],
-    /// Phase change probabilities for fluid simulation (0.0 to 1.0)
-    pub condensation_probability: f32, // Steam to Water
-    pub vaporization_probability: f32, // Water to Steam
     /// Nutrient particle density for noise-based spawning (0.0 to 1.0)
     pub nutrient_density: f32, // Controls threshold for nutrient spawning
     /// Nutrient epoch duration in seconds (how long one nutrient pattern lasts)
@@ -760,8 +757,6 @@ impl GpuScene {
             radiation_level: 0.0,
             subtle_mutations: false,
             lateral_flow_probabilities: [1.0, 0.8, 0.6, 0.9],
-            condensation_probability: 0.1,
-            vaporization_probability: 0.1,
             nutrient_density: 0.2,
             nutrient_epoch_duration: 10.0,
             nutrient_epoch_spacing: 7.0,
@@ -6361,6 +6356,7 @@ impl GpuScene {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.set_gravity_mode(self.gravity_mode);
             simulator.set_surface_pressure(self.surface_pressure);
+            simulator.set_sun_brightness(self.sun_intensity);
             simulator.set_water_drag_strength(queue, self.water_viscosity);
             simulator.step(
                 device,
@@ -6374,8 +6370,6 @@ impl GpuScene {
                     self.gravity_mode == 2,
                 ],
                 self.lateral_flow_probabilities,
-                self.condensation_probability,
-                self.vaporization_probability,
             );
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
@@ -6926,12 +6920,6 @@ impl GpuScene {
         }
     }
 
-    /// Set phase change probabilities
-    pub fn set_phase_change_probabilities(&mut self, condensation: f32, vaporization: f32) {
-        self.condensation_probability = condensation.clamp(0.0, 1.0);
-        self.vaporization_probability = vaporization.clamp(0.0, 1.0);
-    }
-
     /// Apply light & fog parameters from editor state to GPU systems
     pub fn apply_light_params_from_editor(
         &mut self,
@@ -7031,7 +7019,11 @@ impl GpuScene {
 
         // Update sun renderer parameters
         self.show_sun = editor_state.show_sun;
-        self.sun_intensity = editor_state.sun_intensity;
+        // Use the *effective* sun intensity (accounts for the day/night cycle
+        // when enabled) so the fluid thermal model tracks the lighting the
+        // player actually sees, not just the static slider value - otherwise
+        // water/air ambient temps never respond to a running day/night cycle.
+        self.sun_intensity = effective_sun_intensity;
         self.sun_light_dir = editor_state.light_dir;
         self.sun_rotating = editor_state.sun_rotation_enabled && editor_state.sun_rotation_speed != 0.0;
         if let Some(ref mut sun) = self.sun_renderer {
@@ -7831,6 +7823,10 @@ impl Scene for GpuScene {
                 label_system.poll_debug_readback(device);
             }
 
+            if let Some(ref simulator) = self.fluid_simulator {
+                simulator.poll_temperature_stats(device);
+            }
+
             if should_start_readback {
                 self.gpu_triple_buffers.initiate_cell_count_map();
             }
@@ -8564,6 +8560,10 @@ impl Scene for GpuScene {
         // Debug: poll label buffer readback.
         if let Some(label_system) = &mut self.organism_label_system {
             label_system.poll_debug_readback(device);
+        }
+
+        if let Some(ref simulator) = self.fluid_simulator {
+            simulator.poll_temperature_stats(device);
         }
 
         // Initiate the async map operation after submit (if we started a readback)

@@ -2688,8 +2688,6 @@ impl App {
             // Apply fluid settings from UI
             gpu_scene.lateral_flow_probabilities =
                 self.editor_state.fluid_lateral_flow_probabilities;
-            gpu_scene.condensation_probability = self.editor_state.fluid_condensation_probability;
-            gpu_scene.vaporization_probability = self.editor_state.fluid_vaporization_probability;
             gpu_scene.nutrient_density = self.editor_state.nutrient_density;
             gpu_scene.nutrient_epoch_duration = self.editor_state.nutrient_epoch_duration;
             gpu_scene.nutrient_epoch_spacing = self.editor_state.nutrient_epoch_spacing;

@@ -21,7 +21,7 @@ struct ExtractParams {
 @group(0) @binding(4) var<storage, read> solid_mask: array<u32>;
 
 fn get_fluid_type(state: u32) -> u32 {
-    return state & 0xFFFFu;
+    return state & 0x7u;
 }
 
 fn sample_fluid_state(x: u32, y: u32, z: u32) -> u32 {

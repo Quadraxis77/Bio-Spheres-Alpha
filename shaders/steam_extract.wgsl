@@ -80,10 +80,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let state = fluid_state[idx];
 
     // Fluid type is stored in lower 16 bits
-    let fluid_type = state & 0xFFFFu;
+    let fluid_type = state & 0x7u;
 
-    // Check if this is a steam voxel (fluid_type == 3)
-    if fluid_type != 3u {
+    // Render steam (3) as soft wispy particles, snow (4) as small opaque
+    // round white flakes that drift down slowly.
+    if fluid_type != 3u && fluid_type != 4u {
         return;
     }
 
@@ -101,10 +102,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Create particle
     var particle: SteamParticle;
     particle.position = world_pos;
-    particle.size = params.cell_size * 1.5;  // Slightly larger than voxel
 
-    // Steam color: white/grey
-    particle.color = vec4<f32>(0.9, 0.9, 0.95, 0.01);
+    if fluid_type == 4u {
+        // Snow: small, round, opaque white flakes
+        particle.size = params.cell_size * 0.6;
+        particle.color = vec4<f32>(1.0, 1.0, 1.0, 0.9);
+    } else {
+        particle.size = params.cell_size * 1.5;  // Slightly larger than voxel
+        // Steam color: white/grey, wispy
+        particle.color = vec4<f32>(0.9, 0.9, 0.95, 0.01);
+    }
 
     // Animation data (time offset based on position for variation)
     particle.animation = vec4<f32>(

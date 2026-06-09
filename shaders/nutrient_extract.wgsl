@@ -45,7 +45,7 @@ fn try_allocate_particle() -> u32 {
 // Check if a voxel is water (fluid type 1)
 fn is_water_voxel(voxel_index: u32) -> bool {
     let state = fluid_state[voxel_index];
-    let fluid_type = state & 0xFFFFu;  // Fluid type is stored in lower 16 bits
+    let fluid_type = state & 0x7u;  // Fluid type is stored in lower 16 bits
     return fluid_type == 1u;  // Water fluid type
 }
 
