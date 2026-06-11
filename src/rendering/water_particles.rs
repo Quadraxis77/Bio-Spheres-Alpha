@@ -6,6 +6,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
+use std::sync::mpsc::Receiver;
 
 /// Water particle instance data (must match shader struct)
 #[repr(C)]
@@ -64,6 +65,7 @@ pub struct WaterParticleRenderer {
     particle_buffer: wgpu::Buffer,
     counter_buffer: wgpu::Buffer,
     counter_staging_buffer: wgpu::Buffer,
+    counter_readback_receiver: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
     params_buffer: wgpu::Buffer,
     render_params_buffer: wgpu::Buffer,
 
@@ -383,6 +385,7 @@ impl WaterParticleRenderer {
             particle_buffer,
             counter_buffer,
             counter_staging_buffer,
+            counter_readback_receiver: None,
             params_buffer,
             render_params_buffer,
             camera_bind_group_layout,
@@ -531,46 +534,48 @@ impl WaterParticleRenderer {
             compute_pass.dispatch_workgroups(workgroups, workgroups, workgroups);
         }
 
-        // Copy counter to staging buffer for readback
-        encoder.copy_buffer_to_buffer(
-            &self.counter_buffer,
-            0,
-            &self.counter_staging_buffer,
-            0,
-            std::mem::size_of::<ParticleCounter>() as u64,
-        );
+        if self.counter_readback_receiver.is_none() {
+            encoder.copy_buffer_to_buffer(
+                &self.counter_buffer,
+                0,
+                &self.counter_staging_buffer,
+                0,
+                std::mem::size_of::<ParticleCounter>() as u64,
+            );
+        }
     }
 
     /// Poll for particle count (call after command buffer submission)
     pub fn poll_particle_count(&mut self, device: &wgpu::Device) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
+        if self.counter_readback_receiver.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.counter_staging_buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    tx.send(result).ok();
+                });
+            self.counter_readback_receiver = Some(rx);
+        }
 
-        let buffer_slice = self.counter_staging_buffer.slice(..);
-        let mapped = Arc::new(AtomicBool::new(false));
-        let mapped_clone = mapped.clone();
-
-        // Map the buffer with callback
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            if result.is_ok() {
-                mapped_clone.store(true, Ordering::SeqCst);
+        let _ = device.poll(wgpu::PollType::Poll);
+        let Some(rx) = self.counter_readback_receiver.as_ref() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(())) => {
+                {
+                    let data = self.counter_staging_buffer.slice(..).get_mapped_range();
+                    let count: &[u32] = bytemuck::cast_slice(&data);
+                    self.particle_count = count[0].min(self.max_particles);
+                }
+                self.counter_staging_buffer.unmap();
+                self.counter_readback_receiver = None;
             }
-        });
-
-        // Poll until mapped
-        while !mapped.load(Ordering::SeqCst) {
-            let _ = device.poll(wgpu::PollType::Poll);
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.counter_readback_receiver = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
-
-        // Read the count
-        {
-            let data = buffer_slice.get_mapped_range();
-            let count: &[u32] = bytemuck::cast_slice(&data);
-            self.particle_count = count[0].min(self.max_particles);
-        }
-
-        // Unmap
-        self.counter_staging_buffer.unmap();
     }
 
     /// Set particle count directly (for async readback)

@@ -83,8 +83,9 @@ struct ShadowFieldParams {
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
-@group(1) @binding(1) var<storage, read> light_field: array<f32>;
-@group(1) @binding(2) var<storage, read> light_color_field: array<vec4<f32>>;
+@group(1) @binding(1) var light_field_tex: texture_3d<f32>;
+@group(1) @binding(2) var light_color_field_tex: texture_3d<f32>;
+@group(1) @binding(3) var light_field_sampler: sampler;
 
 // Environment cubemap for reflections
 @group(2) @binding(0) var env_cubemap: texture_cube<f32>;
@@ -119,58 +120,29 @@ struct VertexOutput {
     @location(3) facet_normal: vec3<f32>,
 }
 
-// Sample light field at world position with trilinear interpolation
+fn world_to_light_uvw(world_pos: vec3<f32>) -> vec3<f32> {
+    let res = f32(shadow_params.grid_resolution);
+    return vec3<f32>(
+        (world_pos.x - shadow_params.grid_origin_x) / (shadow_params.cell_size * res),
+        (world_pos.y - shadow_params.grid_origin_y) / (shadow_params.cell_size * res),
+        (world_pos.z - shadow_params.grid_origin_z) / (shadow_params.cell_size * res),
+    );
+}
+
+fn light_uvw_in_bounds(uvw: vec3<f32>) -> bool {
+    return all(uvw >= vec3<f32>(0.0)) && all(uvw <= vec3<f32>(1.0));
+}
+
 fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     if (shadow_params.shadow_enabled == 0u) {
         return 1.0;
     }
-    let res = shadow_params.grid_resolution;
-    let fres = f32(res);
-
-    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
-    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size - 0.5;
-    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size - 0.5;
-
-    if (gx < -0.5 || gx >= fres - 0.5 ||
-        gy < -0.5 || gy >= fres - 0.5 ||
-        gz < -0.5 || gz >= fres - 0.5) {
+    let uvw = world_to_light_uvw(world_pos);
+    if (!light_uvw_in_bounds(uvw)) {
         return 1.0;
     }
-
-    let ix = i32(floor(gx));
-    let iy = i32(floor(gy));
-    let iz = i32(floor(gz));
-    let fx = gx - floor(gx);
-    let fy = gy - floor(gy);
-    let fz = gz - floor(gz);
-
-    let ires = i32(res);
-    let x0 = u32(clamp(ix, 0, ires - 1));
-    let x1 = u32(clamp(ix + 1, 0, ires - 1));
-    let y0 = u32(clamp(iy, 0, ires - 1));
-    let y1 = u32(clamp(iy + 1, 0, ires - 1));
-    let z0 = u32(clamp(iz, 0, ires - 1));
-    let z1 = u32(clamp(iz + 1, 0, ires - 1));
-
-    let c000 = light_field[x0 + y0 * res + z0 * res * res];
-    let c100 = light_field[x1 + y0 * res + z0 * res * res];
-    let c010 = light_field[x0 + y1 * res + z0 * res * res];
-    let c110 = light_field[x1 + y1 * res + z0 * res * res];
-    let c001 = light_field[x0 + y0 * res + z1 * res * res];
-    let c101 = light_field[x1 + y0 * res + z1 * res * res];
-    let c011 = light_field[x0 + y1 * res + z1 * res * res];
-    let c111 = light_field[x1 + y1 * res + z1 * res * res];
-
-    let c00 = mix(c000, c100, fx);
-    let c10 = mix(c010, c110, fx);
-    let c01 = mix(c001, c101, fx);
-    let c11 = mix(c011, c111, fx);
-    let c0 = mix(c00, c10, fy);
-    let c1 = mix(c01, c11, fy);
-
-    return mix(c0, c1, fz);
+    return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
-
 // Crystal facet field: world space is partitioned into irregular Voronoi
 // regions ("crystal faces"). Each region gets its own flat plane, and
 // vertices are displaced (along the smooth surface normal) onto that plane -

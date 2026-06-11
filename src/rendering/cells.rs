@@ -221,18 +221,47 @@ impl CellRenderer {
             &vec![0u8; shadow_params_size as usize],
         );
 
-        let dummy_light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Dummy Light Field Buffer"),
-            size: 4, // Minimum size for storage buffer
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
+        let dummy_light_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy Light Field Texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
         });
-
-        let dummy_light_color_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Dummy Light Color Field Buffer"),
-            size: 16, // One vec4<f32>
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
+        let dummy_light_color_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Dummy Light Color Field Texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_light_texture_view =
+            dummy_light_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_light_color_texture_view =
+            dummy_light_color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_light_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Dummy Light Field Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
         });
 
         let dummy_shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -245,11 +274,15 @@ impl CellRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: dummy_light_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&dummy_light_texture_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: dummy_light_color_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&dummy_light_color_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&dummy_light_sampler),
                 },
             ],
         });

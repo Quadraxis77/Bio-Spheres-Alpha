@@ -68,7 +68,7 @@ var<uniform> camera: CameraUniforms;
 var<uniform> fog_params: FogParams;
 
 @group(1) @binding(1)
-var<storage, read> light_field: array<f32>;
+var light_field_tex: texture_3d<f32>;
 
 @group(1) @binding(2)
 var depth_texture: texture_depth_2d;
@@ -77,10 +77,13 @@ var depth_texture: texture_depth_2d;
 var depth_sampler: sampler;
 
 @group(1) @binding(4)
-var<storage, read> light_color_field: array<vec4<f32>>;
+var light_color_field_tex: texture_3d<f32>;
 
 @group(1) @binding(5)
 var<storage, read> water_density_field: array<f32>;
+
+@group(1) @binding(6)
+var light_field_sampler: sampler;
 
 // Vertex output
 struct VertexOutput {
@@ -113,116 +116,44 @@ fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
     return (1.0 - g2) / (4.0 * 3.14159265 * denom * denom_sqrt);
 }
 
-// Raw voxel load helpers for trilinear sampling.
-fn lf_load(ix: i32, iy: i32, iz: i32) -> f32 {
-    let res = fog_params.grid_resolution;
-    let ires = i32(res);
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return 1.0;
-    }
-    return light_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
-}
-
-fn lf_color_load(ix: i32, iy: i32, iz: i32) -> vec4<f32> {
-    let res = fog_params.grid_resolution;
-    let ires = i32(res);
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
-    }
-    return light_color_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
-}
-
-// Trilinear interpolation of the light field — eliminates hard voxel boundaries.
-fn lf_trilinear(gx: f32, gy: f32, gz: f32) -> f32 {
-    let x0 = i32(floor(gx)); let x1 = x0 + 1;
-    let y0 = i32(floor(gy)); let y1 = y0 + 1;
-    let z0 = i32(floor(gz)); let z1 = z0 + 1;
-    let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
-    let v00 = mix(lf_load(x0,y0,z0), lf_load(x1,y0,z0), fx);
-    let v10 = mix(lf_load(x0,y1,z0), lf_load(x1,y1,z0), fx);
-    let v01 = mix(lf_load(x0,y0,z1), lf_load(x1,y0,z1), fx);
-    let v11 = mix(lf_load(x0,y1,z1), lf_load(x1,y1,z1), fx);
-    return mix(mix(v00,v10,fy), mix(v01,v11,fy), fz);
-}
-
-fn lf_color_trilinear(gx: f32, gy: f32, gz: f32) -> vec4<f32> {
-    let x0 = i32(floor(gx)); let x1 = x0 + 1;
-    let y0 = i32(floor(gy)); let y1 = y0 + 1;
-    let z0 = i32(floor(gz)); let z1 = z0 + 1;
-    let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
-    let c000 = lf_color_load(x0,y0,z0);
-    let c100 = lf_color_load(x1,y0,z0);
-    let c010 = lf_color_load(x0,y1,z0);
-    let c110 = lf_color_load(x1,y1,z0);
-    let c001 = lf_color_load(x0,y0,z1);
-    let c101 = lf_color_load(x1,y0,z1);
-    let c011 = lf_color_load(x0,y1,z1);
-    let c111 = lf_color_load(x1,y1,z1);
-
-    let w000 = (1.0 - fx) * (1.0 - fy) * (1.0 - fz);
-    let w100 = fx * (1.0 - fy) * (1.0 - fz);
-    let w010 = (1.0 - fx) * fy * (1.0 - fz);
-    let w110 = fx * fy * (1.0 - fz);
-    let w001 = (1.0 - fx) * (1.0 - fy) * fz;
-    let w101 = fx * (1.0 - fy) * fz;
-    let w011 = (1.0 - fx) * fy * fz;
-    let w111 = fx * fy * fz;
-
-    let local_weight =
-        c000.w * w000 + c100.w * w100 + c010.w * w010 + c110.w * w110 +
-        c001.w * w001 + c101.w * w101 + c011.w * w011 + c111.w * w111;
-    if (local_weight > 0.0001) {
-        let local_color =
-            c000.rgb * c000.w * w000 + c100.rgb * c100.w * w100 +
-            c010.rgb * c010.w * w010 + c110.rgb * c110.w * w110 +
-            c001.rgb * c001.w * w001 + c101.rgb * c101.w * w101 +
-            c011.rgb * c011.w * w011 + c111.rgb * c111.w * w111;
-        return vec4<f32>(local_color / local_weight, local_weight);
-    }
-
-    return vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
-}
-
-fn world_to_grid_pos(world_pos: vec3<f32>) -> vec3<f32> {
+fn world_to_light_uvw(world_pos: vec3<f32>) -> vec3<f32> {
+    let res = f32(fog_params.grid_resolution);
     return vec3<f32>(
-        (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size - 0.5,
-        (world_pos.y - fog_params.grid_origin_y) / fog_params.cell_size - 0.5,
-        (world_pos.z - fog_params.grid_origin_z) / fog_params.cell_size - 0.5,
+        (world_pos.x - fog_params.grid_origin_x) / (fog_params.cell_size * res),
+        (world_pos.y - fog_params.grid_origin_y) / (fog_params.cell_size * res),
+        (world_pos.z - fog_params.grid_origin_z) / (fog_params.cell_size * res),
     );
 }
 
-// Sample light field — trilinear or nearest depending on fog_params.smooth_light_field.
+fn light_uvw_in_bounds(uvw: vec3<f32>) -> bool {
+    return all(uvw >= vec3<f32>(0.0)) && all(uvw <= vec3<f32>(1.0));
+}
+
 fn sample_light_field(world_pos: vec3<f32>) -> f32 {
-    let gp = world_to_grid_pos(world_pos);
-    if (fog_params.smooth_light_field != 0u) {
-        return lf_trilinear(gp.x, gp.y, gp.z);
+    let uvw = world_to_light_uvw(world_pos);
+    if (!light_uvw_in_bounds(uvw)) {
+        return 1.0;
     }
-    let res = fog_params.grid_resolution;
-    let ires = i32(res);
-    let ix = i32(round(gp.x + 0.5)); let iy = i32(round(gp.y + 0.5)); let iz = i32(round(gp.z + 0.5));
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) { return 1.0; }
-    return light_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
+    return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
 
 // Returns full vec4: rgb = light color, w = luminocyte emitter weight (0 = sun, >0 = local emitter)
 fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
-    let gp = world_to_grid_pos(world_pos);
-    if (fog_params.smooth_light_field != 0u) {
-        return lf_color_trilinear(gp.x, gp.y, gp.z);
+    let fallback = vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
+    let uvw = world_to_light_uvw(world_pos);
+    if (!light_uvw_in_bounds(uvw)) {
+        return fallback;
     }
-    let res = fog_params.grid_resolution;
-    let ires = i32(res);
-    let ix = i32(round(gp.x + 0.5)); let iy = i32(round(gp.y + 0.5)); let iz = i32(round(gp.z + 0.5));
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
+    let sample = textureSampleLevel(light_color_field_tex, light_field_sampler, uvw, 0.0);
+    if (sample.w <= 0.0001) {
+        return fallback;
     }
-    return light_color_field[u32(ix) + u32(iy)*res + u32(iz)*res*res];
+    return sample;
 }
 
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     return sample_light_color_field_full(world_pos).rgb;
 }
-
 fn sample_water_density_fog(world_pos: vec3<f32>) -> f32 {
     let res = fog_params.grid_resolution;
     let gx = (world_pos.x - fog_params.grid_origin_x) / fog_params.cell_size;
@@ -347,7 +278,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var accumulated_color = vec3<f32>(0.0);
     var transmittance = 1.0;
     
-    // Interleaved gradient noise — lower visual frequency than white noise, smoother result.
+    // Interleaved gradient noise - lower visual frequency than white noise, smoother result.
     let px = in.position.xy;
     let dither = fract(52.9829189 * fract(dot(px, vec2<f32>(0.06711056, 0.00583715))));
     let start_offset = march_start + dither * step_size;
@@ -386,7 +317,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let effective_density = density + water_amount * 0.6;
 
         // In-scattered light: light that scatters toward camera at this point.
-        // Luminocyte-lit voxels (w > 0) use isotropic phase — their light radiates in
+        // Luminocyte-lit voxels (w > 0) use isotropic phase - their light radiates in
         // all directions, so the sun angle must not create dark "beam" shadows.
         var sample_color = vec3<f32>(0.0);
         if (light_intensity > 0.0 && fog_params.light_intensity > 0.0 && effective_density > 0.0) {
@@ -401,7 +332,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             if (water_amount > 0.01) {
                 // Inside water: scatter with a blue tint rather than suppressing the beam.
-                // Water is a participating medium — it scatters light forward but absorbs
+                // Water is a participating medium - it scatters light forward but absorbs
                 // red and green faster than blue, producing the characteristic deep-water color.
                 // light_color_field already carries ray-march tint; this adds per-voxel scattering tint.
                 let r_abs = water_amount * 2.2;

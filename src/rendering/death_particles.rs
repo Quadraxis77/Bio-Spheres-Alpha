@@ -23,6 +23,8 @@
 //!   by the GPU last frame (one-frame latency via a staging buffer readback that
 //!   completes asynchronously).
 
+use std::sync::mpsc::Receiver;
+
 use bytemuck::{Pod, Zeroable};
 
 /// Death particle instance data.
@@ -69,6 +71,7 @@ pub struct DeathParticleRenderer {
     pub particle_buffer: wgpu::Buffer,
     pub counter_buffer: wgpu::Buffer,
     counter_staging_buffer: wgpu::Buffer,
+    counter_readback_receiver: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
     /// Snapshot of death_flags from the previous frame.
     pub prev_death_flags_buffer: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
@@ -380,6 +383,7 @@ impl DeathParticleRenderer {
             particle_buffer,
             counter_buffer,
             counter_staging_buffer,
+            counter_readback_receiver: None,
             prev_death_flags_buffer,
             params_buffer,
             camera_bind_group_layout,
@@ -511,44 +515,61 @@ impl DeathParticleRenderer {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        // Copy counter to staging for async readback (one-frame latency is fine)
-        encoder.copy_buffer_to_buffer(
-            &self.counter_buffer,
-            0,
-            &self.counter_staging_buffer,
-            0,
-            std::mem::size_of::<ParticleCounter>() as u64,
-        );
+        // Copy counter only when the previous staging readback has completed.
+        if self.counter_readback_receiver.is_none() {
+            encoder.copy_buffer_to_buffer(
+                &self.counter_buffer,
+                0,
+                &self.counter_staging_buffer,
+                0,
+                std::mem::size_of::<ParticleCounter>() as u64,
+            );
+        }
     }
 
     /// Poll the staging buffer for the particle count written last frame.
     /// Call this after `queue.submit()`.
     pub fn poll_particle_count(&mut self, device: &wgpu::Device) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
+        use std::sync::mpsc::channel;
 
-        let buffer_slice = self.counter_staging_buffer.slice(..);
-        let mapped = Arc::new(AtomicBool::new(false));
-        let mapped_clone = mapped.clone();
+        if self.counter_readback_receiver.is_none() {
+            let (sender, receiver) = channel();
+            self.counter_staging_buffer
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = sender.send(result);
+                });
+            self.counter_readback_receiver = Some(receiver);
+        }
 
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            if result.is_ok() {
-                mapped_clone.store(true, Ordering::SeqCst);
+        let _ = device.poll(wgpu::PollType::Poll);
+
+        let Some(receiver) = self.counter_readback_receiver.as_ref() else {
+            return;
+        };
+
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                {
+                    let buffer_slice = self.counter_staging_buffer.slice(..);
+                    let data = buffer_slice.get_mapped_range();
+                    let count: &[u32] = bytemuck::cast_slice(&data);
+                    // Counter is monotonically increasing; clamp to ring buffer size.
+                    self.particle_count = count[0].min(self.max_particles);
+                }
+
+                self.counter_staging_buffer.unmap();
+                self.counter_readback_receiver = None;
             }
-        });
-
-        while !mapped.load(Ordering::SeqCst) {
-            let _ = device.poll(wgpu::PollType::Poll);
+            Ok(Err(err)) => {
+                log::warn!("Death particle counter readback failed: {err:?}");
+                self.counter_readback_receiver = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.counter_readback_receiver = None;
+            }
         }
-
-        {
-            let data = buffer_slice.get_mapped_range();
-            let count: &[u32] = bytemuck::cast_slice(&data);
-            // Counter is monotonically increasing; clamp to ring buffer size
-            self.particle_count = count[0].min(self.max_particles);
-        }
-
-        self.counter_staging_buffer.unmap();
     }
 
     /// Render death particles.

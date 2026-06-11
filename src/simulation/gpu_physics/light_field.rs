@@ -122,6 +122,12 @@ pub struct LightFieldSystem {
     // Buffers
     light_field_buffer: wgpu::Buffer,
     light_color_field_buffer: wgpu::Buffer,
+    _light_field_texture: wgpu::Texture,
+    _light_color_field_texture: wgpu::Texture,
+    light_field_texture_view: wgpu::TextureView,
+    light_color_field_texture_view: wgpu::TextureView,
+    light_sampler: wgpu::Sampler,
+    nearest_light_sampler: wgpu::Sampler,
     cell_occupancy_buffer: wgpu::Buffer,
     light_field_params_buffer: wgpu::Buffer,
     occupancy_params_buffer: wgpu::Buffer,
@@ -143,16 +149,19 @@ pub struct LightFieldSystem {
     clear_occupancy_pipeline: wgpu::ComputePipeline,
     build_occupancy_pipeline: wgpu::ComputePipeline,
     compute_light_pipeline: wgpu::ComputePipeline,
+    pack_light_pipeline: wgpu::ComputePipeline,
     photocyte_light_pipeline: wgpu::ComputePipeline,
     sense_luminocyte_pipeline: wgpu::ComputePipeline,
 
     // Bind group layouts
     light_field_layout: wgpu::BindGroupLayout,
+    light_field_pack_layout: wgpu::BindGroupLayout,
     occupancy_layout: wgpu::BindGroupLayout,
     photocyte_physics_layout: wgpu::BindGroupLayout,
     photocyte_system_layout: wgpu::BindGroupLayout,
     sense_system_layout: wgpu::BindGroupLayout,
     shadow_bind_group_layout: wgpu::BindGroupLayout,
+    light_field_pack_bind_group: wgpu::BindGroup,
 
     // Configurable parameters
     light_dir: [f32; 3],
@@ -224,6 +233,56 @@ impl LightFieldSystem {
             size: (TOTAL_VOXELS * std::mem::size_of::<[f32; 4]>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+
+        let light_texture_size = wgpu::Extent3d {
+            width: GRID_RESOLUTION,
+            height: GRID_RESOLUTION,
+            depth_or_array_layers: GRID_RESOLUTION,
+        };
+        let light_field_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Light Field 3D Texture"),
+            size: light_texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let light_color_field_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Light Color Field 3D Texture"),
+            size: light_texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let light_field_texture_view =
+            light_field_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let light_color_field_texture_view =
+            light_color_field_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let light_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Light Field Linear Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let nearest_light_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Light Field Nearest Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
         });
 
         let glow_flags_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -407,6 +466,96 @@ impl LightFieldSystem {
                 compilation_options: Default::default(),
                 cache: None,
             });
+
+        let light_field_pack_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Light Field Pack Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/light_field_pack.wgsl").into(),
+            ),
+        });
+        let light_field_pack_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Light Field Pack Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let light_field_pack_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Light Field Pack Pipeline Layout"),
+                bind_group_layouts: &[&light_field_pack_layout],
+                push_constant_ranges: &[],
+            });
+        let pack_light_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Pack Light Field Textures Pipeline"),
+                layout: Some(&light_field_pack_pipeline_layout),
+                module: &light_field_pack_shader,
+                entry_point: Some("pack_light_field"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let light_field_pack_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Light Field Pack Bind Group"),
+            layout: &light_field_pack_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_color_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&light_field_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&light_color_field_texture_view),
+                },
+            ],
+        });
 
         // === Cell occupancy pipelines ===
         // Occupancy bind group layout (group 0 for clear_occupancy and build_cell_occupancy)
@@ -829,26 +978,33 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 1: light_field (read-only storage)
+                    // Binding 1: light_field 3D texture
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
                         },
                         count: None,
                     },
-                    // Binding 2: light_color_field (read-only storage)
+                    // Binding 2: light_color_field 3D texture
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
                         },
+                        count: None,
+                    },
+                    // Binding 3: light field sampler
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
@@ -903,31 +1059,38 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 1: light_field (read-only storage)
+                    // Binding 1: light_field 3D texture
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
                         },
                         count: None,
                     },
-                    // Binding 2: light_color_field (read-only storage)
+                    // Binding 2: light_color_field 3D texture
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            multisampled: false,
                         },
                         count: None,
                     },
-                    // Binding 3: water_bitfield (read-only storage)
+                    // Binding 3: light field sampler
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Binding 4: water_bitfield (read-only storage)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -936,9 +1099,9 @@ impl LightFieldSystem {
                         },
                         count: None,
                     },
-                    // Binding 4: moss_density (read-only storage)
+                    // Binding 5: moss_density (read-only storage)
                     wgpu::BindGroupLayoutEntry {
-                        binding: 4,
+                        binding: 5,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -953,6 +1116,12 @@ impl LightFieldSystem {
         Self {
             light_field_buffer,
             light_color_field_buffer,
+            _light_field_texture: light_field_texture,
+            _light_color_field_texture: light_color_field_texture,
+            light_field_texture_view,
+            light_color_field_texture_view,
+            light_sampler,
+            nearest_light_sampler,
             glow_flags_buffer,
             cell_occupancy_buffer,
             light_field_params_buffer,
@@ -965,14 +1134,17 @@ impl LightFieldSystem {
             clear_occupancy_pipeline,
             build_occupancy_pipeline,
             compute_light_pipeline,
+            pack_light_pipeline,
             photocyte_light_pipeline,
             sense_luminocyte_pipeline,
             light_field_layout,
+            light_field_pack_layout,
             occupancy_layout,
             photocyte_physics_layout,
             photocyte_system_layout,
             sense_system_layout,
             shadow_bind_group_layout,
+            light_field_pack_bind_group,
             light_dir,
             max_steps: 128,
             step_size: 2.0,
@@ -1024,6 +1196,22 @@ impl LightFieldSystem {
         &self.light_color_field_buffer
     }
 
+    pub fn light_field_texture_view(&self) -> &wgpu::TextureView {
+        &self.light_field_texture_view
+    }
+
+    pub fn light_color_field_texture_view(&self) -> &wgpu::TextureView {
+        &self.light_color_field_texture_view
+    }
+
+    pub fn light_sampler(&self) -> &wgpu::Sampler {
+        &self.light_sampler
+    }
+
+    pub fn nearest_light_sampler(&self) -> &wgpu::Sampler {
+        &self.nearest_light_sampler
+    }
+
     /// Get the cell occupancy buffer
     pub fn cell_occupancy_buffer(&self) -> &wgpu::Buffer {
         &self.cell_occupancy_buffer
@@ -1042,6 +1230,45 @@ impl LightFieldSystem {
     /// Get a reference to the compute light field pipeline
     pub fn compute_light_pipeline_ref(&self) -> &wgpu::ComputePipeline {
         &self.compute_light_pipeline
+    }
+
+    pub fn pack_light_pipeline_ref(&self) -> &wgpu::ComputePipeline {
+        &self.pack_light_pipeline
+    }
+
+    pub fn light_field_pack_bind_group(&self) -> &wgpu::BindGroup {
+        &self.light_field_pack_bind_group
+    }
+
+    pub fn light_field_pack_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.light_field_pack_layout
+    }
+
+    pub fn create_pack_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Light Field Pack Bind Group"),
+            layout: &self.light_field_pack_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.light_color_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.light_field_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.light_color_field_texture_view,
+                    ),
+                },
+            ],
+        })
     }
 
     /// Get a reference to the photocyte light pipeline
@@ -1260,11 +1487,17 @@ impl LightFieldSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: self.light_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&self.light_field_texture_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.light_color_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.light_color_field_texture_view,
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.light_sampler),
                 },
             ],
         })
@@ -1287,18 +1520,24 @@ impl LightFieldSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: self.light_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&self.light_field_texture_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.light_color_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.light_color_field_texture_view,
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: water_density_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Sampler(&self.light_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
+                    resource: water_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: moss_density_buffer.as_entire_binding(),
                 },
             ],

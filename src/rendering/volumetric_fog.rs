@@ -150,14 +150,14 @@ impl VolumetricFogRenderer {
                     },
                     count: None,
                 },
-                // Binding 1: light_field storage (also encodes solid as 0.0)
+                // Binding 1: light_field texture (also encodes solid as 0.0)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -179,14 +179,14 @@ impl VolumetricFogRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
-                // Binding 4: light_color_field storage
+                // Binding 4: light_color_field texture
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -199,6 +199,13 @@ impl VolumetricFogRenderer {
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
+                    count: None,
+                },
+                // Binding 6: light field sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -531,8 +538,9 @@ impl VolumetricFogRenderer {
     fn create_fog_data_bind_group(
         &self,
         device: &wgpu::Device,
-        light_field_buffer: &wgpu::Buffer,
-        light_color_field_buffer: &wgpu::Buffer,
+        light_field_view: &wgpu::TextureView,
+        light_color_field_view: &wgpu::TextureView,
+        light_sampler: &wgpu::Sampler,
         depth_view: &wgpu::TextureView,
         water_density_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -546,7 +554,7 @@ impl VolumetricFogRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: light_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(light_field_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -558,11 +566,15 @@ impl VolumetricFogRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: light_color_field_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(light_color_field_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: water_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(light_sampler),
                 },
             ],
         })
@@ -576,8 +588,9 @@ impl VolumetricFogRenderer {
         color_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         device: &wgpu::Device,
-        light_field_buffer: &wgpu::Buffer,
-        light_color_field_buffer: &wgpu::Buffer,
+        light_field_view: &wgpu::TextureView,
+        light_color_field_view: &wgpu::TextureView,
+        light_sampler: &wgpu::Sampler,
         water_density_buffer: &wgpu::Buffer,
         view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
@@ -641,8 +654,9 @@ impl VolumetricFogRenderer {
         // references are always current (no stale ghost from a previous frame).
         let fog_data_bind_group = self.create_fog_data_bind_group(
             device,
-            light_field_buffer,
-            light_color_field_buffer,
+            light_field_view,
+            light_color_field_view,
+            light_sampler,
             depth_view,
             water_density_buffer,
         );

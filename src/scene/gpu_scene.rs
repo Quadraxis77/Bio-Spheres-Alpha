@@ -2301,6 +2301,16 @@ impl GpuScene {
             pass.set_bind_group(0, light_field_bg, &[]);
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Pack Light Field Textures"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(light_field.pack_light_pipeline_ref());
+            pass.set_bind_group(0, light_field.light_field_pack_bind_group(), &[]);
+            pass.dispatch_workgroups(light_workgroups, 1, 1);
+        }
     }
 
     /// Run photocyte light consumption compute shader.
@@ -8645,8 +8655,6 @@ impl Scene for GpuScene {
                 &self.light_field_system,
                 self.volumetric_fog_renderer.is_some(),
             ) {
-                let lf_buffer = light_field.light_field_buffer();
-                let lf_color_buffer = light_field.light_color_field_buffer();
                 let lf_dir = light_field.light_dir();
                 let lf_cell_size = light_field.cell_size();
                 let lf_origin = light_field.grid_origin();
@@ -8659,14 +8667,25 @@ impl Scene for GpuScene {
                 let depth_view = &self.renderer.depth_view;
                 let cam_pos = self.camera.position();
                 let time = self.current_time;
+                let light_sampler = if self
+                    .volumetric_fog_renderer
+                    .as_ref()
+                    .map(|fog| fog.smooth_light_field)
+                    .unwrap_or(true)
+                {
+                    light_field.light_sampler()
+                } else {
+                    light_field.nearest_light_sampler()
+                };
                 self.volumetric_fog_renderer.as_mut().unwrap().render(
                     &mut encoder,
                     queue,
                     scene_target,
                     depth_view,
                     device,
-                    lf_buffer,
-                    lf_color_buffer,
+                    light_field.light_field_texture_view(),
+                    light_field.light_color_field_texture_view(),
+                    light_sampler,
                     water_density_buf,
                     view_proj,
                     cam_pos,

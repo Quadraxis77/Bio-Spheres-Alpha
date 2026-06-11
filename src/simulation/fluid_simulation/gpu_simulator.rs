@@ -1494,9 +1494,11 @@ impl GpuFluidSimulator {
         const CLIMATE_TICK_INTERVAL: u32 = 4;
         let climate_tick = self.climate_tick_counter.get().wrapping_add(1);
         self.climate_tick_counter.set(climate_tick);
-        let run_climate = climate_tick % CLIMATE_TICK_INTERVAL == 0;
+        let climate_phase = climate_tick % CLIMATE_TICK_INTERVAL;
+        let run_temperature = climate_phase == 0;
+        let run_vapor_fog = climate_phase == CLIMATE_TICK_INTERVAL / 2;
 
-        if run_climate {
+        if run_temperature {
             // Thermal pass: conduction over the temperature field + solar
             // forcing. Runs as its own pass so it never contends with the
             // swap CAS loops below. The stats accumulator is cleared
@@ -1525,7 +1527,9 @@ impl GpuFluidSimulator {
                 );
                 self.temp_stats_copy_pending.set(true);
             }
+        }
 
+        if run_vapor_fog {
             // Vapor fog pass: derives the fog density field from the steam
             // present in the scene (steam saturates, fog diffuses and
             // decays). Carries no moisture mass, but it is climate-active:

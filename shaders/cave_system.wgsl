@@ -129,118 +129,51 @@ struct ShadowFieldParams {
 }
 
 @group(2) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
-@group(2) @binding(1) var<storage, read> light_field: array<f32>;
-@group(2) @binding(2) var<storage, read> light_color_field: array<vec4<f32>>;
-@group(2) @binding(3) var<storage, read> water_density: array<f32>;
-@group(2) @binding(4) var<storage, read> moss_density: array<f32>;
+@group(2) @binding(1) var light_field_tex: texture_3d<f32>;
+@group(2) @binding(2) var light_color_field_tex: texture_3d<f32>;
+@group(2) @binding(3) var light_field_sampler: sampler;
+@group(2) @binding(4) var<storage, read> water_density: array<f32>;
+@group(2) @binding(5) var<storage, read> moss_density: array<f32>;
 
-// Sample light field at world position - always trilinear.
+fn world_to_light_uvw(world_pos: vec3<f32>) -> vec3<f32> {
+    let res = f32(shadow_params.grid_resolution);
+    return vec3<f32>(
+        (world_pos.x - shadow_params.grid_origin_x) / (shadow_params.cell_size * res),
+        (world_pos.y - shadow_params.grid_origin_y) / (shadow_params.cell_size * res),
+        (world_pos.z - shadow_params.grid_origin_z) / (shadow_params.cell_size * res),
+    );
+}
+
+fn light_uvw_in_bounds(uvw: vec3<f32>) -> bool {
+    return all(uvw >= vec3<f32>(0.0)) && all(uvw <= vec3<f32>(1.0));
+}
+
 fn sample_light_field_lod(world_pos: vec3<f32>) -> f32 {
     if (shadow_params.shadow_enabled == 0u) {
         return 1.0;
     }
-    let res = shadow_params.grid_resolution;
-    let fres = f32(res);
-
-    let gx = (world_pos.x - shadow_params.grid_origin_x) / shadow_params.cell_size - 0.5;
-    let gy = (world_pos.y - shadow_params.grid_origin_y) / shadow_params.cell_size - 0.5;
-    let gz = (world_pos.z - shadow_params.grid_origin_z) / shadow_params.cell_size - 0.5;
-
-    if (gx < -0.5 || gx >= fres - 0.5 ||
-        gy < -0.5 || gy >= fres - 0.5 ||
-        gz < -0.5 || gz >= fres - 0.5) {
+    let uvw = world_to_light_uvw(world_pos);
+    if (!light_uvw_in_bounds(uvw)) {
         return 1.0;
     }
-
-    let ires = i32(res);
-    let ix = i32(floor(gx));
-    let iy = i32(floor(gy));
-    let iz = i32(floor(gz));
-    let fx = gx - floor(gx);
-    let fy = gy - floor(gy);
-    let fz = gz - floor(gz);
-
-    let x0 = u32(clamp(ix, 0, ires - 1));
-    let x1 = u32(clamp(ix + 1, 0, ires - 1));
-    let y0 = u32(clamp(iy, 0, ires - 1));
-    let y1 = u32(clamp(iy + 1, 0, ires - 1));
-    let z0 = u32(clamp(iz, 0, ires - 1));
-    let z1 = u32(clamp(iz + 1, 0, ires - 1));
-
-    let c000 = light_field[x0 + y0 * res + z0 * res * res];
-    let c100 = light_field[x1 + y0 * res + z0 * res * res];
-    let c010 = light_field[x0 + y1 * res + z0 * res * res];
-    let c110 = light_field[x1 + y1 * res + z0 * res * res];
-    let c001 = light_field[x0 + y0 * res + z1 * res * res];
-    let c101 = light_field[x1 + y0 * res + z1 * res * res];
-    let c011 = light_field[x0 + y1 * res + z1 * res * res];
-    let c111 = light_field[x1 + y1 * res + z1 * res * res];
-
-    let c00 = mix(c000, c100, fx);
-    let c10 = mix(c010, c110, fx);
-    let c01 = mix(c001, c101, fx);
-    let c11 = mix(c011, c111, fx);
-    let c0  = mix(c00, c10, fy);
-    let c1  = mix(c01, c11, fy);
-    return mix(c0, c1, fz);
-}
-
-fn light_color_load(ix: i32, iy: i32, iz: i32) -> vec4<f32> {
-    let res = shadow_params.grid_resolution;
-    let ires = i32(res);
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return vec4<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b, 0.0);
-    }
-    return light_color_field[u32(ix) + u32(iy) * res + u32(iz) * res * res];
+    return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
 
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
+    let fallback = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     if (shadow_params.shadow_enabled == 0u) {
-        return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+        return fallback;
     }
-    let grid_origin = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
-    let gx = (world_pos.x - grid_origin.x) / shadow_params.cell_size - 0.5;
-    let gy = (world_pos.y - grid_origin.y) / shadow_params.cell_size - 0.5;
-    let gz = (world_pos.z - grid_origin.z) / shadow_params.cell_size - 0.5;
-
-    let x0 = i32(floor(gx)); let x1 = x0 + 1;
-    let y0 = i32(floor(gy)); let y1 = y0 + 1;
-    let z0 = i32(floor(gz)); let z1 = z0 + 1;
-    let fx = fract(gx); let fy = fract(gy); let fz = fract(gz);
-
-    let c000 = light_color_load(x0,y0,z0);
-    let c100 = light_color_load(x1,y0,z0);
-    let c010 = light_color_load(x0,y1,z0);
-    let c110 = light_color_load(x1,y1,z0);
-    let c001 = light_color_load(x0,y0,z1);
-    let c101 = light_color_load(x1,y0,z1);
-    let c011 = light_color_load(x0,y1,z1);
-    let c111 = light_color_load(x1,y1,z1);
-
-    let w000 = (1.0 - fx) * (1.0 - fy) * (1.0 - fz);
-    let w100 = fx * (1.0 - fy) * (1.0 - fz);
-    let w010 = (1.0 - fx) * fy * (1.0 - fz);
-    let w110 = fx * fy * (1.0 - fz);
-    let w001 = (1.0 - fx) * (1.0 - fy) * fz;
-    let w101 = fx * (1.0 - fy) * fz;
-    let w011 = (1.0 - fx) * fy * fz;
-    let w111 = fx * fy * fz;
-
-    let local_weight =
-        c000.w * w000 + c100.w * w100 + c010.w * w010 + c110.w * w110 +
-        c001.w * w001 + c101.w * w101 + c011.w * w011 + c111.w * w111;
-    if (local_weight > 0.0001) {
-        let local_color =
-            c000.rgb * c000.w * w000 + c100.rgb * c100.w * w100 +
-            c010.rgb * c010.w * w010 + c110.rgb * c110.w * w110 +
-            c001.rgb * c001.w * w001 + c101.rgb * c101.w * w101 +
-            c011.rgb * c011.w * w011 + c111.rgb * c111.w * w111;
-        return local_color / local_weight;
+    let uvw = world_to_light_uvw(world_pos);
+    if (!light_uvw_in_bounds(uvw)) {
+        return fallback;
     }
-
-    return vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    let sample = textureSampleLevel(light_color_field_tex, light_field_sampler, uvw, 0.0);
+    if (sample.w <= 0.0001) {
+        return fallback;
+    }
+    return sample.rgb;
 }
-
 @vertex
 fn vs_main(vertex: VertexInput) -> VertexOutput {
     var out: VertexOutput;
