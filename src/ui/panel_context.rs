@@ -198,6 +198,8 @@ pub struct GenomeEditorState {
     pub cave_resolution: u32,
     pub geothermal_enabled: bool,
     pub geothermal_count: u32,
+    pub geothermal_placement_mode: u32,
+    pub geothermal_lower_hemisphere: bool,
     pub geothermal_length: f32,
     pub geothermal_width: f32,
     pub geothermal_depth: f32,
@@ -703,6 +705,8 @@ impl GenomeEditorState {
             cave_resolution,
             geothermal_enabled,
             geothermal_count,
+            geothermal_placement_mode,
+            geothermal_lower_hemisphere,
             geothermal_length,
             geothermal_width,
             geothermal_depth,
@@ -890,6 +894,8 @@ impl GenomeEditorState {
             cave_resolution,
             geothermal_enabled,
             geothermal_count,
+            geothermal_placement_mode,
+            geothermal_lower_hemisphere,
             geothermal_length,
             geothermal_width,
             geothermal_depth,
@@ -1124,6 +1130,8 @@ impl GenomeEditorState {
             self.cave_resolution,
             self.geothermal_enabled,
             self.geothermal_count,
+            self.geothermal_placement_mode,
+            self.geothermal_lower_hemisphere,
             self.geothermal_length,
             self.geothermal_width,
             self.geothermal_depth,
@@ -1198,6 +1206,8 @@ impl GenomeEditorState {
         resolution: u32,
         geothermal_enabled: bool,
         geothermal_count: u32,
+        geothermal_placement_mode: u32,
+        geothermal_lower_hemisphere: bool,
         geothermal_length: f32,
         geothermal_width: f32,
         geothermal_depth: f32,
@@ -1251,6 +1261,8 @@ impl GenomeEditorState {
             resolution: u32,
             geothermal_enabled: bool,
             geothermal_count: u32,
+            geothermal_placement_mode: u32,
+            geothermal_lower_hemisphere: bool,
             geothermal_length: f32,
             geothermal_width: f32,
             geothermal_depth: f32,
@@ -1304,6 +1316,8 @@ impl GenomeEditorState {
             resolution,
             geothermal_enabled,
             geothermal_count,
+            geothermal_placement_mode,
+            geothermal_lower_hemisphere,
             geothermal_length,
             geothermal_width,
             geothermal_depth,
@@ -1410,6 +1424,8 @@ impl GenomeEditorState {
         u32,
         bool,
         u32,
+        u32,
+        bool,
         f32,
         f32,
         f32,
@@ -1466,6 +1482,10 @@ impl GenomeEditorState {
             geothermal_enabled: bool,
             #[serde(default = "default_geothermal_count")]
             geothermal_count: u32,
+            #[serde(default = "default_geothermal_placement_mode")]
+            geothermal_placement_mode: u32,
+            #[serde(default = "default_geothermal_lower_hemisphere")]
+            geothermal_lower_hemisphere: bool,
             #[serde(default = "default_geothermal_length")]
             geothermal_length: f32,
             #[serde(default = "default_geothermal_width")]
@@ -1556,6 +1576,12 @@ impl GenomeEditorState {
         }
         fn default_geothermal_count() -> u32 {
             10
+        }
+        fn default_geothermal_placement_mode() -> u32 {
+            0
+        }
+        fn default_geothermal_lower_hemisphere() -> bool {
+            false
         }
         fn default_geothermal_length() -> f32 {
             9.0
@@ -1695,6 +1721,8 @@ impl GenomeEditorState {
                             settings.resolution,
                             settings.geothermal_enabled,
                             settings.geothermal_count,
+                            settings.geothermal_placement_mode,
+                            settings.geothermal_lower_hemisphere,
                             settings.geothermal_length,
                             settings.geothermal_width,
                             settings.geothermal_depth,
@@ -1759,6 +1787,8 @@ impl GenomeEditorState {
             128u32,
             true,
             10u32,
+            0u32,
+            false,
             9.0,
             2.0,
             5.0,

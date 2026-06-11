@@ -3596,6 +3596,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut resolution = params.grid_resolution as i32;
             let mut geothermal_enabled = params.geothermal_enabled != 0;
             let mut geothermal_count = params.geothermal_count as i32;
+            let mut geothermal_placement_mode = params.geothermal_placement_mode;
+            let mut geothermal_lower_hemisphere = params.geothermal_lower_hemisphere != 0;
             let mut geothermal_length = params.geothermal_length;
             let mut geothermal_width = params.geothermal_width;
             let mut geothermal_depth = params.geothermal_depth;
@@ -3695,8 +3697,36 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             if geothermal_enabled {
                 ui.add_space(4.0);
+                ui.label("Placement:")
+                    .on_hover_text("Choose whether smoke stacks grow from the world sphere boundary or from interior cave wall voxels");
+                egui::ComboBox::from_id_salt("geothermal_placement_mode")
+                    .selected_text(match geothermal_placement_mode {
+                        1 => "Cave Walls",
+                        _ => "World Boundary",
+                    })
+                    .show_ui(ui, |ui| {
+                        params_changed |= ui
+                            .selectable_value(
+                                &mut geothermal_placement_mode,
+                                0,
+                                "World Boundary",
+                            )
+                            .changed();
+                        params_changed |= ui
+                            .selectable_value(&mut geothermal_placement_mode, 1, "Cave Walls")
+                            .changed();
+                    });
+
+                params_changed |= ui
+                    .checkbox(&mut geothermal_lower_hemisphere, "Lower Hemisphere Only")
+                    .on_hover_text(
+                        "Restrict placement to the lower half according to the active directional gravity axis. Radial gravity ignores this filter",
+                    )
+                    .changed();
+
+                ui.add_space(4.0);
                 ui.label("Frequency:")
-                    .on_hover_text("Target number of smoke stacks to place on open sections of the world sphere boundary");
+                    .on_hover_text("Target number of smoke stacks to place on eligible boundary or cave wall voxels");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_count, 0..=64))
                     .changed();
@@ -3800,6 +3830,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.cave_resolution = resolution as u32;
                 context.editor_state.geothermal_enabled = geothermal_enabled;
                 context.editor_state.geothermal_count = geothermal_count.max(0) as u32;
+                context.editor_state.geothermal_placement_mode = geothermal_placement_mode.min(1);
+                context.editor_state.geothermal_lower_hemisphere = geothermal_lower_hemisphere;
                 context.editor_state.geothermal_length = geothermal_length;
                 context.editor_state.geothermal_width = geothermal_width;
                 context.editor_state.geothermal_depth = geothermal_depth;

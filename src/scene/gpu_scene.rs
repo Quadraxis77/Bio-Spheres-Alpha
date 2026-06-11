@@ -7197,6 +7197,10 @@ impl GpuScene {
             params.grid_resolution = editor_state.cave_resolution;
             params.geothermal_enabled = u32::from(editor_state.geothermal_enabled);
             params.geothermal_count = editor_state.geothermal_count;
+            params.geothermal_placement_mode = editor_state.geothermal_placement_mode.min(1);
+            params.geothermal_lower_hemisphere = u32::from(editor_state.geothermal_lower_hemisphere);
+            params.geothermal_gravity_mode = self.gravity_mode;
+            params.geothermal_gravity = self.gravity;
             params.geothermal_length = editor_state.geothermal_length;
             params.geothermal_width = editor_state.geothermal_width;
             params.geothermal_depth = editor_state.geothermal_depth;

@@ -62,6 +62,14 @@ pub struct CaveParams {
     /// them.
     pub geothermal_enabled: u32,
     pub geothermal_count: u32,
+    /// 0 = world sphere boundary, 1 = interior cave wall voxels.
+    pub geothermal_placement_mode: u32,
+    /// Restrict placement to the lower half along directional gravity axes.
+    pub geothermal_lower_hemisphere: u32,
+    /// Scene gravity axis used by the lower-hemisphere filter: 0=X, 1=Y, 2=Z, 3=radial.
+    pub geothermal_gravity_mode: u32,
+    /// Scene gravity sign/magnitude; positive axis gravity pulls toward -axis.
+    pub geothermal_gravity: f32,
     pub geothermal_length: f32,
     pub geothermal_width: f32,
     pub geothermal_depth: f32,
@@ -73,7 +81,7 @@ pub struct CaveParams {
     pub geothermal_glow_radius: f32,
     pub geothermal_glow_color: [f32; 3],
 
-    _padding: [f32; 174],
+    _padding: [f32; 170],
 }
 
 impl Default for CaveParams {
@@ -96,6 +104,10 @@ impl Default for CaveParams {
             substeps: 3,
             geothermal_enabled: 1,
             geothermal_count: 10,
+            geothermal_placement_mode: 0,
+            geothermal_lower_hemisphere: 0,
+            geothermal_gravity_mode: 1,
+            geothermal_gravity: 1.0,
             geothermal_length: 9.0,
             geothermal_width: 2.0,
             geothermal_depth: 5.0,
@@ -106,7 +118,7 @@ impl Default for CaveParams {
             geothermal_glow_strength: 2.8,
             geothermal_glow_radius: 10.0,
             geothermal_glow_color: [1.0, 0.32, 0.055],
-            _padding: [0.0; 174],
+            _padding: [0.0; 170],
         }
     }
 }

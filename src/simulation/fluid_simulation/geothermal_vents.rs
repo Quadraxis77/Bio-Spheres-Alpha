@@ -2,11 +2,17 @@ use crate::rendering::cave_system::CaveParams;
 use glam::{IVec3, Vec3};
 
 #[derive(Clone, Copy, Debug)]
-struct VentSpec {
+pub(crate) struct VentSpec {
     surface: IVec3,
+    /// Cardinal direction toward the open neighbor cell. Used to mold the
+    /// base flush with the wall along a precise grid axis.
     normal: IVec3,
     tangent: IVec3,
     bitangent: IVec3,
+    /// Direction the stack grows from base to opening, following the local
+    /// average surface normal rather than snapping to a grid axis.
+    axis: Vec3,
+    placement_mode: u32,
     length: i32,
     width: i32,
     depth: i32,
@@ -87,7 +93,131 @@ fn choose_tangent(normal: IVec3, p: IVec3, seed: u32) -> IVec3 {
     }
 }
 
-fn generate_specs(solid: &[bool], res: usize, params: &CaveParams, seed: u32) -> Vec<VentSpec> {
+/// Estimates the local outward surface direction at a solid voxel by
+/// averaging (inverse-distance weighted) directions toward nearby non-solid
+/// voxels. Returns `None` if no open voxels are found in the search radius.
+fn local_outward_axis(solid: &[bool], p: IVec3, res: usize, radius: i32) -> Option<Vec3> {
+    let mut sum = Vec3::ZERO;
+    for dz in -radius..=radius {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx == 0 && dy == 0 && dz == 0 {
+                    continue;
+                }
+                let q = p + IVec3::new(dx, dy, dz);
+                if !in_bounds(q, res as i32) || solid[idx(q, res)] {
+                    continue;
+                }
+                let dir = Vec3::new(dx as f32, dy as f32, dz as f32);
+                let dist_sq = dir.length_squared();
+                sum += dir / dist_sq;
+            }
+        }
+    }
+    sum.try_normalize()
+}
+
+/// Walks outward from `origin` along `axis`, looking for the solid/open
+/// boundary closest to `origin`. Returns the signed offset (in voxels) that
+/// should be added along `axis` so the base sits flush on the surface
+/// instead of floating above it (overhang) or burying into it.
+fn surface_shift(solid: &[bool], origin: Vec3, axis: Vec3, res: usize, max_search: i32) -> f32 {
+    for d in -max_search..=max_search {
+        let cur = round_vec3(origin + axis * d as f32);
+        let next = round_vec3(origin + axis * (d + 1) as f32);
+        let cur_solid = in_bounds(cur, res as i32) && solid[idx(cur, res)];
+        let next_solid = in_bounds(next, res as i32) && solid[idx(next, res)];
+        if cur_solid && !next_solid {
+            return d as f32;
+        }
+    }
+    0.0
+}
+
+/// Checks that the voxels ahead of `origin` along `axis` are open for at
+/// least `min_clear` steps, so the vent opening doesn't exhale straight into
+/// more rock.
+fn has_clear_opening(solid: &[bool], origin: IVec3, axis: Vec3, res: usize, min_clear: i32) -> bool {
+    let origin_f = Vec3::new(origin.x as f32, origin.y as f32, origin.z as f32);
+    for d in 1..=min_clear {
+        let q = round_vec3(origin_f + axis * d as f32);
+        if !in_bounds(q, res as i32) || solid[idx(q, res)] {
+            return false;
+        }
+    }
+    true
+}
+
+/// Checks that the wall stays solid and the surface direction stays
+/// consistent across the footprint area, so the base isn't molded onto a
+/// sharp edge or corner where the wall geometry breaks down.
+fn is_locally_flat(
+    solid: &[bool],
+    p: IVec3,
+    axis: Vec3,
+    tangent: IVec3,
+    bitangent: IVec3,
+    radius: i32,
+    res: usize,
+) -> bool {
+    const MIN_DOT: f32 = 0.6;
+    for &(ta, bb) in &[(radius, 0), (-radius, 0), (0, radius), (0, -radius)] {
+        let q = p + tangent * ta + bitangent * bb;
+        if !is_solid(solid, q, res) {
+            return false;
+        }
+        match local_outward_axis(solid, q, res, 2) {
+            Some(local_axis) if local_axis.dot(axis) >= MIN_DOT => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn gravity_down_dir(params: &CaveParams) -> Option<Vec3> {
+    if params.geothermal_gravity_mode == 3 {
+        return None;
+    }
+
+    let sign = if params.geothermal_gravity < 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+
+    Some(match params.geothermal_gravity_mode {
+        0 => Vec3::X * sign,
+        2 => Vec3::Z * sign,
+        _ => Vec3::Y * sign,
+    })
+}
+
+fn passes_lower_hemisphere(p: IVec3, res: usize, params: &CaveParams) -> bool {
+    if params.geothermal_lower_hemisphere == 0 {
+        return true;
+    }
+
+    let Some(down) = gravity_down_dir(params) else {
+        return true;
+    };
+
+    let center = Vec3::splat(res as f32 * 0.5);
+    let pf = Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+    (pf - center).dot(down) >= 0.0
+}
+
+/// Generates vent placement specs against the given solid/empty grid. Both
+/// the geothermal heat/glow fields and the cave mesh's stack geometry must
+/// call this against the *same* `solid`/`res` grid (the canonical
+/// resolution^3/world_radius grid from [`SolidMaskGenerator::build_solid_array`])
+/// so they agree on placement -- otherwise glow can appear with no matching
+/// stack geometry, or vice versa.
+pub(crate) fn generate_specs(
+    solid: &[bool],
+    res: usize,
+    params: &CaveParams,
+    seed: u32,
+) -> Vec<VentSpec> {
     if params.geothermal_enabled == 0 || params.geothermal_count == 0 {
         return Vec::new();
     }
@@ -95,6 +225,23 @@ fn generate_specs(solid: &[bool], res: usize, params: &CaveParams, seed: u32) ->
     let mut candidates = Vec::new();
     let center = Vec3::splat(res as f32 * 0.5);
     let boundary_radius = res as f32 * 0.5;
+    let placement_mode = params.geothermal_placement_mode.min(1);
+    let dirs = [
+        IVec3::X,
+        -IVec3::X,
+        IVec3::Y,
+        -IVec3::Y,
+        IVec3::Z,
+        -IVec3::Z,
+    ];
+
+    let length = param_i32(params.geothermal_length, 1, 64);
+    let width = param_i32(params.geothermal_width, 1, 16);
+    let depth = param_i32(params.geothermal_depth, 1, 32);
+    let heat_radius = param_i32(params.geothermal_heat_radius, 1, 64);
+    let glow_radius = param_i32(params.geothermal_glow_radius, 1, 64);
+    let min_clear = depth + 2;
+    let top_outer = width.max(2);
 
     for y in (3..res - 3).step_by(SEARCH_STRIDE) {
         for z in (3..res - 3).step_by(SEARCH_STRIDE) {
@@ -103,45 +250,151 @@ fn generate_specs(solid: &[bool], res: usize, params: &CaveParams, seed: u32) ->
                 if !is_solid(solid, p, res) {
                     continue;
                 }
+                if !passes_lower_hemisphere(p, res, params) {
+                    continue;
+                }
                 let pf = Vec3::new(x as f32, y as f32, z as f32);
                 let from_center = pf - center;
                 let dist = from_center.length();
-                if dist < boundary_radius * 0.88 {
-                    continue;
-                }
 
-                let normal = dominant_axis_dir(center - pf);
-                if normal == IVec3::ZERO {
-                    continue;
-                }
+                if placement_mode == 0 {
+                    if dist < boundary_radius * 0.88 {
+                        continue;
+                    }
 
-                // The stack lives on the solid sphere shell and exhales inward
-                // into the first open interior voxel. No solid voxels are opened.
-                if !is_solid(solid, p + normal, res) {
+                    let normal = dominant_axis_dir(center - pf);
+                    if normal == IVec3::ZERO {
+                        continue;
+                    }
+
+                    // The stack lives on the solid sphere shell and exhales inward
+                    // into the first open interior voxel. No solid voxels are opened.
+                    if !is_solid(solid, p + normal, res) {
+                        let axis = (center - pf).try_normalize().unwrap_or(Vec3::new(
+                            normal.x as f32,
+                            normal.y as f32,
+                            normal.z as f32,
+                        ));
+                        let tangent = choose_tangent(normal, p, seed);
+                        let score = hash_u32(p.x, p.y, p.z, seed ^ 0x6D2B_79F5);
+                        candidates.push((score, p, normal, tangent, axis));
+                    }
+                } else {
+                    // Interior mode: choose ordinary cave wall voxels and face the
+                    // stack out into the adjacent open cave cell.
+                    if dist > boundary_radius * 0.86 {
+                        continue;
+                    }
+
+                    // Face the stack toward the average of every open
+                    // cardinal neighbor direction, rather than just the
+                    // first one found. On an edge or corner this points
+                    // along a blended diagonal instead of snapping to
+                    // whichever single face happened to be open.
+                    let mut face_sum = Vec3::ZERO;
+                    for dir in dirs {
+                        if !is_solid(solid, p + dir, res) {
+                            face_sum += Vec3::new(dir.x as f32, dir.y as f32, dir.z as f32);
+                        }
+                    }
+                    let Some(face_avg) = face_sum.try_normalize() else {
+                        continue;
+                    };
+
+                    // `normal` stays a single cardinal axis: it's used to
+                    // mold the base flush with the wall along a precise grid
+                    // step and to pick a perpendicular cardinal
+                    // tangent/bitangent pair. Use whichever cardinal axis is
+                    // closest to the averaged open-face direction, and
+                    // require that axis itself to be open.
+                    let normal = dominant_axis_dir(face_avg);
+                    if is_solid(solid, p + normal, res) {
+                        continue;
+                    }
+
+                    // Angle the stack along the averaged surface normal of the
+                    // surrounding wall instead of snapping to a cardinal axis.
+                    // The estimate is blended with (and biased toward) the
+                    // averaged open-face direction so the tilt stays modest --
+                    // a wildly angled axis would tip the footprint disc off the
+                    // flat wall section it was sampled from, leaving most
+                    // columns to mold against nothing (floating in open air or
+                    // buried with no nearby surface).
+                    let axis = match local_outward_axis(solid, p, res, 2) {
+                        Some(avg) => (face_avg * 1.5 + avg).try_normalize().unwrap_or(face_avg),
+                        None => face_avg,
+                    };
+
+                    // Reject spots where the vent would exhale straight back into rock.
+                    if !has_clear_opening(solid, p, axis, res, min_clear) {
+                        continue;
+                    }
+
                     let tangent = choose_tangent(normal, p, seed);
-                    let score = hash_u32(p.x, p.y, p.z, seed ^ 0x6D2B_79F5);
-                    candidates.push((score, p, normal, tangent));
+                    let bitangent = normal.cross(tangent);
+
+                    // Reject sharp edges/corners where the wall geometry
+                    // breaks down across the footprint area.
+                    if !is_locally_flat(solid, p, axis, tangent, bitangent, top_outer, res) {
+                        continue;
+                    }
+
+                    let score = hash_u32(
+                        p.x + normal.x * 17,
+                        p.y + normal.y * 17,
+                        p.z + normal.z * 17,
+                        seed ^ 0x6D2B_79F5,
+                    );
+                    candidates.push((score, p, normal, tangent, axis));
                 }
             }
         }
     }
 
-    candidates.sort_by_key(|(score, _, _, _)| *score);
-    candidates
-        .into_iter()
-        .take(params.geothermal_count as usize)
-        .map(|(_, surface, normal, tangent)| VentSpec {
+    candidates.sort_by_key(|(score, _, _, _, _)| *score);
+
+    let mut specs = Vec::new();
+    for (_, surface, normal, tangent, axis) in candidates {
+        if specs.len() >= params.geothermal_count as usize {
+            break;
+        }
+
+        let spec = VentSpec {
             surface,
             normal,
             tangent,
             bitangent: normal.cross(tangent),
-            length: param_i32(params.geothermal_length, 1, 64),
-            width: param_i32(params.geothermal_width, 1, 16),
-            depth: param_i32(params.geothermal_depth, 1, 32),
-            heat_radius: param_i32(params.geothermal_heat_radius, 1, 64),
-            glow_radius: param_i32(params.geothermal_glow_radius, 1, 64),
-        })
-        .collect()
+            axis,
+            placement_mode,
+            length,
+            width,
+            depth,
+            heat_radius,
+            glow_radius,
+        };
+
+        if placement_mode == 1 {
+            // Make sure the molded stack actually reaches open space and
+            // doesn't end up sealed inside the rock. Only the central
+            // (anchor) column is checked here -- fringe footprint columns
+            // are allowed to mold against whatever local terrain they land
+            // on without invalidating the whole vent. Molding walks along
+            // the cardinal `normal` (precise, single-axis steps) while the
+            // opening is offset along the angled `axis` to match how
+            // `stack_voxels` builds the stack.
+            let surface_f = Vec3::new(surface.x as f32, surface.y as f32, surface.z as f32);
+            let normal_vec = Vec3::new(normal.x as f32, normal.y as f32, normal.z as f32);
+            let shift = surface_shift(solid, surface_f, normal_vec, res, 3);
+            let opening = round_vec3(surface_f + normal_vec * shift + axis * depth as f32);
+            if !in_bounds(opening, res as i32) || solid[idx(opening, res)] {
+                continue;
+            }
+        }
+
+        specs.push(spec);
+    }
+
+    specs
 }
 
 fn centerline_jitter(spec: VentSpec, s: i32, seed: u32) -> i32 {
@@ -164,9 +417,10 @@ fn footprint_centers(spec: VentSpec, seed: u32) -> Vec<IVec3> {
     out
 }
 
-fn stack_voxels(
+pub(crate) fn stack_voxels(
     spec: VentSpec,
     seed: u32,
+    solid: &[bool],
     res: usize,
 ) -> (Vec<IVec3>, Vec<IVec3>, Vec<IVec3>, Vec<IVec3>) {
     let mut walls = Vec::new();
@@ -178,11 +432,6 @@ fn stack_voxels(
     let inner = (spec.width / 2).max(1);
     let grid_center = Vec3::splat(res as f32 * 0.5);
     let sphere_radius = res as f32 * 0.5 - 1.0;
-    let axis_hint = Vec3::new(
-        spec.normal.x as f32,
-        spec.normal.y as f32,
-        spec.normal.z as f32,
-    );
     let tangent = Vec3::new(
         spec.tangent.x as f32,
         spec.tangent.y as f32,
@@ -193,35 +442,78 @@ fn stack_voxels(
         spec.bitangent.y as f32,
         spec.bitangent.z as f32,
     );
+    let normal_vec = Vec3::new(
+        spec.normal.x as f32,
+        spec.normal.y as f32,
+        spec.normal.z as f32,
+    );
 
     for base in footprint_centers(spec, seed) {
         let base_f = Vec3::new(base.x as f32, base.y as f32, base.z as f32);
-        let radial_in = (grid_center - base_f).try_normalize().unwrap_or(axis_hint);
-        let radial_out = -radial_in;
+        let stack_axis = if spec.placement_mode == 0 {
+            (grid_center - base_f).try_normalize().unwrap_or(spec.axis)
+        } else {
+            spec.axis
+        };
+        let radial_out = -stack_axis;
 
-        for h in 0..=spec.depth {
-            let height_t = h as f32 / spec.depth.max(1) as f32;
-            let outer = (base_outer as f32 * (1.0 - height_t) + top_outer as f32 * height_t)
-                .round()
-                .max(top_outer as f32) as i32;
+        // For angled (mode 1) stacks the cardinal tangent/bitangent pair is
+        // generally not perpendicular to `stack_axis` any more. Re-project
+        // them onto the plane perpendicular to the axis so each cross
+        // section stays a clean disc instead of a sheared ellipse, which
+        // otherwise leaves gaps in the extruded stack.
+        let (cs_tangent, cs_bitangent) = if spec.placement_mode == 1 {
+            let t = (tangent - stack_axis * tangent.dot(stack_axis))
+                .try_normalize()
+                .unwrap_or(tangent);
+            let b = stack_axis.cross(t).try_normalize().unwrap_or(bitangent);
+            (t, b)
+        } else {
+            (tangent, bitangent)
+        };
 
-            for a in -base_outer..=base_outer {
-                for b in -base_outer..=base_outer {
-                    let lateral = tangent * a as f32 + bitangent * b as f32;
-                    let radial_len = lateral.length();
+        for a in -base_outer..=base_outer {
+            for b in -base_outer..=base_outer {
+                let lateral = cs_tangent * a as f32 + cs_bitangent * b as f32;
+                let radial_len = lateral.length();
+                if radial_len > base_outer as f32 + 0.25 {
+                    continue;
+                }
+
+                let col_origin = if spec.placement_mode == 0 {
+                    // Each footprint sample is projected onto the sphere
+                    // before the stack rises inward, so the flared base
+                    // follows the curved boundary instead of cutting a flat
+                    // plane through it.
+                    (base_f + lateral - grid_center)
+                        .try_normalize()
+                        .unwrap_or(radial_out)
+                        * sphere_radius
+                        + grid_center
+                } else {
+                    // Cave-wall stacks mold their base to the local wall: walk
+                    // along the cardinal normal (a precise, single-axis step
+                    // per voxel) to find where this column actually crosses
+                    // the rock surface, so the base neither floats over a
+                    // recess (overhang) nor buries into a bulge. The stack
+                    // then grows away from this molded point along the
+                    // angled `stack_axis`.
+                    let flat = base_f + lateral;
+                    let shift = surface_shift(solid, flat, normal_vec, res, 3);
+                    flat + normal_vec * shift
+                };
+
+                for h in 0..=spec.depth {
+                    let height_t = h as f32 / spec.depth.max(1) as f32;
+                    let outer = (base_outer as f32 * (1.0 - height_t)
+                        + top_outer as f32 * height_t)
+                        .round()
+                        .max(top_outer as f32) as i32;
                     if radial_len > outer as f32 + 0.25 {
                         continue;
                     }
 
-                    // Each footprint sample is projected onto the sphere before
-                    // the stack rises inward, so the flared base follows the
-                    // curved boundary instead of cutting a flat plane through it.
-                    let shell_point = (base_f + lateral - grid_center)
-                        .try_normalize()
-                        .unwrap_or(radial_out)
-                        * sphere_radius
-                        + grid_center;
-                    let p = round_vec3(shell_point + radial_in * h as f32);
+                    let p = round_vec3(col_origin + stack_axis * h as f32);
 
                     if h == 0 {
                         push_unique(&mut walls, p);
@@ -244,29 +536,71 @@ fn stack_voxels(
 }
 
 pub fn carve_density_grid(density: &mut [Vec<Vec<f32>>], params: &CaveParams, threshold: f32) {
-    let res = density.len();
-    if res < 8 {
+    let grid_size = density.len();
+    if grid_size < 8 {
         return;
     }
-    let mut solid = vec![false; res * res * res];
-    for x in 0..res {
-        for y in 0..res {
-            for z in 0..res {
-                solid[x + y * res + z * res * res] = density[x][y][z] >= threshold;
-            }
-        }
+    if params.geothermal_enabled == 0 || params.geothermal_count == 0 {
+        return;
     }
 
-    for spec in generate_specs(&solid, res, params, params.seed ^ 0xCE11_5EED) {
-        let (walls, core, _, _) = stack_voxels(spec, params.seed, res);
+    // Vent placement is decided on the canonical resolution^3/world_radius
+    // grid (the same grid `SolidMaskGenerator::build_solid_array` produces
+    // for the geothermal heat/glow fields), then the resulting voxels are
+    // mapped into this mesh's own density grid by world position. Deciding
+    // placement on this grid's own (mesh) resolution would let the two
+    // disagree on local terrain, leaving glow with no matching stack
+    // geometry (or vice versa).
+    let world_center = Vec3::from(params.world_center);
+    let world_radius = params.world_radius;
+    let res_canonical = crate::simulation::fluid_simulation::GRID_RESOLUTION as usize;
+    let solid_mask_gen = crate::simulation::fluid_simulation::SolidMaskGenerator::new(
+        res_canonical as u32,
+        world_center,
+        world_radius,
+    );
+    let solid_canonical = solid_mask_gen.build_solid_array(params);
+
+    let cell_size_canonical = world_radius * 2.0 / res_canonical as f32;
+    let origin_canonical = world_center - Vec3::splat(world_radius);
+
+    let resolution = grid_size - 1;
+    let cave_generation_radius = world_radius + 3.0;
+    let cell_size_mesh = cave_generation_radius * 2.0 / resolution as f32;
+    let origin_mesh = world_center - Vec3::splat(cave_generation_radius);
+
+    let to_mesh_grid = |p: IVec3| -> Option<IVec3> {
+        let world_pos =
+            origin_canonical + Vec3::new(p.x as f32, p.y as f32, p.z as f32) * cell_size_canonical;
+        let g = round_vec3((world_pos - origin_mesh) / cell_size_mesh);
+        if g.x >= 0
+            && g.y >= 0
+            && g.z >= 0
+            && (g.x as usize) < grid_size
+            && (g.y as usize) < grid_size
+            && (g.z as usize) < grid_size
+        {
+            Some(g)
+        } else {
+            None
+        }
+    };
+
+    for spec in generate_specs(
+        &solid_canonical,
+        res_canonical,
+        params,
+        params.seed ^ 0xCE11_5EED,
+    ) {
+        let (walls, core, _, _) = stack_voxels(spec, params.seed, &solid_canonical, res_canonical);
         for p in walls {
-            if in_bounds(p, res as i32) {
-                density[p.x as usize][p.y as usize][p.z as usize] = threshold + 0.35;
+            if let Some(g) = to_mesh_grid(p) {
+                density[g.x as usize][g.y as usize][g.z as usize] = threshold + 0.35;
             }
         }
         for p in core {
-            if in_bounds(p, res as i32) {
-                density[p.x as usize][p.y as usize][p.z as usize] = threshold - 0.5;
+            if let Some(g) = to_mesh_grid(p) {
+                density[g.x as usize][g.y as usize][g.z as usize] = threshold - 0.5;
             }
         }
     }
@@ -285,7 +619,7 @@ pub fn apply_to_solid_mask(
     let specs = generate_specs(&solid, res, params, params.seed ^ 0xCE11_5EED);
 
     for spec in specs {
-        let (walls, core, openings, glow_sources) = stack_voxels(spec, params.seed, res);
+        let (walls, core, openings, glow_sources) = stack_voxels(spec, params.seed, &solid, res);
 
         for p in walls {
             if in_bounds(p, res as i32) {
@@ -316,7 +650,11 @@ pub fn apply_to_solid_mask(
 
         for &p in &openings {
             let p_f = Vec3::new(p.x as f32, p.y as f32, p.z as f32);
-            let radial_in = (grid_center - p_f).try_normalize().unwrap_or(Vec3::Y);
+            let radial_in = if spec.placement_mode == 0 {
+                (grid_center - p_f).try_normalize().unwrap_or(Vec3::Y)
+            } else {
+                spec.axis
+            };
             let source_depth = (spec.heat_radius / 8).clamp(1, 3);
             let source_radius = (spec.width / 2).max(1);
 
@@ -348,7 +686,11 @@ pub fn apply_to_solid_mask(
         let shaft_inner_radius = (spec.width / 2).max(1);
         for &source in &glow_sources {
             let source_f = Vec3::new(source.x as f32, source.y as f32, source.z as f32);
-            let radial_in = (grid_center - source_f).try_normalize().unwrap_or(Vec3::Y);
+            let radial_in = if spec.placement_mode == 0 {
+                (grid_center - source_f).try_normalize().unwrap_or(Vec3::Y)
+            } else {
+                spec.axis
+            };
 
             for h in 0..=spec.glow_radius {
                 // Before the glow reaches the chimney lip, keep it inside the

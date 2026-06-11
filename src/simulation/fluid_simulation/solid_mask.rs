@@ -31,17 +31,18 @@ impl SolidMaskGenerator {
             .0
     }
 
-    pub fn generate_solid_mask_and_geothermal_fields(
-        &self,
-        cave_params: &CaveParams,
-    ) -> (
-        Vec<u32>,
-        crate::simulation::fluid_simulation::GeothermalFields,
-    ) {
+    /// Builds the canonical solid/empty voxel grid (resolution^3, spanning
+    /// `world_radius` from `world_center`) used for both fluid-sim collision
+    /// and geothermal vent placement. Exposed so the cave mesh generator can
+    /// place vent stack geometry on the exact same grid that the geothermal
+    /// heat/glow fields are computed on -- otherwise the two would disagree
+    /// on local terrain and produce glow with no matching stack geometry (or
+    /// vice versa).
+    pub fn build_solid_array(&self, cave_params: &CaveParams) -> Vec<bool> {
         let resolution = self.grid_resolution as usize;
         let grid_size = resolution;
         let total_voxels = grid_size * grid_size * grid_size;
-        let mut solid_mask = vec![0u32; total_voxels];
+        let mut solid = vec![false; total_voxels];
 
         // Calculate cell size (distance between grid points)
         let world_diameter = self.world_radius * 2.0;
@@ -65,9 +66,7 @@ impl SolidMaskGenerator {
                         );
 
                     // Use cave generation logic to determine if this is solid
-                    let is_solid = self.is_solid_cave_volume(world_pos, cave_params);
-
-                    solid_mask[voxel_index] = if is_solid { 1 } else { 0 };
+                    solid[voxel_index] = self.is_solid_cave_volume(world_pos, cave_params);
                 }
             }
         }
@@ -75,7 +74,6 @@ impl SolidMaskGenerator {
         // Cull small isolated rock chunks so collision matches the rendered
         // cave mesh (which applies the same world-space volume threshold) -
         // floating noise debris neither renders nor collides.
-        let mut solid: Vec<bool> = solid_mask.iter().map(|&v| v == 1).collect();
         let min_voxels = (crate::rendering::cave_system::MIN_ISOLATED_CHUNK_VOLUME
             / cell_size.powi(3))
         .ceil()
@@ -85,12 +83,21 @@ impl SolidMaskGenerator {
         );
         if culled > 0 {
             log::info!("Solid mask: culled {culled} voxels of isolated debris");
-            for (mask, keep) in solid_mask.iter_mut().zip(solid.iter()) {
-                if *mask == 1 && !*keep {
-                    *mask = 0;
-                }
-            }
         }
+
+        solid
+    }
+
+    pub fn generate_solid_mask_and_geothermal_fields(
+        &self,
+        cave_params: &CaveParams,
+    ) -> (
+        Vec<u32>,
+        crate::simulation::fluid_simulation::GeothermalFields,
+    ) {
+        let grid_size = self.grid_resolution as usize;
+        let solid = self.build_solid_array(cave_params);
+        let mut solid_mask: Vec<u32> = solid.iter().map(|&b| u32::from(b)).collect();
 
         let fields = crate::simulation::fluid_simulation::geothermal_vents::apply_to_solid_mask(
             &mut solid_mask,
