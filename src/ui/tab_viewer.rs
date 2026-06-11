@@ -3307,6 +3307,97 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
 
     ui.add_space(6.0);
 
+    // GPU Timing section (per-segment breakdown via timestamp queries)
+    let gpu_segments = perf.gpu_segment_times_ms();
+    if !gpu_segments.is_empty() {
+        section_header(ui, "GPU TIMING");
+
+        const SEGMENT_COLORS: [egui::Color32; crate::scene::gpu_timer::SEGMENT_COUNT] = [
+            egui::Color32::from_rgb(80, 160, 220),  // Physics & Compute
+            egui::Color32::from_rgb(120, 200, 120), // Instance Build & Culling
+            egui::Color32::from_rgb(220, 180, 60),  // Opaque Render
+            egui::Color32::from_rgb(220, 120, 200), // Skins & Effects
+            egui::Color32::from_rgb(220, 100, 100), // Post-Process
+        ];
+
+        let total: f32 = gpu_segments.iter().sum();
+
+        // Stacked horizontal bar showing each segment's share of total GPU time
+        let bar_height = 14.0;
+        let (response, painter) = ui.allocate_painter(
+            egui::vec2(ui.available_width(), bar_height),
+            egui::Sense::hover(),
+        );
+        let rect = response.rect;
+        painter.rect_filled(rect, 2.0, palette().bg_darkest);
+        if total > 0.0 {
+            let mut x = rect.left();
+            for (i, &t) in gpu_segments.iter().enumerate() {
+                let w = (t / total) * rect.width();
+                if w > 0.0 {
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(x, rect.top()),
+                            egui::vec2(w, bar_height),
+                        ),
+                        0.0,
+                        SEGMENT_COLORS[i],
+                    );
+                    x += w;
+                }
+            }
+        }
+        painter.rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(1.0, palette().border_subtle),
+            egui::StrokeKind::Outside,
+        );
+
+        ui.add_space(3.0);
+
+        egui::Grid::new("gpu_timing_grid")
+            .num_columns(3)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                for (i, &t) in gpu_segments.iter().enumerate() {
+                    let label = crate::scene::gpu_timer::SEGMENT_LABELS
+                        .get(i)
+                        .copied()
+                        .unwrap_or("Segment");
+                    let (swatch_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().rect_filled(swatch_rect, 1.0, SEGMENT_COLORS[i]);
+                    ui.label(
+                        egui::RichText::new(label)
+                            .size(11.0)
+                            .color(palette().text_secondary),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("{:.2} ms", t))
+                            .size(11.0)
+                            .color(palette().text_primary),
+                    );
+                    ui.end_row();
+                }
+                ui.label("");
+                ui.label(
+                    egui::RichText::new("Total GPU")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{:.2} ms", total))
+                        .size(11.0)
+                        .strong()
+                        .color(palette().text_primary),
+                );
+                ui.end_row();
+            });
+
+        ui.add_space(6.0);
+    }
+
     // CPU section
     section_header(ui, "CPU");
 

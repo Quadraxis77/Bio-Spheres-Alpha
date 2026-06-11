@@ -2787,6 +2787,15 @@ impl App {
             self.editor_state.cell_outline_width,
         );
 
+        // Pull the latest GPU frame timing breakdown (lags a few frames behind
+        // due to async readback) for the performance monitor.
+        if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+            if let Some(ref timer) = gpu_scene.gpu_timer {
+                self.performance
+                    .set_gpu_segment_times(&timer.segment_times_ms());
+            }
+        }
+
         if gpu_headless {
             let mut clear_encoder =
                 self.device
@@ -4533,9 +4542,21 @@ impl ApplicationHandler for AppState {
             adapter_limits.max_buffer_size / (1024 * 1024),
         );
 
+        // Enable GPU timestamp queries for the in-app frame timing breakdown,
+        // if the adapter supports them (most desktop GPUs do; some mobile/web
+        // backends don't). TIMESTAMP_QUERY_INSIDE_ENCODERS is needed for
+        // CommandEncoder::write_timestamp between passes (not just pass
+        // begin/end timestamp_writes).
+        let timestamp_features =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        let mut required_features = wgpu::Features::empty();
+        if adapter.features().contains(timestamp_features) {
+            required_features |= timestamp_features;
+        }
+
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Bio-Spheres Device"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             required_limits: wgpu::Limits {
                 // Cell state write bind group uses up to 41 storage buffers on Vulkan/DX12.
                 // Metal (macOS) hard-caps at 31 - requesting 42 panics request_device on Metal.

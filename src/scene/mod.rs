@@ -4,6 +4,7 @@
 //! simulation modes (Preview and GPU).
 
 pub mod gpu_scene;
+pub mod gpu_timer;
 pub mod lineage;
 pub mod main_menu;
 pub mod manager;

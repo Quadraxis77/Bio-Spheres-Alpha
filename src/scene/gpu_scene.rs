@@ -403,6 +403,8 @@ pub struct GpuScene {
     pub boulder_moss_min: f32,
     /// Maximum boulder moss store (nutrients)
     pub boulder_moss_max: f32,
+    /// GPU frame timer - per-segment timestamp queries for the performance monitor
+    pub gpu_timer: Option<crate::scene::gpu_timer::GpuTimer>,
     /// Organism label system - GPU-driven connected-component labeling
     pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
     /// Mutation system - GPU-driven genome mutation during cell division
@@ -872,6 +874,7 @@ impl GpuScene {
             moss_growth_bind_group: None,
             moss_consume_physics_bind_groups: None,
             moss_consume_moss_bind_group: None,
+            gpu_timer: crate::scene::gpu_timer::GpuTimer::new(device, queue),
             organism_label_system,
             mutation_system,
             light_field_system: None,
@@ -7681,6 +7684,10 @@ impl Scene for GpuScene {
             label: Some("GPU Scene Encoder"),
         });
 
+        if let Some(ref timer) = self.gpu_timer {
+            timer.write_timestamp(&mut encoder, 0);
+        }
+
         // If moss was just disabled, clear the moss_density buffer so the cave shader
         // immediately stops rendering stale moss. The buffer persists between frames and
         // the cave fragment shader reads it unconditionally, so without this clear the
@@ -7907,6 +7914,11 @@ impl Scene for GpuScene {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
+        // End of "Physics & Compute" segment.
+        if let Some(ref timer) = self.gpu_timer {
+            timer.write_timestamp(&mut encoder, 1);
+        }
+
         if self.headless_no_render {
             let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
             let should_start_readback = self.readbacks_enabled && !cell_count_read_pending;
@@ -7914,7 +7926,21 @@ impl Scene for GpuScene {
                 self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
             }
 
+            // No rendering work in headless mode - write the remaining boundaries
+            // immediately so the query set has valid data for resolve_query_set,
+            // then resolve before submitting.
+            if let Some(ref mut timer) = self.gpu_timer {
+                for boundary in 2..=crate::scene::gpu_timer::SEGMENT_COUNT {
+                    timer.write_timestamp(&mut encoder, boundary);
+                }
+                timer.resolve(&mut encoder);
+            }
+
             queue.submit(std::iter::once(encoder.finish()));
+
+            if let Some(ref mut timer) = self.gpu_timer {
+                timer.after_submit(device);
+            }
 
             if self.follow_organism_id.is_some() {
                 self.tick_follow_camera_post_submit();
@@ -8014,6 +8040,11 @@ impl Scene for GpuScene {
             self.total_cell_slots.max(if cell_inserted { 1 } else { 0 }),
             solid_mask_buf,
         );
+
+        // End of "Instance Build & Culling" segment.
+        if let Some(ref timer) = self.gpu_timer {
+            timer.write_timestamp(&mut encoder, 2);
+        }
 
         // When DoF is enabled, render the scene to an intermediate texture so the
         // DoF shader can read it. Otherwise render directly to the swapchain.
@@ -8265,6 +8296,11 @@ impl Scene for GpuScene {
                 self.camera.position(),
                 self.camera.rotation,
             );
+        }
+
+        // End of "Opaque Render" segment.
+        if let Some(ref timer) = self.gpu_timer {
+            timer.write_timestamp(&mut encoder, 3);
         }
 
         // Render organism skins after all opaque geometry (cave, cells, world sphere)
@@ -8629,6 +8665,11 @@ impl Scene for GpuScene {
             );
         }
 
+        // End of "Skins & Effects" segment.
+        if let Some(ref timer) = self.gpu_timer {
+            timer.write_timestamp(&mut encoder, 4);
+        }
+
         // DoF: reads scene_target, writes to PP intermediate (or swapchain if PP off).
         if dof_enabled {
             let dof_out: &wgpu::TextureView = if pp_enabled {
@@ -8663,8 +8704,18 @@ impl Scene for GpuScene {
             self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
         }
 
+        // End of "Post-Process" segment, and final resolve for this frame's queries.
+        if let Some(ref mut timer) = self.gpu_timer {
+            timer.write_timestamp(&mut encoder, 5);
+            timer.resolve(&mut encoder);
+        }
+
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
+
+        if let Some(ref mut timer) = self.gpu_timer {
+            timer.after_submit(device);
+        }
 
         // Call map_async on follow camera staging buffers NOW - after submit.
         // map_async must not be called while the buffer is referenced by a pending

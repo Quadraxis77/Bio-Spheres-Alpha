@@ -186,6 +186,10 @@ fn hash3_vec(p: vec3<f32>) -> vec3<f32> {
     return fract(sin(q) * 43758.5453123);
 }
 
+fn cell_order_key(cell: vec3<f32>) -> f32 {
+    return dot(cell, vec3<f32>(1.0, 4096.0, 16777216.0));
+}
+
 // Returns the integer cell coordinates of the two nearest Voronoi crystal
 // feature points to `p` (already scaled by facet_scale), along with the
 // (non-squared) distances to each. `cell_a`/`da` is the nearest, `cell_b`/`db`
@@ -255,32 +259,64 @@ struct FacetResult {
     normal: vec3<f32>,
 }
 
+struct OrderedVoronoiPair {
+    cell_a: vec3<f32>,
+    cell_b: vec3<f32>,
+    dist_a: f32,
+    dist_b: f32,
+}
+
+fn ordered_voronoi_pair(p: vec3<f32>) -> OrderedVoronoiPair {
+    let pair = voronoi_pair(p);
+    var cell_a = pair.cell_a;
+    var cell_b = pair.cell_b;
+    var dist_a = pair.da;
+    var dist_b = pair.db;
+    if (cell_order_key(cell_a) > cell_order_key(cell_b)) {
+        let old_cell_a = cell_a;
+        let old_dist_a = dist_a;
+        cell_a = cell_b;
+        dist_a = dist_b;
+        cell_b = old_cell_a;
+        dist_b = old_dist_a;
+    }
+    return OrderedVoronoiPair(cell_a, cell_b, dist_a, dist_b);
+}
+
+fn facet_blend_weight(dist_a: f32, dist_b: f32) -> f32 {
+    const BLEND_WIDTH: f32 = 0.075;
+    var w = smoothstep(-BLEND_WIDTH, BLEND_WIDTH, dist_a - dist_b);
+    return w * w * w * (w * (w * 6.0 - 15.0) + 10.0);
+}
+
+fn facet_shading_normal(pos: vec3<f32>, smooth_normal: vec3<f32>) -> vec3<f32> {
+    let scale = max(params.facet_scale, 0.001);
+    let pair = ordered_voronoi_pair(pos * scale);
+    let normal_a = facet_plane_normal(pair.cell_a, smooth_normal);
+    let normal_b = facet_plane_normal(pair.cell_b, smooth_normal);
+    let w = facet_blend_weight(pair.dist_a, pair.dist_b);
+    return normalize(mix(normal_a, normal_b, w));
+}
+
 fn facet_displace(pos: vec3<f32>, smooth_normal: vec3<f32>) -> FacetResult {
     if params.displacement_strength <= 0.0 {
         return FacetResult(pos, smooth_normal);
     }
 
     let scale = max(params.facet_scale, 0.001);
-    let p = pos * scale;
-    let pair = voronoi_pair(p);
+    let pair = ordered_voronoi_pair(pos * scale);
     let max_disp = 1.0 / scale;
 
-    // Each vertex picks its own nearest/second-nearest cell pair, so right at
-    // a Voronoi boundary the two vertices on either side disagree about which
-    // cell is "nearest" - querying only the nearest cell's plane (the old
-    // approach) made the displaced position jump discontinuously across that
-    // boundary, splitting the shared mesh edge into a crack (rendered as a
-    // bright line where the background shows through). Fix: evaluate BOTH
-    // candidate planes and blend between them with a smoothstep based on how
-    // close their distances are. At the boundary itself da == db for both
-    // vertices (just with cell_a/cell_b swapped), so both sides compute the
-    // same 50/50 blend of the same two planes and land on the same position -
-    // no crack. Away from boundaries da << db (or vice versa), so the blend
-    // collapses to a single plane and the facet stays flat.
+    // Each vertex picks its own nearest/second-nearest cell pair. Sort that
+    // pair into a stable order before blending; otherwise the two sides of a
+    // boundary both call their own nearest cell "A", so the interpolation
+    // restarts at zero immediately after the boundary and creates a jagged
+    // snap between facets.
     //
-    // The transition band is kept very narrow (BLEND_WIDTH) so facets read as
-    // sharp flat crystal shards with crisp straight edges - just wide enough
-    // to remain continuous (no crack) without visibly rounding the edge.
+    // The transition band has to be wider than a single surface-nets triangle
+    // in scaled facet space. When it is too narrow, the Voronoi boundary is
+    // only sampled at mesh vertices and turns into a saw-toothed crack between
+    // otherwise broad crystal faces.
     let normal_a = facet_plane_normal(pair.cell_a, smooth_normal);
     let normal_b = facet_plane_normal(pair.cell_b, smooth_normal);
     let feature_a = (pair.cell_a + hash3_vec(pair.cell_a)) / scale;
@@ -289,9 +325,7 @@ fn facet_displace(pos: vec3<f32>, smooth_normal: vec3<f32>) -> FacetResult {
     let t_a = clamp(dot(feature_a - pos, normal_a) / dot(smooth_normal, normal_a), -max_disp, max_disp);
     let t_b = clamp(dot(feature_b - pos, normal_b) / dot(smooth_normal, normal_b), -max_disp, max_disp);
 
-    const BLEND_WIDTH: f32 = 0.02;
-    let w = smoothstep(-BLEND_WIDTH, BLEND_WIDTH, pair.da - pair.db);
-
+    let w = facet_blend_weight(pair.dist_a, pair.dist_b);
     let t = mix(t_a, t_b, w) * params.displacement_strength;
     let facet_normal = normalize(mix(normal_a, normal_b, w));
     return FacetResult(pos + smooth_normal * t, facet_normal);
@@ -331,7 +365,7 @@ struct ShadeResult {
 fn shade_ice(in: VertexOutput) -> ShadeResult {
     let smooth_normal = normalize(in.world_normal);
     let view_dir = normalize(in.view_dir);
-    let facet_normal = normalize(in.facet_normal);
+    let facet_normal = facet_shading_normal(in.world_position, smooth_normal);
 
     let light_dir = normalize(vec3<f32>(shadow_params.light_dir_x, shadow_params.light_dir_y, shadow_params.light_dir_z));
 

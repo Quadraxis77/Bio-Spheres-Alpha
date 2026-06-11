@@ -62,6 +62,9 @@ pub struct PerformanceMetrics {
     memory_total: u64,
     /// Culling statistics (total, visible, frustum culled, occluded)
     culling_stats: (u32, u32, u32, u32),
+    /// Per-segment GPU frame times (ms), from timestamp queries. Empty if
+    /// the device doesn't support `wgpu::Features::TIMESTAMP_QUERY`.
+    gpu_segment_times_ms: Vec<f32>,
     /// Frame counter for periodic operations.
     frame_count: u64,
     /// Performance spike detection
@@ -88,6 +91,7 @@ impl PerformanceMetrics {
             memory_used: 0,
             memory_total: 0,
             culling_stats: (0, 0, 0, 0),
+            gpu_segment_times_ms: Vec::new(),
             frame_count: 0,
             spike_detector: PerformanceSpikeDetector::new(),
         }
@@ -247,6 +251,17 @@ impl PerformanceMetrics {
     /// Get culling statistics: (total, visible, frustum_culled, occluded).
     pub fn culling_stats(&self) -> (u32, u32, u32, u32) {
         self.culling_stats
+    }
+
+    /// Update per-segment GPU frame times (ms) from the GPU timer.
+    pub fn set_gpu_segment_times(&mut self, times: &[f32]) {
+        self.gpu_segment_times_ms.clear();
+        self.gpu_segment_times_ms.extend_from_slice(times);
+    }
+
+    /// Get per-segment GPU frame times (ms). Empty if GPU timing is unavailable.
+    pub fn gpu_segment_times_ms(&self) -> &[f32] {
+        &self.gpu_segment_times_ms
     }
 
     /// Get the current frame count.

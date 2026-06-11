@@ -110,6 +110,10 @@ fn fixed_to_float(v: i32) -> f32 {
     return f32(v) / FIXED_POINT_SCALE;
 }
 
+fn calculate_radius_from_mass(mass: f32) -> f32 {
+    return clamp(mass, 0.5, 2.0);
+}
+
 // Check if a world position is inside water using the compressed bitfield
 // Returns true if the cell is in a water voxel
 fn is_in_water(world_pos: vec3<f32>) -> bool {
@@ -178,6 +182,24 @@ fn is_in_ice(world_pos: vec3<f32>) -> bool {
     return (bits & (1u << bit_index)) != 0u;
 }
 
+// A single ice-voxel hit is surface contact, not entombment. Treat the cell as
+// immobilized only when ice spans across the cell along every cardinal axis.
+fn is_embedded_in_ice(world_pos: vec3<f32>, radius: f32) -> bool {
+    if (!is_in_ice(world_pos)) {
+        return false;
+    }
+
+    let sample_dist = max(radius * 0.75, water_params.cell_size * 0.5);
+    let x_axis = is_in_ice(world_pos + vec3<f32>( sample_dist, 0.0, 0.0)) &&
+                 is_in_ice(world_pos + vec3<f32>(-sample_dist, 0.0, 0.0));
+    let y_axis = is_in_ice(world_pos + vec3<f32>(0.0,  sample_dist, 0.0)) &&
+                 is_in_ice(world_pos + vec3<f32>(0.0, -sample_dist, 0.0));
+    let z_axis = is_in_ice(world_pos + vec3<f32>(0.0, 0.0,  sample_dist)) &&
+                 is_in_ice(world_pos + vec3<f32>(0.0, 0.0, -sample_dist));
+
+    return x_axis && y_axis && z_axis;
+}
+
 // Decode a packed velocity u32 into a direction vector.
 // Encoding: 2 bits per axis. 0b00=0, 0b01=+1, 0b10=-1.
 fn decode_velocity_component(v: u32) -> f32 {
@@ -241,6 +263,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dt = max(params.delta_time, MIN_SAFE_DT);
     let pos = positions_in[cell_idx].xyz;
     let mass = positions_in[cell_idx].w;
+    let radius = calculate_radius_from_mass(mass);
 
     // Clear prev_accelerations for dead/near-dead cells so recycled slots start clean.
     // Do NOT freeze position - death_scan (lifecycle pipeline) is the authority on removal.
@@ -415,19 +438,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // --- Ice is a solid obstacle. ---
-    // A cell whose own voxel froze around it (its current position is
-    // already inside ice) is encapsulated/entombed: it stays locked, frozen
-    // mid-pose, until the ice melts away. A cell that merely bumps into an
-    // ice voxel from outside just has that move blocked - position holds for
-    // this frame, but velocity is left intact so it can drift away again
-    // rather than getting stuck glued to the ice surface.
+    // A cell that is embedded through an ice volume is encapsulated/entombed:
+    // it stays locked, frozen mid-pose, until the ice melts away. Touching or
+    // grazing the ice voxel skin is only surface contact, so cells can still
+    // roll and slide along ice instead of freezing to it.
     var entombed_acceleration = new_acceleration;
-    if (is_in_ice(pos)) {
+    if (is_embedded_in_ice(pos, radius)) {
         final_pos = pos;
         final_vel = vec3<f32>(0.0);
         // Zero stored acceleration so no Verlet momentum builds up while frozen.
         entombed_acceleration = vec3<f32>(0.0);
-    } else if (is_in_ice(final_pos)) {
+    } else if (is_embedded_in_ice(final_pos, radius)) {
         final_pos = pos;
     }
 
