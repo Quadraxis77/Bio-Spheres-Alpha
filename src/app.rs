@@ -2500,17 +2500,15 @@ impl App {
                     )
                 {
                     gpu_scene.sun_light_dir = self.editor_state.light_dir;
-                    gpu_scene.sun_rotating =
-                        self.editor_state.sun_rotation_enabled
-                            && self.editor_state.sun_rotation_speed != 0.0;
+                    gpu_scene.sun_rotating = self.editor_state.sun_rotation_enabled
+                        && self.editor_state.sun_rotation_speed != 0.0;
                     if let Some(ref mut sun) = gpu_scene.sun_renderer {
                         sun.orbit_axis = self.editor_state.sun_rotation_axis;
                         sun.orbit_ring_opacity = self.editor_state.orbit_ring_opacity;
                     }
                     self.editor_state.light_params_dirty = true;
                 }
-                if self.editor_state.sun_cycle_enabled || self.editor_state.sun_night_ratio > 0.0
-                {
+                if self.editor_state.sun_cycle_enabled || self.editor_state.sun_night_ratio > 0.0 {
                     // Time-driven brightness (season cycle and/or day/night
                     // cycle) needs the light params re-applied every frame.
                     self.editor_state.light_params_dirty = true;
@@ -2689,8 +2687,7 @@ impl App {
             gpu_scene.freeze_rate = self.ui.state.fluid_settings.climate.freeze_rate;
             gpu_scene.melt_rate = self.ui.state.fluid_settings.climate.melt_rate;
             gpu_scene.snow_melt_rate = self.ui.state.fluid_settings.climate.snow_melt_rate;
-            gpu_scene.snow_compact_rate =
-                self.ui.state.fluid_settings.climate.snow_compact_rate;
+            gpu_scene.snow_compact_rate = self.ui.state.fluid_settings.climate.snow_compact_rate;
             gpu_scene.freeze_threshold = self.ui.state.fluid_settings.climate.freeze_threshold;
             gpu_scene.melt_threshold = self.ui.state.fluid_settings.climate.melt_threshold;
             gpu_scene.snow_threshold = self.ui.state.fluid_settings.climate.snow_threshold;
@@ -3127,12 +3124,15 @@ impl App {
                         });
 
                         // Derive luminocyte brightness state from live signal value
-                        let luminocyte_bright = is_luminocyte && mode.map(|m| {
-                            let ch = m.luminocyte_signal_channel.clamp(0, 7) as usize;
-                            let sig_val = cell_signals[ch].unwrap_or(0.0);
-                            let above = sig_val >= m.luminocyte_threshold;
-                            above != m.luminocyte_invert
-                        }).unwrap_or(false);
+                        let luminocyte_bright = is_luminocyte
+                            && mode
+                                .map(|m| {
+                                    let ch = m.luminocyte_signal_channel.clamp(0, 7) as usize;
+                                    let sig_val = cell_signals[ch].unwrap_or(0.0);
+                                    let above = sig_val >= m.luminocyte_threshold;
+                                    above != m.luminocyte_invert
+                                })
+                                .unwrap_or(false);
 
                         let mut close_menu = false;
                         let mut send_test_signal = false;
@@ -3356,7 +3356,8 @@ impl App {
                                     // --- Luminocyte brightness state ---
                                     if is_luminocyte {
                                         if let Some(m) = mode {
-                                            let ch = m.luminocyte_signal_channel.clamp(0, 7) as usize;
+                                            let ch =
+                                                m.luminocyte_signal_channel.clamp(0, 7) as usize;
                                             let (state_label, state_color) = if luminocyte_bright {
                                                 ("● Bright", egui::Color32::from_rgb(80, 220, 255))
                                             } else {
@@ -3370,9 +3371,19 @@ impl App {
                                                     ui.colored_label(state_color, state_label);
                                                     ui.end_row();
                                                     ui.colored_label(dim, "Watching");
-                                                    ui.colored_label(dim, format!("Ch {} (≥ {:.0}{})",
-                                                        ch, m.luminocyte_threshold,
-                                                        if m.luminocyte_invert { ", inv" } else { "" }));
+                                                    ui.colored_label(
+                                                        dim,
+                                                        format!(
+                                                            "Ch {} (≥ {:.0}{})",
+                                                            ch,
+                                                            m.luminocyte_threshold,
+                                                            if m.luminocyte_invert {
+                                                                ", inv"
+                                                            } else {
+                                                                ""
+                                                            }
+                                                        ),
+                                                    );
                                                     ui.end_row();
                                                 });
                                         }

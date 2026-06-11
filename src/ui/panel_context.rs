@@ -196,6 +196,18 @@ pub struct GenomeEditorState {
     pub cave_smoothness: f32,
     pub cave_seed: u32,
     pub cave_resolution: u32,
+    pub geothermal_enabled: bool,
+    pub geothermal_count: u32,
+    pub geothermal_length: f32,
+    pub geothermal_width: f32,
+    pub geothermal_depth: f32,
+    pub geothermal_back_margin: f32,
+    pub geothermal_top_margin: f32,
+    pub geothermal_heat_output: f32,
+    pub geothermal_heat_radius: f32,
+    pub geothermal_glow_strength: f32,
+    pub geothermal_glow_radius: f32,
+    pub geothermal_glow_color: [f32; 3],
     pub cave_params_dirty: bool,
 
     // Fluid simulation parameters
@@ -363,11 +375,11 @@ pub struct GenomeEditorState {
     pub dof_blur_strength: f32,
 
     // Post-process settings
-    pub pp_contrast:     f32,
+    pub pp_contrast: f32,
     pub pp_adapt_enabled: bool,
-    pub pp_adapt_speed:  f32,
-    pub pp_adapt_min:    f32,
-    pub pp_adapt_max:    f32,
+    pub pp_adapt_speed: f32,
+    pub pp_adapt_min: f32,
+    pub pp_adapt_max: f32,
 
     // Sun renderer settings
     /// Whether the procedural sun is visible
@@ -689,6 +701,18 @@ impl GenomeEditorState {
             cave_smoothness,
             cave_seed,
             cave_resolution,
+            geothermal_enabled,
+            geothermal_count,
+            geothermal_length,
+            geothermal_width,
+            geothermal_depth,
+            geothermal_back_margin,
+            geothermal_top_margin,
+            geothermal_heat_output,
+            geothermal_heat_radius,
+            geothermal_glow_strength,
+            geothermal_glow_radius,
+            geothermal_glow_color,
             show_moss,
             moss_growth_rate,
             moss_erosion_rate,
@@ -864,6 +888,18 @@ impl GenomeEditorState {
             cave_smoothness,
             cave_seed,
             cave_resolution,
+            geothermal_enabled,
+            geothermal_count,
+            geothermal_length,
+            geothermal_width,
+            geothermal_depth,
+            geothermal_back_margin,
+            geothermal_top_margin,
+            geothermal_heat_output,
+            geothermal_heat_radius,
+            geothermal_glow_strength,
+            geothermal_glow_radius,
+            geothermal_glow_color,
             cave_params_dirty: false,
             fluid_gravity,
             fluid_gravity_x,
@@ -1058,8 +1094,9 @@ impl GenomeEditorState {
             return false;
         }
 
-        self.sun_orbit_angle =
-            Self::wrap_degrees(self.sun_orbit_angle + self.sun_rotation_speed.to_degrees() * sim_dt);
+        self.sun_orbit_angle = Self::wrap_degrees(
+            self.sun_orbit_angle + self.sun_rotation_speed.to_degrees() * sim_dt,
+        );
         self.apply_sun_orbit();
         true
     }
@@ -1085,6 +1122,18 @@ impl GenomeEditorState {
             self.cave_smoothness,
             self.cave_seed,
             self.cave_resolution,
+            self.geothermal_enabled,
+            self.geothermal_count,
+            self.geothermal_length,
+            self.geothermal_width,
+            self.geothermal_depth,
+            self.geothermal_back_margin,
+            self.geothermal_top_margin,
+            self.geothermal_heat_output,
+            self.geothermal_heat_radius,
+            self.geothermal_glow_strength,
+            self.geothermal_glow_radius,
+            self.geothermal_glow_color,
             self.show_moss,
             self.moss_growth_rate,
             self.moss_erosion_rate,
@@ -1147,6 +1196,18 @@ impl GenomeEditorState {
         smoothness: f32,
         seed: u32,
         resolution: u32,
+        geothermal_enabled: bool,
+        geothermal_count: u32,
+        geothermal_length: f32,
+        geothermal_width: f32,
+        geothermal_depth: f32,
+        geothermal_back_margin: f32,
+        geothermal_top_margin: f32,
+        geothermal_heat_output: f32,
+        geothermal_heat_radius: f32,
+        geothermal_glow_strength: f32,
+        geothermal_glow_radius: f32,
+        geothermal_glow_color: [f32; 3],
         show_moss: bool,
         moss_growth_rate: f32,
         moss_erosion_rate: f32,
@@ -1188,6 +1249,18 @@ impl GenomeEditorState {
             smoothness: f32,
             seed: u32,
             resolution: u32,
+            geothermal_enabled: bool,
+            geothermal_count: u32,
+            geothermal_length: f32,
+            geothermal_width: f32,
+            geothermal_depth: f32,
+            geothermal_back_margin: f32,
+            geothermal_top_margin: f32,
+            geothermal_heat_output: f32,
+            geothermal_heat_radius: f32,
+            geothermal_glow_strength: f32,
+            geothermal_glow_radius: f32,
+            geothermal_glow_color: [f32; 3],
             show_moss: bool,
             moss_growth_rate: f32,
             moss_erosion_rate: f32,
@@ -1229,6 +1302,18 @@ impl GenomeEditorState {
             smoothness,
             seed,
             resolution,
+            geothermal_enabled,
+            geothermal_count,
+            geothermal_length,
+            geothermal_width,
+            geothermal_depth,
+            geothermal_back_margin,
+            geothermal_top_margin,
+            geothermal_heat_output,
+            geothermal_heat_radius,
+            geothermal_glow_strength,
+            geothermal_glow_radius,
+            geothermal_glow_color,
             show_moss,
             moss_growth_rate,
             moss_erosion_rate,
@@ -1324,6 +1409,18 @@ impl GenomeEditorState {
         u32,
         u32,
         bool,
+        u32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        [f32; 3],
+        bool,
         f32,
         f32,
         f32,
@@ -1365,6 +1462,30 @@ impl GenomeEditorState {
             seed: u32,
             #[serde(default = "default_resolution")]
             resolution: u32,
+            #[serde(default = "default_geothermal_enabled")]
+            geothermal_enabled: bool,
+            #[serde(default = "default_geothermal_count")]
+            geothermal_count: u32,
+            #[serde(default = "default_geothermal_length")]
+            geothermal_length: f32,
+            #[serde(default = "default_geothermal_width")]
+            geothermal_width: f32,
+            #[serde(default = "default_geothermal_depth")]
+            geothermal_depth: f32,
+            #[serde(default = "default_geothermal_back_margin")]
+            geothermal_back_margin: f32,
+            #[serde(default = "default_geothermal_top_margin")]
+            geothermal_top_margin: f32,
+            #[serde(default = "default_geothermal_heat_output")]
+            geothermal_heat_output: f32,
+            #[serde(default = "default_geothermal_heat_radius")]
+            geothermal_heat_radius: f32,
+            #[serde(default = "default_geothermal_glow_strength")]
+            geothermal_glow_strength: f32,
+            #[serde(default = "default_geothermal_glow_radius")]
+            geothermal_glow_radius: f32,
+            #[serde(default = "default_geothermal_glow_color")]
+            geothermal_glow_color: [f32; 3],
             #[serde(default = "default_show_moss")]
             show_moss: bool,
             #[serde(default = "default_moss_growth_rate")]
@@ -1429,6 +1550,42 @@ impl GenomeEditorState {
 
         fn default_resolution() -> u32 {
             128
+        }
+        fn default_geothermal_enabled() -> bool {
+            true
+        }
+        fn default_geothermal_count() -> u32 {
+            10
+        }
+        fn default_geothermal_length() -> f32 {
+            9.0
+        }
+        fn default_geothermal_width() -> f32 {
+            2.0
+        }
+        fn default_geothermal_depth() -> f32 {
+            5.0
+        }
+        fn default_geothermal_back_margin() -> f32 {
+            4.0
+        }
+        fn default_geothermal_top_margin() -> f32 {
+            2.0
+        }
+        fn default_geothermal_heat_output() -> f32 {
+            34.0
+        }
+        fn default_geothermal_heat_radius() -> f32 {
+            8.0
+        }
+        fn default_geothermal_glow_strength() -> f32 {
+            2.8
+        }
+        fn default_geothermal_glow_radius() -> f32 {
+            10.0
+        }
+        fn default_geothermal_glow_color() -> [f32; 3] {
+            [1.0, 0.32, 0.055]
         }
         fn default_show_moss() -> bool {
             true
@@ -1536,6 +1693,18 @@ impl GenomeEditorState {
                             settings.smoothness,
                             settings.seed,
                             settings.resolution,
+                            settings.geothermal_enabled,
+                            settings.geothermal_count,
+                            settings.geothermal_length,
+                            settings.geothermal_width,
+                            settings.geothermal_depth,
+                            settings.geothermal_back_margin,
+                            settings.geothermal_top_margin,
+                            settings.geothermal_heat_output,
+                            settings.geothermal_heat_radius,
+                            settings.geothermal_glow_strength,
+                            settings.geothermal_glow_radius,
+                            settings.geothermal_glow_color,
                             settings.show_moss,
                             settings.moss_growth_rate,
                             settings.moss_erosion_rate,
@@ -1588,6 +1757,18 @@ impl GenomeEditorState {
             0.0,
             12345u32,
             128u32,
+            true,
+            10u32,
+            9.0,
+            2.0,
+            5.0,
+            4.0,
+            2.0,
+            34.0,
+            8.0,
+            2.8,
+            10.0,
+            [1.0, 0.32, 0.055],
             true,
             0.15,
             0.3,
@@ -1822,17 +2003,45 @@ impl GenomeEditorState {
     /// Load light settings from disk, or return defaults if file doesn't exist.
     #[allow(clippy::type_complexity)]
     pub fn load_light_settings() -> (
-        [f32; 3], bool, f32, u32,         // light_dir, show_fog, fog_density, fog_steps
-        [f32; 3], f32,                    // light_color, light_intensity
-        [f32; 3], f32, f32, f32, f32,     // fog_color, anisotropy, absorption, height_density, height_falloff
-        u32, f32, f32, f32, f32,          // lf_max_steps, step_size, absorb_solid, absorb_cell, ambient_floor
-        bool, [f32; 3], f32, f32,         // show_sun, sun_color, sun_angular_radius, sun_intensity
-        bool, [f32; 3], f32, f32,         // rotation_enabled, rotation_axis, orbit_angle, rotation_speed
-        bool, f32, f32, f32, f32,         // cycle_enabled, cycle_min, cycle_max, cycle_period, night_ratio
-        bool, f32, f32,                   // shadow_enabled, shadow_strength, shadow_quality
-        f32, f32, f32,                    // caustic_intensity, scale, speed
-        f32, f32,                         // photocyte_mass, photocyte_threshold
-        bool, f32,                        // luminocyte_bloom_enabled, luminocyte_bloom_radius
+        [f32; 3],
+        bool,
+        f32,
+        u32, // light_dir, show_fog, fog_density, fog_steps
+        [f32; 3],
+        f32, // light_color, light_intensity
+        [f32; 3],
+        f32,
+        f32,
+        f32,
+        f32, // fog_color, anisotropy, absorption, height_density, height_falloff
+        u32,
+        f32,
+        f32,
+        f32,
+        f32, // lf_max_steps, step_size, absorb_solid, absorb_cell, ambient_floor
+        bool,
+        [f32; 3],
+        f32,
+        f32, // show_sun, sun_color, sun_angular_radius, sun_intensity
+        bool,
+        [f32; 3],
+        f32,
+        f32, // rotation_enabled, rotation_axis, orbit_angle, rotation_speed
+        bool,
+        f32,
+        f32,
+        f32,
+        f32, // cycle_enabled, cycle_min, cycle_max, cycle_period, night_ratio
+        bool,
+        f32,
+        f32, // shadow_enabled, shadow_strength, shadow_quality
+        f32,
+        f32,
+        f32, // caustic_intensity, scale, speed
+        f32,
+        f32, // photocyte_mass, photocyte_threshold
+        bool,
+        f32, // luminocyte_bloom_enabled, luminocyte_bloom_radius
     ) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
@@ -2053,24 +2262,13 @@ impl GenomeEditorState {
             0.012, // photocyte_mass_per_second (scaled by sun_intensity at sync)
             0.05,  // photocyte_min_light_threshold
             // Luminocyte bloom
-            true,  // luminocyte_bloom_enabled
-            0.02,  // luminocyte_bloom_radius
+            true, // luminocyte_bloom_enabled
+            0.02, // luminocyte_bloom_radius
         )
     }
 
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_settings() -> (
-        f32,
-        bool,
-        bool,
-        bool,
-        f32,
-        u32,
-        [f32; 4],
-        bool,
-        u32,
-        f32,
-    ) {
+    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, f32) {
         #[derive(serde::Deserialize)]
         struct FluidSettings {
             gravity: f32,
@@ -2609,4 +2807,3 @@ mod tests {
         assert_eq!(state.time_value, 0.0);
     }
 }
-

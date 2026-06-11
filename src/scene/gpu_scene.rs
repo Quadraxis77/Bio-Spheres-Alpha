@@ -891,10 +891,12 @@ impl GpuScene {
                 surface_config.height,
                 surface_config.format,
             )),
-            luminocyte_bloom: Some(crate::rendering::luminocyte_bloom::LuminocyteBloomRenderer::new(
-                device,
-                surface_config.format,
-            )),
+            luminocyte_bloom: Some(
+                crate::rendering::luminocyte_bloom::LuminocyteBloomRenderer::new(
+                    device,
+                    surface_config.format,
+                ),
+            ),
             surface_format: surface_config.format,
             sun_renderer: None,
             show_sun: true,
@@ -2273,6 +2275,7 @@ impl GpuScene {
                 water_density_buffer,
                 fluid_sim.humidity_buffer(),
                 ice_density_buffer,
+                fluid_sim.geothermal_glow_buffer(),
             ));
         }
         let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
@@ -2406,7 +2409,6 @@ impl GpuScene {
             pass.set_bind_group(1, &sense_bg, &[]);
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
-
     }
 
     /// Copy data from triple buffers to instance builder
@@ -4419,16 +4421,19 @@ impl GpuScene {
                 let grid_res = 128u32;
                 let cell_size = world_diam / grid_res as f32;
                 let origin = -world_diam * 0.5;
-                self.instance_builder.set_cave_cull_params(queue, CaveCullParams {
-                    enabled: 1,
-                    grid_resolution: grid_res,
-                    cell_size,
-                    origin_x: origin,
-                    origin_y: origin,
-                    origin_z: origin,
-                    _pad0: 0.0,
-                    _pad1: 0.0,
-                });
+                self.instance_builder.set_cave_cull_params(
+                    queue,
+                    CaveCullParams {
+                        enabled: 1,
+                        grid_resolution: grid_res,
+                        cell_size,
+                        origin_x: origin,
+                        origin_y: origin,
+                        origin_z: origin,
+                        _pad0: 0.0,
+                        _pad1: 0.0,
+                    },
+                );
             }
 
             // Create cave-specific physics bind groups
@@ -4790,7 +4795,8 @@ impl GpuScene {
         self.solid_mask_generator = Some(solid_mask_generator);
 
         // Create light field system for photocyte nutrients and volumetric fog
-        let light_field_system = LightFieldSystem::new(device, world_radius, self.gpu_triple_buffers.capacity);
+        let light_field_system =
+            LightFieldSystem::new(device, world_radius, self.gpu_triple_buffers.capacity);
 
         // Rebuild signal sense world data bind group with real light field buffer
         {
@@ -5536,6 +5542,13 @@ impl GpuScene {
             solid_mask_buffer,
             &light_field_buffer,
         );
+        if let (Some(ref solid_mask_generator), Some(ref cave_renderer)) =
+            (&self.solid_mask_generator, &self.cave_renderer)
+        {
+            let (_, geothermal_fields) = solid_mask_generator
+                .generate_solid_mask_and_geothermal_fields(cave_renderer.params());
+            simulator.update_geothermal_fields(queue, &geothermal_fields);
+        }
 
         // Update the position update force accum bind group with real water buffers
         self.cached_bind_groups.update_water_buffers(
@@ -7015,7 +7028,8 @@ impl GpuScene {
             let period = editor_state.sun_cycle_period.max(1.0);
             let phase = (self.current_time / period * 2.0 * std::f32::consts::PI).sin();
             let t = (phase + 1.0) * 0.5;
-            editor_state.sun_cycle_min + t * (editor_state.sun_cycle_max - editor_state.sun_cycle_min)
+            editor_state.sun_cycle_min
+                + t * (editor_state.sun_cycle_max - editor_state.sun_cycle_min)
         } else {
             editor_state.sun_intensity
         };
@@ -7031,10 +7045,7 @@ impl GpuScene {
             let day_frac = 1.0 - night_frac;
             // Dawn/dusk ramp width: 5% of the period, but never wider than
             // half of the shorter phase so extreme ratios still work.
-            let ramp = 0.05f32
-                .min(day_frac * 0.5)
-                .min(night_frac * 0.5)
-                .max(1e-4);
+            let ramp = 0.05f32.min(day_frac * 0.5).min(night_frac * 0.5).max(1e-4);
             let smoothstep = |x: f32| {
                 let x = x.clamp(0.0, 1.0);
                 x * x * (3.0 - 2.0 * x)
@@ -7139,7 +7150,8 @@ impl GpuScene {
         // water/air ambient temps never respond to a running day/night cycle.
         self.sun_intensity = effective_sun_intensity;
         self.sun_light_dir = editor_state.light_dir;
-        self.sun_rotating = editor_state.sun_rotation_enabled && editor_state.sun_rotation_speed != 0.0;
+        self.sun_rotating =
+            editor_state.sun_rotation_enabled && editor_state.sun_rotation_speed != 0.0;
         if let Some(ref mut sun) = self.sun_renderer {
             sun.sun_color = editor_state.sun_color;
             sun.sun_angular_radius = editor_state.sun_angular_radius;
@@ -7176,6 +7188,18 @@ impl GpuScene {
             params.smoothness = editor_state.cave_smoothness;
             params.seed = editor_state.cave_seed;
             params.grid_resolution = editor_state.cave_resolution;
+            params.geothermal_enabled = u32::from(editor_state.geothermal_enabled);
+            params.geothermal_count = editor_state.geothermal_count;
+            params.geothermal_length = editor_state.geothermal_length;
+            params.geothermal_width = editor_state.geothermal_width;
+            params.geothermal_depth = editor_state.geothermal_depth;
+            params.geothermal_back_margin = editor_state.geothermal_back_margin;
+            params.geothermal_top_margin = editor_state.geothermal_top_margin;
+            params.geothermal_heat_output = editor_state.geothermal_heat_output;
+            params.geothermal_heat_radius = editor_state.geothermal_heat_radius;
+            params.geothermal_glow_strength = editor_state.geothermal_glow_strength;
+            params.geothermal_glow_radius = editor_state.geothermal_glow_radius;
+            params.geothermal_glow_color = editor_state.geothermal_glow_color;
 
             // Ensure world dimensions match the physics world
             params.world_center = [0.0, 0.0, 0.0];
@@ -7210,10 +7234,14 @@ impl GpuScene {
             &self.cave_renderer,
         ) {
             let cave_params = cave_renderer.params();
-            let solid_mask = solid_mask_generator.generate_solid_mask(cave_params);
+            let (solid_mask, geothermal_fields) =
+                solid_mask_generator.generate_solid_mask_and_geothermal_fields(cave_params);
 
             // Update the solid mask buffer
             fluid_buffers.update_solid_mask(queue, &solid_mask);
+            if let Some(ref simulator) = self.fluid_simulator {
+                simulator.update_geothermal_fields(queue, &geothermal_fields);
+            }
 
             // Also update surface nets with the solid mask for greedy water surface generation
             if let Some(ref gpu_surface_nets) = self.gpu_surface_nets {
@@ -7850,7 +7878,6 @@ impl Scene for GpuScene {
             self.dispatch_scaffold_rules(device, &mut encoder, queue);
         }
 
-
         // Execute non-drag pending position updates (e.g. from other tools)
         let position_updated =
             position_updated || self.execute_pending_position_updates(device, &mut encoder, queue);
@@ -8008,7 +8035,8 @@ impl Scene for GpuScene {
         }
 
         // Resolve solid mask buffer before the mutable borrow of instance_builder
-        let solid_mask_buf: *const wgpu::Buffer = self.fluid_buffers
+        let solid_mask_buf: *const wgpu::Buffer = self
+            .fluid_buffers
             .as_ref()
             .map(|fb| fb.solid_mask() as *const _)
             .unwrap_or(self.instance_builder.dummy_solid_mask_buffer() as *const _);

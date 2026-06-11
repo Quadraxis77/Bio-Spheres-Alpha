@@ -1387,12 +1387,10 @@ impl UiSystem {
                                                 .color(theme::TEXT_DIM),
                                         );
                                         ui.label(
-                                            egui::RichText::new(format_temp(
-                                                live_avg_water_temp_c,
-                                            ))
-                                            .strong()
-                                            .size(11.5)
-                                            .color(p.status_info),
+                                            egui::RichText::new(format_temp(live_avg_water_temp_c))
+                                                .strong()
+                                                .size(11.5)
+                                                .color(p.status_info),
                                         );
                                     },
                                 );
@@ -1423,12 +1421,10 @@ impl UiSystem {
                                                 .color(theme::TEXT_DIM),
                                         );
                                         ui.label(
-                                            egui::RichText::new(format_temp(
-                                                live_avg_air_temp_c,
-                                            ))
-                                            .strong()
-                                            .size(11.5)
-                                            .color(p.text_primary),
+                                            egui::RichText::new(format_temp(live_avg_air_temp_c))
+                                                .strong()
+                                                .size(11.5)
+                                                .color(p.text_primary),
                                         );
                                     },
                                 );

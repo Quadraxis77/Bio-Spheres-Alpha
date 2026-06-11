@@ -3367,7 +3367,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                         .unwrap_or("Segment");
                     let (swatch_rect, _) =
                         ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    ui.painter().rect_filled(swatch_rect, 1.0, SEGMENT_COLORS[i]);
+                    ui.painter()
+                        .rect_filled(swatch_rect, 1.0, SEGMENT_COLORS[i]);
                     ui.label(
                         egui::RichText::new(label)
                             .size(11.0)
@@ -3593,6 +3594,18 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut smoothness = params.smoothness;
             let mut seed = params.seed as i32;
             let mut resolution = params.grid_resolution as i32;
+            let mut geothermal_enabled = params.geothermal_enabled != 0;
+            let mut geothermal_count = params.geothermal_count as i32;
+            let mut geothermal_length = params.geothermal_length;
+            let mut geothermal_width = params.geothermal_width;
+            let mut geothermal_depth = params.geothermal_depth;
+            let mut geothermal_back_margin = params.geothermal_back_margin;
+            let mut geothermal_top_margin = params.geothermal_top_margin;
+            let mut geothermal_heat_output = params.geothermal_heat_output;
+            let mut geothermal_heat_radius = params.geothermal_heat_radius;
+            let mut geothermal_glow_strength = params.geothermal_glow_strength;
+            let mut geothermal_glow_radius = params.geothermal_glow_radius;
+            let mut geothermal_glow_color = params.geothermal_glow_color;
 
             let mut params_changed = false;
 
@@ -3668,6 +3681,105 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 }
             });
 
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Geothermal Vents");
+            ui.add_space(5.0);
+
+            params_changed |= ui
+                .checkbox(&mut geothermal_enabled, "Enable Vents")
+                .on_hover_text(
+                    "Generate procedural cave-wall crevices that emit directional heat and warm colored light",
+                )
+                .changed();
+
+            if geothermal_enabled {
+                ui.add_space(4.0);
+                ui.label("Frequency:")
+                    .on_hover_text("Target number of vents to place in thick-enough cave walls");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_count, 0..=64))
+                    .changed();
+
+                ui.add_space(6.0);
+                ui.label("Shape");
+                ui.add_space(2.0);
+
+                ui.label("Length:")
+                    .on_hover_text("How far each crevice runs along the cave wall, in voxels");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_length, 1.0..=32.0))
+                    .changed();
+
+                ui.label("Width:")
+                    .on_hover_text("Opening width of the crevice mouth, in voxels");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_width, 1.0..=10.0))
+                    .changed();
+
+                ui.label("Depth:")
+                    .on_hover_text("How deeply the surface crevice indents the cave wall visually. The fluid/solid mask only opens the mouth layer, so this does not create tunnels");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_depth, 1.0..=20.0))
+                    .changed();
+
+                if state.show_advanced_options {
+                    ui.label("Back Margin:")
+                        .on_hover_text("Extra solid rock required behind the carved crevice before placement is allowed");
+                    params_changed |= ui
+                        .add(egui::Slider::new(&mut geothermal_back_margin, 0.0..=20.0))
+                        .changed();
+
+                    ui.label("Top Margin:")
+                        .on_hover_text("Extra solid rock required above the crevice volume before placement is allowed");
+                    params_changed |= ui
+                        .add(egui::Slider::new(&mut geothermal_top_margin, 0.0..=12.0))
+                        .changed();
+                }
+
+                ui.add_space(6.0);
+                ui.label("Heat");
+                ui.add_space(2.0);
+
+                ui.label("Heat Output:")
+                    .on_hover_text("Directional heat injected from exposed crevice voxels into the temperature field");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0))
+                    .changed();
+
+                ui.label("Heat Radius:")
+                    .on_hover_text("Distance the baked directional heat plume reaches from the crevice mouth, in voxels");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
+                    .changed();
+
+                ui.add_space(6.0);
+                ui.label("Glow");
+                ui.add_space(2.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Color:");
+                    params_changed |= ui
+                        .color_edit_button_rgb(&mut geothermal_glow_color)
+                        .on_hover_text("RGB color emitted from the lowest point of each crevice into the light field")
+                        .changed();
+                });
+
+                ui.label("Glow Strength:").on_hover_text(
+                    "Brightness of the colored glow injected into the local light field",
+                );
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_glow_strength, 0.0..=8.0))
+                    .changed();
+
+                ui.label("Glow Radius:").on_hover_text(
+                    "Radius of the baked colored glow around the lowest crevice point, in voxels",
+                );
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut geothermal_glow_radius, 1.0..=32.0))
+                    .changed();
+            }
+
             if state.show_advanced_options {
                 ui.add_space(10.0);
                 ui.separator();
@@ -3686,6 +3798,18 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.cave_smoothness = smoothness;
                 context.editor_state.cave_seed = seed as u32;
                 context.editor_state.cave_resolution = resolution as u32;
+                context.editor_state.geothermal_enabled = geothermal_enabled;
+                context.editor_state.geothermal_count = geothermal_count.max(0) as u32;
+                context.editor_state.geothermal_length = geothermal_length;
+                context.editor_state.geothermal_width = geothermal_width;
+                context.editor_state.geothermal_depth = geothermal_depth;
+                context.editor_state.geothermal_back_margin = geothermal_back_margin;
+                context.editor_state.geothermal_top_margin = geothermal_top_margin;
+                context.editor_state.geothermal_heat_output = geothermal_heat_output;
+                context.editor_state.geothermal_heat_radius = geothermal_heat_radius;
+                context.editor_state.geothermal_glow_strength = geothermal_glow_strength;
+                context.editor_state.geothermal_glow_radius = geothermal_glow_radius;
+                context.editor_state.geothermal_glow_color = geothermal_glow_color;
                 context.editor_state.cave_params_dirty = true;
 
                 // Save settings to disk
@@ -4435,8 +4559,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             }
         }
 
-        ui.label("Freeze Rate:")
-            .on_hover_text("How quickly sustained cold accumulates freeze debt, converting water to ice");
+        ui.label("Freeze Rate:").on_hover_text(
+            "How quickly sustained cold accumulates freeze debt, converting water to ice",
+        );
         if ui
             .add(
                 egui::Slider::new(&mut state.fluid_settings.climate.freeze_rate, 0.0..=5.0)
@@ -4450,8 +4575,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             }
         }
 
-        ui.label("Melt Rate:")
-            .on_hover_text("How quickly sustained warmth accumulates melt debt, converting ice to water");
+        ui.label("Melt Rate:").on_hover_text(
+            "How quickly sustained warmth accumulates melt debt, converting ice to water",
+        );
         if ui
             .add(
                 egui::Slider::new(&mut state.fluid_settings.climate.melt_rate, 0.0..=5.0)
@@ -4465,8 +4591,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             }
         }
 
-        ui.label("Snow Melt Rate:")
-            .on_hover_text("How quickly sustained warmth accumulates melt debt, converting snow to water");
+        ui.label("Snow Melt Rate:").on_hover_text(
+            "How quickly sustained warmth accumulates melt debt, converting snow to water",
+        );
         if ui
             .add(
                 egui::Slider::new(&mut state.fluid_settings.climate.snow_melt_rate, 0.0..=5.0)
@@ -4625,8 +4752,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         if advanced {
             ui.add_space(4.0);
-            ui.label("Glint Sharpness:")
-                .on_hover_text("Blinn-Phong exponent for the facet glints. Higher = tighter, sharper sparkles");
+            ui.label("Glint Sharpness:").on_hover_text(
+                "Blinn-Phong exponent for the facet glints. Higher = tighter, sharper sparkles",
+            );
             ui.add(
                 egui::Slider::new(&mut ice.glint_shininess, 4.0..=256.0)
                     .step_by(1.0)
@@ -5237,13 +5365,8 @@ fn pitch_yaw_to_light_dir(pitch_degrees: f32, yaw_degrees: f32) -> [f32; 3] {
     let pitch = pitch_degrees.to_radians();
     let yaw = yaw_degrees.to_radians();
     let horizontal = pitch.cos();
-    [
-        horizontal * yaw.sin(),
-        pitch.sin(),
-        horizontal * yaw.cos(),
-    ]
+    [horizontal * yaw.sin(), pitch.sin(), horizontal * yaw.cos()]
 }
-
 
 fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
     let (mut pitch, mut yaw) = light_dir_to_pitch_yaw(*light_dir);
@@ -5281,7 +5404,11 @@ fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
             yaw = -55.0;
             changed = true;
         }
-        if ui.button("Default").on_hover_text("Default angled light").clicked() {
+        if ui
+            .button("Default")
+            .on_hover_text("Default angled light")
+            .clicked()
+        {
             pitch = 44.0;
             yaw = -45.0;
             changed = true;
@@ -5736,7 +5863,9 @@ fn render_light_settings_organized(
                         .step_by(0.01)
                         .fixed_decimals(2),
                     )
-                    .on_hover_text("How strongly fog scatters light toward the viewer (god-ray sharpness).")
+                    .on_hover_text(
+                        "How strongly fog scatters light toward the viewer (god-ray sharpness).",
+                    )
                     .changed();
                 ui.label("Absorption");
                 changed |= ui
@@ -5772,13 +5901,10 @@ fn render_light_settings_organized(
                 ui.label("Bottom Density");
                 changed |= ui
                     .add(
-                        egui::Slider::new(
-                            &mut context.editor_state.fog_height_density,
-                            0.0..=2.0,
-                        )
-                        .text("Bottom Density")
-                        .step_by(0.01)
-                        .fixed_decimals(2),
+                        egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
+                            .text("Bottom Density")
+                            .step_by(0.01)
+                            .fixed_decimals(2),
                     )
                     .changed();
                 ui.label("Falloff");
@@ -5806,19 +5932,19 @@ fn render_light_settings_organized(
                     changed = true;
                 }
                 changed |= ui
-                    .checkbox(&mut context.editor_state.fog_smooth_light_field, "Smooth Voxels")
+                    .checkbox(
+                        &mut context.editor_state.fog_smooth_light_field,
+                        "Smooth Voxels",
+                    )
                     .on_hover_text("Trilinear light-field sampling for fog.")
                     .changed();
                 ui.label("Blur");
                 changed |= ui
                     .add(
-                        egui::Slider::new(
-                            &mut context.editor_state.fog_composite_blur,
-                            0.25..=4.0,
-                        )
-                        .text("Blur")
-                        .step_by(0.25)
-                        .fixed_decimals(2),
+                        egui::Slider::new(&mut context.editor_state.fog_composite_blur, 0.25..=4.0)
+                            .text("Blur")
+                            .step_by(0.25)
+                            .fixed_decimals(2),
                     )
                     .changed();
 
@@ -5857,7 +5983,10 @@ fn render_light_settings_organized(
         .default_open(true)
         .show(ui, |ui| {
             changed |= ui
-                .checkbox(&mut context.editor_state.luminocyte_bloom_enabled, "Enabled")
+                .checkbox(
+                    &mut context.editor_state.luminocyte_bloom_enabled,
+                    "Enabled",
+                )
                 .on_hover_text("Screen-space bloom halo around glowing luminocytes.")
                 .changed();
 
@@ -5873,7 +6002,9 @@ fn render_light_settings_organized(
                         .step_by(0.01)
                         .fixed_decimals(2),
                     )
-                    .on_hover_text("Halo size as a fraction of screen height. Larger = bigger glow.")
+                    .on_hover_text(
+                        "Halo size as a fraction of screen height. Larger = bigger glow.",
+                    )
                     .changed();
             });
 
@@ -5904,8 +6035,9 @@ fn render_light_settings_organized(
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("Contrast & Eye Adaptation").strong());
 
-                ui.label("Contrast")
-                    .on_hover_text("Midpoint contrast. Values above 1 separate lights and darks; 1 is neutral.");
+                ui.label("Contrast").on_hover_text(
+                    "Midpoint contrast. Values above 1 separate lights and darks; 1 is neutral.",
+                );
                 if ui
                     .add(
                         egui::Slider::new(&mut context.editor_state.pp_contrast, 0.25..=4.0)
@@ -5923,7 +6055,9 @@ fn render_light_settings_organized(
 
                 if ui
                     .checkbox(&mut context.editor_state.pp_adapt_enabled, "Eye Adaptation")
-                    .on_hover_text("Camera gradually adjusts exposure between bright and dark areas.")
+                    .on_hover_text(
+                        "Camera gradually adjusts exposure between bright and dark areas.",
+                    )
                     .changed()
                 {
                     if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
@@ -5938,13 +6072,10 @@ fn render_light_settings_organized(
                     ui.label("Adapt Speed");
                     if ui
                         .add(
-                            egui::Slider::new(
-                                &mut context.editor_state.pp_adapt_speed,
-                                0.01..=0.4,
-                            )
-                            .text("Adapt Speed")
-                            .step_by(0.01)
-                            .fixed_decimals(2),
+                            egui::Slider::new(&mut context.editor_state.pp_adapt_speed, 0.01..=0.4)
+                                .text("Adapt Speed")
+                                .step_by(0.01)
+                                .fixed_decimals(2),
                         )
                         .changed()
                     {
@@ -6057,7 +6188,11 @@ fn render_light_settings_organized(
         .on_hover_text("Recompute the shadow/light voxel grid every N render frames. 1 = every frame (best quality). /2 /4 /8 = progressively cheaper with minor shadow lag on fast-moving organisms.");
     ui.horizontal(|ui| {
         for &n in &[1u32, 2, 4, 8] {
-            let label = if n == 1 { "Every".to_owned() } else { format!("/{n}") };
+            let label = if n == 1 {
+                "Every".to_owned()
+            } else {
+                format!("/{n}")
+            };
             if ui.selectable_label(lf_interval == n, label).clicked() {
                 lf_interval = n;
             }
@@ -6083,7 +6218,12 @@ fn render_light_settings_organized(
     ui.label("Max Steps / Frame:")
         .on_hover_text("Maximum physics steps per render frame at 1x speed. Lower = better frame times at high simulation speeds; higher = simulation keeps up during fast-forward.");
     ui.add(egui::Slider::new(&mut max_steps, 1..=16));
-    ui.label(egui::RichText::new("Caps physics budget per frame (lower = smoother, may slow sim at high speed)").small());
+    ui.label(
+        egui::RichText::new(
+            "Caps physics budget per frame (lower = smoother, may slow sim at high speed)",
+        )
+        .small(),
+    );
 
     state.world_settings.light_field_update_interval = lf_interval;
     state.world_settings.physics_hz = phz;
@@ -6132,13 +6272,17 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
     changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
 
     if false {
-    let rotating = context.editor_state.sun_rotation_enabled;
-    if rotating {
-        ui.label(egui::RichText::new("⟳ Controlled by rotation — disable rotation to set manually").italics().weak());
-        ui.add_space(2.0);
-    }
+        let rotating = context.editor_state.sun_rotation_enabled;
+        if rotating {
+            ui.label(
+                egui::RichText::new("⟳ Controlled by rotation — disable rotation to set manually")
+                    .italics()
+                    .weak(),
+            );
+            ui.add_space(2.0);
+        }
 
-    ui.add_enabled_ui(!rotating, |ui| {
+        ui.add_enabled_ui(!rotating, |ui| {
         ui.label("X:").on_hover_text(
             "X component of the light direction vector. Negative = light comes from the right",
         );
@@ -6185,7 +6329,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             }
         });
     });
-
     }
 
     // === Sun ===
@@ -6217,17 +6360,32 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
 
     if context.editor_state.sun_cycle_enabled {
         ui.add_space(4.0);
-        ui.label("Min Brightness:").on_hover_text("Dimmest point of the season cycle");
+        ui.label("Min Brightness:")
+            .on_hover_text("Dimmest point of the season cycle");
         changed |= ui
-            .add(egui::Slider::new(&mut context.editor_state.sun_cycle_min, 0.0..=20.0).step_by(0.1).fixed_decimals(1))
+            .add(
+                egui::Slider::new(&mut context.editor_state.sun_cycle_min, 0.0..=20.0)
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
             .changed();
-        ui.label("Max Brightness:").on_hover_text("Brightest point of the season cycle");
+        ui.label("Max Brightness:")
+            .on_hover_text("Brightest point of the season cycle");
         changed |= ui
-            .add(egui::Slider::new(&mut context.editor_state.sun_cycle_max, 0.0..=20.0).step_by(0.1).fixed_decimals(1))
+            .add(
+                egui::Slider::new(&mut context.editor_state.sun_cycle_max, 0.0..=20.0)
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+            )
             .changed();
-        ui.label("Period (seconds):").on_hover_text("How long one full season cycle takes");
+        ui.label("Period (seconds):")
+            .on_hover_text("How long one full season cycle takes");
         changed |= ui
-            .add(egui::Slider::new(&mut context.editor_state.sun_cycle_period, 10.0..=3600.0).step_by(1.0).fixed_decimals(0))
+            .add(
+                egui::Slider::new(&mut context.editor_state.sun_cycle_period, 10.0..=3600.0)
+                    .step_by(1.0)
+                    .fixed_decimals(0),
+            )
             .changed();
         ui.add_space(4.0);
     }
@@ -6437,14 +6595,19 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
 
             ui.add_space(4.0);
             let mut fog_col = context.editor_state.fog_color;
-            ui.label("Fog Colour:").on_hover_text("Ambient/shadow colour of the fog medium itself.");
+            ui.label("Fog Colour:")
+                .on_hover_text("Ambient/shadow colour of the fog medium itself.");
             let mut c32 = egui::Color32::from_rgb(
                 (fog_col[0] * 255.0) as u8,
                 (fog_col[1] * 255.0) as u8,
                 (fog_col[2] * 255.0) as u8,
             );
             if ui.color_edit_button_srgba(&mut c32).changed() {
-                fog_col = [c32.r() as f32 / 255.0, c32.g() as f32 / 255.0, c32.b() as f32 / 255.0];
+                fog_col = [
+                    c32.r() as f32 / 255.0,
+                    c32.g() as f32 / 255.0,
+                    c32.b() as f32 / 255.0,
+                ];
                 changed = true;
             }
             context.editor_state.fog_color = fog_col;
@@ -6460,8 +6623,9 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
                 )
                 .changed();
 
-            ui.label("Height Fog Falloff:")
-                .on_hover_text("How quickly the height fog thins with altitude. Smaller = fog extends higher.");
+            ui.label("Height Fog Falloff:").on_hover_text(
+                "How quickly the height fog thins with altitude. Smaller = fog extends higher.",
+            );
             changed |= ui
                 .add(
                     egui::Slider::new(&mut context.editor_state.fog_height_falloff, 0.001..=0.1)
@@ -6523,11 +6687,17 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.label(egui::RichText::new("Contrast & Eye Adaptation").strong());
 
         // Contrast slider - always active.
-        ui.label("Contrast:")
-            .on_hover_text("Midpoint contrast. Values above 1 separate lights and darks; 1.0 = neutral.");
-        if ui.add(egui::Slider::new(
-            &mut context.editor_state.pp_contrast, 0.25..=4.0
-        ).step_by(0.05).fixed_decimals(2)).changed() {
+        ui.label("Contrast:").on_hover_text(
+            "Midpoint contrast. Values above 1 separate lights and darks; 1.0 = neutral.",
+        );
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.pp_contrast, 0.25..=4.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 if let Some(pp) = gpu_scene.post_process.as_mut() {
                     pp.contrast = context.editor_state.pp_contrast;
@@ -6549,33 +6719,51 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
 
         if context.editor_state.pp_adapt_enabled {
             ui.add_space(4.0);
-            ui.label("Adaptation Speed:")
-                .on_hover_text("How quickly the eye adjusts. 0.01 = very slow (cinematic), 0.3 = fast (arcade).");
-            if ui.add(egui::Slider::new(
-                &mut context.editor_state.pp_adapt_speed, 0.01..=0.4
-            ).step_by(0.01).fixed_decimals(2)).changed() {
+            ui.label("Adaptation Speed:").on_hover_text(
+                "How quickly the eye adjusts. 0.01 = very slow (cinematic), 0.3 = fast (arcade).",
+            );
+            if ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.pp_adapt_speed, 0.01..=0.4)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                     if let Some(pp) = gpu_scene.post_process.as_mut() {
                         pp.adapt_speed = context.editor_state.pp_adapt_speed;
                     }
                 }
             }
-            ui.label("Min Exposure:")
-                .on_hover_text("Darkest the camera can get (e.g. 0.1 = very dark in full sunlight).");
-            if ui.add(egui::Slider::new(
-                &mut context.editor_state.pp_adapt_min, 0.05..=2.0
-            ).step_by(0.05).fixed_decimals(2)).changed() {
+            ui.label("Min Exposure:").on_hover_text(
+                "Darkest the camera can get (e.g. 0.1 = very dark in full sunlight).",
+            );
+            if ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.pp_adapt_min, 0.05..=2.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                     if let Some(pp) = gpu_scene.post_process.as_mut() {
                         pp.adapt_min = context.editor_state.pp_adapt_min;
                     }
                 }
             }
-            ui.label("Max Exposure:")
-                .on_hover_text("Brightest the camera can get (e.g. 6.0 = very bright in a dark cave).");
-            if ui.add(egui::Slider::new(
-                &mut context.editor_state.pp_adapt_max, 1.0..=20.0
-            ).step_by(0.5).fixed_decimals(1)).changed() {
+            ui.label("Max Exposure:").on_hover_text(
+                "Brightest the camera can get (e.g. 6.0 = very bright in a dark cave).",
+            );
+            if ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.pp_adapt_max, 1.0..=20.0)
+                        .step_by(0.5)
+                        .fixed_decimals(1),
+                )
+                .changed()
+            {
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                     if let Some(pp) = gpu_scene.post_process.as_mut() {
                         pp.adapt_max = context.editor_state.pp_adapt_max;
@@ -11967,7 +12155,6 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             )
             .small(),
         );
-
     } // end advanced physics
 
     ui.add_space(12.0);

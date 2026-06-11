@@ -6,10 +6,12 @@
 //! - Checkered processing to prevent race conditions
 
 pub mod buffers;
+pub mod geothermal_vents;
 pub mod gpu_simulator;
 pub mod solid_mask;
 
 pub use buffers::{FluidBuffers, FluidParams, FluidType};
+pub use geothermal_vents::GeothermalFields;
 pub use gpu_simulator::{GpuFluidSimulator, WaterGridParams};
 pub use solid_mask::SolidMaskGenerator;
 

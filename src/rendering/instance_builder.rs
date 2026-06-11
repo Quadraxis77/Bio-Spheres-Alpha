@@ -718,25 +718,27 @@ impl InstanceBuilder {
             mapped_at_creation: false,
         });
 
-        let cave_cull_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Cave Cull Params"),
-            contents: bytemuck::bytes_of(&CaveCullParams {
-                enabled: 0,
-                grid_resolution: 128,
-                cell_size: 1.0,
-                origin_x: 0.0,
-                origin_y: 0.0,
-                origin_z: 0.0,
-                _pad0: 0.0,
-                _pad1: 0.0,
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let dummy_solid_mask_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Dummy Solid Mask"),
-            contents: bytemuck::cast_slice(&[0u32]),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let cave_cull_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cave Cull Params"),
+                contents: bytemuck::bytes_of(&CaveCullParams {
+                    enabled: 0,
+                    grid_resolution: 128,
+                    cell_size: 1.0,
+                    origin_x: 0.0,
+                    origin_y: 0.0,
+                    origin_z: 0.0,
+                    _pad0: 0.0,
+                    _pad1: 0.0,
+                }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+        let dummy_solid_mask_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Dummy Solid Mask"),
+                contents: bytemuck::cast_slice(&[0u32]),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         Self {
             pipeline,
@@ -800,7 +802,11 @@ impl InstanceBuilder {
     /// Enable cave solid-mask culling. Call once after the cave is initialized.
     /// Invalidates the bind group so it gets recreated with the correct solid mask buffer.
     pub fn set_cave_cull_params(&mut self, queue: &wgpu::Queue, params: CaveCullParams) {
-        queue.write_buffer(&self.cave_cull_params_buffer, 0, bytemuck::bytes_of(&params));
+        queue.write_buffer(
+            &self.cave_cull_params_buffer,
+            0,
+            bytemuck::bytes_of(&params),
+        );
         self.bind_group = None; // force recreate with new solid mask reference
     }
 
@@ -1683,7 +1689,14 @@ impl InstanceBuilder {
 
         // Ensure bind group exists with cell_count_buffer and death_flags_buffer
         if self.bind_group.is_none() {
-            self.recreate_bind_group(device, cell_count_buffer, death_flags_buffer, signal_flags_buffer, mode_properties_v7_buffer, solid_mask_buffer);
+            self.recreate_bind_group(
+                device,
+                cell_count_buffer,
+                death_flags_buffer,
+                signal_flags_buffer,
+                mode_properties_v7_buffer,
+                solid_mask_buffer,
+            );
         }
 
         let bind_group = self.bind_group.as_ref().unwrap();

@@ -94,6 +94,9 @@ struct ExtractParams {
 // conduction pass snaps such voxels to ambient on first touch, and
 // encode_field_temp never produces 0 for a legit value.
 @group(0) @binding(8) var<storage, read_write> temp_field: array<atomic<u32>>;
+// Prebaked directional heat from geothermal crevices. Generated with the cave
+// voxel field and only read here, so runtime cost is one coalesced load.
+@group(0) @binding(9) var<storage, read> geothermal_heat: array<f32>;
 
 // Encode a displacement vector (dx, dy, dz each in {-1, 0, +1}) into a packed u32.
 // Encoding: 2 bits per axis. 0b00=0, 0b01=+1, 0b10=-1.
@@ -373,6 +376,7 @@ fn temperature_from_0_255_u32(val_u32: u32) -> f32 {
 
 // ---- Temperature field access (see temp_field binding) ----
 const TFIELD_FP: f32 = 256.0;
+const TFIELD_MAX_RAW: u32 = u32((TEMP_MAX_C - TEMP_MIN_C) * TFIELD_FP);
 
 // Encode Celsius into the field's fixed-point representation. Clamped to a
 // minimum of 1 so a legitimate value never collides with the 0 sentinel.
@@ -396,7 +400,11 @@ fn field_temp_c(idx: u32) -> f32 {
 fn nudge_field_temp(idx: u32, delta_c: f32) {
     let d = i32(delta_c * TFIELD_FP);
     if d > 0 {
-        atomicAdd(&temp_field[idx], u32(d));
+        let add = u32(d);
+        let prev = atomicAdd(&temp_field[idx], add);
+        if prev > TFIELD_MAX_RAW || add > TFIELD_MAX_RAW - min(prev, TFIELD_MAX_RAW) {
+            atomicStore(&temp_field[idx], TFIELD_MAX_RAW);
+        }
     } else if d < 0 {
         let sub = u32(-d);
         let prev = atomicSub(&temp_field[idx], sub);
@@ -987,10 +995,14 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // First touch: snap uninitialized voxels to their light-driven ambient
     // and let conduction take over from the next tick.
-    let raw_self = atomicLoad(&temp_field[idx]);
+    var raw_self = atomicLoad(&temp_field[idx]);
     if raw_self == 0u {
         atomicStore(&temp_field[idx], encode_field_temp(ambient_temp_c(idx)));
         return;
+    }
+    if raw_self > TFIELD_MAX_RAW {
+        raw_self = TFIELD_MAX_RAW;
+        atomicStore(&temp_field[idx], TFIELD_MAX_RAW);
     }
     let t_self = TEMP_MIN_C + f32(raw_self) / TFIELD_FP;
 
@@ -1036,6 +1048,15 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
         self_delta_c += delta * coupling;
     }
 
+    let geothermal_c = geothermal_heat[idx];
+    if geothermal_c > 0.0 {
+        let geothermal_target_c = min(ambient_temp_c(idx) + geothermal_c, TEMP_MAX_C);
+        if geothermal_target_c > t_self {
+            let geothermal_coupling = min(0.08 * rate_scale / m_self, 0.35);
+            self_delta_c += (geothermal_target_c - t_self) * geothermal_coupling;
+        }
+    }
+
     // Rolling-average stats: slots 0/1 = water phases, 2/3 = air.
     if fluid_type == 1u || fluid_type == 2u || fluid_type == 4u {
         atomicAdd(&temp_stats[0], u32(round(t_self) + 50.0));
@@ -1066,9 +1087,13 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
         let n_idx = grid_index(u32(nx), u32(ny), u32(nz));
-        let raw_n = atomicLoad(&temp_field[n_idx]);
+        var raw_n = atomicLoad(&temp_field[n_idx]);
         if raw_n == 0u {
             continue; // neighbor not initialized yet
+        }
+        if raw_n > TFIELD_MAX_RAW {
+            raw_n = TFIELD_MAX_RAW;
+            atomicStore(&temp_field[n_idx], TFIELD_MAX_RAW);
         }
         let t_n = TEMP_MIN_C + f32(raw_n) / TFIELD_FP;
         if t_self <= t_n {

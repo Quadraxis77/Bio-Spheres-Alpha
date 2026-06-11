@@ -5106,15 +5106,23 @@ impl GpuPhysicsPipelines {
         use wgpu::util::DeviceExt;
 
         // Create default water buffers if not provided
-        let (water_grid_params_buffer, water_bitfield_buffer, water_velocity_buffer, ice_bitfield_buffer) = match (
+        let (
+            water_grid_params_buffer,
+            water_bitfield_buffer,
+            water_velocity_buffer,
+            ice_bitfield_buffer,
+        ) = match (
             water_grid_params_buffer,
             water_bitfield_buffer,
             water_velocity_buffer,
             ice_bitfield_buffer,
         ) {
-            (Some(params), Some(bitfield), Some(velocity), Some(ice)) => {
-                (params.clone(), bitfield.clone(), velocity.clone(), ice.clone())
-            }
+            (Some(params), Some(bitfield), Some(velocity), Some(ice)) => (
+                params.clone(),
+                bitfield.clone(),
+                velocity.clone(),
+                ice.clone(),
+            ),
             _ => {
                 // Default params with grid_resolution=0 which will cause all position lookups to be out of bounds
                 #[repr(C)]

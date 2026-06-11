@@ -27,6 +27,17 @@ impl SolidMaskGenerator {
     /// Returns a vector of u32 values where 1 = solid, 0 = empty
     /// Grid uses resolution^3 to match all shader indexing (128-stride)
     pub fn generate_solid_mask(&self, cave_params: &CaveParams) -> Vec<u32> {
+        self.generate_solid_mask_and_geothermal_fields(cave_params)
+            .0
+    }
+
+    pub fn generate_solid_mask_and_geothermal_fields(
+        &self,
+        cave_params: &CaveParams,
+    ) -> (
+        Vec<u32>,
+        crate::simulation::fluid_simulation::GeothermalFields,
+    ) {
         let resolution = self.grid_resolution as usize;
         let grid_size = resolution;
         let total_voxels = grid_size * grid_size * grid_size;
@@ -70,9 +81,7 @@ impl SolidMaskGenerator {
         .ceil()
         .max(1.0) as usize;
         let culled = crate::rendering::cave_system::cull_isolated_solid_chunks(
-            &mut solid,
-            grid_size,
-            min_voxels,
+            &mut solid, grid_size, min_voxels,
         );
         if culled > 0 {
             log::info!("Solid mask: culled {culled} voxels of isolated debris");
@@ -83,7 +92,15 @@ impl SolidMaskGenerator {
             }
         }
 
-        solid_mask
+        let fields = crate::simulation::fluid_simulation::geothermal_vents::apply_to_solid_mask(
+            &mut solid_mask,
+            cave_params,
+            self.world_center,
+            self.world_radius,
+            grid_size,
+        );
+
+        (solid_mask, fields)
     }
 
     /// Check if a world position is inside the solid cave volume

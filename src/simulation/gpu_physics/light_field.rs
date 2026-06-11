@@ -132,6 +132,8 @@ pub struct LightFieldSystem {
     /// Dummy humidity buffer (all zeros = no fog attenuation) for when the fluid
     /// simulator's humidity buffer isn't available
     dummy_humidity: wgpu::Buffer,
+    /// Dummy geothermal glow buffer (all zeros) for helper paths without fluid.
+    dummy_geothermal_glow: wgpu::Buffer,
     /// Per-cell glow state written by luminocytes (vec4: rgb color + brightness).
     /// DMA-cleared each physics step; sense_luminocyte.wgsl reads this for photocyte gain.
     pub glow_flags_buffer: wgpu::Buffer,
@@ -259,11 +261,12 @@ impl LightFieldSystem {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        let occupancy_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Occupancy Params"),
-            contents: bytemuck::cast_slice(&[occupancy_params_init]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let occupancy_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Occupancy Params"),
+                contents: bytemuck::cast_slice(&[occupancy_params_init]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         let photocyte_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Photocyte Params"),
@@ -366,6 +369,17 @@ impl LightFieldSystem {
                     // attenuates sunlight more strongly than liquid water
                     wgpu::BindGroupLayoutEntry {
                         binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 8: prebaked geothermal RGB glow source field
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -866,6 +880,12 @@ impl LightFieldSystem {
             mapped_at_creation: false,
         });
 
+        let dummy_geothermal_glow = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Geothermal Glow Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<[f32; 4]>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
         // === Cave-specific shadow bind group layout (includes water bitfield) ===
         let cave_shadow_bind_group_layout =
@@ -941,6 +961,7 @@ impl LightFieldSystem {
             shadow_field_params_buffer,
             dummy_water_density,
             dummy_humidity,
+            dummy_geothermal_glow,
             clear_occupancy_pipeline,
             build_occupancy_pipeline,
             compute_light_pipeline,
@@ -1337,6 +1358,10 @@ impl LightFieldSystem {
         &self.dummy_humidity
     }
 
+    pub fn dummy_geothermal_glow(&self) -> &wgpu::Buffer {
+        &self.dummy_geothermal_glow
+    }
+
     /// Get grid origin
     pub fn grid_origin(&self) -> [f32; 3] {
         self.grid_origin
@@ -1437,6 +1462,7 @@ impl LightFieldSystem {
         water_density_buffer: &wgpu::Buffer,
         humidity_buffer: &wgpu::Buffer,
         ice_density_buffer: &wgpu::Buffer,
+        geothermal_glow_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Light Field Bind Group"),
@@ -1473,6 +1499,10 @@ impl LightFieldSystem {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: ice_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: geothermal_glow_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1652,6 +1682,7 @@ impl LightFieldSystem {
             water_density_buffer,
             humidity_buffer,
             ice_density_buffer,
+            self.dummy_geothermal_glow(),
         );
         let photocyte_physics_bg = self.create_photocyte_physics_bind_group(
             device,
@@ -1711,7 +1742,6 @@ impl LightFieldSystem {
             pass.set_bind_group(1, &photocyte_system_bg, &[]);
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
-
     }
 
     /// Run only the photocyte light consumption step.
@@ -1804,6 +1834,7 @@ impl LightFieldSystem {
             water_density_buffer,
             humidity_buffer,
             ice_density_buffer,
+            self.dummy_geothermal_glow(),
         );
 
         // Clear occupancy grid using DMA (faster than compute dispatch)

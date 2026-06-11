@@ -297,10 +297,21 @@ impl PreviewState {
             mode.oculocyte_signal_value.to_bits().hash(&mut hasher);
             mode.oculocyte_signal_hops.hash(&mut hasher);
             mode.oculocyte_ray_length.to_bits().hash(&mut hasher);
-            mode.oculocyte_light_target_color.x.to_bits().hash(&mut hasher);
-            mode.oculocyte_light_target_color.y.to_bits().hash(&mut hasher);
-            mode.oculocyte_light_target_color.z.to_bits().hash(&mut hasher);
-            mode.oculocyte_light_color_tolerance.to_bits().hash(&mut hasher);
+            mode.oculocyte_light_target_color
+                .x
+                .to_bits()
+                .hash(&mut hasher);
+            mode.oculocyte_light_target_color
+                .y
+                .to_bits()
+                .hash(&mut hasher);
+            mode.oculocyte_light_target_color
+                .z
+                .to_bits()
+                .hash(&mut hasher);
+            mode.oculocyte_light_color_tolerance
+                .to_bits()
+                .hash(&mut hasher);
 
             // Hash regulation emit settings
             mode.regulation_emit_channel.hash(&mut hasher);

@@ -394,9 +394,7 @@ impl SunRenderer {
             orbit_ring_opacity: self.orbit_ring_opacity,
         };
         let params_bytes = bytemuck::bytes_of(&params);
-        if self.sun_params_dirty
-            || params_bytes != bytemuck::bytes_of(&self.cached_sun_params)
-        {
+        if self.sun_params_dirty || params_bytes != bytemuck::bytes_of(&self.cached_sun_params) {
             queue.write_buffer(&self.sun_params_buffer, 0, params_bytes);
             self.cached_sun_params = params;
             self.sun_params_dirty = false;

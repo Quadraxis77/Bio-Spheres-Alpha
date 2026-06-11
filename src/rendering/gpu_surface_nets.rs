@@ -1202,11 +1202,12 @@ impl GpuSurfaceNets {
             _pad0: 0.0,
             _pad1: 0.0,
         };
-        let ice_smooth_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Ice Smooth Density Params Buffer"),
-            contents: bytemuck::cast_slice(&[ice_smooth_params]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let ice_smooth_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Ice Smooth Density Params Buffer"),
+                contents: bytemuck::cast_slice(&[ice_smooth_params]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
         let ice_smooth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Ice Smooth Density Bind Group"),

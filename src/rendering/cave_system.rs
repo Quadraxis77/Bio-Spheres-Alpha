@@ -57,8 +57,23 @@ pub struct CaveParams {
     /// XPBD substeps
     pub substeps: u32,
 
-    /// Padding to 256-byte alignment (68 bytes used, need 188 bytes padding = 47 vec4s)
-    _padding: [f32; 188],
+    /// Procedural geothermal vent controls. These occupy the start of the
+    /// shader-side padding region, so existing cave shaders do not need to read
+    /// them.
+    pub geothermal_enabled: u32,
+    pub geothermal_count: u32,
+    pub geothermal_length: f32,
+    pub geothermal_width: f32,
+    pub geothermal_depth: f32,
+    pub geothermal_back_margin: f32,
+    pub geothermal_top_margin: f32,
+    pub geothermal_heat_output: f32,
+    pub geothermal_heat_radius: f32,
+    pub geothermal_glow_strength: f32,
+    pub geothermal_glow_radius: f32,
+    pub geothermal_glow_color: [f32; 3],
+
+    _padding: [f32; 174],
 }
 
 impl Default for CaveParams {
@@ -79,7 +94,19 @@ impl Default for CaveParams {
             collision_stiffness: 10000.0,
             collision_damping: 1.0,
             substeps: 3,
-            _padding: [0.0; 188],
+            geothermal_enabled: 1,
+            geothermal_count: 10,
+            geothermal_length: 9.0,
+            geothermal_width: 2.0,
+            geothermal_depth: 5.0,
+            geothermal_back_margin: 4.0,
+            geothermal_top_margin: 2.0,
+            geothermal_heat_output: 34.0,
+            geothermal_heat_radius: 8.0,
+            geothermal_glow_strength: 2.8,
+            geothermal_glow_radius: 10.0,
+            geothermal_glow_color: [1.0, 0.32, 0.055],
+            _padding: [0.0; 174],
         }
     }
 }
@@ -364,12 +391,11 @@ impl CaveSystemRenderer {
         // Depth-only prepass pipeline: no face culling, no fragment, no color outputs.
         // Writes depth for ALL cave surfaces (interior AND exterior) so that bloom
         // depth occlusion works when the camera is outside the cave looking in.
-        let depth_prepass_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Cave Depth Prepass Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout],
-                push_constant_ranges: &[],
-            });
+        let depth_prepass_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Cave Depth Prepass Layout"),
+            bind_group_layouts: &[&camera_bind_group_layout, &params_bind_group_layout],
+            push_constant_ranges: &[],
+        });
 
         let depth_prepass_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -988,7 +1014,11 @@ pub fn cull_isolated_solid_chunks(solid: &mut [bool], dims: usize, min_voxels: u
                 if y > 0 { Some(i - dims) } else { None },
                 if y + 1 < dims { Some(i + dims) } else { None },
                 if z > 0 { Some(i - dims * dims) } else { None },
-                if z + 1 < dims { Some(i + dims * dims) } else { None },
+                if z + 1 < dims {
+                    Some(i + dims * dims)
+                } else {
+                    None
+                },
             ];
             for n in neighbors.into_iter().flatten() {
                 if solid[n] && !visited[n] {
@@ -1003,12 +1033,8 @@ pub fn cull_isolated_solid_chunks(solid: &mut [bool], dims: usize, min_voxels: u
     for z in 0..dims {
         for y in 0..dims {
             for x in 0..dims {
-                let on_boundary = x == 0
-                    || x == dims - 1
-                    || y == 0
-                    || y == dims - 1
-                    || z == 0
-                    || z == dims - 1;
+                let on_boundary =
+                    x == 0 || x == dims - 1 || y == 0 || y == dims - 1 || z == 0 || z == dims - 1;
                 if !on_boundary {
                     continue;
                 }
@@ -1088,8 +1114,9 @@ impl CaveSystemRenderer {
                     }
                 }
             }
-            let min_voxels =
-                (MIN_ISOLATED_CHUNK_VOLUME / cell_size.powi(3)).ceil().max(1.0) as usize;
+            let min_voxels = (MIN_ISOLATED_CHUNK_VOLUME / cell_size.powi(3))
+                .ceil()
+                .max(1.0) as usize;
             let culled = cull_isolated_solid_chunks(&mut solid, dims, min_voxels);
             if culled > 0 {
                 log::info!("Cave generation: culled {culled} voxels of isolated debris");
@@ -1106,6 +1133,12 @@ impl CaveSystemRenderer {
                 }
             }
         }
+
+        crate::simulation::fluid_simulation::geothermal_vents::carve_density_grid(
+            &mut density_grid,
+            params,
+            params.threshold,
+        );
 
         // Run marching cubes
         let mut vertices = Vec::new();

@@ -341,7 +341,7 @@ pub struct ModeSettings {
     // Luminocyte settings
     pub luminocyte_signal_channel: i32, // Signal channel to listen on (0-7)
     pub luminocyte_threshold: f32,      // Signal value required to switch state
-    pub luminocyte_invert: bool,        // If true, bright by default and dims on signal (on without signal)
+    pub luminocyte_invert: bool, // If true, bright by default and dims on signal (on without signal)
 
     // Child settings
     pub child_a: ChildSettings,

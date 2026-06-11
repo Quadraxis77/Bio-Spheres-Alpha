@@ -81,6 +81,11 @@ const HUMIDITY_ATTENUATION_FLOOR: f32 = 0.4;
 @group(0) @binding(7)
 var<storage, read> ice_density: array<f32>;
 
+// Prebaked local glow from geothermal crevice low points. xyz is RGB radiance,
+// w is source strength. Medium tinting is applied per voxel below.
+@group(0) @binding(8)
+var<storage, read> geothermal_glow: array<vec4<f32>>;
+
 // Per-voxel absorption coefficient for ice (liquid water uses 0.055).
 const ICE_ABSORPTION: f32 = 0.12;
 
@@ -263,7 +268,8 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let grid_pos_f = vec3<f32>(f32(grid_pos.x) + 0.5, f32(grid_pos.y) + 0.5, f32(grid_pos.z) + 0.5);
     if (!is_inside_sphere(grid_pos_f.x, grid_pos_f.y, grid_pos_f.z)) {
         light_field[idx] = 1.0;
-        light_color_field[idx] = vec4<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b, 0.0);
+        let geo = geothermal_glow[idx];
+        light_color_field[idx] = vec4<f32>(vec3<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b) + geo.xyz, geo.w);
         return;
     }
     
@@ -285,13 +291,13 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (is_solid(gx, gy, gz - 1)) { solid_neighbors += 1u; }
             if (solid_neighbors >= 3u) {
                 light_field[idx] = 0.0;
-                light_color_field[idx] = vec4<f32>(0.0);
+                light_color_field[idx] = geothermal_glow[idx];
                 return;
             }
         } else {
             // Deep interior solid = actual wall, skip expensive neighbor check
             light_field[idx] = 0.0;
-            light_color_field[idx] = vec4<f32>(0.0);
+            light_color_field[idx] = geothermal_glow[idx];
             return;
         }
     }
@@ -319,7 +325,14 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let voxel_water = clamp(water_density[idx], 0.0, 1.0);
     let voxel_tint = mix(vec3<f32>(1.0), vec3<f32>(0.70, 0.92, 1.10), voxel_water * 0.45);
 
-    light_color_field[idx] = vec4<f32>(sun_color * ray_tint * voxel_tint, 0.0);
+    let geo = geothermal_glow[idx];
+    let geo_tint = mix(vec3<f32>(1.0), vec3<f32>(0.85, 0.45, 0.22), voxel_water * 0.35);
+    let ice_amount_here = clamp(ice_density[idx], 0.0, 1.0);
+    let ice_tint = mix(vec3<f32>(1.0), vec3<f32>(1.15, 0.62, 0.38), ice_amount_here * 0.4);
+    let local_glow = geo.xyz * geo_tint * ice_tint;
+    let local_weight = clamp(geo.w, 0.0, 4.0);
+    light_field[idx] = max(intensity, local_weight);
+    light_color_field[idx] = vec4<f32>(sun_color * ray_tint * voxel_tint + local_glow, geo.w);
 }
 
 // === Cell Occupancy Grid Builder ===

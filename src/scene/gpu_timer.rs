@@ -47,8 +47,8 @@ impl GpuTimer {
     /// Create a new GPU timer, or `None` if the device doesn't support
     /// timestamp queries between passes.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
-        let required = wgpu::Features::TIMESTAMP_QUERY
-            | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        let required =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         if !device.features().contains(required) {
             return None;
         }
@@ -109,7 +109,12 @@ impl GpuTimer {
         let last = first + TIMESTAMP_COUNT as u32;
         let resolve_offset = self.frame_index as u64 * RESOLVE_ALIGNMENT;
 
-        encoder.resolve_query_set(&self.query_set, first..last, &self.resolve_buffer, resolve_offset);
+        encoder.resolve_query_set(
+            &self.query_set,
+            first..last,
+            &self.resolve_buffer,
+            resolve_offset,
+        );
         encoder.copy_buffer_to_buffer(
             &self.resolve_buffer,
             resolve_offset,

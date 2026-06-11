@@ -232,6 +232,8 @@ pub struct GpuFluidSimulator {
     // storage - each invocation only reads/writes its own voxel's debt.
     phase_debt_buffer: wgpu::Buffer,
     temp_field_buffer: wgpu::Buffer,
+    geothermal_heat_buffer: wgpu::Buffer,
+    geothermal_glow_buffer: wgpu::Buffer,
     /// Tick counter gating the every-Nth-tick climate passes.
     climate_tick_counter: std::cell::Cell<u32>,
 
@@ -372,7 +374,9 @@ impl GpuFluidSimulator {
         let temp_stats_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Temperature Stats Buffer"),
             size: TEMP_STATS_SIZE,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let temp_stats_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -406,6 +410,20 @@ impl GpuFluidSimulator {
         let temp_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Temperature Field Buffer"),
             size: buffer_size, // TOTAL_VOXELS * sizeof(u32)
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let geothermal_heat_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Geothermal Heat Source Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let geothermal_glow_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Geothermal Glow Source Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<[f32; 4]>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -507,6 +525,17 @@ impl GpuFluidSimulator {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 9: Prebaked geothermal heat source field (f32 Celsius impulse per climate pass)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -979,6 +1008,10 @@ impl GpuFluidSimulator {
                     binding: 8,
                     resource: temp_field_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: geothermal_heat_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -1031,6 +1064,8 @@ impl GpuFluidSimulator {
             humidity_buffer,
             phase_debt_buffer,
             temp_field_buffer,
+            geothermal_heat_buffer,
+            geothermal_glow_buffer,
             climate_tick_counter: std::cell::Cell::new(0),
             params_buffer,
             world_radius,
@@ -1131,6 +1166,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: self.temp_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: self.geothermal_heat_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1530,7 +1569,6 @@ impl GpuFluidSimulator {
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
         }
-
     }
 
     /// Get current state buffer
@@ -1541,6 +1579,27 @@ impl GpuFluidSimulator {
     /// Get solid mask buffer
     pub fn solid_mask_buffer(&self) -> &wgpu::Buffer {
         &self.solid_mask_buffer
+    }
+
+    pub fn geothermal_glow_buffer(&self) -> &wgpu::Buffer {
+        &self.geothermal_glow_buffer
+    }
+
+    pub fn update_geothermal_fields(
+        &self,
+        queue: &wgpu::Queue,
+        fields: &crate::simulation::fluid_simulation::GeothermalFields,
+    ) {
+        queue.write_buffer(
+            &self.geothermal_heat_buffer,
+            0,
+            bytemuck::cast_slice(&fields.heat),
+        );
+        queue.write_buffer(
+            &self.geothermal_glow_buffer,
+            0,
+            bytemuck::cast_slice(&fields.glow),
+        );
     }
 
     /// Get grid parameters for surface nets
@@ -1799,10 +1858,7 @@ impl GpuFluidSimulator {
             match rx.try_recv() {
                 Ok(Ok(())) => {
                     {
-                        let view = self
-                            .temp_stats_staging_buffer
-                            .slice(..)
-                            .get_mapped_range();
+                        let view = self.temp_stats_staging_buffer.slice(..).get_mapped_range();
                         let stats: &[u32] = bytemuck::cast_slice(&view);
                         // The temperature field itself has real physical inertia
                         // (conduction + per-phase thermal mass), so the displayed
@@ -1817,12 +1873,14 @@ impl GpuFluidSimulator {
                         if stats[1] > 0 {
                             let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;
                             let prev = self.avg_water_temp_c.get();
-                            self.avg_water_temp_c.set(prev + (avg_c - prev) * WATER_EMA_RATE);
+                            self.avg_water_temp_c
+                                .set(prev + (avg_c - prev) * WATER_EMA_RATE);
                         }
                         if stats[3] > 0 {
                             let avg_c = (stats[2] as f32 / stats[3] as f32) - 50.0;
                             let prev = self.avg_air_temp_c.get();
-                            self.avg_air_temp_c.set(prev + (avg_c - prev) * AIR_EMA_RATE);
+                            self.avg_air_temp_c
+                                .set(prev + (avg_c - prev) * AIR_EMA_RATE);
                         }
                     }
                     self.temp_stats_staging_buffer.unmap();
