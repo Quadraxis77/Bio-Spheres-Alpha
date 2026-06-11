@@ -23,6 +23,7 @@ struct VertexOutput {
     @builtin(position) clip_pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) kind: f32,
 }
 
 // Quad vertex indices for two triangles with CCW winding
@@ -63,6 +64,7 @@ fn vs_main(
     out.clip_pos = clip_pos;
     out.uv = uv;
     out.color = instance.color;
+    out.kind = instance.animation.y;
 
     return out;
 }
@@ -71,7 +73,12 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Create soft circular particle
     let center_dist = length(in.uv - vec2<f32>(0.5));
-    let circle_alpha = 1.0 - smoothstep(0.3, 0.5, center_dist);
+    let soot = in.kind > 2.5;
+    let circle_alpha = select(
+        1.0 - smoothstep(0.3, 0.5, center_dist),
+        1.0 - smoothstep(0.18, 0.42, center_dist),
+        soot
+    );
 
     // Discard pixels outside the circle
     if circle_alpha < 0.01 {

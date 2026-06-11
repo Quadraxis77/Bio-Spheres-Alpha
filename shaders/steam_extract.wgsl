@@ -31,6 +31,11 @@ struct ParticleCounter {
 // is baked into the instance color here, so steam and snow in caves or at
 // night are dark instead of self-illuminated.
 @group(0) @binding(4) var<storage, read> light_field: array<f32>;
+// Water density field. Soot from thermal smoke stacks only appears when the
+// glowing stack source is submerged.
+@group(0) @binding(5) var<storage, read> water_density: array<f32>;
+// Geothermal glow/source field. xyz = glow color, w = source strength.
+@group(0) @binding(6) var<storage, read> geothermal_glow: array<vec4<f32>>;
 
 // Hash function for generating pseudo-random values from cell ID
 fn hash_u32(x: u32) -> u32 {
@@ -86,9 +91,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Fluid type is stored in lower 16 bits
     let fluid_type = state & 0x7u;
 
+    let geo = geothermal_glow[idx];
+    let underwater_stack = geo.w > 0.10 && water_density[idx] > 0.35;
+    let soot_seed = hash_u32(idx + u32(params.time * 17.0));
+    let soot_keep = (soot_seed & 3u) == 0u;
+
     // Render steam (3) as soft wispy particles, snow (4) as small opaque
-    // round white flakes that drift down slowly.
-    if fluid_type != 3u && fluid_type != 4u {
+    // round white flakes, and underwater geothermal stack glow as soot.
+    if fluid_type != 3u && fluid_type != 4u && !(underwater_stack && soot_keep) {
         return;
     }
 
@@ -110,7 +120,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Lit by the local light field and overall sun brightness - no ambient
     // self-illumination (dark caves and night render dark flakes/wisps).
     let light = clamp(light_field[idx] * params.sun_brightness, 0.0, 1.2);
-    if fluid_type == 4u {
+    var particle_kind = 1.0;
+    if underwater_stack && soot_keep {
+        particle_kind = 3.0;
+        // Underwater thermal soot: dark mineral flecks that catch a little of
+        // the stack glow and drift as a loose plume.
+        let soot_jitter = vec3<f32>(
+            random_float(soot_seed + 11u) - 0.5,
+            random_float(soot_seed + 17u) - 0.5,
+            random_float(soot_seed + 23u) - 0.5
+        ) * params.cell_size * 0.85;
+        particle.position = world_pos + soot_jitter;
+        particle.size = params.cell_size * mix(0.35, 0.9, random_float(soot_seed + 31u));
+        let glow_lift = clamp(length(geo.xyz) * 0.08, 0.0, 0.22);
+        let soot_color = vec3<f32>(0.025, 0.020, 0.016) + geo.xyz * glow_lift;
+        particle.color = vec4<f32>(soot_color, 0.16);
+    } else if fluid_type == 4u {
         // Snow: small, round, opaque white flakes
         particle.size = params.cell_size * 0.6;
         particle.color = vec4<f32>(vec3<f32>(1.0, 1.0, 1.0) * light, 0.9);
@@ -123,7 +148,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Animation data (time offset based on position for variation)
     particle.animation = vec4<f32>(
         params.time + f32(global_id.x) * 0.1,
-        1.0,
+        particle_kind,
         f32(global_id.y) * 0.1,
         f32(global_id.z) * 0.1
     );

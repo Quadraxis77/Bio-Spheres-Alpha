@@ -994,11 +994,12 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = grid_index(gid.x, gid.y, gid.z);
 
     // First touch: snap uninitialized voxels to their light-driven ambient
-    // and let conduction take over from the next tick.
+    // and keep going so a new heat source does not create a one-tick
+    // conduction dead zone at the edge of its initialized field.
     var raw_self = atomicLoad(&temp_field[idx]);
     if raw_self == 0u {
-        atomicStore(&temp_field[idx], encode_field_temp(ambient_temp_c(idx)));
-        return;
+        raw_self = encode_field_temp(ambient_temp_c(idx));
+        atomicStore(&temp_field[idx], raw_self);
     }
     if raw_self > TFIELD_MAX_RAW {
         raw_self = TFIELD_MAX_RAW;
@@ -1057,6 +1058,8 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    let conductive_t_self = clamp(t_self + self_delta_c, TEMP_MIN_C, TEMP_MAX_C);
+
     // Rolling-average stats: slots 0/1 = water phases, 2/3 = air.
     if fluid_type == 1u || fluid_type == 2u || fluid_type == 4u {
         atomicAdd(&temp_stats[0], u32(round(t_self) + 50.0));
@@ -1089,14 +1092,15 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
         let n_idx = grid_index(u32(nx), u32(ny), u32(nz));
         var raw_n = atomicLoad(&temp_field[n_idx]);
         if raw_n == 0u {
-            continue; // neighbor not initialized yet
+            raw_n = encode_field_temp(ambient_temp_c(n_idx));
+            atomicStore(&temp_field[n_idx], raw_n);
         }
         if raw_n > TFIELD_MAX_RAW {
             raw_n = TFIELD_MAX_RAW;
             atomicStore(&temp_field[n_idx], TFIELD_MAX_RAW);
         }
         let t_n = TEMP_MIN_C + f32(raw_n) / TFIELD_FP;
-        if t_self <= t_n {
+        if conductive_t_self <= t_n {
             continue; // only the hotter side pushes
         }
 
@@ -1130,7 +1134,7 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Heat flux in degree-mass units, CFL-clamped so neither side can
         // move more than CONDUCTION_CFL_MAX of the differential per pass.
         let k_eff = min(k_pair * CONDUCTION_RATE * rate_scale, CONDUCTION_CFL_MAX * min(m_self, m_n));
-        let q = (t_self - t_n) * k_eff;
+        let q = (conductive_t_self - t_n) * k_eff;
         self_delta_c -= q / m_self;
         nudge_field_temp(n_idx, q / m_n);
     }

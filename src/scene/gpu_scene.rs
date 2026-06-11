@@ -6811,10 +6811,17 @@ impl GpuScene {
             &self.fluid_simulator,
             &self.light_field_system,
         ) {
+            let water_density_buffer = self
+                .gpu_surface_nets
+                .as_ref()
+                .map(|sn| sn.density_buffer())
+                .unwrap_or(light_field.dummy_water_density());
             self.steam_extract_bind_group = Some(particle_renderer.create_extract_bind_group(
                 device,
                 fluid_sim.current_state_buffer(),
                 light_field.light_field_buffer(),
+                water_density_buffer,
+                fluid_sim.geothermal_glow_buffer(),
             ));
             log::info!("Steam extract bind group created");
         }

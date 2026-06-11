@@ -183,6 +183,29 @@ impl SteamParticleRenderer {
                         },
                         count: None,
                     },
+                    // Water density (read) - soot particles only spawn while the
+                    // geothermal source voxel is underwater.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Geothermal glow/source field (read) - marks smoke-stack sources.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -342,6 +365,8 @@ impl SteamParticleRenderer {
         device: &wgpu::Device,
         fluid_state_buffer: &wgpu::Buffer,
         light_field_buffer: &wgpu::Buffer,
+        water_density_buffer: &wgpu::Buffer,
+        geothermal_glow_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Steam Extract Bind Group"),
@@ -366,6 +391,14 @@ impl SteamParticleRenderer {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: water_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: geothermal_glow_buffer.as_entire_binding(),
                 },
             ],
         })

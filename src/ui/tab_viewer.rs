@@ -3683,20 +3683,20 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             ui.add_space(10.0);
             ui.separator();
-            ui.heading("Geothermal Vents");
+            ui.heading("Thermal Smoke Stacks");
             ui.add_space(5.0);
 
             params_changed |= ui
                 .checkbox(&mut geothermal_enabled, "Enable Vents")
                 .on_hover_text(
-                    "Generate procedural cave-wall crevices that emit directional heat and warm colored light",
+                    "Generate procedural thermal stacks on the world sphere boundary that emit inward heat plumes and warm colored light",
                 )
                 .changed();
 
             if geothermal_enabled {
                 ui.add_space(4.0);
                 ui.label("Frequency:")
-                    .on_hover_text("Target number of vents to place in thick-enough cave walls");
+                    .on_hover_text("Target number of smoke stacks to place on open sections of the world sphere boundary");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_count, 0..=64))
                     .changed();
@@ -3706,32 +3706,32 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
 
                 ui.label("Length:")
-                    .on_hover_text("How far each crevice runs along the cave wall, in voxels");
+                    .on_hover_text("How far each smoke stack footprint runs along the sphere boundary, in voxels");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_length, 1.0..=32.0))
                     .changed();
 
                 ui.label("Width:")
-                    .on_hover_text("Opening width of the crevice mouth, in voxels");
+                    .on_hover_text("Approximate radius of the chimney. The base flares wider and conforms to the sphere boundary");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_width, 1.0..=10.0))
                     .changed();
 
                 ui.label("Depth:")
-                    .on_hover_text("How deeply the surface crevice indents the cave wall visually. The fluid/solid mask only opens the mouth layer, so this does not create tunnels");
+                    .on_hover_text("Height of the hollow smoke-stack chimney rising inward from a closed, flared base. Glow is placed deep in the shaft so it peeks out through the opening");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_depth, 1.0..=20.0))
                     .changed();
 
                 if state.show_advanced_options {
                     ui.label("Back Margin:")
-                        .on_hover_text("Extra solid rock required behind the carved crevice before placement is allowed");
+                        .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks use the sphere surface instead of cave wall thickness");
                     params_changed |= ui
                         .add(egui::Slider::new(&mut geothermal_back_margin, 0.0..=20.0))
                         .changed();
 
                     ui.label("Top Margin:")
-                        .on_hover_text("Extra solid rock required above the crevice volume before placement is allowed");
+                        .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks are independent of gravity direction");
                     params_changed |= ui
                         .add(egui::Slider::new(&mut geothermal_top_margin, 0.0..=12.0))
                         .changed();
@@ -3742,13 +3742,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
 
                 ui.label("Heat Output:")
-                    .on_hover_text("Directional heat injected from exposed crevice voxels into the temperature field");
+                    .on_hover_text("Directional heat injected inward from the sphere-boundary smoke stack footprint");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0))
                     .changed();
 
                 ui.label("Heat Radius:")
-                    .on_hover_text("Distance the baked directional heat plume reaches from the crevice mouth, in voxels");
+                    .on_hover_text("Distance the baked inward heat plume reaches from the boundary, in voxels");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
                     .changed();
@@ -3761,7 +3761,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ui.label("Color:");
                     params_changed |= ui
                         .color_edit_button_rgb(&mut geothermal_glow_color)
-                        .on_hover_text("RGB color emitted from the lowest point of each crevice into the light field")
+                        .on_hover_text("RGB glow emitted from the smoke stack footprint into the local light field")
                         .changed();
                 });
 
