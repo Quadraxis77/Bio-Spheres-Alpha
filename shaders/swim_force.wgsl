@@ -27,6 +27,19 @@ struct PhysicsParams {
     _pad2: f32,
 }
 
+// Water grid parameters for checking whether flagella have a medium to push against.
+// Must match WaterGridParams in Rust and position_update.wgsl.
+struct WaterGridParams {
+    grid_resolution: u32,
+    cell_size: f32,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+    grid_origin_z: f32,
+    buoyancy_multiplier: f32,
+    water_viscosity: f32,
+    _pad1: f32,
+}
+
 // mode_properties layout across 5 sub-buffers (v0-v4), 1 vec4 per mode each:
 // v0: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
 // v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
@@ -110,12 +123,49 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 @group(2) @binding(9)
 var<storage, read> signal_flags: array<atomic<u32>>;
 
+@group(2) @binding(10)
+var<uniform> water_params: WaterGridParams;
+
+@group(2) @binding(11)
+var<storage, read> water_bitfield: array<u32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const SWIM_FORCE_MULTIPLIER: f32 = 50.0; // Scale swim_force (0-1) to actual force magnitude
+const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 
 // Convert float to fixed-point i32 for atomic accumulation
 fn float_to_fixed(v: f32) -> i32 {
     return i32(v * FIXED_POINT_SCALE);
+}
+
+fn is_in_water(world_pos: vec3<f32>) -> bool {
+    let res = water_params.grid_resolution;
+    if (res == 0u) {
+        return false;
+    }
+
+    let grid_pos = vec3<f32>(
+        (world_pos.x - water_params.grid_origin_x) / water_params.cell_size,
+        (world_pos.y - water_params.grid_origin_y) / water_params.cell_size,
+        (world_pos.z - water_params.grid_origin_z) / water_params.cell_size
+    );
+
+    if (grid_pos.x < 0.0 || grid_pos.x >= f32(res) ||
+        grid_pos.y < 0.0 || grid_pos.y >= f32(res) ||
+        grid_pos.z < 0.0 || grid_pos.z >= f32(res)) {
+        return false;
+    }
+
+    let gx = u32(grid_pos.x);
+    let gy = u32(grid_pos.y);
+    let gz = u32(grid_pos.z);
+
+    let x_group = gx / 32u;
+    let bit_index = gx % 32u;
+    let bitfield_idx = x_group + gy * WATER_GRID_X_GROUPS + gz * WATER_GRID_X_GROUPS * res;
+
+    let bits = water_bitfield[bitfield_idx];
+    return (bits & (1u << bit_index)) != 0u;
 }
 
 // Rotate a vector by a quaternion
@@ -171,6 +221,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Check if this cell type applies swim force using behavior flags
     let behavior = type_behaviors[cell_type];
     if (behavior.applies_swim_force == 0u) {
+        return;
+    }
+
+    if (!is_in_water(positions_in[cell_idx].xyz)) {
         return;
     }
     

@@ -17,6 +17,7 @@ const DEFAULT_MAX_NODES: usize = 2_000;
 const DEFAULT_MAX_EVENTS: usize = 8_000;
 const DEFAULT_MAX_BOOKMARKS: usize = 256;
 const DEFAULT_MAX_TIME_GAPS: usize = 1_024;
+const DEFAULT_MAX_MINOR_VARIANT_STATS: usize = 512;
 
 /// Fraction change in total live cells below which a scan interval is considered stable.
 pub const STABLE_LIVE_CELL_CHANGE_THRESHOLD: f32 = 0.12;
@@ -338,18 +339,51 @@ pub struct LineagePopulationSample {
     pub frame: i32,
 }
 
-/// Last-scan stats for GPU-native mutation genomes that were observed but not
-/// meaningful enough to promote into full lineage cards.
+/// Aggregated telemetry for mutation genomes that were culled instead of
+/// promoted into lineage nodes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct LineageGenomeStatSample {
-    pub genome_id: u32,
+pub struct LineageMinorVariantStats {
     pub parent_genome_id: Option<u32>,
-    pub cells: u32,
-    pub organisms: u32,
     pub first_seen_frame: i32,
     pub last_seen_frame: i32,
+    /// Number of culled minor variant observations in this bucket. This is not
+    /// deduplicated by genome id because those ids are intentionally discarded.
+    pub variant_observations: u32,
+    /// Number of scan observations accumulated for this bucket.
     pub observations: u32,
+    /// Live cells seen in the most recent scan for this bucket.
+    pub current_cells: u32,
+    /// Living organisms seen in the most recent scan for this bucket.
+    pub current_organisms: u32,
+    pub peak_cells: u32,
+    pub peak_organisms: u32,
+    pub total_cell_observations: u64,
+    pub total_organism_observations: u64,
+}
+
+impl LineageMinorVariantStats {
+    fn record(&mut self, parent_genome_id: Option<u32>, cells: u32, organisms: u32, frame: i32) {
+        self.parent_genome_id = parent_genome_id.or(self.parent_genome_id);
+        if self.observations == 0 {
+            self.first_seen_frame = frame;
+        }
+        if self.last_seen_frame != frame {
+            self.current_cells = 0;
+            self.current_organisms = 0;
+        }
+        self.last_seen_frame = frame;
+        self.variant_observations = self.variant_observations.saturating_add(1);
+        self.observations = self.observations.saturating_add(1);
+        self.current_cells = self.current_cells.saturating_add(cells);
+        self.current_organisms = self.current_organisms.saturating_add(organisms);
+        self.peak_cells = self.peak_cells.max(cells);
+        self.peak_organisms = self.peak_organisms.max(organisms);
+        self.total_cell_observations = self.total_cell_observations.saturating_add(cells as u64);
+        self.total_organism_observations = self
+            .total_organism_observations
+            .saturating_add(organisms as u64);
+    }
 }
 
 /// Optional full-genome record for a lineage node.
@@ -456,7 +490,7 @@ pub struct EcosystemLineageArchive {
     pub nodes: Vec<LineageNode>,
     pub events: Vec<LineageEvent>,
     pub genome_bookmarks: Vec<LineageGenomeBookmark>,
-    pub unpromoted_genome_samples: Vec<LineageGenomeStatSample>,
+    pub minor_variant_stats: Vec<LineageMinorVariantStats>,
     /// Compressed time periods with no meaningful ecosystem changes.
     /// Used by the timeline UI to collapse stable intervals into narrow gap bands.
     pub time_gaps: Vec<LineageTimeGap>,
@@ -478,7 +512,7 @@ impl Default for EcosystemLineageArchive {
             nodes: Vec::new(),
             events: Vec::new(),
             genome_bookmarks: Vec::new(),
-            unpromoted_genome_samples: Vec::new(),
+            minor_variant_stats: Vec::new(),
             time_gaps: Vec::new(),
         }
     }
@@ -754,44 +788,42 @@ impl EcosystemLineageArchive {
         id
     }
 
-    pub fn record_unpromoted_genome_sample(
+    pub fn record_minor_variant_observation(
         &mut self,
-        genome_id: u32,
+        _genome_id: u32,
         parent_genome_id: Option<u32>,
         cells: u32,
         organisms: u32,
         frame: i32,
     ) {
-        if let Some(sample) = self
-            .unpromoted_genome_samples
+        if let Some(stats) = self
+            .minor_variant_stats
             .iter_mut()
-            .find(|sample| sample.genome_id == genome_id)
+            .find(|stats| stats.parent_genome_id == parent_genome_id)
         {
-            sample.parent_genome_id = parent_genome_id.or(sample.parent_genome_id);
-            sample.cells = cells;
-            sample.organisms = organisms;
-            sample.last_seen_frame = frame;
-            sample.observations = sample.observations.saturating_add(1);
-            return;
-        }
-
-        self.unpromoted_genome_samples
-            .push(LineageGenomeStatSample {
-                genome_id,
+            stats.record(parent_genome_id, cells, organisms, frame);
+        } else {
+            let mut stats = LineageMinorVariantStats {
                 parent_genome_id,
-                cells,
-                organisms,
-                first_seen_frame: frame,
-                last_seen_frame: frame,
-                observations: 1,
-            });
+                ..LineageMinorVariantStats::default()
+            };
+            stats.record(parent_genome_id, cells, organisms, frame);
+            self.minor_variant_stats.push(stats);
+        }
         self.enforce_retention();
     }
 
-    pub fn unpromoted_genome_sample(&self, genome_id: u32) -> Option<&LineageGenomeStatSample> {
-        self.unpromoted_genome_samples
-            .iter()
-            .find(|sample| sample.genome_id == genome_id)
+    pub fn minor_variant_totals(&self) -> (u32, u32, u32) {
+        self.minor_variant_stats.iter().fold(
+            (0u32, 0u32, 0u32),
+            |(variants, cells, organisms), stats| {
+                (
+                    variants.saturating_add(stats.variant_observations),
+                    cells.saturating_add(stats.current_cells),
+                    organisms.saturating_add(stats.current_organisms),
+                )
+            },
+        )
     }
 
     pub fn loadable_genome_count(&self) -> usize {
@@ -985,16 +1017,18 @@ impl EcosystemLineageArchive {
 
         self.enforce_genome_bookmark_retention();
 
-        let max_samples = self.retention.max_nodes.max(1);
-        if self.unpromoted_genome_samples.len() > max_samples {
-            self.unpromoted_genome_samples.sort_by(|a, b| {
-                b.cells
-                    .cmp(&a.cells)
-                    .then_with(|| b.organisms.cmp(&a.organisms))
-                    .then_with(|| b.observations.cmp(&a.observations))
+        if self.minor_variant_stats.len() > DEFAULT_MAX_MINOR_VARIANT_STATS {
+            self.minor_variant_stats.sort_by(|a, b| {
+                b.peak_cells
+                    .cmp(&a.peak_cells)
+                    .then_with(|| b.peak_organisms.cmp(&a.peak_organisms))
+                    .then_with(|| b.variant_observations.cmp(&a.variant_observations))
                     .then_with(|| b.last_seen_frame.cmp(&a.last_seen_frame))
             });
-            self.unpromoted_genome_samples.truncate(max_samples);
+            self.minor_variant_stats
+                .truncate(DEFAULT_MAX_MINOR_VARIANT_STATS);
+            self.minor_variant_stats
+                .sort_by_key(|stats| (stats.first_seen_frame, stats.parent_genome_id));
         }
 
         let max_nodes = self.retention.max_nodes.max(1);
@@ -1156,6 +1190,33 @@ mod tests {
         assert!(archive.loadable_bookmark_for_lineage(1).is_none());
         assert!(archive.loadable_bookmark_for_lineage(2).is_some());
         assert!(archive.loadable_bookmark_for_lineage(3).is_some());
+    }
+
+    #[test]
+    fn minor_variants_aggregate_by_parent_without_nodes() {
+        let mut archive = EcosystemLineageArchive::default();
+
+        archive.record_minor_variant_observation(101, Some(1), 3, 1, 10);
+        archive.record_minor_variant_observation(102, Some(1), 5, 2, 10);
+        archive.record_minor_variant_observation(103, Some(2), 7, 1, 11);
+
+        assert!(archive.nodes.is_empty());
+        assert_eq!(archive.minor_variant_stats.len(), 2);
+
+        let parent_one = archive
+            .minor_variant_stats
+            .iter()
+            .find(|stats| stats.parent_genome_id == Some(1))
+            .unwrap();
+        assert_eq!(parent_one.variant_observations, 2);
+        assert_eq!(parent_one.current_cells, 8);
+        assert_eq!(parent_one.current_organisms, 3);
+        assert_eq!(parent_one.peak_cells, 5);
+
+        let (observations, current_cells, current_organisms) = archive.minor_variant_totals();
+        assert_eq!(observations, 3);
+        assert_eq!(current_cells, 15);
+        assert_eq!(current_organisms, 4);
     }
 
     #[test]

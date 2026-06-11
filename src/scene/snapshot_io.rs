@@ -481,42 +481,70 @@ fn blend_pixel(pixels: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 4]) {
     pixels[idx + 3] = 255;
 }
 
-fn read_sampled_mutation_parents(
+fn read_mutation_metadata(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     mutation_system: Option<&crate::simulation::gpu_physics::MutationSystem>,
-    genome_ids: impl Iterator<Item = u32>,
-    cpu_genome_count: usize,
-) -> HashMap<u32, u32> {
+) -> Option<Vec<GenomeMeta>> {
     let Some(mutation_system) = mutation_system else {
-        return HashMap::new();
+        return None;
     };
 
-    let mut parents = HashMap::new();
-    for genome_id in genome_ids {
-        if (genome_id as usize) < cpu_genome_count
-            || genome_id >= crate::simulation::gpu_physics::mutation::GENOME_RING_CAPACITY
-        {
-            continue;
-        }
+    readback_typed(
+        device,
+        queue,
+        mutation_system.genome_meta_buffer(),
+        crate::simulation::gpu_physics::mutation::GENOME_RING_CAPACITY as usize,
+    )
+    .ok()
+}
 
-        let byte_offset = genome_id as u64 * std::mem::size_of::<GenomeMeta>() as u64;
-        let Ok(bytes) = readback_buffer_bytes(
-            device,
-            queue,
-            mutation_system.genome_meta_buffer(),
-            byte_offset,
-            std::mem::size_of::<GenomeMeta>() as u64,
-        ) else {
-            continue;
-        };
-        let meta = bytemuck::from_bytes::<GenomeMeta>(&bytes);
-        if meta.mode_count > 0 && meta.parent_genome_id != u32::MAX {
-            parents.insert(genome_id, meta.parent_genome_id);
-        }
+fn mutation_parent_from_meta(
+    mutation_metadata: Option<&[GenomeMeta]>,
+    genome_id: u32,
+) -> Option<u32> {
+    let meta = mutation_metadata?.get(genome_id as usize)?;
+    if meta.mode_count > 0 && meta.parent_genome_id != u32::MAX {
+        Some(meta.parent_genome_id)
+    } else {
+        None
     }
+}
 
-    parents
+fn mutation_delta_since_recorded_lineage(
+    genome_id: u32,
+    mutation_metadata: Option<&[GenomeMeta]>,
+    archive: &crate::scene::lineage::EcosystemLineageArchive,
+    cpu_genome_count: usize,
+) -> (Option<u32>, u32) {
+    let Some(metadata) = mutation_metadata else {
+        return (None, 0);
+    };
+
+    let mut current = genome_id;
+    let mut delta = 0u32;
+    let mut visited = HashSet::new();
+
+    loop {
+        if !visited.insert(current) {
+            return (None, delta);
+        }
+
+        let Some(parent) = mutation_parent_from_meta(Some(metadata), current) else {
+            return (None, delta);
+        };
+        delta = delta.saturating_add(1);
+
+        if (parent as usize) < cpu_genome_count || archive.lineage_for_genome_id(parent).is_some() {
+            return (Some(parent), delta);
+        }
+
+        if parent >= crate::simulation::gpu_physics::mutation::GENOME_RING_CAPACITY {
+            return (None, delta);
+        }
+
+        current = parent;
+    }
 }
 
 /// Score a sampled GPU mutation genome and decide whether it deserves a full
@@ -538,7 +566,7 @@ fn read_sampled_mutation_parents(
 fn sampled_mutation_is_meaningful(
     cells: u32,
     organisms: u32,
-    prior: Option<&crate::scene::lineage::LineageGenomeStatSample>,
+    mutation_delta_since_recorded_lineage: u32,
 ) -> bool {
     // --- Hard gates -----------------------------------------------------------
 
@@ -561,9 +589,10 @@ fn sampled_mutation_is_meaningful(
     // filters one-frame transient blips.
     const INSTANT_PROMOTION_ORGANISMS: u32 = 8;
     const INSTANT_PROMOTION_AVG_BODY: f32 = 6.0;
+    const MIN_MUTATION_DELTA: u32 = 4;
     let instant =
         organisms >= INSTANT_PROMOTION_ORGANISMS && avg_body >= INSTANT_PROMOTION_AVG_BODY;
-    if prior.is_none() && !instant {
+    if mutation_delta_since_recorded_lineage < MIN_MUTATION_DELTA && !instant {
         return false;
     }
 
@@ -576,29 +605,11 @@ fn sampled_mutation_is_meaningful(
     // Ecological spread: independent organisms competing in the world.
     let spread = (organisms as f32 + 1.0).log2() * 2.5;
 
-    // Persistence and vitality from prior observations.
-    let (persistence, vitality_factor) = match prior {
-        Some(p) => {
-            // Each additional scan interval the lineage survives is strong
-            // evidence it is a stable innovation.
-            let obs = p.observations.saturating_add(1) as f32;
-            let persistence_score = obs.log2() * 4.0;
+    // Mutation delta: multiple hops away from the last recorded branch are
+    // stronger evidence of a genuinely new branch than a one-off child genome.
+    let delta = (mutation_delta_since_recorded_lineage as f32 + 1.0).log2() * 3.0;
 
-            // Vitality: ratio of current cells to the peak ever seen.
-            // A declining lineage is discounted; a stable or growing one gets
-            // full weight.
-            let peak = p.cells.max(cells).max(1) as f32;
-            let vitality = (cells as f32 / peak).clamp(0.05, 1.0);
-            // Map vitality to [0.2, 1.0] so even declining lineages can pass
-            // if they are structurally complex and persistent enough.
-            let vf = 0.2 + vitality * 0.8;
-
-            (persistence_score, vf)
-        }
-        None => (0.0, 0.6), // instant promotion path: partial credit
-    };
-
-    let score = (complexity + spread + persistence) * vitality_factor;
+    let score = complexity + spread + delta;
 
     // Threshold chosen so that:
     // - A 4-cell avg / 5-organism / 2-scan genome scores ≈ 8 → promotes.
@@ -776,13 +787,8 @@ impl GpuScene {
             self.current_time,
             slots_used,
         );
-        let mutation_parents = read_sampled_mutation_parents(
-            device,
-            queue,
-            self.mutation_system.as_ref(),
-            cell_counts.keys().copied(),
-            self.genomes.len(),
-        );
+        let mutation_metadata =
+            read_mutation_metadata(device, queue, self.mutation_system.as_ref());
         let mut samples = Vec::with_capacity(cell_counts.len());
         let mut tracked_cells = 0u32;
         for (&genome_id, &cells) in &cell_counts {
@@ -805,13 +811,17 @@ impl GpuScene {
                         self.current_frame,
                     )
                 } else {
-                    let parent_genome_id = mutation_parents.get(&genome_id).copied();
-                    let prior_sample = self
-                        .lineage_archive
-                        .unpromoted_genome_sample(genome_id)
-                        .cloned();
-                    if !sampled_mutation_is_meaningful(cells, organisms, prior_sample.as_ref()) {
-                        self.lineage_archive.record_unpromoted_genome_sample(
+                    let parent_genome_id =
+                        mutation_parent_from_meta(mutation_metadata.as_deref(), genome_id);
+                    let (nearest_recorded_parent_genome_id, mutation_delta) =
+                        mutation_delta_since_recorded_lineage(
+                            genome_id,
+                            mutation_metadata.as_deref(),
+                            &self.lineage_archive,
+                            self.genomes.len(),
+                        );
+                    if !sampled_mutation_is_meaningful(cells, organisms, mutation_delta) {
+                        self.lineage_archive.record_minor_variant_observation(
                             genome_id,
                             parent_genome_id,
                             cells,
@@ -821,23 +831,24 @@ impl GpuScene {
                         continue;
                     }
 
-                    let parent_lineage = parent_genome_id.and_then(|parent_genome_id| {
-                        if parent_genome_id == genome_id {
-                            None
-                        } else if let Some(lineage_id) =
-                            self.lineage_archive.lineage_for_genome_id(parent_genome_id)
-                        {
-                            Some(lineage_id)
-                        } else if (parent_genome_id as usize) < self.genomes.len() {
-                            Some(self.lineage_archive.ensure_user_lineage(
-                                parent_genome_id,
-                                &self.genomes[parent_genome_id as usize],
-                                self.current_frame,
-                            ))
-                        } else {
-                            None
-                        }
-                    });
+                    let parent_lineage =
+                        nearest_recorded_parent_genome_id.and_then(|parent_genome_id| {
+                            if parent_genome_id == genome_id {
+                                None
+                            } else if let Some(lineage_id) =
+                                self.lineage_archive.lineage_for_genome_id(parent_genome_id)
+                            {
+                                Some(lineage_id)
+                            } else if (parent_genome_id as usize) < self.genomes.len() {
+                                Some(self.lineage_archive.ensure_user_lineage(
+                                    parent_genome_id,
+                                    &self.genomes[parent_genome_id as usize],
+                                    self.current_frame,
+                                ))
+                            } else {
+                                None
+                            }
+                        });
                     self.lineage_archive.ensure_sampled_mutation_lineage(
                         genome_id,
                         parent_lineage,

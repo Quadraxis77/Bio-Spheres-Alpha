@@ -250,6 +250,11 @@ const LATENT_VAPOR_CONDENSE_WARM_C: f32 = 3.0;
 // Water at/above boiling converts to steam with this per-tick probability
 // regardless of air contact - no superheated liquid pools.
 const BOIL_PROBABILITY: f32 = 0.5;
+// Geothermal vents can flash liquid water into steam even when the water is
+// submerged. The heat field is strongest inside/just above vent mouths, so this
+// creates underwater plumes without making ordinary warm pools boil from depth.
+const GEOTHERMAL_FLASH_MIN_HEAT_C: f32 = 4.0;
+const GEOTHERMAL_FLASH_RATE: f32 = 0.35;
 // Slider value at which the rates above apply unscaled. The global Thermal
 // Inertia slider scales conduction and solar forcing together: each -1 below
 // the anchor doubles the speed of all heat flow, each +1 above halves it.
@@ -639,6 +644,30 @@ fn in_contact_with_air(gid: vec3<u32>) -> bool {
         }
     }
     return false;
+}
+
+fn geothermal_contact_heat(gid: vec3<u32>) -> f32 {
+    let res = params.grid_resolution;
+    let offsets = array<vec3<i32>, 7>(
+        vec3<i32>(0, 0, 0),
+        vec3<i32>(1, 0, 0),
+        vec3<i32>(-1, 0, 0),
+        vec3<i32>(0, 1, 0),
+        vec3<i32>(0, -1, 0),
+        vec3<i32>(0, 0, 1),
+        vec3<i32>(0, 0, -1)
+    );
+
+    var heat = 0.0;
+    for (var i = 0u; i < 7u; i++) {
+        let nx = i32(gid.x) + offsets[i].x;
+        let ny = i32(gid.y) + offsets[i].y;
+        let nz = i32(gid.z) + offsets[i].z;
+        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+            heat = max(heat, geothermal_heat[grid_index(u32(nx), u32(ny), u32(nz))]);
+        }
+    }
+    return heat;
 }
 
 // Vapor needs a surface to condense onto: near the world-sphere boundary or
@@ -1660,6 +1689,29 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if result.exchanged {
                     cool_water_neighbors(gid, LATENT_VAPOR_NEIGHBOR_COOL_C);
                     return;
+                }
+            }
+        }
+
+        // --- Geothermal flash vaporization. ---
+        // Vent-mouth water is the exception to the air-contact rule above:
+        // geothermal fissures can inject steam directly into submerged water,
+        // producing bubbles/plumes that then rise and feed the vapor fog field.
+        if fluid_type == 1u {
+            let vent_heat = geothermal_contact_heat(gid);
+            if vent_heat > GEOTHERMAL_FLASH_MIN_HEAT_C && temp_c > EVAPORATION_FLOOR_C {
+                let heat_factor = saturate((vent_heat - GEOTHERMAL_FLASH_MIN_HEAT_C) / 34.0);
+                let warmth_factor = saturate((temp_c - EVAPORATION_FLOOR_C) / (EVAPORATION_BRISK_C - EVAPORATION_FLOOR_C));
+                let rate = GEOTHERMAL_FLASH_RATE * heat_factor * max(warmth_factor, 0.25);
+                let flash_hash = (hash_position(gid) * 0xC2B2AE35u) ^ u32(params.time * 1000.0);
+                if (flash_hash & 255u) < u32(rate * 255.0) {
+                    let new_state = (65535u << 16u) | 3u;
+                    let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+                    if result.exchanged {
+                        cool_water_neighbors(gid, LATENT_VAPOR_NEIGHBOR_COOL_C);
+                        nudge_field_temp(idx, -LATENT_VAPOR_NEIGHBOR_COOL_C);
+                        return;
+                    }
                 }
             }
         }

@@ -1291,20 +1291,13 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                     p.status_warn,
                 );
             }
-            if !archive.unpromoted_genome_samples.is_empty() {
-                let variant_cells: u32 = archive
-                    .unpromoted_genome_samples
-                    .iter()
-                    .map(|sample| sample.cells)
-                    .sum();
+            let (minor_variant_observations, minor_variant_cells, _minor_variant_organisms) =
+                archive.minor_variant_totals();
+            if minor_variant_observations > 0 {
                 lineage_metric_chip(
                     ui,
                     "Variants",
-                    format!(
-                        "{}/{}",
-                        archive.unpromoted_genome_samples.len(),
-                        variant_cells
-                    ),
+                    format!("{}/{}", minor_variant_observations, minor_variant_cells),
                     p.status_warn,
                 );
             }
@@ -3706,11 +3699,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     })
                     .show_ui(ui, |ui| {
                         params_changed |= ui
-                            .selectable_value(
-                                &mut geothermal_placement_mode,
-                                0,
-                                "World Boundary",
-                            )
+                            .selectable_value(&mut geothermal_placement_mode, 0, "World Boundary")
                             .changed();
                         params_changed |= ui
                             .selectable_value(&mut geothermal_placement_mode, 1, "Cave Walls")
@@ -3735,8 +3724,9 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Shape");
                 ui.add_space(2.0);
 
-                ui.label("Length:")
-                    .on_hover_text("How far each smoke stack footprint runs along the sphere boundary, in voxels");
+                ui.label("Length:").on_hover_text(
+                    "How far each smoke stack footprint runs along the sphere boundary, in voxels",
+                );
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_length, 1.0..=32.0))
                     .changed();
@@ -3777,8 +3767,9 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .add(egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0))
                     .changed();
 
-                ui.label("Heat Radius:")
-                    .on_hover_text("Distance the baked inward heat plume reaches from the boundary, in voxels");
+                ui.label("Heat Radius:").on_hover_text(
+                    "Distance the baked inward heat plume reaches from the boundary, in voxels",
+                );
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
                     .changed();

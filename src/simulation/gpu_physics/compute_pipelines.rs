@@ -2072,8 +2072,13 @@ impl GpuPhysicsPipelines {
             self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 1),
             self.create_swim_force_force_accum_bind_group(device, adhesion_buffers, buffers, 2),
         ];
-        let swim_force_cell_data =
-            self.create_swim_force_cell_data_bind_group(device, buffers, adhesion_buffers);
+        let swim_force_cell_data = self.create_swim_force_cell_data_bind_group(
+            device,
+            buffers,
+            adhesion_buffers,
+            None,
+            None,
+        );
 
         // Cilia force bind groups
         let cilia_force_force_accum = [
@@ -6574,7 +6579,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Create swim force cell data bind group layout (Group 2 in swim_force shader)
-    /// Contains mode_indices, cell_types, mode_properties, and mode_cell_types
+    /// Contains mode_indices, cell_types, mode_properties, mode_cell_types, and water lookup buffers.
     fn create_swim_force_cell_data_bind_group_layout(
         device: &wgpu::Device,
     ) -> wgpu::BindGroupLayout {
@@ -6687,6 +6692,28 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 10: Water grid params
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 11: Water bitfield
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -6732,7 +6759,55 @@ impl GpuPhysicsPipelines {
         device: &wgpu::Device,
         triple_buffers: &GpuTripleBufferSystem,
         adhesion_buffers: &super::AdhesionBuffers,
+        water_grid_params_buffer: Option<&wgpu::Buffer>,
+        water_bitfield_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        use wgpu::util::DeviceExt;
+
+        let (water_params_buf, water_bitfield_buf) =
+            match (water_grid_params_buffer, water_bitfield_buffer) {
+                (Some(params), Some(bitfield)) => (params.clone(), bitfield.clone()),
+                _ => {
+                    #[repr(C)]
+                    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+                    struct DefaultWaterGridParams {
+                        grid_resolution: u32,
+                        cell_size: f32,
+                        grid_origin_x: f32,
+                        grid_origin_y: f32,
+                        grid_origin_z: f32,
+                        buoyancy_multiplier: f32,
+                        water_viscosity: f32,
+                        _pad1: f32,
+                    }
+
+                    let default_params = DefaultWaterGridParams {
+                        grid_resolution: 0,
+                        cell_size: 1.0,
+                        grid_origin_x: 0.0,
+                        grid_origin_y: 0.0,
+                        grid_origin_z: 0.0,
+                        buoyancy_multiplier: 0.0,
+                        water_viscosity: 0.0,
+                        _pad1: 0.0,
+                    };
+
+                    let params_buffer =
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Default Swim Force Water Grid Params Buffer"),
+                            contents: bytemuck::cast_slice(&[default_params]),
+                            usage: wgpu::BufferUsages::UNIFORM,
+                        });
+                    let bitfield_buffer =
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Default Swim Force Water Bitfield Buffer"),
+                            contents: &[0u8; 4],
+                            usage: wgpu::BufferUsages::STORAGE,
+                        });
+                    (params_buffer, bitfield_buffer)
+                }
+            };
+
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Swim Force Cell Data Bind Group"),
             layout: &self.swim_force_cell_data_layout,
@@ -6776,6 +6851,14 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 9,
                     resource: adhesion_buffers.signal_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: water_params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: water_bitfield_buf.as_entire_binding(),
                 },
             ],
         })
@@ -8096,6 +8179,13 @@ impl CachedBindGroups {
             Some(water_bitfield_buffer),
             Some(water_velocity_buffer),
             Some(ice_bitfield_buffer),
+        );
+        self.swim_force_cell_data = pipelines.create_swim_force_cell_data_bind_group(
+            device,
+            triple_buffers,
+            adhesion_buffers,
+            Some(water_grid_params_buffer),
+            Some(water_bitfield_buffer),
         );
     }
 }

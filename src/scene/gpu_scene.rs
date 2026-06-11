@@ -7208,7 +7208,8 @@ impl GpuScene {
             params.geothermal_enabled = u32::from(editor_state.geothermal_enabled);
             params.geothermal_count = editor_state.geothermal_count;
             params.geothermal_placement_mode = editor_state.geothermal_placement_mode.min(1);
-            params.geothermal_lower_hemisphere = u32::from(editor_state.geothermal_lower_hemisphere);
+            params.geothermal_lower_hemisphere =
+                u32::from(editor_state.geothermal_lower_hemisphere);
             params.geothermal_gravity_mode = self.gravity_mode;
             params.geothermal_gravity = self.gravity;
             params.geothermal_length = editor_state.geothermal_length;
@@ -7969,7 +7970,7 @@ impl Scene for GpuScene {
 
         if self.headless_no_render {
             let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
-            let should_start_readback = self.readbacks_enabled && !cell_count_read_pending;
+            let should_start_readback = !cell_count_read_pending;
             if should_start_readback {
                 self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
             }
@@ -8016,7 +8017,7 @@ impl Scene for GpuScene {
                 self.gpu_triple_buffers.initiate_cell_count_map();
             }
 
-            if self.readbacks_enabled || cell_count_read_pending {
+            if should_start_readback || cell_count_read_pending {
                 if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
                     self.current_cell_count = live;
                     self.total_cell_slots = total;
@@ -8754,10 +8755,11 @@ impl Scene for GpuScene {
             pp.render(&mut encoder, queue, view);
         }
 
-        // Start async cell count readback (copy to readback buffer)
-        // Only start if no readback is pending
+        // Start async cell count readback (copy to readback buffer). This tiny
+        // 8-byte read stays enabled so UI status counts remain authoritative
+        // even when heavier optional readbacks are disabled.
         let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
-        let should_start_readback = self.readbacks_enabled && !cell_count_read_pending;
+        let should_start_readback = !cell_count_read_pending;
         if should_start_readback {
             self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
         }
@@ -8809,8 +8811,8 @@ impl Scene for GpuScene {
             self.gpu_triple_buffers.initiate_cell_count_map();
         }
 
-        // Poll for cell count readback completion and update current_cell_count
-        if self.readbacks_enabled || cell_count_read_pending {
+        // Poll for cell count readback completion and update current_cell_count.
+        if should_start_readback || cell_count_read_pending {
             if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
                 self.current_cell_count = live;
                 self.total_cell_slots = total;
