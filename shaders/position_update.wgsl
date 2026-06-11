@@ -415,17 +415,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // --- Ice is a solid obstacle. ---
-    // A cell may not move into an ice voxel: if its new position lands in
-    // ice it holds its current position instead with all motion killed. A
-    // cell whose own voxel froze around it is entombed by the same branch -
-    // its old position is inside ice, so it stays locked, frozen mid-pose,
-    // until the ice melts away.
+    // A cell whose own voxel froze around it (its current position is
+    // already inside ice) is encapsulated/entombed: it stays locked, frozen
+    // mid-pose, until the ice melts away. A cell that merely bumps into an
+    // ice voxel from outside just has that move blocked - position holds for
+    // this frame, but velocity is left intact so it can drift away again
+    // rather than getting stuck glued to the ice surface.
     var entombed_acceleration = new_acceleration;
-    if (is_in_ice(final_pos)) {
+    if (is_in_ice(pos)) {
         final_pos = pos;
         final_vel = vec3<f32>(0.0);
         // Zero stored acceleration so no Verlet momentum builds up while frozen.
         entombed_acceleration = vec3<f32>(0.0);
+    } else if (is_in_ice(final_pos)) {
+        final_pos = pos;
     }
 
     // Write updated position and velocity
