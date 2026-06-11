@@ -1630,7 +1630,7 @@ impl InstanceBuilder {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             near_plane: 0.1,
-            far_plane: 1000.0,
+            far_plane: 5000.0,
             screen_width: screen_width as f32,
             screen_height: screen_height as f32,
             hiz_mip_count: 0,

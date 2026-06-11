@@ -3650,10 +3650,10 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Fragment Cull:")
                     .on_hover_text("Minimum isolated fragment volume to keep. Higher values remove larger floating cave chunks; 0 disables fragment cleanup");
                 params_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut isolated_chunk_cull_volume, 0.0..=100000.0)
-                            .logarithmic(true),
-                    )
+                    .add(egui::Slider::new(
+                        &mut isolated_chunk_cull_volume,
+                        0.0..=1000000.0,
+                    ))
                     .changed();
             }
 
@@ -7154,6 +7154,14 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext) {
         "Camera movement speed in FreeFly mode. Higher values let you traverse the world faster",
     );
     ui.add(egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
+    ui.label("Sprint Multiplier:").on_hover_text(
+        "Speed multiplier applied while holding Shift in FreeFly mode. Adjust with Shift+Scroll while flying",
+    );
+    ui.add(egui::Slider::new(&mut camera.sprint_multiplier, 1.0..=20.0));
+    ui.label("Zoom Speed:").on_hover_text(
+        "How fast scrolling zooms the camera in Orbit mode. Adjust with Shift+Scroll while orbiting",
+    );
+    ui.add(egui::Slider::new(&mut camera.zoom_speed, 0.01..=2.0).logarithmic(true));
     ui.label("Mouse Sensitivity:")
         .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
     ui.add(egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01).logarithmic(true));
@@ -8256,12 +8264,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("No mode selected");
                 return;
             }
-            
+
             // Collect mode info BEFORE borrowing mode mutably (for mode_after_splits dropdowns)
             let mode_info_for_dropdowns: Vec<_> = context.genome.modes.iter()
                 .map(|m| (m.name.clone(), m.color))
                 .collect();
-            
+
             let mode = &mut context.genome.modes[selected_idx];
 
             // Special Functions Group (Purple) - cell type specific settings at the top
@@ -9421,7 +9429,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 let reg_channel_labels = ["Disabled", "Ch 8", "Ch 9", "Ch 10", "Ch 11", "Ch 12", "Ch 13", "Ch 14", "Ch 15"];
                 // Map regulation_emit_channel: -1 = Disabled (index 0), 8 = index 1, 9 = index 2, etc.
                 let reg_ch_idx = if mode.regulation_emit_channel < 8 { 0usize } else { (mode.regulation_emit_channel - 7).clamp(0, 8) as usize };
-                
+
                 ui.label("Emit Channel:")
                     .on_hover_text("Developmental/regulation channel (8–15) to broadcast a signal on. Any cell type can emit on these channels. Use them to gate division, mode switching, and apoptosis. Channels 0–7 are sensory channels (oculocyte, photocyte, lipocyte, etc.)");
                 egui::ComboBox::from_id_salt("reg_emit_channel")
@@ -9797,19 +9805,19 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 context.editor_state.panel_rects.insert(
                     "max_splits_slider".to_string(), max_splits_row.response.rect,
                 );
-                
+
                 // Mode after max splits reached - only show if max_splits is not infinite
                 if mode.max_splits >= 0 {
                     let mode_count = mode_info_for_dropdowns.len();
-                    
+
                     // Get current values
                     let current_mode_a = mode.mode_a_after_splits;
                     let current_mode_b = mode.mode_b_after_splits;
-                    
+
                     // Track new selections
                     let mut new_mode_a: Option<i32> = None;
                     let mut new_mode_b: Option<i32> = None;
-                    
+
                     ui.add_space(4.0);
                     ui.label("Child A After Splits:")
                         .on_hover_text("Mode that Child A transitions to once this cell has divided the maximum number of times. 'None' keeps the normal Child A mode. A self-referential mode is equivalent to None.");
@@ -9954,7 +9962,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     context.editor_state.panel_rects.insert(
                         "after_splits_child_b".to_string(), after_splits_b_row.response.rect,
                     );
-                    
+
                     // Apply selections after combo boxes are done
                     if let Some(new_val) = new_mode_a {
                         mode.mode_a_after_splits = new_val;
@@ -9962,11 +9970,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     if let Some(new_val) = new_mode_b {
                         mode.mode_b_after_splits = new_val;
                     }
-                    
+
                     // Quaternion ball controls for child angles after max splits
                     ui.add_space(8.0);
                     ui.label("Child Split Angles:");
-                    
+
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.label("Child A Angle:");
@@ -9986,9 +9994,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 &mut context.editor_state.child_a_split_initial_distance,
                             );
                         });
-                        
+
                         ui.add_space(10.0);
-                        
+
                         ui.vertical(|ui| {
                             ui.label("Child B Angle:");
                             ui.add_space(4.0);
@@ -10008,7 +10016,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             );
                         });
                     });
-                    
+
                     // Keep adhesion toggles under quaternion balls
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -10727,26 +10735,26 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                     } else {
                                         egui::Color32::WHITE
                                     };
-                                    
+
                                     let (rect, response) = ui.allocate_exact_size(
                                         egui::vec2(item_width, 18.0),
                                         egui::Sense::click(),
                                     );
-                                    
+
                                     let bg = if response.hovered() {
                                         bg_color.gamma_multiply(1.2)
                                     } else {
                                         bg_color
                                     };
                                     ui.painter().rect_filled(rect, 2.0, bg);
-                                    
+
                                     if is_selected {
                                         ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                     }
-                                    
+
                                     let marquee_id = egui::Id::new(("qball1_item", i));
                                     draw_marquee_text(ui, rect, name, text_color, response.hovered(), marquee_id);
-                                    
+
                                     if response.clicked() {
                                         new_mode = Some(i as i32);
                                     }
@@ -10897,26 +10905,26 @@ fn render_quaternion_ball(ui: &mut Ui, context: &mut PanelContext) {
                                     } else {
                                         egui::Color32::WHITE
                                     };
-                                    
+
                                     let (rect, response) = ui.allocate_exact_size(
                                         egui::vec2(item_width, 18.0),
                                         egui::Sense::click(),
                                     );
-                                    
+
                                     let bg = if response.hovered() {
                                         bg_color.gamma_multiply(1.2)
                                     } else {
                                         bg_color
                                     };
                                     ui.painter().rect_filled(rect, 2.0, bg);
-                                    
+
                                     if is_selected {
                                         ui.painter().rect_stroke(rect, 2.0, egui::Stroke::new(2.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                     }
-                                    
+
                                     let marquee_id = egui::Id::new(("qball2_item", i));
                                     draw_marquee_text(ui, rect, name, text_color, response.hovered(), marquee_id);
-                                    
+
                                     if response.clicked() {
                                         new_mode = Some(i as i32);
                                     }
@@ -12084,7 +12092,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("World Radius:")
         .on_hover_text("Radius of the spherical world boundary in simulation units. Cells are confined within this sphere. ⚠ Changing this requires a scene reset to take effect");
-    ui.add(egui::Slider::new(&mut world.world_radius, 50.0..=300.0).suffix(" units"));
+    ui.add(egui::Slider::new(&mut world.world_radius, 50.0..=500.0).suffix(" units"));
 
     if (world.world_radius - current_world_radius).abs() > 0.5 {
         ui.horizontal(|ui| {

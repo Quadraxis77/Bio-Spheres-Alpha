@@ -338,6 +338,45 @@ fn sample_triplanar_texture(world_pos: vec3<f32>, normal: vec3<f32>) -> f32 {
     return tex_xz * normalized_weights.x + tex_xy * normalized_weights.y + tex_yz * normalized_weights.z;
 }
 
+fn layered_rock_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f32) -> vec3<f32> {
+    // Layer mostly by world height, but warp the coordinate so strata bend and
+    // pinch instead of forming perfect latitude rings around the cave volume.
+    let broad_warp = noise(world_pos.xz * 0.018)
+                   + noise(world_pos.yz * 0.014 + vec2<f32>(17.0, 5.0)) * 0.7
+                   + noise(world_pos.xy * 0.011 + vec2<f32>(4.0, 23.0)) * 0.45;
+    let layer_coord = world_pos.y * 0.075 + broad_warp * 1.85;
+
+    let coarse_wave = sin(layer_coord * 6.28318);
+    let fine_wave = sin(layer_coord * 22.0 + noise(world_pos.xz * 0.045) * 4.0);
+    let seam_wave = sin(layer_coord * 13.0 + noise(world_pos.yz * 0.035) * 2.5);
+
+    let coarse_band = smoothstep(-0.35, 0.55, coarse_wave);
+    let fine_band = smoothstep(0.35, 0.92, fine_wave);
+    let dark_seam = smoothstep(0.82, 0.98, abs(seam_wave));
+
+    let dark_rock = vec3<f32>(0.105, 0.100, 0.092);
+    let cool_slate = vec3<f32>(0.150, 0.165, 0.160);
+    let warm_shale = vec3<f32>(0.235, 0.205, 0.155);
+    let pale_silt = vec3<f32>(0.330, 0.300, 0.225);
+
+    var color = mix(dark_rock, warm_shale, coarse_band);
+    color = mix(color, pale_silt, fine_band * 0.28);
+    color = mix(color, cool_slate, noise(world_pos.xy * 0.025 + vec2<f32>(11.0, 31.0)) * 0.22);
+
+    let grain = texture_value - 0.5;
+    let patch = noise(world_pos.xz * 0.032 + vec2<f32>(19.0, 7.0));
+    color += vec3<f32>(grain * 0.09);
+    color *= mix(0.82, 1.16, patch);
+    color *= 1.0 - dark_seam * 0.28;
+
+    // Steeper walls show crisper sediment lines; flatter caps keep a subtler,
+    // more scuffed look so the pattern does not become overly graphic.
+    let wall_factor = 1.0 - abs(normal.y);
+    color = mix(color * 0.92 + vec3<f32>(0.025), color, wall_factor * 0.65 + 0.35);
+
+    return clamp(color, vec3<f32>(0.045), vec3<f32>(0.48));
+}
+
 // Moss density sampling - trilinear interpolation from 128^3 grid.
 fn sample_moss_density(world_pos: vec3<f32>) -> f32 {
     let res = shadow_params.grid_resolution;
@@ -494,39 +533,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Ambient occlusion approximation
     var ao = 0.5 + 0.5 * texture_value;
     
-    // Calculate distance from world center for outer layer detection
-    let dist_from_center = length(in.world_position - cave_params.world_center);
-    let normalized_dist = dist_from_center / cave_params.world_radius;
-    
-    // Check if we're in bottom quarter (negative Y) with noise variation
-    let world_pos_normalized = (in.world_position - cave_params.world_center) / cave_params.world_radius;
-    let hemisphere_factor = -world_pos_normalized.y; // Positive for bottom hemisphere
-    
-    // Add noise variation to create irregular boundary between quarters
-    let noise_scale = 8.0;
-    let boundary_variation = sample_triplanar_texture(in.world_position * noise_scale, normalize(in.world_position)) * 0.3 - 0.15;
-    let hemisphere_threshold = 0.5 + boundary_variation;
-    
-    // Only apply red coloring to bottom quarter with variation
-    let is_bottom_quarter = hemisphere_factor > hemisphere_threshold;
-    
-    // Base cave color (dark gray-brown)
-    let base_color = vec3<f32>(0.15, 0.12, 0.10);
-    
-    // Outer layer reddish color
-    let outer_color = vec3<f32>(0.6, 0.15, 0.1);
-    
-    // Blend factor for outer layer
-    let outer_blend_start = 0.9;
-    let outer_blend_factor = smoothstep(outer_blend_start, 1.0, normalized_dist);
-    let red_factor = outer_blend_factor * select(0.0, 1.0, is_bottom_quarter);
-    
-    // Add color variation based on triplanar texture
-    let color_variation = texture_value * 0.15;
-    let cave_color = base_color + vec3<f32>(color_variation);
-    
-    // Blend with outer layer color only in bottom hemisphere
-    var final_base_color = mix(cave_color, outer_color, red_factor);
+    var final_base_color = layered_rock_color(in.world_position, N, texture_value);
 
     // -- Moss rendering with parallax and normal perturbation --------------
     let moss_sample_pos = in.world_position + N * shadow_params.cell_size * 0.5;

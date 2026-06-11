@@ -292,6 +292,7 @@ impl WorldSphereRenderer {
         depth_view: &wgpu::TextureView,
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
+        horizontal_fov_degrees: f32,
     ) {
         // Calculate view and projection matrices
         let view_matrix = Mat4::look_at_rh(
@@ -300,7 +301,15 @@ impl WorldSphereRenderer {
             camera_rotation * Vec3::Y,
         );
         let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let proj_matrix = Mat4::perspective_rh(
+            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
+                horizontal_fov_degrees,
+                aspect,
+            ),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let view_proj = proj_matrix * view_matrix;
 
         // Update camera uniform

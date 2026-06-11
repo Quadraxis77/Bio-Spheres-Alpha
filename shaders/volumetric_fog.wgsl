@@ -12,6 +12,12 @@ struct CameraUniforms {
     inv_view_proj: mat4x4<f32>,
     camera_pos: vec3<f32>,
     time: f32,
+    camera_right: vec3<f32>,
+    tan_half_horizontal_fov: f32,
+    camera_up: vec3<f32>,
+    tan_half_vertical_fov: f32,
+    camera_forward: vec3<f32>,
+    _pad0: f32,
 }
 
 struct FogParams {
@@ -225,6 +231,15 @@ fn fog_density_at(world_pos: vec3<f32>) -> f32 {
     return density;
 }
 
+fn view_ray_dir(uv: vec2<f32>) -> vec3<f32> {
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    return normalize(
+        camera.camera_forward
+        + camera.camera_right * (ndc.x * camera.tan_half_horizontal_fov)
+        + camera.camera_up * (ndc.y * camera.tan_half_vertical_fov)
+    );
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
@@ -232,11 +247,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sample depth buffer
     let depth = textureSample(depth_texture, depth_sampler, uv);
     
-    // Reconstruct world position of the scene geometry at this pixel
-    let scene_world_pos = reconstruct_world_pos(uv, depth);
-    
-    // Ray direction from camera
-    let ray_dir = normalize(scene_world_pos - camera.camera_pos);
+    // Build the ray from the camera basis and FOV directly. This avoids
+    // far-plane unprojection jitter in fog-only frames at large world sizes.
+    let ray_dir = view_ray_dir(uv);
     
     // Intersect ray with world sphere (centered at origin)
     let sphere_hit = intersect_sphere(camera.camera_pos, ray_dir, fog_params.world_radius);
@@ -246,7 +259,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     
     // Calculate ray march distance, clamped to sphere interior
-    let scene_dist = length(scene_world_pos - camera.camera_pos);
+    var scene_dist = fog_params.ray_end;
+    if (depth < 1.0) {
+        let scene_world_pos = reconstruct_world_pos(uv, depth);
+        scene_dist = length(scene_world_pos - camera.camera_pos);
+    }
     let sphere_near = max(sphere_hit.x, 0.0); // clamp entry to camera if inside
     let sphere_far = sphere_hit.y;
     

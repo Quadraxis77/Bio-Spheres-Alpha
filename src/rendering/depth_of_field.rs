@@ -561,7 +561,7 @@ impl DepthOfFieldRenderer {
             screen_width: self.dof_width as f32,
             screen_height: self.dof_height as f32,
             near_clip: 0.1,
-            far_clip: 1000.0,
+            far_clip: 5000.0,
         };
         queue.write_buffer(&self.dof_params_buffer, 0, bytemuck::bytes_of(&dof_params));
 

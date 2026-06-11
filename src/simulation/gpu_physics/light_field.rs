@@ -1616,6 +1616,22 @@ impl LightFieldSystem {
         self.world_radius
     }
 
+    /// Update the cached grid parameters (world radius, cell size, grid origin)
+    /// for a new world size. The voxel buffers/textures are a fixed
+    /// GRID_RESOLUTION^3 regardless of world size, so no GPU resources need to
+    /// be recreated - the field will repopulate over the following frames as
+    /// it is recomputed against the new grid mapping.
+    pub fn update_world_radius(&mut self, world_radius: f32) {
+        let world_diameter = world_radius * 2.0;
+        self.world_radius = world_radius;
+        self.cell_size = world_diameter / GRID_RESOLUTION as f32;
+        self.grid_origin = [
+            -world_diameter / 2.0,
+            -world_diameter / 2.0,
+            -world_diameter / 2.0,
+        ];
+    }
+
     /// Get scattering coefficient
     pub fn scattering_coefficient(&self) -> f32 {
         self.scattering_coefficient

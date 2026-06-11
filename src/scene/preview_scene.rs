@@ -207,7 +207,7 @@ impl Scene for PreviewScene {
             self.camera.rotation * glam::Vec3::Y,
         );
         let aspect = self.renderer.width as f32 / self.renderer.height as f32;
-        let proj_matrix = glam::Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let proj_matrix = self.camera.projection_matrix(aspect, 0.1, 5000.0);
         let view_proj = proj_matrix * view_matrix;
 
         // Pass 1: Clear background
@@ -289,6 +289,7 @@ impl Scene for PreviewScene {
             lod_threshold_high,
             lod_debug_colors,
             outline_width,
+            self.camera.horizontal_fov_degrees,
             &self.selected_mode_indices,
         );
 
@@ -312,6 +313,7 @@ impl Scene for PreviewScene {
                     self.camera.position(),
                     self.camera.rotation,
                     self.state.display_time,
+                    self.camera.horizontal_fov_degrees,
                     self.renderer.width,
                     self.renderer.height,
                 );
@@ -358,6 +360,7 @@ impl Scene for PreviewScene {
                         &self.state.display_state,
                         self.camera.position(),
                         self.camera.rotation,
+                        self.camera.horizontal_fov_degrees,
                     );
                 }
 

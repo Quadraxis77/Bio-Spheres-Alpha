@@ -14,6 +14,12 @@ pub struct FogCameraUniforms {
     pub inv_view_proj: [[f32; 4]; 4],
     pub camera_pos: [f32; 3],
     pub time: f32,
+    pub camera_right: [f32; 3],
+    pub tan_half_horizontal_fov: f32,
+    pub camera_up: [f32; 3],
+    pub tan_half_vertical_fov: f32,
+    pub camera_forward: [f32; 3],
+    pub _pad0: f32,
 }
 
 /// Fog parameters (must match shader struct)
@@ -594,6 +600,8 @@ impl VolumetricFogRenderer {
         water_density_buffer: &wgpu::Buffer,
         view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
+        camera_rotation: glam::Quat,
+        horizontal_fov_degrees: f32,
         time: f32,
         light_dir: [f32; 3],
         grid_resolution: u32,
@@ -607,11 +615,24 @@ impl VolumetricFogRenderer {
 
         // Update camera uniforms
         let inv_view_proj = view_proj.inverse();
+        let aspect = (self.fog_width as f32 / self.fog_height.max(1) as f32).max(0.001);
+        let horizontal_fov_degrees = horizontal_fov_degrees.clamp(
+            crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES,
+            crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
+        );
+        let tan_half_horizontal_fov = (horizontal_fov_degrees.to_radians() * 0.5).tan();
+        let tan_half_vertical_fov = tan_half_horizontal_fov / aspect;
         let camera_uniform = FogCameraUniforms {
             view_proj: view_proj.to_cols_array_2d(),
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             time,
+            camera_right: (camera_rotation * glam::Vec3::X).to_array(),
+            tan_half_horizontal_fov,
+            camera_up: (camera_rotation * glam::Vec3::Y).to_array(),
+            tan_half_vertical_fov,
+            camera_forward: (camera_rotation * glam::Vec3::NEG_Z).to_array(),
+            _pad0: 0.0,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 

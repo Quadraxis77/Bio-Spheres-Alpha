@@ -562,10 +562,19 @@ impl TailRenderer {
         camera_rotation: Quat,
         time: f32,
         partition_offset: u32,
+        horizontal_fov_degrees: f32,
     ) {
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
         let aspect = self.width as f32 / self.height as f32;
-        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 1000.0);
+        let proj = Mat4::perspective_rh(
+            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
+                horizontal_fov_degrees,
+                aspect,
+            ),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let view_proj = proj * view;
 
         let uniform = TailCameraUniform {
@@ -628,6 +637,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
+        horizontal_fov_degrees: f32,
         width: u32,
         height: u32,
     ) {
@@ -645,7 +655,14 @@ impl TailRenderer {
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(instances));
 
         // Update uniforms (partition_offset = 0 for PreviewScene which uses contiguous data)
-        self.update_camera(queue, camera_pos, camera_rotation, time, 0);
+        self.update_camera(
+            queue,
+            camera_pos,
+            camera_rotation,
+            time,
+            0,
+            horizontal_fov_degrees,
+        );
         self.update_lighting(queue);
 
         // Render pass
@@ -729,6 +746,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
+        horizontal_fov_degrees: f32,
         width: u32,
         height: u32,
         cell_capacity: usize,
@@ -743,7 +761,14 @@ impl TailRenderer {
         let _cell_capacity = cell_capacity; // Keep for potential future use
 
         // Update uniforms (no partition offset with dynamic allocation)
-        self.update_camera(queue, camera_pos, camera_rotation, time, 0);
+        self.update_camera(
+            queue,
+            camera_pos,
+            camera_rotation,
+            time,
+            0,
+            horizontal_fov_degrees,
+        );
         self.update_lighting(queue);
 
         // Set up indexed indirect buffer using LOD 2 (medium-high detail)

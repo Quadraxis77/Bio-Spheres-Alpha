@@ -265,13 +265,12 @@ impl App {
         let aspect = w / h;
         let cam_pos = preview_scene.camera.position();
         let cam_rot = preview_scene.camera.rotation;
-        let fov_y = 45.0_f32.to_radians();
-        let tan_half_fov = (fov_y / 2.0).tan();
 
         let ndc_x = (mx / w) * 2.0 - 1.0;
         let ndc_y = 1.0 - (my / h) * 2.0;
-        let ray_dir_cam =
-            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0).normalize();
+        let ray_dir_cam = preview_scene
+            .camera
+            .view_ray_direction(ndc_x, ndc_y, aspect);
         let ray_dir = cam_rot * ray_dir_cam;
 
         let cell_count = preview_scene.state.display_state.cell_count;
@@ -501,8 +500,7 @@ impl App {
             scene.camera.position() + scene.camera.rotation * glam::Vec3::NEG_Z,
             scene.camera.rotation * glam::Vec3::Y,
         );
-        let proj_matrix =
-            glam::Mat4::perspective_rh(45.0_f32.to_radians(), width / height, 0.1, 1000.0);
+        let proj_matrix = scene.camera.projection_matrix(width / height, 0.1, 5000.0);
         let clip = proj_matrix * view_matrix * world_pos.extend(1.0);
         if clip.w <= 0.0 {
             return None;
@@ -1201,18 +1199,13 @@ impl App {
 
                             let cam_pos = preview_scene.camera.position();
                             let cam_rot = preview_scene.camera.rotation;
-                            let fov_y = 45.0_f32.to_radians();
-                            let tan_half_fov = (fov_y / 2.0).tan();
 
                             let ndc_x = (mx / w) * 2.0 - 1.0;
                             let ndc_y = 1.0 - (my / h) * 2.0;
 
-                            let ray_dir_cam = glam::Vec3::new(
-                                ndc_x * aspect * tan_half_fov,
-                                ndc_y * tan_half_fov,
-                                -1.0,
-                            )
-                            .normalize();
+                            let ray_dir_cam = preview_scene
+                                .camera
+                                .view_ray_direction(ndc_x, ndc_y, aspect);
                             let ray_dir = cam_rot * ray_dir_cam;
 
                             let cell_count = preview_scene.state.display_state.cell_count;
@@ -1469,18 +1462,13 @@ impl App {
 
                         let cam_pos = preview_scene.camera.position();
                         let cam_rot = preview_scene.camera.rotation;
-                        let fov_y = 45.0_f32.to_radians();
-                        let tan_half_fov = (fov_y / 2.0).tan();
 
                         let ndc_x = (mx / w) * 2.0 - 1.0;
                         let ndc_y = 1.0 - (my / h) * 2.0;
 
-                        let ray_dir_cam = glam::Vec3::new(
-                            ndc_x * aspect * tan_half_fov,
-                            ndc_y * tan_half_fov,
-                            -1.0,
-                        )
-                        .normalize();
+                        let ray_dir_cam = preview_scene
+                            .camera
+                            .view_ray_direction(ndc_x, ndc_y, aspect);
                         let ray_dir = cam_rot * ray_dir_cam;
 
                         let cell_count = preview_scene.state.display_state.cell_count;
@@ -1547,9 +1535,9 @@ impl App {
                     && self.editor_state.radial_menu.dragging_cell.is_none()
                 {
                     camera.handle_mouse_move(*position);
-                } else if camera.is_dragging() {
+                } else if camera.is_dragging() || camera.is_look_dragging() {
                     // Camera is mid-drag but cursor drifted over a panel - keep feeding
-                    // move events so the orbit doesn't freeze until re-entering the viewport.
+                    // move events so the orbit/free-look doesn't freeze until re-entering the viewport.
                     camera.handle_mouse_move(*position);
                 }
             }
@@ -2402,13 +2390,12 @@ impl App {
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
             && !gpu_headless
         {
-            self.scene_manager
-                .active_scene_mut()
-                .camera_mut()
-                .set_gravity_direction(
-                    self.ui.state.world_settings.gravity,
-                    self.ui.state.world_settings.gravity_mode,
-                );
+            let camera = self.scene_manager.active_scene_mut().camera_mut();
+            camera.set_gravity_direction(
+                self.ui.state.world_settings.gravity,
+                self.ui.state.world_settings.gravity_mode,
+            );
+            camera.set_world_radius(self.ui.state.world_diameter * 0.5);
         }
         if !gpu_headless {
             self.scene_manager
@@ -2429,6 +2416,11 @@ impl App {
                 .active_scene_mut()
                 .camera_mut()
                 .is_dragging()
+            && !self
+                .scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .is_look_dragging()
         {
             let tool_active = self.editor_state.radial_menu.active_tool
                 != crate::ui::radial_menu::RadialTool::None;
@@ -2508,7 +2500,10 @@ impl App {
                     }
                     self.editor_state.light_params_dirty = true;
                 }
-                if self.editor_state.sun_cycle_enabled || self.editor_state.sun_night_ratio > 0.0 {
+                if !gpu_scene.paused
+                    && (self.editor_state.sun_cycle_enabled
+                        || self.editor_state.sun_night_ratio > 0.0)
+                {
                     // Time-driven brightness (season cycle and/or day/night
                     // cycle) needs the light params re-applied every frame.
                     self.editor_state.light_params_dirty = true;

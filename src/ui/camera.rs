@@ -1,7 +1,20 @@
 use glam::{Quat, Vec3};
+use std::time::Instant;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use winit::keyboard::{KeyCode, PhysicalKey};
+
+/// Horizontal field of view used by the main render camera.
+///
+/// The default preserves the old 45 degree vertical FOV at a 16:9 viewport.
+pub const DEFAULT_HORIZONTAL_FOV_DEGREES: f32 = 72.73435;
+pub const MIN_HORIZONTAL_FOV_DEGREES: f32 = 30.0;
+pub const MAX_HORIZONTAL_FOV_DEGREES: f32 = 140.0;
+/// Fraction of the vertical FOV the world sphere should occupy when orbit
+/// distance is auto-fit, leaving a small margin at the top and bottom.
+const ORBIT_FIT_FOV_FRACTION: f32 = 0.9;
+/// Maximum gap (in seconds) between middle-mouse clicks to count as a double-click.
+const DOUBLE_CLICK_SECONDS: f32 = 0.35;
 
 /// Camera mode - matches BioSpheres-Q
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,12 +53,25 @@ pub struct CameraController {
     accumulated_mouse_delta: Vec3,
     accumulated_scroll: f32,
 
+    // Middle-mouse "free look" state (Orbit mode only). Lets the camera angle
+    // away from the orbit center without changing orbit position/distance/logic.
+    pub look_offset: Quat,
+    is_look_dragging: bool,
+    last_look_mouse_pos: Option<PhysicalPosition<f64>>,
+    accumulated_look_delta: Vec3,
+    last_middle_click: Option<Instant>,
+
+    // Radius of the world boundary sphere, used to auto-fit the orbit distance
+    // when switching to Orbit mode (see `toggle_mode` and `reset_orbit_view`).
+    pub world_radius: f32,
+
     // Configuration (matches BioSpheres-Q defaults)
     pub move_speed: f32,
     pub sprint_multiplier: f32,
     pub mouse_sensitivity: f32,
     pub roll_speed: f32,
     pub zoom_speed: f32,
+    pub horizontal_fov_degrees: f32,
     pub enable_spring: bool,
     pub spring_stiffness: f32,
     pub spring_damping: f32,
@@ -93,11 +119,18 @@ impl CameraController {
             last_mouse_pos: None,
             accumulated_mouse_delta: Vec3::ZERO,
             accumulated_scroll: 0.0,
+            look_offset: Quat::IDENTITY,
+            is_look_dragging: false,
+            last_look_mouse_pos: None,
+            accumulated_look_delta: Vec3::ZERO,
+            last_middle_click: None,
+            world_radius: 200.0,
             move_speed: 15.0,
             sprint_multiplier: 6.0, // Increased from 3.0 for faster shift movement
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
+            horizontal_fov_degrees: DEFAULT_HORIZONTAL_FOV_DEGREES,
             enable_spring: true,
             spring_stiffness: 50.0,
             spring_damping: 0.9,
@@ -124,11 +157,18 @@ impl CameraController {
             last_mouse_pos: None,
             accumulated_mouse_delta: Vec3::ZERO,
             accumulated_scroll: 0.0,
+            look_offset: Quat::IDENTITY,
+            is_look_dragging: false,
+            last_look_mouse_pos: None,
+            accumulated_look_delta: Vec3::ZERO,
+            last_middle_click: None,
+            world_radius: 200.0,
             move_speed: 15.0,
             sprint_multiplier: 6.0,
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
+            horizontal_fov_degrees: DEFAULT_HORIZONTAL_FOV_DEGREES,
             enable_spring: true,
             spring_stiffness: 50.0,
             spring_damping: 0.9,
@@ -155,11 +195,18 @@ impl CameraController {
             last_mouse_pos: None,
             accumulated_mouse_delta: Vec3::ZERO,
             accumulated_scroll: 0.0,
+            look_offset: Quat::IDENTITY,
+            is_look_dragging: false,
+            last_look_mouse_pos: None,
+            accumulated_look_delta: Vec3::ZERO,
+            last_middle_click: None,
+            world_radius: 200.0,
             move_speed: 15.0,
             sprint_multiplier: 6.0,
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
+            horizontal_fov_degrees: DEFAULT_HORIZONTAL_FOV_DEGREES,
             enable_spring: true,
             spring_stiffness: 50.0,
             spring_damping: 0.9,
@@ -225,6 +272,79 @@ impl CameraController {
         Quat::from_mat3(&rot_matrix).normalize()
     }
 
+    /// Default camera rotation: looking down at the scene from a 45-degree angle.
+    fn default_rotation() -> Quat {
+        Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4)
+    }
+
+    /// Orbit distance at which a sphere of the given radius fills
+    /// `ORBIT_FIT_FOV_FRACTION` of the vertical field of view, leaving a small
+    /// margin at the top and bottom regardless of world size.
+    fn fit_distance_for_radius(radius: f32) -> f32 {
+        let vertical_fov =
+            Self::vertical_fov_radians_for_horizontal(DEFAULT_HORIZONTAL_FOV_DEGREES, 16.0 / 9.0);
+        let half_fov = (vertical_fov * 0.5) * ORBIT_FIT_FOV_FRACTION;
+        radius / half_fov.sin()
+    }
+
+    pub fn vertical_fov_radians_for_horizontal(horizontal_fov_degrees: f32, aspect: f32) -> f32 {
+        let aspect = aspect.max(0.001);
+        let horizontal_fov_degrees =
+            horizontal_fov_degrees.clamp(MIN_HORIZONTAL_FOV_DEGREES, MAX_HORIZONTAL_FOV_DEGREES);
+        let tan_half_horizontal = (horizontal_fov_degrees.to_radians() * 0.5).tan();
+        2.0 * (tan_half_horizontal / aspect).atan()
+    }
+
+    pub fn vertical_fov_radians(&self, aspect: f32) -> f32 {
+        Self::vertical_fov_radians_for_horizontal(self.horizontal_fov_degrees, aspect)
+    }
+
+    pub fn projection_matrix(&self, aspect: f32, near: f32, far: f32) -> glam::Mat4 {
+        glam::Mat4::perspective_rh(self.vertical_fov_radians(aspect), aspect, near, far)
+    }
+
+    pub fn view_ray_direction(&self, ndc_x: f32, ndc_y: f32, aspect: f32) -> glam::Vec3 {
+        let aspect = aspect.max(0.001);
+        let horizontal_fov_degrees = self
+            .horizontal_fov_degrees
+            .clamp(MIN_HORIZONTAL_FOV_DEGREES, MAX_HORIZONTAL_FOV_DEGREES);
+        let tan_half_horizontal = (horizontal_fov_degrees.to_radians() * 0.5).tan();
+        let tan_half_vertical = tan_half_horizontal / aspect;
+
+        glam::Vec3::new(ndc_x * tan_half_horizontal, ndc_y * tan_half_vertical, -1.0).normalize()
+    }
+
+    /// Update the world boundary sphere radius used to auto-fit the orbit distance.
+    pub fn set_world_radius(&mut self, radius: f32) {
+        self.world_radius = radius;
+    }
+
+    /// Reset the orbit camera to its default view: centered on the world origin,
+    /// looking down at 45 degrees, with the world sphere fit vertically in view
+    /// (small margin top and bottom), and any free-look offset cleared.
+    pub fn reset_orbit_view(&mut self) {
+        self.center = Vec3::ZERO;
+        self.look_offset = Quat::IDENTITY;
+
+        let default_rotation = Self::default_rotation();
+        self.rotation = default_rotation;
+        self.target_rotation = default_rotation;
+
+        let orbit_distance = match self.scene_type {
+            SceneType::GpuScene => Self::fit_distance_for_radius(self.world_radius),
+            SceneType::PreviewScene => 50.0,
+        };
+        self.distance = orbit_distance;
+        self.target_distance = orbit_distance;
+    }
+
+    /// Reset only the render/view direction while preserving the orbit center,
+    /// rotation, and distance. In orbit mode this returns middle-mouse free-look
+    /// to the current orbit camera direction without moving the camera position.
+    pub fn reset_view_direction(&mut self) {
+        self.look_offset = Quat::IDENTITY;
+    }
+
     /// Get the current camera position in world space
     pub fn position(&self) -> Vec3 {
         let offset = self.rotation * Vec3::new(0.0, 0.0, self.distance);
@@ -244,11 +364,42 @@ impl CameraController {
                 self.last_mouse_pos = None;
             }
         }
+
+        // Middle mouse button: free-look in Orbit mode (angle the camera away
+        // from the orbit center without changing orbit position/distance).
+        // Double-click resets only the view direction.
+        if button == MouseButton::Middle {
+            self.is_look_dragging = state == ElementState::Pressed;
+            if !self.is_look_dragging {
+                self.last_look_mouse_pos = None;
+            }
+
+            if state == ElementState::Pressed {
+                let now = Instant::now();
+                let is_double_click = self
+                    .last_middle_click
+                    .is_some_and(|t| now.duration_since(t).as_secs_f32() <= DOUBLE_CLICK_SECONDS);
+
+                if is_double_click {
+                    if self.mode == CameraMode::Orbit {
+                        self.reset_view_direction();
+                    }
+                    self.last_middle_click = None;
+                } else {
+                    self.last_middle_click = Some(now);
+                }
+            }
+        }
     }
 
     /// Returns true if the camera is currently rotating (right-mouse held).
     pub fn is_dragging(&self) -> bool {
         self.is_dragging
+    }
+
+    /// Returns true if the camera is currently free-looking (middle-mouse held).
+    pub fn is_look_dragging(&self) -> bool {
+        self.is_look_dragging
     }
 
     /// Handle mouse movement
@@ -263,16 +414,40 @@ impl CameraController {
             }
             self.last_mouse_pos = Some(position);
         }
+
+        if self.is_look_dragging {
+            if let Some(last_pos) = self.last_look_mouse_pos {
+                let delta_x = (position.x - last_pos.x) as f32;
+                let delta_y = (position.y - last_pos.y) as f32;
+
+                self.accumulated_look_delta.x += delta_x;
+                self.accumulated_look_delta.y += delta_y;
+            }
+            self.last_look_mouse_pos = Some(position);
+        }
     }
 
-    /// Handle mouse scroll for zooming (Orbit mode) or focal plane (FreeFly mode)
+    /// Returns the rotation to use for rendering/view direction, including any
+    /// middle-mouse free-look offset (Orbit mode only). Orbit position/distance
+    /// (see `position()`) is unaffected by this offset.
+    pub fn view_rotation(&self) -> Quat {
+        if self.mode == CameraMode::Orbit {
+            (self.rotation * self.look_offset).normalize()
+        } else {
+            self.rotation
+        }
+    }
+
+    /// Handle mouse scroll for zooming in Orbit mode.
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         let scroll_amount = match delta {
             MouseScrollDelta::LineDelta(_x, y) => y,
             MouseScrollDelta::PixelDelta(pos) => (pos.y / 100.0) as f32,
         };
 
-        self.accumulated_scroll += scroll_amount;
+        if self.mode == CameraMode::Orbit {
+            self.accumulated_scroll += scroll_amount;
+        }
     }
 
     /// Handle keyboard input
@@ -297,6 +472,24 @@ impl CameraController {
                     }
                     self.keys_pressed.tab = pressed;
                 }
+                KeyCode::BracketLeft if pressed && !event.repeat => {
+                    if self.mode == CameraMode::Orbit {
+                        self.zoom_speed = (self.zoom_speed / 1.25).clamp(0.01, 2.0);
+                        log::info!("Orbit zoom sensitivity: {:.3}", self.zoom_speed);
+                    }
+                }
+                KeyCode::BracketRight if pressed && !event.repeat => {
+                    if self.mode == CameraMode::Orbit {
+                        self.zoom_speed = (self.zoom_speed * 1.25).clamp(0.01, 2.0);
+                        log::info!("Orbit zoom sensitivity: {:.3}", self.zoom_speed);
+                    }
+                }
+                KeyCode::Backslash if pressed && !event.repeat => {
+                    if self.mode == CameraMode::Orbit {
+                        self.zoom_speed = 0.2;
+                        log::info!("Orbit zoom sensitivity reset: {:.3}", self.zoom_speed);
+                    }
+                }
                 _ => {}
             }
         }
@@ -314,10 +507,11 @@ impl CameraController {
                 self.mode = CameraMode::FreeFly;
             }
             CameraMode::FreeFly => {
-                // Switch to Orbit: set orbit center to world origin, use scene-specific distance
+                // Switch to Orbit: set orbit center to world origin, use a distance that
+                // fits the world sphere vertically in view (small margin top/bottom).
                 self.center = Vec3::ZERO;
                 let orbit_distance = match self.scene_type {
-                    SceneType::GpuScene => 500.0,
+                    SceneType::GpuScene => Self::fit_distance_for_radius(self.world_radius),
                     SceneType::PreviewScene => 50.0,
                 };
                 self.distance = orbit_distance;
@@ -337,11 +531,20 @@ impl CameraController {
     pub fn update(&mut self, dt: f32) {
         // 1. ZOOM (scroll) - Only in Orbit mode
         if self.mode == CameraMode::Orbit && self.accumulated_scroll.abs() > 0.001 {
-            // Additive zoom - constant speed regardless of distance
+            // Additive zoom - constant speed regardless of distance.
             self.target_distance -= self.accumulated_scroll * self.zoom_speed * 30.0;
             self.target_distance = self.target_distance.max(0.1);
         }
         self.accumulated_scroll = 0.0;
+
+        // 2. FREE LOOK (middle mouse drag) - Only in Orbit mode
+        if self.mode == CameraMode::Orbit && self.accumulated_look_delta.length_squared() > 0.0 {
+            let delta = self.accumulated_look_delta.truncate() * self.mouse_sensitivity;
+            let yaw = Quat::from_axis_angle(Vec3::Y, -delta.x);
+            let pitch = Quat::from_axis_angle(Vec3::X, -delta.y);
+            self.look_offset = (self.look_offset * yaw * pitch).normalize();
+        }
+        self.accumulated_look_delta = Vec3::ZERO;
 
         // Apply spring interpolation to distance and rotation in orbit mode
         if self.mode == CameraMode::Orbit {

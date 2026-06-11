@@ -858,6 +858,7 @@ impl OrganismSkinRenderer {
         depth_view: &wgpu::TextureView,
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
+        horizontal_fov_degrees: f32,
     ) {
         let view = glam::Mat4::look_at_rh(
             camera_pos,
@@ -865,7 +866,15 @@ impl OrganismSkinRenderer {
             camera_rotation * Vec3::Y,
         );
         let aspect = self.width as f32 / self.height.max(1) as f32;
-        let proj = glam::Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 2000.0);
+        let proj = glam::Mat4::perspective_rh(
+            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
+                horizontal_fov_degrees,
+                aspect,
+            ),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let cam = CameraUniform {
             view_proj: (proj * view).to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),

@@ -140,6 +140,10 @@ pub struct GpuScene {
     pub(super) time_accumulator: f32,
     /// Current frame counter (for shader time-based logic)
     pub(super) current_frame: i32,
+    /// Last simulation frame for which the light field was recomputed.
+    last_light_field_update_frame: Option<i32>,
+    /// Force the light field to refresh even if the simulation frame did not advance.
+    light_field_needs_update: bool,
     /// Set by run_light_field each render frame; cleared after the resolve fires once.
     /// Whether this is the first frame (no Hi-Z data yet)
     first_frame: bool,
@@ -733,7 +737,12 @@ impl GpuScene {
             readback_manager,
             config,
             paused: false,
-            camera: CameraController::new_for_gpu_scene(),
+            camera: {
+                let mut camera = CameraController::new_for_gpu_scene();
+                camera.set_world_radius(world_radius);
+                camera.reset_orbit_view();
+                camera
+            },
             current_time: 0.0,
             genomes: Vec::new(),
             lineage_archive: EcosystemLineageArchive::default(),
@@ -749,6 +758,8 @@ impl GpuScene {
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
             current_frame: 0,
+            last_light_field_update_frame: None,
+            light_field_needs_update: true,
             first_frame: true,
             readbacks_enabled: true,
             time_scale: 1.0,
@@ -967,6 +978,8 @@ impl GpuScene {
         self.current_time = 0.0;
         self.time_accumulator = 0.0;
         self.current_frame = 0;
+        self.last_light_field_update_frame = None;
+        self.light_field_needs_update = true;
         self.paused = false;
         self.first_frame = true;
         self.dragged_cell_index = u32::MAX;
@@ -3637,13 +3650,9 @@ impl GpuScene {
         let ndc_y = 1.0 - (2.0 * screen_y / height);
 
         let aspect = width / height;
-        let fov = 45.0_f32.to_radians();
-        let tan_half_fov = (fov / 2.0).tan();
+        let ray_view = self.camera.view_ray_direction(ndc_x, ndc_y, aspect);
 
-        let ray_view =
-            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0).normalize();
-
-        let ray_world = self.camera.rotation * ray_view;
+        let ray_world = self.camera.view_rotation() * ray_view;
         self.camera.position() + ray_world * distance
     }
 
@@ -4066,7 +4075,7 @@ impl GpuScene {
                 physics_bind_group,
                 ray_origin,
                 ray_direction,
-                1000.0, // max_distance - raycast up to 1000 units
+                5000.0, // max_distance - raycast up to 5000 units
                 dispatch_count,
             );
 
@@ -4089,14 +4098,10 @@ impl GpuScene {
 
         // Calculate ray direction in view space
         let aspect = width / height;
-        let fov = 45.0_f32.to_radians();
-        let tan_half_fov = (fov / 2.0).tan();
-
-        let ray_view =
-            glam::Vec3::new(ndc_x * aspect * tan_half_fov, ndc_y * tan_half_fov, -1.0).normalize();
+        let ray_view = self.camera.view_ray_direction(ndc_x, ndc_y, aspect);
 
         // Transform ray direction to world space
-        let ray_direction = self.camera.rotation * ray_view;
+        let ray_direction = self.camera.view_rotation() * ray_view;
         let ray_origin = self.camera.position();
 
         (ray_origin, ray_direction)
@@ -4739,7 +4744,7 @@ impl GpuScene {
     /// Create camera uniform for rendering
     fn create_camera_uniform(&self) -> CameraUniform {
         let camera_pos = self.camera.position();
-        let camera_rotation = self.camera.rotation;
+        let camera_rotation = self.camera.view_rotation();
 
         // Use NEG_Z for forward direction (consistent with other renderers)
         let view_matrix = Mat4::look_at_rh(
@@ -4748,7 +4753,7 @@ impl GpuScene {
             camera_rotation * glam::Vec3::Y,
         );
         let aspect = self.renderer.width as f32 / self.renderer.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let proj_matrix = self.camera.projection_matrix(aspect, 0.1, 5000.0);
         let view_proj = proj_matrix * view_matrix;
 
         CameraUniform {
@@ -7048,6 +7053,8 @@ impl GpuScene {
         editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) {
         // Compute effective sun intensity — season cycle overrides the static slider.
+        self.light_field_needs_update = true;
+
         let mut effective_sun_intensity = if editor_state.sun_cycle_enabled {
             let period = editor_state.sun_cycle_period.max(1.0);
             let phase = (self.current_time / period * 2.0 * std::f32::consts::PI).sin();
@@ -7295,11 +7302,19 @@ impl GpuScene {
     ) {
         // Check if world diameter changed significantly (more than 0.1 units)
         if (world_diameter - self.previous_world_diameter).abs() > 0.1 {
+            let new_world_radius = world_diameter * 0.5;
+
             if let Some(ref mut cave_renderer) = self.cave_renderer {
-                let new_world_radius = world_diameter * 0.5;
                 cave_renderer.update_world_radius(device, queue, new_world_radius);
-                self.previous_world_diameter = world_diameter;
             }
+
+            if let Some(ref mut light_field) = self.light_field_system {
+                light_field.update_world_radius(new_world_radius);
+            }
+
+            self.camera.set_world_radius(new_world_radius);
+            self.light_field_needs_update = true;
+            self.previous_world_diameter = world_diameter;
         }
     }
 
@@ -7597,7 +7612,7 @@ impl GpuScene {
         ];
 
         let origin = glam::Vec3::ZERO;
-        let proj = glam::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 1000.0);
+        let proj = glam::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 5000.0);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Cubemap Capture Encoder"),
@@ -7711,14 +7726,18 @@ impl Scene for GpuScene {
         // Check and update cave world radius if world diameter changed
         self.check_world_diameter_change(device, queue, world_diameter);
 
+        // Effective view rotation, including any middle-mouse free-look offset
+        // (Orbit mode only). Camera position/distance are unaffected.
+        let camera_view_rotation = self.camera.view_rotation();
+
         // Calculate view-projection matrix for culling
         let view_matrix = Mat4::look_at_rh(
             self.camera.position(),
-            self.camera.position() + self.camera.rotation * glam::Vec3::NEG_Z,
-            self.camera.rotation * glam::Vec3::Y,
+            self.camera.position() + camera_view_rotation * glam::Vec3::NEG_Z,
+            camera_view_rotation * glam::Vec3::Y,
         );
         let aspect = self.renderer.width as f32 / self.renderer.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let proj_matrix = self.camera.projection_matrix(aspect, 0.1, 5000.0);
         let view_proj = proj_matrix * view_matrix;
 
         // TODO: Update instance builder to work without canonical state
@@ -7813,10 +7832,15 @@ impl Scene for GpuScene {
         // Compute light field BEFORE physics loop, throttled by light_field_update_interval.
         // Needed for: (1) photocyte consumption inside each physics step, (2) volumetric fog rendering
         let lf_interval = self.light_field_update_interval.max(1);
-        if (!self.paused || self.show_volumetric_fog)
-            && (self.current_frame as u32 % lf_interval == 0)
+        let frame_due = self.current_frame as u32 % lf_interval == 0;
+        let already_updated_this_frame =
+            self.last_light_field_update_frame == Some(self.current_frame);
+        if self.light_field_needs_update
+            || (!self.paused && frame_due && !already_updated_this_frame)
         {
             self.run_light_field(device, &mut encoder, queue);
+            self.last_light_field_update_frame = Some(self.current_frame);
+            self.light_field_needs_update = false;
         }
 
         // NOTE: Moss growth is dispatched AFTER the cave render pass (near queue.submit)
@@ -8260,7 +8284,8 @@ impl Scene for GpuScene {
                 scene_target,
                 &self.renderer.depth_view,
                 self.camera.position(),
-                self.camera.rotation,
+                camera_view_rotation,
+                self.camera.horizontal_fov_degrees,
             );
         }
 
@@ -8274,8 +8299,9 @@ impl Scene for GpuScene {
                     scene_target,
                     &self.renderer.depth_view,
                     self.camera.position(),
-                    self.camera.rotation,
+                    camera_view_rotation,
                     self.current_time,
+                    self.camera.horizontal_fov_degrees,
                 );
             }
         }
@@ -8294,13 +8320,14 @@ impl Scene for GpuScene {
             &self.instance_builder,
             visible_count,
             self.camera.position(),
-            self.camera.rotation,
+            camera_view_rotation,
             self.current_time,
             lod_scale_factor,
             lod_threshold_low,
             lod_threshold_medium,
             lod_threshold_high,
             outline_width,
+            self.camera.horizontal_fov_degrees,
         );
 
         // Render flagellocyte tails using GPU instance buffer
@@ -8317,8 +8344,9 @@ impl Scene for GpuScene {
                 self.instance_builder.get_instance_buffer(),
                 self.instance_builder.get_indirect_buffer(), // Use total visible count, not per-type
                 self.camera.position(),
-                self.camera.rotation,
+                camera_view_rotation,
                 self.current_time,
+                self.camera.horizontal_fov_degrees,
                 self.renderer.width,
                 self.renderer.height,
                 self.instance_builder.capacity(),
@@ -8362,7 +8390,8 @@ impl Scene for GpuScene {
                 scene_target,
                 &self.renderer.depth_view,
                 self.camera.position(),
-                self.camera.rotation,
+                camera_view_rotation,
+                self.camera.horizontal_fov_degrees,
             );
         }
 
@@ -8411,7 +8440,8 @@ impl Scene for GpuScene {
                     queue,
                     adhesion_data_bind_group,
                     self.camera.position(),
-                    self.camera.rotation,
+                    camera_view_rotation,
+                    self.camera.horizontal_fov_degrees,
                 );
             }
         }
@@ -8447,7 +8477,8 @@ impl Scene for GpuScene {
                         scene_target,
                         &self.renderer.depth_view,
                         self.camera.position(),
-                        self.camera.rotation,
+                        camera_view_rotation,
+                        self.camera.horizontal_fov_degrees,
                     );
                 }
             }
@@ -8588,7 +8619,8 @@ impl Scene for GpuScene {
                     scene_target,
                     &self.renderer.depth_view,
                     self.camera.position(),
-                    self.camera.rotation,
+                    camera_view_rotation,
+                    self.camera.horizontal_fov_degrees,
                 );
             }
         }
@@ -8717,6 +8749,8 @@ impl Scene for GpuScene {
                     water_density_buf,
                     view_proj,
                     cam_pos,
+                    camera_view_rotation,
+                    self.camera.horizontal_fov_degrees,
                     time,
                     lf_dir,
                     128, // GRID_RESOLUTION

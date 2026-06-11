@@ -1042,7 +1042,12 @@ impl UiSystem {
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                             .show(|ui| {
                                 ui.set_min_width(200.0);
-                                show_windows_menu(ui, &mut ui_state_copy, dock_manager);
+                                show_windows_menu(
+                                    ui,
+                                    &mut ui_state_copy,
+                                    dock_manager,
+                                    scene_manager,
+                                );
                             });                    });
                 });
 
@@ -2739,6 +2744,7 @@ fn show_windows_menu(
     ui: &mut egui::Ui,
     state: &mut GlobalUiState,
     dock_manager: &mut crate::ui::dock::DockManager,
+    scene_manager: &mut crate::scene::SceneManager,
 ) {
     use crate::ui::panel::Panel;
 
@@ -2774,6 +2780,19 @@ fn show_windows_menu(
             }
         });
     });
+
+    ui.add_space(6.0);
+    ui.label("Horizontal FOV:")
+        .on_hover_text("Horizontal camera field of view in degrees. Higher values show more of the scene with stronger perspective.");
+    let camera = scene_manager.active_scene_mut().camera_mut();
+    ui.add(
+        egui::Slider::new(
+            &mut camera.horizontal_fov_degrees,
+            crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES
+                ..=crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
+        )
+        .suffix(" deg"),
+    );
 
     ui.separator();
 

@@ -481,11 +481,20 @@ impl BoulderBubbleSystem {
         depth_view: &wgpu::TextureView,
         camera_pos: glam::Vec3,
         camera_rotation: glam::Quat,
+        horizontal_fov_degrees: f32,
     ) {
         // Update camera uniform
         let view = glam::Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
         let aspect = self.width as f32 / self.height as f32;
-        let proj = glam::Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 1000.0);
+        let proj = glam::Mat4::perspective_rh(
+            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
+                horizontal_fov_degrees,
+                aspect,
+            ),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let cam = CameraUniform {
             view_proj: (proj * view).to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),

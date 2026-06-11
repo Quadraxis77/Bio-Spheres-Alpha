@@ -673,6 +673,7 @@ impl CaveSystemRenderer {
         depth_view: &wgpu::TextureView,
         camera_position: Vec3,
         camera_rotation: glam::Quat,
+        horizontal_fov_degrees: f32,
     ) {
         // Calculate view and projection matrices
         let view_matrix = Mat4::look_at_rh(
@@ -681,7 +682,15 @@ impl CaveSystemRenderer {
             camera_rotation * Vec3::Y,
         );
         let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let proj_matrix = Mat4::perspective_rh(
+            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
+                horizontal_fov_degrees,
+                aspect,
+            ),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let view_proj = proj_matrix * view_matrix;
 
         // Update camera uniform
@@ -1190,6 +1199,7 @@ impl CaveSystemRenderer {
                         cell_size,
                         world_center - Vec3::splat(cave_generation_radius),
                         params.threshold,
+                        params,
                         &mut vertices,
                         &mut indices,
                     );
@@ -1498,6 +1508,7 @@ impl CaveSystemRenderer {
         cell_size: f32,
         grid_origin: Vec3,
         threshold: f32,
+        params: &CaveParams,
         vertices: &mut Vec<CaveVertex>,
         indices: &mut Vec<u32>,
     ) {
@@ -1557,15 +1568,23 @@ impl CaveSystemRenderer {
             }
 
             let v0 = edge_vertices[tri[0] as usize];
-            let v1 = edge_vertices[tri[1] as usize];
-            let v2 = edge_vertices[tri[2] as usize];
+            let mut v1 = edge_vertices[tri[1] as usize];
+            let mut v2 = edge_vertices[tri[2] as usize];
 
-            // Calculate normal (ensure it points outward from solid)
+            // Calculate normal, then orient it into open cave space. The density
+            // gradient points toward solid rock, so the render normal should face
+            // the opposite direction for stable lighting/shadow offset sampling.
             let edge1 = v1 - v0;
             let edge2 = v2 - v0;
-            let normal = edge1.cross(edge2).normalize_or_zero();
+            let mut normal = edge1.cross(edge2).normalize_or_zero();
             if normal.length_squared() < 0.0001 {
                 continue;
+            }
+            let centroid = (v0 + v1 + v2) / 3.0;
+            let open_normal = -Self::density_gradient(centroid, params, cell_size * 0.5);
+            if open_normal.length_squared() > 0.0001 && normal.dot(open_normal) < 0.0 {
+                normal = -normal;
+                std::mem::swap(&mut v1, &mut v2);
             }
 
             // Get base index for this triangle
@@ -1604,6 +1623,19 @@ impl CaveSystemRenderer {
     fn corner_position(corner: usize, cube_pos: Vec3, cell_size: f32, grid_origin: Vec3) -> Vec3 {
         let offset = CORNER_OFFSETS[corner];
         grid_origin + (cube_pos + offset) * cell_size
+    }
+
+    fn density_gradient(pos: Vec3, params: &CaveParams, step: f32) -> Vec3 {
+        let h = step.max(0.001);
+        Vec3::new(
+            Self::sample_density(pos + Vec3::X * h, params)
+                - Self::sample_density(pos - Vec3::X * h, params),
+            Self::sample_density(pos + Vec3::Y * h, params)
+                - Self::sample_density(pos - Vec3::Y * h, params),
+            Self::sample_density(pos + Vec3::Z * h, params)
+                - Self::sample_density(pos - Vec3::Z * h, params),
+        )
+        .normalize_or_zero()
     }
 }
 

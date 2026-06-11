@@ -326,13 +326,16 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let voxel_tint = mix(vec3<f32>(1.0), vec3<f32>(0.70, 0.92, 1.10), voxel_water * 0.45);
 
     let geo = geothermal_glow[idx];
-    let geo_tint = mix(vec3<f32>(1.0), vec3<f32>(0.85, 0.45, 0.22), voxel_water * 0.35);
+    let submerged = smoothstep(0.35, 0.85, voxel_water);
+    let geo_tint = mix(vec3<f32>(1.0), vec3<f32>(0.92, 0.86, 0.78), submerged * 0.22);
     let ice_amount_here = clamp(ice_density[idx], 0.0, 1.0);
-    let ice_tint = mix(vec3<f32>(1.0), vec3<f32>(1.15, 0.62, 0.38), ice_amount_here * 0.4);
+    let ice_tint = mix(vec3<f32>(1.0), vec3<f32>(0.90, 0.88, 0.86), ice_amount_here * 0.18);
     let local_glow = geo.xyz * geo_tint * ice_tint;
     let local_weight = clamp(geo.w, 0.0, 4.0);
     light_field[idx] = max(intensity, local_weight);
-    light_color_field[idx] = vec4<f32>(sun_color * ray_tint * voxel_tint + local_glow, geo.w);
+    let sunlight_color = sun_color * ray_tint * voxel_tint;
+    let resolved_color = select(sunlight_color, local_glow, geo.w > 0.001);
+    light_color_field[idx] = vec4<f32>(resolved_color, geo.w);
 }
 
 // === Cell Occupancy Grid Builder ===

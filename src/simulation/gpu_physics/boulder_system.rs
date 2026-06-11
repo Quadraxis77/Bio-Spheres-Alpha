@@ -196,6 +196,7 @@ impl BoulderSystem {
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
         current_time: f32,
+        horizontal_fov_degrees: f32,
     ) {
         self.renderer.render(
             encoder,
@@ -205,6 +206,7 @@ impl BoulderSystem {
             camera_pos,
             camera_rotation,
             current_time,
+            horizontal_fov_degrees,
             self.buffers.active_count,
         );
         // Render bubbles after boulders (additive-ish blending, depth test only)
@@ -216,6 +218,7 @@ impl BoulderSystem {
                 depth_view,
                 camera_pos,
                 camera_rotation,
+                horizontal_fov_degrees,
             );
         }
     }

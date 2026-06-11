@@ -211,6 +211,16 @@ impl SceneManager {
                 gpu_scene.fluid_simulator = old_scene.fluid_simulator.take();
                 gpu_scene.fluid_buffers = old_scene.fluid_buffers.take();
                 gpu_scene.light_field_system = old_scene.light_field_system.take();
+                // The light field's grid origin/cell size are derived from world
+                // radius. When the world was resized, refresh those cached values
+                // so the carried-over field (and the volumetric fog that samples
+                // it) stays aligned with the new world bounds.
+                if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                    let new_world_radius = world_diameter * 0.5;
+                    if (light_field.world_radius() - new_world_radius).abs() > 0.1 {
+                        light_field.update_world_radius(new_world_radius);
+                    }
+                }
                 gpu_scene.volumetric_fog_renderer = old_scene.volumetric_fog_renderer.take();
                 gpu_scene.dof_renderer = old_scene.dof_renderer.take();
                 gpu_scene.sun_renderer = old_scene.sun_renderer.take();
