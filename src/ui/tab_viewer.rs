@@ -3650,10 +3650,10 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Fragment Cull:")
                     .on_hover_text("Minimum isolated fragment volume to keep. Higher values remove larger floating cave chunks; 0 disables fragment cleanup");
                 params_changed |= ui
-                    .add(egui::Slider::new(
-                        &mut isolated_chunk_cull_volume,
-                        0.0..=500.0,
-                    ))
+                    .add(
+                        egui::Slider::new(&mut isolated_chunk_cull_volume, 0.0..=100000.0)
+                            .logarithmic(true),
+                    )
                     .changed();
             }
 

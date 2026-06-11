@@ -195,21 +195,24 @@ const THERMAL_MASS_SOLID: f32 = 6.0;
 // Conductivity: how readily a phase exchanges heat with a neighbor. Pairs use
 // the harmonic mean, so the worse conductor dominates (snow insulates).
 const CONDUCT_AIR: f32 = 1.0;
-const CONDUCT_WATER: f32 = 0.6;
-const CONDUCT_ICE: f32 = 0.5;
+const CONDUCT_WATER: f32 = 0.9;
+const CONDUCT_ICE: f32 = 0.65;
 const CONDUCT_STEAM: f32 = 1.2;
 const CONDUCT_SNOW: f32 = 0.08;
-const CONDUCT_SOLID: f32 = 0.4;
+const CONDUCT_SOLID: f32 = 0.55;
 // Global per-tick conduction rate at the Thermal Inertia anchor setting.
-const CONDUCTION_RATE: f32 = 0.05;
+const CONDUCTION_RATE: f32 = 0.065;
 // Per-pair stability clamp: one tick's transfer may move each side at most
 // this fraction of the differential (explicit scheme CFL guard).
-const CONDUCTION_CFL_MAX: f32 = 0.12;
+const CONDUCTION_CFL_MAX: f32 = 0.16;
 // Buoyant convection bias for mobile media (air/water/steam): heat rises,
 // cold falls. Upward heat flux (hot below cold = unstable stratification)
 // is boosted; downward heat flux (stable stratification) is damped.
 const CONVECTION_BOOST: f32 = 3.0;
 const STRATIFICATION_DAMP: f32 = 0.25;
+const WATER_BUOYANCY_MIN_DELTA_C: f32 = 0.35;
+const WATER_BUOYANCY_FULL_DELTA_C: f32 = 8.0;
+const WATER_BUOYANCY_MAX_PROBABILITY: f32 = 0.9;
 // Water's density inversion: below ~4°C colder water is LIGHTER, so
 // near-freezing pools stratify stably and stop convecting - the physical
 // reason real lakes freeze top-down as a slow sheet. Water-water pairs
@@ -1106,12 +1109,22 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
         up_dir = -grav / grav_len;
     }
 
-    let neighbor_offsets = array<vec3<i32>, 6>(
+    let neighbor_offsets = array<vec3<i32>, 26>(
         vec3<i32>(1, 0, 0), vec3<i32>(-1, 0, 0),
         vec3<i32>(0, 1, 0), vec3<i32>(0, -1, 0),
-        vec3<i32>(0, 0, 1), vec3<i32>(0, 0, -1)
+        vec3<i32>(0, 0, 1), vec3<i32>(0, 0, -1),
+        vec3<i32>(1, 1, 0), vec3<i32>(1, -1, 0),
+        vec3<i32>(-1, 1, 0), vec3<i32>(-1, -1, 0),
+        vec3<i32>(1, 0, 1), vec3<i32>(1, 0, -1),
+        vec3<i32>(-1, 0, 1), vec3<i32>(-1, 0, -1),
+        vec3<i32>(0, 1, 1), vec3<i32>(0, 1, -1),
+        vec3<i32>(0, -1, 1), vec3<i32>(0, -1, -1),
+        vec3<i32>(1, 1, 1), vec3<i32>(1, 1, -1),
+        vec3<i32>(1, -1, 1), vec3<i32>(1, -1, -1),
+        vec3<i32>(-1, 1, 1), vec3<i32>(-1, 1, -1),
+        vec3<i32>(-1, -1, 1), vec3<i32>(-1, -1, -1)
     );
-    for (var i = 0u; i < 6u; i++) {
+    for (var i = 0u; i < 26u; i++) {
         let nx = i32(gid.x) + neighbor_offsets[i].x;
         let ny = i32(gid.y) + neighbor_offsets[i].y;
         let nz = i32(gid.z) + neighbor_offsets[i].z;
@@ -1162,7 +1175,12 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // Heat flux in degree-mass units, CFL-clamped so neither side can
         // move more than CONDUCTION_CFL_MAX of the differential per pass.
-        let k_eff = min(k_pair * CONDUCTION_RATE * rate_scale, CONDUCTION_CFL_MAX * min(m_self, m_n));
+        let off_len_sq = f32(dot(neighbor_offsets[i], neighbor_offsets[i]));
+        let distance_weight = 1.0 / off_len_sq;
+        let k_eff = min(
+            k_pair * CONDUCTION_RATE * rate_scale * distance_weight,
+            CONDUCTION_CFL_MAX * min(m_self, m_n) * distance_weight
+        );
         let q = (conductive_t_self - t_n) * k_eff;
         self_delta_c -= q / m_self;
         nudge_field_temp(n_idx, q / m_n);
@@ -2168,6 +2186,67 @@ fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
     let a_is_empty = type_a == 0u;
     let b_is_empty = type_b == 0u;
 
+    // Check if this direction aligns with gravity (per-voxel for radial mode)
+    let grav_dir = get_effective_gravity(gid);
+
+    // Simple dot product to check if direction aligns with gravity
+    let dir_vec = get_offset(direction);
+    var alignment = dot(grav_dir, vec3<f32>(f32(dir_vec.x), f32(dir_vec.y), f32(dir_vec.z)));
+
+    // Water-water thermal buoyancy: the fluid state is identical, so swapping
+    // the temperature entries is the parcel exchange. This lets hot water rise
+    // through cooler water instead of being dragged downward by bulk flow.
+    if a_is_water && b_is_water && abs(alignment) > 0.1 {
+        let t_a = field_temp_c(idx_a);
+        let t_b = field_temp_c(idx_b);
+        let b_is_down_from_a = alignment > 0.0;
+        let hot_can_rise = select(t_a > t_b, t_b > t_a, b_is_down_from_a);
+
+        if !hot_can_rise {
+            return;
+        }
+
+        let delta_c = abs(t_a - t_b);
+        if delta_c < WATER_BUOYANCY_MIN_DELTA_C {
+            return;
+        }
+
+        let buoyancy_t = saturate(
+            (delta_c - WATER_BUOYANCY_MIN_DELTA_C)
+            / (WATER_BUOYANCY_FULL_DELTA_C - WATER_BUOYANCY_MIN_DELTA_C)
+        );
+        let probability = max(0.15, buoyancy_t * WATER_BUOYANCY_MAX_PROBABILITY);
+        let time_hash = u32(params.time * 1000.0) + direction * 12345u;
+        let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
+        let combined_hash = time_hash ^ pos_hash ^ 0xA341316Cu;
+        if (combined_hash & 255u) > u32(probability * 255.0) {
+            return;
+        }
+
+        let result_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
+        if !result_a.exchanged {
+            return;
+        }
+
+        let result_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
+        if !result_b.exchanged {
+            atomicExchange(&voxels[idx_a], state_a);
+            return;
+        }
+
+        atomicStore(&voxels[idx_a], state_a);
+        atomicStore(&voxels[idx_b], state_b);
+        swap_field_temp(idx_a, idx_b);
+
+        let dir = get_offset(direction);
+        if b_is_down_from_a {
+            write_water_velocity(idx_a, 1u, -dir.x, -dir.y, -dir.z);
+        } else {
+            write_water_velocity(idx_b, 1u, dir.x, dir.y, dir.z);
+        }
+        return;
+    }
+
     // Skip if both same or neither fluid/empty
     // Now also allow steam-water exchanges
     if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water) ||
@@ -2176,13 +2255,6 @@ fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
         return;
     }
 
-    // Check if this direction aligns with gravity (per-voxel for radial mode)
-    let grav_dir = get_effective_gravity(gid);
-    
-    // Simple dot product to check if direction aligns with gravity
-    let dir_vec = get_offset(direction);
-    var alignment = dot(grav_dir, vec3<f32>(f32(dir_vec.x), f32(dir_vec.y), f32(dir_vec.z)));
-    
     // Reverse alignment for steam (steam flows against gravity)
     if a_is_steam || b_is_steam {
         alignment = -alignment;

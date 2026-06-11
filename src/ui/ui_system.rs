@@ -963,6 +963,13 @@ impl UiSystem {
                     .stroke(egui::Stroke::new(1.0, tb_border)),
             )
             .show(&self.ctx, |ui| {
+                // Top bar layout uses fixed pixel sizes throughout, so keep its
+                // spacing unscaled regardless of ui_scale to avoid the bar's
+                // height/widths drifting out of sync with those fixed values.
+                if let Some(ref orig) = self.original_spacing {
+                    *ui.spacing_mut() = orig.clone();
+                }
+
                 let bar_rect = ui.available_rect_before_wrap();
                 ui.spacing_mut().item_spacing.x = 6.0;
 
@@ -1177,6 +1184,12 @@ impl UiSystem {
                         .stroke(egui::Stroke::new(1.0, p.border_subtle)),
                 )
                 .show(&self.ctx, |ui| {
+                    // Status bar layout uses fixed pixel sizes throughout, so keep
+                    // its spacing unscaled regardless of ui_scale (see top bar).
+                    if let Some(ref orig) = self.original_spacing {
+                        *ui.spacing_mut() = orig.clone();
+                    }
+
                     let bar_rect = ui.max_rect();
 
                     ui.horizontal(|ui| {
