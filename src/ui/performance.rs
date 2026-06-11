@@ -11,7 +11,7 @@ const FRAME_TIME_SAMPLES: usize = 120;
 
 /// How often to refresh system info (in seconds).
 /// Keep this off the hot path: sysinfo refreshes can perturb frame pacing.
-const SYSTEM_REFRESH_INTERVAL: f32 = 300.0;
+const SYSTEM_REFRESH_INTERVAL: f32 = 1.0;
 
 /// Performance spike detection configuration.
 const SPIKE_THRESHOLD_MULTIPLIER: f32 = 2.5; // Spike if frame time > 2.5x average
@@ -80,7 +80,7 @@ impl PerformanceMetrics {
 
         let cpu_core_count = system.cpus().len();
 
-        Self {
+        let mut metrics = Self {
             frame_times: VecDeque::with_capacity(FRAME_TIME_SAMPLES),
             system,
             time_since_refresh: 0.0,
@@ -94,7 +94,9 @@ impl PerformanceMetrics {
             gpu_segment_times_ms: Vec::new(),
             frame_count: 0,
             spike_detector: PerformanceSpikeDetector::new(),
-        }
+        };
+        metrics.refresh_system_info();
+        metrics
     }
 
     /// Update metrics with a new frame time.
@@ -257,6 +259,11 @@ impl PerformanceMetrics {
     pub fn set_gpu_segment_times(&mut self, times: &[f32]) {
         self.gpu_segment_times_ms.clear();
         self.gpu_segment_times_ms.extend_from_slice(times);
+    }
+
+    /// Clear GPU segment timings when timestamp queries are disabled or unavailable.
+    pub fn clear_gpu_segment_times(&mut self) {
+        self.gpu_segment_times_ms.clear();
     }
 
     /// Get per-segment GPU frame times (ms). Empty if GPU timing is unavailable.

@@ -2666,6 +2666,7 @@ impl App {
             gpu_scene.set_occlusion_min_screen_size(self.ui.state.occlusion_min_screen_size);
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
+            gpu_scene.set_gpu_timing_enabled(self.ui.state.gpu_timing_enabled);
             gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
 
             // Apply LOD settings from UI
@@ -2786,11 +2787,19 @@ impl App {
 
         // Pull the latest GPU frame timing breakdown (lags a few frames behind
         // due to async readback) for the performance monitor.
-        if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
-            if let Some(ref timer) = gpu_scene.gpu_timer {
+        if self.ui.state.gpu_timing_enabled {
+            if let Some(timer) = self
+                .scene_manager
+                .gpu_scene()
+                .and_then(|gpu_scene| gpu_scene.gpu_timer.as_ref())
+            {
                 self.performance
                     .set_gpu_segment_times(&timer.segment_times_ms());
+            } else {
+                self.performance.clear_gpu_segment_times();
             }
+        } else {
+            self.performance.clear_gpu_segment_times();
         }
 
         if gpu_headless {

@@ -3052,6 +3052,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     ui.horizontal(|ui| {
         ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks")
             .on_hover_text("Allow the CPU to read back cell data from the GPU for the Cell Inspector. Disable to reduce GPU-CPU synchronization overhead if the inspector is not needed");
+        ui.checkbox(&mut state.gpu_timing_enabled, "GPU Frame Timing")
+            .on_hover_text("Measure per-segment GPU frame time with timestamp queries. Disable to remove timestamp query and readback overhead");
     });
     ui.add_space(4.0);
 

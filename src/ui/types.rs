@@ -945,6 +945,11 @@ pub struct GlobalUiState {
     #[serde(default = "default_true")]
     pub gpu_readbacks_enabled: bool,
 
+    /// Whether GPU frame timing timestamp queries are enabled.
+    /// Disabling this removes per-frame timestamp writes and timing readbacks.
+    #[serde(default = "default_true")]
+    pub gpu_timing_enabled: bool,
+
     /// GPU mode no-render performance cockpit. Simulation continues, visual render passes stop.
     #[serde(skip)]
     pub gpu_headless_mode: bool,
@@ -1096,6 +1101,7 @@ impl Default for GlobalUiState {
             occlusion_enabled: true,
             frustum_enabled: true,
             gpu_readbacks_enabled: true,
+            gpu_timing_enabled: true,
             gpu_headless_mode: false,
             gpu_headless_auto_speed: false,
             gpu_headless_target_fps: default_headless_target_fps(),

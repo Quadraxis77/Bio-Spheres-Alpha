@@ -404,6 +404,8 @@ pub struct GpuScene {
     pub boulder_moss_max: f32,
     /// GPU frame timer - per-segment timestamp queries for the performance monitor
     pub gpu_timer: Option<crate::scene::gpu_timer::GpuTimer>,
+    /// Whether GPU frame timing timestamp queries are active.
+    pub gpu_timing_enabled: bool,
     /// Organism label system - GPU-driven connected-component labeling
     pub organism_label_system: Option<crate::simulation::gpu_physics::OrganismLabelSystem>,
     /// Mutation system - GPU-driven genome mutation during cell division
@@ -874,6 +876,7 @@ impl GpuScene {
             moss_consume_physics_bind_groups: None,
             moss_consume_moss_bind_group: None,
             gpu_timer: crate::scene::gpu_timer::GpuTimer::new(device, queue),
+            gpu_timing_enabled: true,
             organism_label_system,
             mutation_system,
             light_field_system: None,
@@ -1844,6 +1847,11 @@ impl GpuScene {
     /// Disabling this can improve performance by avoiding CPU-GPU sync overhead.
     pub fn set_readbacks_enabled(&mut self, enabled: bool) {
         self.readbacks_enabled = enabled;
+    }
+
+    /// Set whether GPU timestamp timing is enabled.
+    pub fn set_gpu_timing_enabled(&mut self, enabled: bool) {
+        self.gpu_timing_enabled = enabled;
     }
 
     /// Set surface pressure for radial fluid mode (tangential smoothing strength).
@@ -7734,8 +7742,10 @@ impl Scene for GpuScene {
             label: Some("GPU Scene Encoder"),
         });
 
-        if let Some(ref timer) = self.gpu_timer {
-            timer.write_timestamp(&mut encoder, 0);
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 0);
+            }
         }
 
         // If moss was just disabled, clear the moss_density buffer so the cave shader
@@ -7964,8 +7974,10 @@ impl Scene for GpuScene {
         }
 
         // End of "Physics & Compute" segment.
-        if let Some(ref timer) = self.gpu_timer {
-            timer.write_timestamp(&mut encoder, 1);
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 1);
+            }
         }
 
         if self.headless_no_render {
@@ -7978,17 +7990,21 @@ impl Scene for GpuScene {
             // No rendering work in headless mode - write the remaining boundaries
             // immediately so the query set has valid data for resolve_query_set,
             // then resolve before submitting.
-            if let Some(ref mut timer) = self.gpu_timer {
-                for boundary in 2..=crate::scene::gpu_timer::SEGMENT_COUNT {
-                    timer.write_timestamp(&mut encoder, boundary);
+            if self.gpu_timing_enabled {
+                if let Some(ref mut timer) = self.gpu_timer {
+                    for boundary in 2..=crate::scene::gpu_timer::SEGMENT_COUNT {
+                        timer.write_timestamp(&mut encoder, boundary);
+                    }
+                    timer.resolve(&mut encoder);
                 }
-                timer.resolve(&mut encoder);
             }
 
             queue.submit(std::iter::once(encoder.finish()));
 
-            if let Some(ref mut timer) = self.gpu_timer {
-                timer.after_submit(device);
+            if self.gpu_timing_enabled {
+                if let Some(ref mut timer) = self.gpu_timer {
+                    timer.after_submit(device);
+                }
             }
 
             if self.follow_organism_id.is_some() {
@@ -8092,8 +8108,10 @@ impl Scene for GpuScene {
         );
 
         // End of "Instance Build & Culling" segment.
-        if let Some(ref timer) = self.gpu_timer {
-            timer.write_timestamp(&mut encoder, 2);
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 2);
+            }
         }
 
         // When DoF is enabled, render the scene to an intermediate texture so the
@@ -8349,8 +8367,10 @@ impl Scene for GpuScene {
         }
 
         // End of "Opaque Render" segment.
-        if let Some(ref timer) = self.gpu_timer {
-            timer.write_timestamp(&mut encoder, 3);
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 3);
+            }
         }
 
         // Render organism skins after all opaque geometry (cave, cells, world sphere)
@@ -8732,8 +8752,10 @@ impl Scene for GpuScene {
         }
 
         // End of "Skins & Effects" segment.
-        if let Some(ref timer) = self.gpu_timer {
-            timer.write_timestamp(&mut encoder, 4);
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 4);
+            }
         }
 
         // DoF: reads scene_target, writes to PP intermediate (or swapchain if PP off).
@@ -8772,16 +8794,20 @@ impl Scene for GpuScene {
         }
 
         // End of "Post-Process" segment, and final resolve for this frame's queries.
-        if let Some(ref mut timer) = self.gpu_timer {
-            timer.write_timestamp(&mut encoder, 5);
-            timer.resolve(&mut encoder);
+        if self.gpu_timing_enabled {
+            if let Some(ref mut timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 5);
+                timer.resolve(&mut encoder);
+            }
         }
 
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
 
-        if let Some(ref mut timer) = self.gpu_timer {
-            timer.after_submit(device);
+        if self.gpu_timing_enabled {
+            if let Some(ref mut timer) = self.gpu_timer {
+                timer.after_submit(device);
+            }
         }
 
         // Call map_async on follow camera staging buffers NOW - after submit.

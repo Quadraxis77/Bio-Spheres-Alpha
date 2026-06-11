@@ -66,6 +66,7 @@
     occlusion_enabled: false,
     frustum_enabled: false,
     gpu_readbacks_enabled: true,
+    gpu_timing_enabled: true,
     show_adhesion_lines: true,
     world_diameter: 400.0,
     lod_scale_factor: 500.0,
