@@ -18,6 +18,8 @@ struct BitfieldParams {
 @group(0) @binding(0) var<uniform> params: BitfieldParams;
 @group(0) @binding(1) var<storage, read> voxels: array<u32>;
 @group(0) @binding(2) var<storage, read_write> water_bitfield: array<atomic<u32>>;
+// Ice bitfield, same layout: cells treat ice voxels as solid obstacles.
+@group(0) @binding(3) var<storage, read_write> ice_bitfield: array<atomic<u32>>;
 
 // Extract fluid type from voxel state (lower 16 bits)
 fn get_fluid_type(state: u32) -> u32 {
@@ -45,8 +47,9 @@ fn generate_water_bitfield(@builtin(global_invocation_id) global_id: vec3<u32>) 
 
     let base_x = x_group * 32u;
 
-    // Pack 32 voxels into one u32
+    // Pack 32 voxels into one u32 (water and ice planes in one sweep)
     var bits = 0u;
+    var ice_bits = 0u;
     for (var i = 0u; i < 32u; i++) {
         let x = base_x + i;
         let voxel_idx = x + y * res + z * res * res;
@@ -57,10 +60,15 @@ fn generate_water_bitfield(@builtin(global_invocation_id) global_id: vec3<u32>) 
         if (fluid_type == 1u) {
             bits = bits | (1u << i);
         }
+        // Ice (type == 2) is a solid obstacle for cells
+        if (fluid_type == 2u) {
+            ice_bits = ice_bits | (1u << i);
+        }
     }
 
-    // Write compressed result
+    // Write compressed results
     atomicStore(&water_bitfield[bitfield_idx], bits);
+    atomicStore(&ice_bitfield[bitfield_idx], ice_bits);
 }
 
 // Clear the bitfield (for initialization)
@@ -76,4 +84,5 @@ fn clear_water_bitfield(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     atomicStore(&water_bitfield[bitfield_idx], 0u);
+    atomicStore(&ice_bitfield[bitfield_idx], 0u);
 }

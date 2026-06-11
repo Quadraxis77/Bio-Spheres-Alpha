@@ -25,7 +25,7 @@ pub struct ExtractParams {
     pub max_particles: u32,
     pub time: f32,
     pub grid_origin: [f32; 3],
-    pub _padding: f32,
+    pub sun_brightness: f32, // Normalized sun brightness (0-1.2) for particle lighting
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -167,6 +167,17 @@ impl SteamParticleRenderer {
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Light field (read) - particle lighting baked at extraction
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -330,6 +341,7 @@ impl SteamParticleRenderer {
         &self,
         device: &wgpu::Device,
         fluid_state_buffer: &wgpu::Buffer,
+        light_field_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Steam Extract Bind Group"),
@@ -350,6 +362,10 @@ impl SteamParticleRenderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: light_field_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -373,6 +389,7 @@ impl SteamParticleRenderer {
         grid_resolution: u32,
         grid_origin: Vec3,
         cell_size: f32,
+        sun_brightness: f32,
         dt: f32,
     ) {
         self.time += dt;
@@ -387,7 +404,7 @@ impl SteamParticleRenderer {
             max_particles: self.max_particles,
             time: self.time,
             grid_origin: grid_origin.to_array(),
-            _padding: 0.0,
+            sun_brightness,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 

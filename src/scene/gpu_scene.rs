@@ -199,6 +199,32 @@ pub struct GpuScene {
     pub constraint_iterations: u32,
     /// Surface pressure: tangential smoothing strength for radial fluid mode (0.0-1.0)
     pub surface_pressure: f32,
+    /// Atmospheric humidity diffusion rate (0.0-1.0 per tick)
+    pub humidity_diffusion_rate: f32,
+    /// Freeze debt accumulation rate for water -> ice
+    pub freeze_rate: f32,
+    /// Melt debt accumulation rate for ice -> water
+    pub melt_rate: f32,
+    /// Melt debt accumulation rate for snow -> water
+    pub snow_melt_rate: f32,
+    /// Compaction debt accumulation rate for snow -> ice (sustained cold packs snow into ice)
+    pub snow_compact_rate: f32,
+    /// Thermal inertia (0-5 scale): controls how fast climate changes
+    pub thermal_inertia: f32,
+    /// Frame counter throttling ice mesh re-extraction (ice changes over
+    /// seconds; re-running a full surface-nets extraction every frame is
+    /// wasted work).
+    ice_extract_counter: u32,
+    /// Water freezing threshold (internal 0-255 scale, default 65 = 0°C)
+    pub freeze_threshold: u32,
+    /// Ice melting threshold (internal 0-255 scale, default 75 = 5°C)
+    pub melt_threshold: u32,
+    /// Snow formation threshold (internal 0-255 scale, default 60 = -2°C)
+    pub snow_threshold: u32,
+    /// Evaporation begins threshold (internal 0-255 scale, default 120 = 28°C)
+    pub evaporation_threshold: u32,
+    /// Optimal cell temperature (internal 0-255 scale, default 105 = 20°C)
+    pub optimal_cell_temp: u32,
     /// Global velocity damping factor (0.0-1.0, higher = less damping, lower = more drag)
     pub acceleration_damping: f32,
     /// Water viscosity: drag applied to cells moving through water (0.0 = off, 1.0 = heavy drag)
@@ -749,6 +775,18 @@ impl GpuScene {
             gravity_mode: 1, // default Y axis
             constraint_iterations: 4,
             surface_pressure: 0.5,
+            humidity_diffusion_rate: 0.15,
+            freeze_rate: 1.0,
+            melt_rate: 1.5,
+            snow_melt_rate: 3.0,
+            snow_compact_rate: 1.0,
+            thermal_inertia: 4.0,
+            ice_extract_counter: 0,
+            freeze_threshold: 65,
+            melt_threshold: 75,
+            snow_threshold: 60,
+            evaporation_threshold: 120,
+            optimal_cell_temp: 105,
             acceleration_damping: 0.98,
             water_viscosity: 0.0,
             solo_metabolism_multiplier: 1.0,
@@ -857,7 +895,7 @@ impl GpuScene {
             surface_format: surface_config.format,
             sun_renderer: None,
             show_sun: true,
-            sun_intensity: 10.0,
+            sun_intensity: 3.0,
             sun_light_dir: [0.0, 1.0, 0.0],
             sun_rotating: false,
             cached_sky_rotation: glam::Quat::IDENTITY,
@@ -2205,6 +2243,13 @@ impl GpuScene {
             .as_ref()
             .map(|sn| sn.density_buffer())
             .unwrap_or(light_field.dummy_water_density());
+        // Ice attenuates sunlight too (sheet shading the pool below). Same
+        // dummy fallback as water - all zeros, same size and type.
+        let ice_density_buffer = self
+            .gpu_surface_nets
+            .as_ref()
+            .map(|sn| sn.ice_density_buffer())
+            .unwrap_or(light_field.dummy_water_density());
 
         // Use cached bind groups instead of creating per-frame
         light_field.update_light_field_params(queue, self.current_time);
@@ -2223,6 +2268,8 @@ impl GpuScene {
                 device,
                 fluid_sim.solid_mask_buffer(),
                 water_density_buffer,
+                fluid_sim.humidity_buffer(),
+                ice_density_buffer,
             ));
         }
         let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
@@ -5472,11 +5519,19 @@ impl GpuScene {
             return;
         };
 
+        let light_field_buffer = self
+            .light_field_system
+            .as_ref()
+            .expect("light field system must be initialized before fluid simulator")
+            .light_field_buffer()
+            .clone();
+
         let simulator = GpuFluidSimulator::new(
             device,
             self.config.sphere_radius,
             glam::Vec3::ZERO,
             solid_mask_buffer,
+            &light_field_buffer,
         );
 
         // Update the position update force accum bind group with real water buffers
@@ -5488,6 +5543,7 @@ impl GpuScene {
             simulator.water_grid_params_buffer(),
             simulator.water_bitfield_buffer(),
             simulator.water_velocity_buffer(),
+            simulator.ice_bitfield_buffer(),
         );
 
         // Also rebuild boulder physics bind group with real water buffers if boulder system exists
@@ -6356,6 +6412,20 @@ impl GpuScene {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.set_gravity_mode(self.gravity_mode);
             simulator.set_surface_pressure(self.surface_pressure);
+            simulator.set_humidity_diffusion_rate(self.humidity_diffusion_rate);
+            simulator.set_freeze_rate(self.freeze_rate);
+            simulator.set_melt_rate(self.melt_rate);
+            simulator.set_snow_melt_rate(self.snow_melt_rate);
+            simulator.set_snow_compact_rate(self.snow_compact_rate);
+            simulator.set_thermal_inertia(self.thermal_inertia);
+            simulator.set_freeze_threshold(self.freeze_threshold);
+            simulator.set_melt_threshold(self.melt_threshold);
+            simulator.set_snow_threshold(self.snow_threshold);
+            simulator.set_evaporation_threshold(self.evaporation_threshold);
+            simulator.set_optimal_cell_temp(self.optimal_cell_temp);
+            // The thermal model's sun_brightness is on a 0-5 scale
+            // (0 = dark, 3 = comfortable/recommended, 5 = extreme heat).
+            // sun_intensity is now also 0-5 to match directly.
             simulator.set_sun_brightness(self.sun_intensity);
             simulator.set_water_drag_strength(queue, self.water_viscosity);
             simulator.step(
@@ -6720,13 +6790,16 @@ impl GpuScene {
             return;
         }
 
-        if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
-            (&self.steam_particle_renderer, &self.fluid_simulator)
-        {
-            self.steam_extract_bind_group = Some(
-                particle_renderer
-                    .create_extract_bind_group(device, fluid_sim.current_state_buffer()),
-            );
+        if let (Some(ref particle_renderer), Some(ref fluid_sim), Some(ref light_field)) = (
+            &self.steam_particle_renderer,
+            &self.fluid_simulator,
+            &self.light_field_system,
+        ) {
+            self.steam_extract_bind_group = Some(particle_renderer.create_extract_bind_group(
+                device,
+                fluid_sim.current_state_buffer(),
+                light_field.light_field_buffer(),
+            ));
             log::info!("Steam extract bind group created");
         }
     }
@@ -6764,6 +6837,7 @@ impl GpuScene {
                 grid_resolution,
                 grid_origin,
                 cell_size,
+                (self.sun_intensity / 3.0).clamp(0.0, 1.2),
                 dt,
             );
         }
@@ -6782,14 +6856,17 @@ impl GpuScene {
             return;
         }
 
-        if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
-            (&self.nutrient_particle_renderer, &self.fluid_simulator)
-        {
+        if let (Some(ref particle_renderer), Some(ref fluid_sim), Some(ref light_field)) = (
+            &self.nutrient_particle_renderer,
+            &self.fluid_simulator,
+            &self.light_field_system,
+        ) {
             self.nutrient_extract_bind_group = Some(particle_renderer.create_extract_bind_group(
                 device,
                 fluid_sim.current_state_buffer(),
                 fluid_sim.solid_mask_buffer(),
                 fluid_sim.nutrient_voxels_buffer(),
+                light_field.light_field_buffer(),
             ));
             log::info!("Nutrient extract bind group created");
         }
@@ -6831,6 +6908,7 @@ impl GpuScene {
                 world_radius,
                 dt,
                 self.nutrient_density,
+                (self.sun_intensity / 3.0).clamp(0.0, 1.2),
             );
         }
     }
@@ -6848,14 +6926,17 @@ impl GpuScene {
             return;
         }
 
-        if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
-            (&self.water_particle_renderer, &self.fluid_simulator)
-        {
+        if let (Some(ref particle_renderer), Some(ref fluid_sim), Some(ref light_field)) = (
+            &self.water_particle_renderer,
+            &self.fluid_simulator,
+            &self.light_field_system,
+        ) {
             self.water_extract_bind_group = Some(particle_renderer.create_extract_bind_group(
                 device,
                 fluid_sim.current_state_buffer(),
                 fluid_sim.solid_mask_buffer(),
                 fluid_sim.water_velocity_buffer(),
+                light_field.light_field_buffer(),
             ));
             log::info!("Water extract bind group created");
         }
@@ -6900,6 +6981,7 @@ impl GpuScene {
                 grid_origin,
                 cell_size,
                 world_radius,
+                (self.sun_intensity / 3.0).clamp(0.0, 1.2),
                 dt,
             );
         }
@@ -6926,7 +7008,7 @@ impl GpuScene {
         editor_state: &crate::ui::panel_context::GenomeEditorState,
     ) {
         // Compute effective sun intensity — season cycle overrides the static slider.
-        let effective_sun_intensity = if editor_state.sun_cycle_enabled {
+        let mut effective_sun_intensity = if editor_state.sun_cycle_enabled {
             let period = editor_state.sun_cycle_period.max(1.0);
             let phase = (self.current_time / period * 2.0 * std::f32::consts::PI).sin();
             let t = (phase + 1.0) * 0.5;
@@ -6934,6 +7016,35 @@ impl GpuScene {
         } else {
             editor_state.sun_intensity
         };
+
+        // Day/night cycle: purely time-driven, independent of the sun's
+        // orbit position. `sun_night_ratio` is the fraction of each cycle
+        // period spent fully dark (brightness 0); the rest is full daylight,
+        // with short smoothstep dawn/dusk ramps at the boundaries.
+        let night_frac = editor_state.sun_night_ratio.clamp(0.0, 1.0);
+        if night_frac > 0.0 {
+            let period = editor_state.sun_cycle_period.max(1.0);
+            let t = (self.current_time / period).fract();
+            let day_frac = 1.0 - night_frac;
+            // Dawn/dusk ramp width: 5% of the period, but never wider than
+            // half of the shorter phase so extreme ratios still work.
+            let ramp = 0.05f32
+                .min(day_frac * 0.5)
+                .min(night_frac * 0.5)
+                .max(1e-4);
+            let smoothstep = |x: f32| {
+                let x = x.clamp(0.0, 1.0);
+                x * x * (3.0 - 2.0 * x)
+            };
+            // Day spans [0, day_frac), night spans [day_frac, 1). Ramp up at
+            // dawn (t=0, following the night that wrapped) and down at dusk.
+            let daylight = if t < day_frac {
+                smoothstep(t / ramp).min(smoothstep((day_frac - t) / ramp))
+            } else {
+                0.0
+            };
+            effective_sun_intensity *= daylight;
+        }
 
         // Update light field system parameters
         if let Some(ref mut light_field) = self.light_field_system {
@@ -8312,6 +8423,7 @@ impl Scene for GpuScene {
                         queue,
                         gpu_surface_nets.density_buffer(),
                         gpu_surface_nets.fluid_type_buffer(),
+                        gpu_surface_nets.ice_density_buffer(),
                     );
                 }
 
@@ -8321,6 +8433,17 @@ impl Scene for GpuScene {
 
                     // Run compute shaders to extract mesh from smoothed density buffer
                     gpu_surface_nets.extract_mesh(&mut encoder);
+
+                    // Ice gets its own mesh: raw ice density, no smoothing,
+                    // no waves - a rigid faceted surface. Ice only changes
+                    // through slow freeze/melt events, so re-extracting every
+                    // 8th frame (~130ms latency) is visually identical and
+                    // skips a full second surface-nets extraction per frame.
+                    self.ice_extract_counter = self.ice_extract_counter.wrapping_add(1);
+                    // % 8 == 1 so the very first frame extracts immediately.
+                    if self.ice_extract_counter % 8 == 1 {
+                        gpu_surface_nets.extract_ice_mesh(&mut encoder);
+                    }
                 }
             }
 
@@ -8339,7 +8462,7 @@ impl Scene for GpuScene {
                     light_field.update_shadow_params(queue);
                 }
 
-                // Render the extracted mesh
+                // Render the extracted water + ice meshes (shared WBOIT pass)
                 gpu_surface_nets.render(
                     &mut encoder,
                     queue,

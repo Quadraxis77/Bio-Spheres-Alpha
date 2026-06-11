@@ -398,6 +398,10 @@ pub struct GenomeEditorState {
     pub sun_cycle_max: f32,
     /// Duration of one full brightness cycle in seconds
     pub sun_cycle_period: f32,
+    /// Fraction of each day/night cycle spent in full darkness (0-1). The
+    /// cycle is purely time-based (one cycle per `sun_cycle_period`),
+    /// independent of the sun's orbit position. 0.0 disables the night.
+    pub sun_night_ratio: f32,
 
     // Shadow settings
     /// Whether surface shadows are enabled
@@ -759,6 +763,7 @@ impl GenomeEditorState {
             sun_cycle_min,
             sun_cycle_max,
             sun_cycle_period,
+            sun_night_ratio,
             shadow_enabled,
             shadow_strength,
             shadow_quality,
@@ -962,6 +967,7 @@ impl GenomeEditorState {
             sun_cycle_min,
             sun_cycle_max,
             sun_cycle_period,
+            sun_night_ratio,
             shadow_enabled,
             shadow_strength,
             shadow_quality,
@@ -1647,6 +1653,7 @@ impl GenomeEditorState {
             self.sun_cycle_min,
             self.sun_cycle_max,
             self.sun_cycle_period,
+            self.sun_night_ratio,
             // Shadow settings
             self.shadow_enabled,
             self.shadow_strength,
@@ -1696,6 +1703,7 @@ impl GenomeEditorState {
         sun_cycle_min: f32,
         sun_cycle_max: f32,
         sun_cycle_period: f32,
+        sun_night_ratio: f32,
         // Shadow settings
         shadow_enabled: bool,
         shadow_strength: f32,
@@ -1742,6 +1750,7 @@ impl GenomeEditorState {
             sun_cycle_min: f32,
             sun_cycle_max: f32,
             sun_cycle_period: f32,
+            sun_night_ratio: f32,
             // Shadow settings
             shadow_enabled: bool,
             shadow_strength: f32,
@@ -1787,6 +1796,7 @@ impl GenomeEditorState {
             sun_cycle_min,
             sun_cycle_max,
             sun_cycle_period,
+            sun_night_ratio,
             // Shadow settings
             shadow_enabled,
             shadow_strength,
@@ -1818,7 +1828,7 @@ impl GenomeEditorState {
         u32, f32, f32, f32, f32,          // lf_max_steps, step_size, absorb_solid, absorb_cell, ambient_floor
         bool, [f32; 3], f32, f32,         // show_sun, sun_color, sun_angular_radius, sun_intensity
         bool, [f32; 3], f32, f32,         // rotation_enabled, rotation_axis, orbit_angle, rotation_speed
-        bool, f32, f32, f32,              // cycle_enabled, cycle_min, cycle_max, cycle_period
+        bool, f32, f32, f32, f32,         // cycle_enabled, cycle_min, cycle_max, cycle_period, night_ratio
         bool, f32, f32,                   // shadow_enabled, shadow_strength, shadow_quality
         f32, f32, f32,                    // caustic_intensity, scale, speed
         f32, f32,                         // photocyte_mass, photocyte_threshold
@@ -1867,6 +1877,8 @@ impl GenomeEditorState {
             sun_cycle_max: f32,
             #[serde(default = "default_sun_cycle_period")]
             sun_cycle_period: f32,
+            #[serde(default = "default_sun_night_ratio")]
+            sun_night_ratio: f32,
             // Shadow settings
             #[serde(default = "default_shadow_enabled")]
             shadow_enabled: bool,
@@ -1919,6 +1931,9 @@ impl GenomeEditorState {
         fn default_sun_cycle_period() -> f32 {
             120.0
         }
+        fn default_sun_night_ratio() -> f32 {
+            0.25
+        }
         fn default_sun_rotation_axis() -> [f32; 3] {
             [0.0, 1.0, 0.0]
         }
@@ -1966,6 +1981,7 @@ impl GenomeEditorState {
                                 s.sun_cycle_min,
                                 s.sun_cycle_max,
                                 s.sun_cycle_period,
+                                s.sun_night_ratio,
                                 // Shadow settings
                                 s.shadow_enabled,
                                 s.shadow_strength,
@@ -2024,6 +2040,7 @@ impl GenomeEditorState {
             0.0,             // sun_cycle_min
             15.0,            // sun_cycle_max
             120.0,           // sun_cycle_period
+            0.25,            // sun_night_ratio
             // Shadow settings
             true, // shadow_enabled
             0.7,  // shadow_strength

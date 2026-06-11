@@ -62,6 +62,28 @@ var<storage, read_write> light_color_field: array<vec4<f32>>;
 @group(0) @binding(5)
 var<storage, read> water_density: array<f32>;
 
+// Group 0: Atmospheric humidity field from the fluid simulator, fixed-point
+// (value = humidity_0_255 * HUMIDITY_FIXED_POINT). Higher humidity scatters
+// more light, gently dimming the light field (fog).
+@group(0) @binding(6)
+var<storage, read> humidity: array<u32>;
+
+const HUMIDITY_FIXED_POINT: f32 = 256.0;
+// Per-voxel humidity contribution to light attenuation along the ray.
+const HUMIDITY_LIGHT_ATTENUATION: f32 = 0.002;
+// Never let humidity alone reduce transmittance below this fraction -
+// fog dims light but shouldn't black it out on its own.
+const HUMIDITY_ATTENUATION_FLOOR: f32 = 0.4;
+
+// Group 0: Ice density field (f32 per voxel, 1.0 = ice). Ice is translucent
+// but scatters more than liquid water, so it attenuates the ray more
+// strongly per voxel - water under an ice sheet sits in cold shade.
+@group(0) @binding(7)
+var<storage, read> ice_density: array<f32>;
+
+// Per-voxel absorption coefficient for ice (liquid water uses 0.055).
+const ICE_ABSORPTION: f32 = 0.12;
+
 // Convert 3D grid coordinates to linear index
 fn grid_to_index(x: u32, y: u32, z: u32) -> u32 {
     let res = params.grid_resolution;
@@ -139,6 +161,7 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
 
     var transmittance = 1.0;
     var water_column = 0.0; // integrated water density along the ray
+    var humidity_column = 0.0; // integrated atmospheric humidity along the ray
     var consecutive_solid = 0u;
 
     for (var i = 0u; i < params.max_steps; i++) {
@@ -194,12 +217,31 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
             water_column += water_amount * params.step_size;
         }
 
+        // Ice: translucent but a stronger scatterer than liquid water - an
+        // ice sheet dims the pool beneath it, which also slows melting from
+        // solar heating (the thermal model reads this light field).
+        let ice_amount = clamp(ice_density[sample_idx], 0.0, 1.0);
+        if (ice_amount > 0.01) {
+            let xi = ICE_ABSORPTION * ice_amount * params.step_size;
+            transmittance *= 1.0 / (1.0 + xi + xi * xi * 0.5);
+            // Ice tints downstream light like water does.
+            water_column += ice_amount * params.step_size;
+        }
+
+        // Accumulate atmospheric humidity along the ray (fog/mist scattering)
+        let humidity_amount = f32(humidity[sample_idx]) / HUMIDITY_FIXED_POINT;
+        humidity_column += humidity_amount * params.step_size;
+
         // Early exit if light is effectively blocked
         if (transmittance < 0.05) {
             transmittance = 0.0;
             break;
         }
     }
+
+    // Humidity gently dims light (fog), capped so it never fully blacks out a voxel on its own
+    let humidity_atten = max(1.0 - humidity_column * HUMIDITY_LIGHT_ATTENUATION, HUMIDITY_ATTENUATION_FLOOR);
+    transmittance *= humidity_atten;
 
     // Apply ambient floor - even fully shadowed areas get some light
     return vec2<f32>(max(transmittance, params.ambient_floor), water_column);

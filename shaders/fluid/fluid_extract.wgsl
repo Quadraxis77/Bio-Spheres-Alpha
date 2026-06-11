@@ -19,6 +19,9 @@ struct ExtractParams {
 @group(0) @binding(2) var<storage, read_write> density_out: array<f32>;
 @group(0) @binding(3) var<storage, read_write> fluid_type_out: array<u32>;
 @group(0) @binding(4) var<storage, read> solid_mask: array<u32>;
+// Separate ice density field: ice gets its own surface-nets mesh (rigid,
+// faceted, no waves) instead of merging into the water isosurface.
+@group(0) @binding(5) var<storage, read_write> ice_density_out: array<f32>;
 
 fn get_fluid_type(state: u32) -> u32 {
     return state & 0x7u;
@@ -120,11 +123,12 @@ fn extract_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fluid_type = get_fluid_type(state);
     let fill = f32((state >> 16u) & 0xFFFFu) / 65535.0;
 
-    if (fluid_type == 1u || fluid_type == 2u) && fill > 0.0 {
+    // Water-only density: ice has its own field below so the two never merge
+    // into one isosurface.
+    if fluid_type == 1u && fill > 0.0 {
         // In zero gravity, all water contributes to the mesh (floating blobs allowed).
         // With gravity, only supported water forms the mesh surface.
-        if fluid_type == 1u
-            && extract_params.gravity_magnitude > 0.01
+        if extract_params.gravity_magnitude > 0.01
             && !is_water_supported(gid.x, gid.y, gid.z) {
             density_out[out_idx] = 0.0;
         } else {
@@ -133,6 +137,9 @@ fn extract_density(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else {
         density_out[out_idx] = 0.0;
     }
+
+    // Ice density: always a full voxel of volume (1 unit of ice == 1 voxel).
+    ice_density_out[out_idx] = select(0.0, 1.0, fluid_type == 2u);
 
     fluid_type_out[out_idx] = fluid_type;
 }

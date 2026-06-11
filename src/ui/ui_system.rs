@@ -1370,24 +1370,30 @@ impl UiSystem {
                                     }
                                 };
 
-                                // Fixed-width, center-aligned containers so both readouts
-                                // occupy equal space and the toggle button sits exactly
-                                // between the two numbers (label text lengths differ).
+                                // Fixed-width containers with label AND value each
+                                // center-aligned (status_field left-aligns the value
+                                // under its label, which made the group read
+                                // off-center), so the toggle button sits exactly
+                                // between the two numbers.
                                 let field_width = 84.0;
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(field_width, ui.available_height()),
                                     egui::Layout::top_down(egui::Align::Center),
                                     |ui| {
-                                        status_field(ui, "AVG WATER TEMP", &|ui| {
-                                            ui.label(
-                                                egui::RichText::new(format_temp(
-                                                    live_avg_water_temp_c,
-                                                ))
-                                                .strong()
-                                                .size(11.5)
-                                                .color(p.status_info),
-                                            );
-                                        });
+                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                        ui.label(
+                                            egui::RichText::new("AVG WATER TEMP")
+                                                .size(8.5)
+                                                .color(theme::TEXT_DIM),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format_temp(
+                                                live_avg_water_temp_c,
+                                            ))
+                                            .strong()
+                                            .size(11.5)
+                                            .color(p.status_info),
+                                        );
                                     },
                                 );
 
@@ -1410,16 +1416,20 @@ impl UiSystem {
                                     egui::vec2(field_width, ui.available_height()),
                                     egui::Layout::top_down(egui::Align::Center),
                                     |ui| {
-                                        status_field(ui, "AVG AIR TEMP", &|ui| {
-                                            ui.label(
-                                                egui::RichText::new(format_temp(
-                                                    live_avg_air_temp_c,
-                                                ))
-                                                .strong()
-                                                .size(11.5)
-                                                .color(p.text_primary),
-                                            );
-                                        });
+                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                        ui.label(
+                                            egui::RichText::new("AVG AIR TEMP")
+                                                .size(8.5)
+                                                .color(theme::TEXT_DIM),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format_temp(
+                                                live_avg_air_temp_c,
+                                            ))
+                                            .strong()
+                                            .size(11.5)
+                                            .color(p.text_primary),
+                                        );
                                     },
                                 );
                             },

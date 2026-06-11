@@ -17,7 +17,7 @@ struct ExtractParams {
     world_radius: f32,  // World boundary radius
     prominence_factor: f32,  // How prominent to make water particles (0.0-1.0)
     gravity_mode: u32,  // 0=X, 1=Y, 2=Z, 3=radial
-    _pad0: f32,
+    sun_brightness: f32, // Normalized sun brightness (0-1.2) for particle lighting
     _pad1: f32,
 }
 
@@ -33,6 +33,10 @@ struct ParticleCounter {
 @group(0) @binding(3) var<storage, read> solid_mask: array<u32>;
 @group(0) @binding(4) var<uniform> params: ExtractParams;
 @group(0) @binding(5) var<storage, read> water_velocity: array<u32>;
+// Light field intensity per voxel (0 = shadowed, 1 = lit) - particle lighting
+// is baked into the instance color here, so droplets in caves or at night
+// are dark instead of self-illuminated.
+@group(0) @binding(6) var<storage, read> light_field: array<f32>;
 
 // Check if a voxel is solid
 fn is_solid(x: u32, y: u32, z: u32) -> bool {
@@ -95,6 +99,11 @@ fn should_render_as_particle(x: u32, y: u32, z: u32) -> bool {
             
             if neighbor_type == 1u {  // Water
                 water_neighbors++;
+            } else if neighbor_type == 2u {
+                // Ice counts as surface contact like solids - droplets
+                // resting on an ice sheet are part of the surface, not
+                // free-falling rain particles.
+                touches_solid = true;
             } else if is_solid(u32(nx), u32(ny), u32(nz)) {  // Solid
                 touches_solid = true;
             }
@@ -191,8 +200,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let max_size = params.cell_size * 1.2;
     particle.size = mix(base_size, max_size, params.prominence_factor);
 
-    // Water color: bright blue, opaque enough to read as solid drops
-    particle.color = vec4<f32>(0.35, 0.6, 0.95, 0.75);
+    // Water color: bright blue, opaque enough to read as solid drops.
+    // Lit by the local light field and overall sun brightness - no ambient
+    // self-illumination (dark caves and night render dark droplets).
+    let light = clamp(light_field[idx] * params.sun_brightness, 0.0, 1.2);
+    particle.color = vec4<f32>(vec3<f32>(0.35, 0.6, 0.95) * light, 0.75);
 
     // Sample water velocity at this voxel
     let vel = decode_water_velocity(water_velocity[idx]);

@@ -28,7 +28,8 @@ pub struct NutrientExtractParams {
     pub world_radius: f32,
     pub spawn_probability: f32, // Legacy parameter (kept for compatibility)
     pub nutrient_density: f32,  // Density parameter (0.0 = sparse, 1.0 = dense)
-    pub _padding: [f32; 2],     // Pad to 48 bytes for WGSL struct alignment
+    pub sun_brightness: f32,    // Normalized sun brightness (0-1.2) for particle lighting
+    pub _padding: f32,          // Pad to 48 bytes for WGSL struct alignment
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -199,6 +200,17 @@ impl NutrientParticleRenderer {
                         },
                         count: None,
                     },
+                    // Light field (read) - particle lighting baked at extraction
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -360,6 +372,7 @@ impl NutrientParticleRenderer {
         fluid_state_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
         nutrient_voxels_buffer: &wgpu::Buffer,
+        light_field_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Nutrient Extract Bind Group"),
@@ -388,6 +401,10 @@ impl NutrientParticleRenderer {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: nutrient_voxels_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: light_field_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -424,6 +441,7 @@ impl NutrientParticleRenderer {
         world_radius: f32,
         dt: f32,
         nutrient_density: f32,
+        sun_brightness: f32,
     ) {
         self.time += dt;
 
@@ -440,7 +458,8 @@ impl NutrientParticleRenderer {
             world_radius,
             spawn_probability: self.spawn_probability,
             nutrient_density,
-            _padding: [0.0; 2],
+            sun_brightness,
+            _padding: 0.0,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 

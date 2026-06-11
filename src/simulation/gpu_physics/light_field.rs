@@ -129,6 +129,9 @@ pub struct LightFieldSystem {
     shadow_field_params_buffer: wgpu::Buffer,
     /// Dummy water density buffer (all zeros) for when surface nets isn't available
     dummy_water_density: wgpu::Buffer,
+    /// Dummy humidity buffer (all zeros = no fog attenuation) for when the fluid
+    /// simulator's humidity buffer isn't available
+    dummy_humidity: wgpu::Buffer,
     /// Per-cell glow state written by luminocytes (vec4: rgb color + brightness).
     /// DMA-cleared each physics step; sense_luminocyte.wgsl reads this for photocyte gain.
     pub glow_flags_buffer: wgpu::Buffer,
@@ -340,6 +343,29 @@ impl LightFieldSystem {
                     // Binding 5: water_density (read-only storage)
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 6: humidity (read-only storage, fixed-point u32 = value * 256)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 7: ice density (read-only f32 per voxel) - ice
+                    // attenuates sunlight more strongly than liquid water
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -831,6 +857,15 @@ impl LightFieldSystem {
             mapped_at_creation: false,
         });
 
+        // Dummy humidity buffer (all zeros = no fog/light attenuation)
+        // Used when the fluid simulator's humidity buffer isn't available
+        let dummy_humidity = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Humidity Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
 
         // === Cave-specific shadow bind group layout (includes water bitfield) ===
         let cave_shadow_bind_group_layout =
@@ -905,6 +940,7 @@ impl LightFieldSystem {
             photocyte_params_buffer,
             shadow_field_params_buffer,
             dummy_water_density,
+            dummy_humidity,
             clear_occupancy_pipeline,
             build_occupancy_pipeline,
             compute_light_pipeline,
@@ -1297,6 +1333,10 @@ impl LightFieldSystem {
         &self.dummy_water_density
     }
 
+    pub fn dummy_humidity(&self) -> &wgpu::Buffer {
+        &self.dummy_humidity
+    }
+
     /// Get grid origin
     pub fn grid_origin(&self) -> [f32; 3] {
         self.grid_origin
@@ -1395,6 +1435,8 @@ impl LightFieldSystem {
         device: &wgpu::Device,
         solid_mask_buffer: &wgpu::Buffer,
         water_density_buffer: &wgpu::Buffer,
+        humidity_buffer: &wgpu::Buffer,
+        ice_density_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Light Field Bind Group"),
@@ -1423,6 +1465,14 @@ impl LightFieldSystem {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: water_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: humidity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: ice_density_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1569,6 +1619,8 @@ impl LightFieldSystem {
         queue: &wgpu::Queue,
         solid_mask_buffer: &wgpu::Buffer,
         water_density_buffer: &wgpu::Buffer,
+        humidity_buffer: &wgpu::Buffer,
+        ice_density_buffer: &wgpu::Buffer,
         positions_buffer: &wgpu::Buffer,
         cell_count_buffer: &wgpu::Buffer,
         physics_params_buffer: &wgpu::Buffer,
@@ -1594,8 +1646,13 @@ impl LightFieldSystem {
         // Create bind groups
         let occupancy_bg =
             self.create_occupancy_bind_group(device, positions_buffer, cell_count_buffer);
-        let light_field_bg =
-            self.create_light_field_bind_group(device, solid_mask_buffer, water_density_buffer);
+        let light_field_bg = self.create_light_field_bind_group(
+            device,
+            solid_mask_buffer,
+            water_density_buffer,
+            humidity_buffer,
+            ice_density_buffer,
+        );
         let photocyte_physics_bg = self.create_photocyte_physics_bind_group(
             device,
             physics_params_buffer,
@@ -1727,6 +1784,8 @@ impl LightFieldSystem {
         queue: &wgpu::Queue,
         solid_mask_buffer: &wgpu::Buffer,
         water_density_buffer: &wgpu::Buffer,
+        humidity_buffer: &wgpu::Buffer,
+        ice_density_buffer: &wgpu::Buffer,
         positions_buffer: &wgpu::Buffer,
         cell_count_buffer: &wgpu::Buffer,
         cell_count: u32,
@@ -1739,8 +1798,13 @@ impl LightFieldSystem {
 
         let occupancy_bg =
             self.create_occupancy_bind_group(device, positions_buffer, cell_count_buffer);
-        let light_field_bg =
-            self.create_light_field_bind_group(device, solid_mask_buffer, water_density_buffer);
+        let light_field_bg = self.create_light_field_bind_group(
+            device,
+            solid_mask_buffer,
+            water_density_buffer,
+            humidity_buffer,
+            ice_density_buffer,
+        );
 
         // Clear occupancy grid using DMA (faster than compute dispatch)
         encoder.clear_buffer(&self.cell_occupancy_buffer, 0, None);

@@ -40,7 +40,8 @@ pub struct ExtractParams {
     pub world_radius: f32,      // World boundary radius
     pub prominence_factor: f32, // How prominent to make water particles (0.0-1.0)
     pub gravity_mode: u32,      // 0=X, 1=Y, 2=Z, 3=radial
-    pub _padding: [f32; 2],     // Pad to 48 bytes for WGSL struct alignment
+    pub sun_brightness: f32,    // Normalized sun brightness (0-1.2) for particle lighting
+    pub _padding: f32,          // Pad to 48 bytes for WGSL struct alignment
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -212,6 +213,17 @@ impl WaterParticleRenderer {
                     // Water velocity buffer (read)
                     wgpu::BindGroupLayoutEntry {
                         binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Light field (read) - particle lighting baked at extraction
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -392,6 +404,7 @@ impl WaterParticleRenderer {
         fluid_state_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
         water_velocity_buffer: &wgpu::Buffer,
+        light_field_buffer: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Water Extract Bind Group"),
@@ -420,6 +433,10 @@ impl WaterParticleRenderer {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: water_velocity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: light_field_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -462,6 +479,7 @@ impl WaterParticleRenderer {
         grid_origin: Vec3,
         cell_size: f32,
         world_radius: f32,
+        sun_brightness: f32,
         dt: f32,
     ) {
         self.time += dt;
@@ -479,7 +497,8 @@ impl WaterParticleRenderer {
             world_radius,
             prominence_factor: self.prominence_factor,
             gravity_mode: self.gravity_mode,
-            _padding: [0.0; 2],
+            sun_brightness,
+            _padding: 0.0,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 

@@ -2048,6 +2048,7 @@ impl GpuPhysicsPipelines {
             None,
             None,
             None,
+            None,
         );
 
         // Velocity update angular bind groups - one per rotation buffer index.
@@ -4877,6 +4878,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 8: Ice bitfield (read-only storage) - solid obstacle for cells
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -5089,17 +5101,19 @@ impl GpuPhysicsPipelines {
         water_grid_params_buffer: Option<&wgpu::Buffer>,
         water_bitfield_buffer: Option<&wgpu::Buffer>,
         water_velocity_buffer: Option<&wgpu::Buffer>,
+        ice_bitfield_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
         use wgpu::util::DeviceExt;
 
         // Create default water buffers if not provided
-        let (water_grid_params_buffer, water_bitfield_buffer, water_velocity_buffer) = match (
+        let (water_grid_params_buffer, water_bitfield_buffer, water_velocity_buffer, ice_bitfield_buffer) = match (
             water_grid_params_buffer,
             water_bitfield_buffer,
             water_velocity_buffer,
+            ice_bitfield_buffer,
         ) {
-            (Some(params), Some(bitfield), Some(velocity)) => {
-                (params.clone(), bitfield.clone(), velocity.clone())
+            (Some(params), Some(bitfield), Some(velocity), Some(ice)) => {
+                (params.clone(), bitfield.clone(), velocity.clone(), ice.clone())
             }
             _ => {
                 // Default params with grid_resolution=0 which will cause all position lookups to be out of bounds
@@ -5149,7 +5163,14 @@ impl GpuPhysicsPipelines {
                         usage: wgpu::BufferUsages::STORAGE,
                     });
 
-                (params_buffer, bitfield_buffer, velocity_buffer)
+                // Minimal ice bitfield buffer (zero = no ice anywhere)
+                let ice_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Default Ice Bitfield Buffer"),
+                    contents: &[0u8; 4],
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+
+                (params_buffer, bitfield_buffer, velocity_buffer, ice_buffer)
             }
         };
 
@@ -5189,6 +5210,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: triple_buffers.cell_grip_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: ice_bitfield_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -8053,6 +8078,7 @@ impl CachedBindGroups {
         water_grid_params_buffer: &wgpu::Buffer,
         water_bitfield_buffer: &wgpu::Buffer,
         water_velocity_buffer: &wgpu::Buffer,
+        ice_bitfield_buffer: &wgpu::Buffer,
     ) {
         self.position_update_force_accum = pipelines.create_position_update_force_accum_bind_group(
             device,
@@ -8061,6 +8087,7 @@ impl CachedBindGroups {
             Some(water_grid_params_buffer),
             Some(water_bitfield_buffer),
             Some(water_velocity_buffer),
+            Some(ice_bitfield_buffer),
         );
     }
 }

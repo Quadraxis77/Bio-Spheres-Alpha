@@ -162,7 +162,7 @@ pub use depth_of_field::DepthOfFieldRenderer;
 pub use gpu_adhesion_lines::GpuAdhesionLineRenderer;
 pub use gpu_surface_nets::{
     generate_test_density_metaballs, generate_test_density_noise, generate_test_density_sphere,
-    DensityMeshParams, GpuSurfaceNets, GpuVertex,
+    DensityMeshParams, GpuSurfaceNets, GpuVertex, IceRenderParams,
 };
 pub use instance_builder::{CellInstance, CullingMode, CullingStats, InstanceBuilder};
 pub use nutrient_particles::NutrientParticleRenderer;

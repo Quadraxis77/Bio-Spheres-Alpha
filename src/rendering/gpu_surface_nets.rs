@@ -52,6 +52,50 @@ pub struct Counters {
     pub index_count: u32,
 }
 
+/// Ice appearance uniform (must match IceRenderParams in ice_mesh.wgsl)
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct IceRenderParams {
+    pub surface_color: [f32; 3],
+    pub facet_scale: f32,
+    pub deep_color: [f32; 3],
+    pub displacement_strength: f32,
+    pub facet_diffuse: f32,
+    pub glint_shininess: f32,
+    pub glint_strength: f32,
+    pub alpha_base: f32,
+    pub reflection_brightness: f32,
+    pub fresnel_reflection: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
+    /// Tail padding: the ice pipeline shares its pipeline layout with the
+    /// water pipeline, and wgpu validates the bound buffer against the
+    /// LARGEST shader requirement across pipelines using that layout (the
+    /// water shader's 112-byte RenderParams). The ice shader only reads the
+    /// first 64 bytes; this padding satisfies the shared-layout minimum.
+    pub _pad_tail: [f32; 12],
+}
+
+impl Default for IceRenderParams {
+    fn default() -> Self {
+        Self {
+            surface_color: [0.80, 0.90, 1.00],
+            facet_scale: 0.02,
+            deep_color: [0.25, 0.45, 0.75],
+            displacement_strength: 0.9,
+            facet_diffuse: 0.2,
+            glint_shininess: 64.0,
+            glint_strength: 1.0,
+            alpha_base: 0.82,
+            reflection_brightness: 1.0,
+            fresnel_reflection: 0.35,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad_tail: [0.0; 12],
+        }
+    }
+}
+
 /// GPU Surface Nets renderer
 pub struct GpuSurfaceNets {
     // Compute pipelines
@@ -62,6 +106,25 @@ pub struct GpuSurfaceNets {
 
     // Render pipeline
     render_pipeline: wgpu::RenderPipeline,
+
+    // Ice mesh: separate full-volume surface from water (rigid, faceted,
+    // semitransparent, alpha-blended forward pass instead of WBOIT).
+    // Reuses the same surface-nets compute pipelines with its own buffers.
+    ice_render_pipeline: wgpu::RenderPipeline,
+    ice_density_buffer: wgpu::Buffer,
+    ice_vertex_buffer: wgpu::Buffer,
+    ice_index_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
+    ice_vertex_map_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
+    ice_counter_buffer: wgpu::Buffer,
+    ice_indirect_draw_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
+    ice_params_buffer: wgpu::Buffer,
+    ice_compute_bind_group: wgpu::BindGroup,
+    /// Ice appearance uniform (UI-driven) + its camera/params bind group.
+    ice_render_params_buffer: wgpu::Buffer,
+    ice_render_bind_group: wgpu::BindGroup,
 
     // Buffers
     density_buffer: wgpu::Buffer,
@@ -756,6 +819,250 @@ impl GpuSurfaceNets {
             cache: None,
         });
 
+        // === Ice mesh: separate surface-nets extraction + forward render ===
+        // Ice volumes are typically far smaller than the water surface, so the
+        // mesh buffers get half the water caps.
+        let ice_max_vertices = max_vertices / 2;
+        let ice_max_indices = max_indices / 2;
+
+        let ice_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Density Buffer"),
+            size: density_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let ice_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Surface Nets Vertex Buffer"),
+            size: (ice_max_vertices as usize * std::mem::size_of::<GpuVertex>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+
+        let ice_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Surface Nets Index Buffer"),
+            size: (ice_max_indices as usize * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX,
+            mapped_at_creation: false,
+        });
+
+        let ice_vertex_map_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Vertex Map Buffer"),
+            size: (PADDED_VOXELS * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        let ice_counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Counter Buffer"),
+            size: std::mem::size_of::<Counters>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let ice_indirect_draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Indirect Draw Buffer"),
+            size: 20, // 5 * u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
+            mapped_at_creation: false,
+        });
+
+        // Same grid params as water, with the ice mesh's smaller caps. Must
+        // use the wide early-out (not the 8-corner fast path): ice corners
+        // go through the same 3x3x3 height filter as water, which bleeds
+        // density one cell beyond a cell's own 8 corners. With the fast
+        // 8-corner check, cells just outside an ice block (especially at
+        // concave edges/corners) had all-zero raw corners and were skipped
+        // even though their filtered corners crossed the isosurface,
+        // leaving tiny holes in the mesh.
+        let ice_params = SurfaceNetsGpuParams {
+            max_vertices: ice_max_vertices,
+            max_indices: ice_max_indices,
+            use_fast_early_out: 0,
+            ..params
+        };
+        let ice_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Ice Surface Nets Params Buffer"),
+            contents: bytemuck::cast_slice(&[ice_params]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Reuses the water compute pipelines - only the buffers differ.
+        let ice_compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Ice Surface Nets Compute Bind Group"),
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ice_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: ice_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: fluid_type_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: solid_mask_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: ice_vertex_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: ice_index_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: ice_vertex_map_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: ice_counter_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: ice_indirect_draw_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Ice appearance uniform + its own group(0) bind group (same layout
+        // as the water render bind group: camera + params uniforms).
+        let ice_render_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Ice Render Params Buffer"),
+                contents: bytemuck::cast_slice(&[IceRenderParams::default()]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+        let ice_render_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Ice Render Bind Group"),
+            layout: &render_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: ice_render_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Ice render pipeline: classic alpha blend straight into the scene
+        // with depth writes - a rigid translucent solid, not an OIT fluid.
+        let ice_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Ice Mesh Render Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/fluid/ice_mesh.wgsl").into(),
+            ),
+        });
+
+        let ice_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Ice Mesh Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &ice_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GpuVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3, // position
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32, // fluid_type
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 16,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x3, // normal
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ice_shader,
+                entry_point: Some("fs_main"),
+                // Same WBOIT targets as the water pipeline: ice draws into
+                // the shared OIT pass, so water and ice composite
+                // order-independently with no depth contention (a depth-write
+                // forward pass z-fought the water surface at the ice boundary
+                // and hid water behind ice completely).
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::R8Unorm,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Zero,
+                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                // Cull back faces so a slab contributes one layer to the
+                // weighted blend instead of front + back doubling its alpha.
+                cull_mode: Some(wgpu::Face::Back),
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: false, // OIT: no depth writes for transparents
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
         // === Density smoothing infrastructure ===
         let smooth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Smooth Density Compute Shader"),
@@ -1054,6 +1361,17 @@ impl GpuSurfaceNets {
             index_pipeline,
             finalize_pipeline,
             render_pipeline,
+            ice_render_pipeline,
+            ice_density_buffer,
+            ice_vertex_buffer,
+            ice_index_buffer,
+            ice_vertex_map_buffer,
+            ice_counter_buffer,
+            ice_indirect_draw_buffer,
+            ice_params_buffer,
+            ice_compute_bind_group,
+            ice_render_params_buffer,
+            ice_render_bind_group,
             density_buffer,
             fluid_type_buffer,
             solid_mask_buffer,
@@ -1124,6 +1442,20 @@ impl GpuSurfaceNets {
     }
 
     /// Get density buffer for GPU writes
+    /// Get the ice density buffer (filled by the fluid extract pass)
+    pub fn ice_density_buffer(&self) -> &wgpu::Buffer {
+        &self.ice_density_buffer
+    }
+
+    /// Update the ice appearance uniform (driven by the Fluid Settings UI)
+    pub fn update_ice_render_params(&self, queue: &wgpu::Queue, params: &IceRenderParams) {
+        queue.write_buffer(
+            &self.ice_render_params_buffer,
+            0,
+            bytemuck::bytes_of(params),
+        );
+    }
+
     pub fn density_buffer(&self) -> &wgpu::Buffer {
         &self.density_buffer
     }
@@ -1480,6 +1812,52 @@ impl GpuSurfaceNets {
         );
     }
 
+    /// Extract the ice mesh from the ice density field. Reuses the water
+    /// surface-nets compute pipelines with the ice bind group; no smoothing
+    /// pass (the extractor's internal height filter plus flat shading gives
+    /// the large faceted look).
+    pub fn extract_ice_mesh(&self, encoder: &mut wgpu::CommandEncoder) {
+        let workgroup_count = (PADDED_RESOLUTION + 3) / 4;
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Ice Reset Counters Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.reset_pipeline);
+            pass.set_bind_group(0, &self.ice_compute_bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Ice Generate Vertices Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.vertex_pipeline);
+            pass.set_bind_group(0, &self.ice_compute_bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Ice Generate Indices Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.index_pipeline);
+            pass.set_bind_group(0, &self.ice_compute_bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Ice Finalize Indirect Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.finalize_pipeline);
+            pass.set_bind_group(0, &self.ice_compute_bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        // No counter readback: the indirect draw needs no CPU involvement.
+    }
+
     /// Read back mesh counts from GPU (call after extract_mesh completes)
     pub fn read_counts(&mut self, device: &wgpu::Device) {
         let slice = self.counter_staging_buffer.slice(..);
@@ -1594,6 +1972,15 @@ impl GpuSurfaceNets {
             oit_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             oit_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             oit_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
+
+            // Ice mesh: same OIT pass, its own faceted pipeline and its own
+            // appearance params at group(0) - weighted blending composites
+            // ice and water order-independently.
+            oit_pass.set_pipeline(&self.ice_render_pipeline);
+            oit_pass.set_bind_group(0, &self.ice_render_bind_group, &[]);
+            oit_pass.set_vertex_buffer(0, self.ice_vertex_buffer.slice(..));
+            oit_pass.set_index_buffer(self.ice_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            oit_pass.draw_indexed_indirect(&self.ice_indirect_draw_buffer, 0);
         }
 
         // === Pass 2: Composite OIT result over the scene ===

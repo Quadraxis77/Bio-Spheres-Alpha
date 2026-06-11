@@ -2509,7 +2509,10 @@ impl App {
                     }
                     self.editor_state.light_params_dirty = true;
                 }
-                if self.editor_state.sun_cycle_enabled {
+                if self.editor_state.sun_cycle_enabled || self.editor_state.sun_night_ratio > 0.0
+                {
+                    // Time-driven brightness (season cycle and/or day/night
+                    // cycle) needs the light params re-applied every frame.
                     self.editor_state.light_params_dirty = true;
                 }
 
@@ -2580,6 +2583,27 @@ impl App {
                         gravity_mode: gpu_scene.gravity_mode,
                     };
                     surface_nets.update_render_params(&self.queue, &params);
+
+                    // Ice appearance (UI-driven, persisted in FluidSettings)
+                    let ice = &self.ui.state.fluid_settings.ice;
+                    surface_nets.update_ice_render_params(
+                        &self.queue,
+                        &crate::rendering::IceRenderParams {
+                            surface_color: ice.surface_color,
+                            facet_scale: ice.facet_scale,
+                            deep_color: ice.deep_color,
+                            displacement_strength: ice.displacement_strength,
+                            facet_diffuse: ice.facet_diffuse,
+                            glint_shininess: ice.glint_shininess,
+                            glint_strength: ice.glint_strength,
+                            alpha_base: ice.alpha,
+                            reflection_brightness: ice.reflection_brightness,
+                            fresnel_reflection: ice.fresnel_reflection,
+                            _pad0: 0.0,
+                            _pad1: 0.0,
+                            _pad_tail: [0.0; 12],
+                        },
+                    );
                 }
 
                 // -- Organism skin sync -------------------------------------
@@ -2659,6 +2683,20 @@ impl App {
             gpu_scene.gravity = self.ui.state.world_settings.gravity;
             gpu_scene.gravity_mode = self.ui.state.world_settings.gravity_mode;
             gpu_scene.surface_pressure = self.ui.state.fluid_settings.surface_pressure;
+            gpu_scene.humidity_diffusion_rate =
+                self.ui.state.fluid_settings.climate.humidity_diffusion_rate;
+            gpu_scene.thermal_inertia = self.ui.state.fluid_settings.climate.thermal_inertia;
+            gpu_scene.freeze_rate = self.ui.state.fluid_settings.climate.freeze_rate;
+            gpu_scene.melt_rate = self.ui.state.fluid_settings.climate.melt_rate;
+            gpu_scene.snow_melt_rate = self.ui.state.fluid_settings.climate.snow_melt_rate;
+            gpu_scene.snow_compact_rate =
+                self.ui.state.fluid_settings.climate.snow_compact_rate;
+            gpu_scene.freeze_threshold = self.ui.state.fluid_settings.climate.freeze_threshold;
+            gpu_scene.melt_threshold = self.ui.state.fluid_settings.climate.melt_threshold;
+            gpu_scene.snow_threshold = self.ui.state.fluid_settings.climate.snow_threshold;
+            gpu_scene.evaporation_threshold =
+                self.ui.state.fluid_settings.climate.evaporation_threshold;
+            gpu_scene.optimal_cell_temp = self.ui.state.fluid_settings.climate.optimal_cell_temp;
             gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
             gpu_scene.water_viscosity = self.ui.state.world_settings.water_viscosity;

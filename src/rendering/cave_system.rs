@@ -946,6 +946,103 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
 // Cave Mesh Generation
 // ============================================================================
 
+/// Minimum world-space volume (units³) for an isolated rock chunk to survive
+/// generation. Anything smaller that is not connected to the world shell is
+/// culled from both the rendered cave mesh and the collision solid mask -
+/// floating noise debris neither renders nor collides. Large isolated
+/// islands above this volume are deliberate features and are kept.
+pub const MIN_ISOLATED_CHUNK_VOLUME: f32 = 50.0;
+
+/// Remove small isolated solid chunks from a flat solid grid (`dims`³ cells,
+/// indexed `x + y*dims + z*dims²`, 6-connectivity).
+///
+/// Components reachable from any solid cell on the grid boundary are anchored
+/// to the world shell and always kept. Isolated components are kept only if
+/// they span at least `min_voxels` cells. Culled cells are set to `false`.
+/// Returns the number of voxels culled.
+///
+/// Used by both the cave mesh generator and the fluid solid-mask generator
+/// (with `min_voxels` derived from the same world-space volume) so rendering
+/// and collision agree about which chunks exist.
+pub fn cull_isolated_solid_chunks(solid: &mut [bool], dims: usize, min_voxels: usize) -> usize {
+    let total = dims * dims * dims;
+    debug_assert_eq!(solid.len(), total);
+    let mut visited = vec![false; total];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut component: Vec<usize> = Vec::new();
+
+    // Expand a flood fill from whatever is currently on the stack, recording
+    // every cell reached into `component`.
+    let flood = |stack: &mut Vec<usize>,
+                 visited: &mut Vec<bool>,
+                 component: &mut Vec<usize>,
+                 solid: &[bool]| {
+        while let Some(i) = stack.pop() {
+            component.push(i);
+            let x = i % dims;
+            let y = (i / dims) % dims;
+            let z = i / (dims * dims);
+            let neighbors = [
+                if x > 0 { Some(i - 1) } else { None },
+                if x + 1 < dims { Some(i + 1) } else { None },
+                if y > 0 { Some(i - dims) } else { None },
+                if y + 1 < dims { Some(i + dims) } else { None },
+                if z > 0 { Some(i - dims * dims) } else { None },
+                if z + 1 < dims { Some(i + dims * dims) } else { None },
+            ];
+            for n in neighbors.into_iter().flatten() {
+                if solid[n] && !visited[n] {
+                    visited[n] = true;
+                    stack.push(n);
+                }
+            }
+        }
+    };
+
+    // Pass 1: everything reachable from solid boundary cells is shell-anchored.
+    for z in 0..dims {
+        for y in 0..dims {
+            for x in 0..dims {
+                let on_boundary = x == 0
+                    || x == dims - 1
+                    || y == 0
+                    || y == dims - 1
+                    || z == 0
+                    || z == dims - 1;
+                if !on_boundary {
+                    continue;
+                }
+                let i = x + y * dims + z * dims * dims;
+                if solid[i] && !visited[i] {
+                    visited[i] = true;
+                    stack.push(i);
+                    component.clear();
+                    flood(&mut stack, &mut visited, &mut component, solid);
+                }
+            }
+        }
+    }
+
+    // Pass 2: remaining unvisited solid cells form isolated components -
+    // cull the ones below the size threshold.
+    let mut culled = 0usize;
+    for start in 0..total {
+        if solid[start] && !visited[start] {
+            visited[start] = true;
+            stack.push(start);
+            component.clear();
+            flood(&mut stack, &mut visited, &mut component, solid);
+            if component.len() < min_voxels {
+                for &i in &component {
+                    solid[i] = false;
+                }
+                culled += component.len();
+            }
+        }
+    }
+    culled
+}
+
 impl CaveSystemRenderer {
     /// Generate cave mesh using marching cubes
     fn generate_cave_mesh(params: &CaveParams) -> (Vec<CaveVertex>, Vec<u32>) {
@@ -972,6 +1069,40 @@ impl CaveSystemRenderer {
                     );
 
                     density_grid[x][y][z] = Self::sample_density(pos, params);
+                }
+            }
+        }
+
+        // Cull small isolated rock chunks before meshing: flatten to a binary
+        // solid grid, flood-fill components, and zero the density of culled
+        // cells so marching cubes never emits their triangles. The solid-mask
+        // generator applies the same filter, so collision matches.
+        {
+            let dims = grid_size;
+            let mut solid = vec![false; dims * dims * dims];
+            for x in 0..dims {
+                for y in 0..dims {
+                    for z in 0..dims {
+                        solid[x + y * dims + z * dims * dims] =
+                            density_grid[x][y][z] >= params.threshold;
+                    }
+                }
+            }
+            let min_voxels =
+                (MIN_ISOLATED_CHUNK_VOLUME / cell_size.powi(3)).ceil().max(1.0) as usize;
+            let culled = cull_isolated_solid_chunks(&mut solid, dims, min_voxels);
+            if culled > 0 {
+                log::info!("Cave generation: culled {culled} voxels of isolated debris");
+                for x in 0..dims {
+                    for y in 0..dims {
+                        for z in 0..dims {
+                            if density_grid[x][y][z] >= params.threshold
+                                && !solid[x + y * dims + z * dims * dims]
+                            {
+                                density_grid[x][y][z] = 0.0;
+                            }
+                        }
+                    }
                 }
             }
         }

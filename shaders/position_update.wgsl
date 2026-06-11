@@ -94,6 +94,12 @@ var<storage, read> water_velocity: array<u32>;
 @group(2) @binding(7)
 var<storage, read> cell_grip: array<f32>;
 
+// Ice bitfield - same packing as the water bitfield. Ice is a solid
+// obstacle: cells cannot move into it, and a cell that ice forms around is
+// entombed in place until the ice melts.
+@group(2) @binding(8)
+var<storage, read> ice_bitfield: array<u32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 const MIN_SAFE_DT: f32 = 0.0001;
@@ -137,6 +143,38 @@ fn is_in_water(world_pos: vec3<f32>) -> bool {
 
     // Read the u32 containing this voxel and extract the bit
     let bits = water_bitfield[bitfield_idx];
+    return (bits & (1u << bit_index)) != 0u;
+}
+
+// Check if a world position is inside ice using the compressed bitfield.
+// Same indexing as is_in_water.
+fn is_in_ice(world_pos: vec3<f32>) -> bool {
+    let res = water_params.grid_resolution;
+    if (res == 0u) {
+        return false;
+    }
+
+    let grid_pos = vec3<f32>(
+        (world_pos.x - water_params.grid_origin_x) / water_params.cell_size,
+        (world_pos.y - water_params.grid_origin_y) / water_params.cell_size,
+        (world_pos.z - water_params.grid_origin_z) / water_params.cell_size
+    );
+
+    if (grid_pos.x < 0.0 || grid_pos.x >= f32(res) ||
+        grid_pos.y < 0.0 || grid_pos.y >= f32(res) ||
+        grid_pos.z < 0.0 || grid_pos.z >= f32(res)) {
+        return false;
+    }
+
+    let gx = u32(grid_pos.x);
+    let gy = u32(grid_pos.y);
+    let gz = u32(grid_pos.z);
+
+    let x_group = gx / 32u;
+    let bit_index = gx % 32u;
+    let bitfield_idx = x_group + gy * WATER_GRID_X_GROUPS + gz * WATER_GRID_X_GROUPS * res;
+
+    let bits = ice_bitfield[bitfield_idx];
     return (bits & (1u << bit_index)) != 0u;
 }
 
@@ -376,12 +414,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
+    // --- Ice is a solid obstacle. ---
+    // A cell may not move into an ice voxel: if its new position lands in
+    // ice it holds its current position instead with all motion killed. A
+    // cell whose own voxel froze around it is entombed by the same branch -
+    // its old position is inside ice, so it stays locked, frozen mid-pose,
+    // until the ice melts away.
+    var entombed_acceleration = new_acceleration;
+    if (is_in_ice(final_pos)) {
+        final_pos = pos;
+        final_vel = vec3<f32>(0.0);
+        // Zero stored acceleration so no Verlet momentum builds up while frozen.
+        entombed_acceleration = vec3<f32>(0.0);
+    }
+
     // Write updated position and velocity
     positions_out[cell_idx] = vec4<f32>(final_pos, mass);
     velocities_out[cell_idx] = vec4<f32>(final_vel, 0.0);
-    
+
     // Store current acceleration for next frame's Verlet integration
-    prev_accelerations[cell_idx] = vec4<f32>(new_acceleration, 0.0);
+    prev_accelerations[cell_idx] = vec4<f32>(entombed_acceleration, 0.0);
     
     // Propagate rotation from input to output (no rotation physics yet)
     rotations_out[cell_idx] = rotations_in[cell_idx];

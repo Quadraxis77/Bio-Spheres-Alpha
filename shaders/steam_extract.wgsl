@@ -14,7 +14,7 @@ struct ExtractParams {
     max_particles: u32,
     time: f32,
     grid_origin: vec3<f32>,
-    _padding: f32,
+    sun_brightness: f32, // Normalized sun brightness (0-1.2) for particle lighting
 }
 
 // Atomic counter for particle count
@@ -27,6 +27,10 @@ struct ParticleCounter {
 @group(0) @binding(1) var<storage, read_write> particles: array<SteamParticle>;
 @group(0) @binding(2) var<storage, read_write> counter: ParticleCounter;
 @group(0) @binding(3) var<uniform> params: ExtractParams;
+// Light field intensity per voxel (0 = shadowed, 1 = lit) - particle lighting
+// is baked into the instance color here, so steam and snow in caves or at
+// night are dark instead of self-illuminated.
+@group(0) @binding(4) var<storage, read> light_field: array<f32>;
 
 // Hash function for generating pseudo-random values from cell ID
 fn hash_u32(x: u32) -> u32 {
@@ -103,14 +107,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var particle: SteamParticle;
     particle.position = world_pos;
 
+    // Lit by the local light field and overall sun brightness - no ambient
+    // self-illumination (dark caves and night render dark flakes/wisps).
+    let light = clamp(light_field[idx] * params.sun_brightness, 0.0, 1.2);
     if fluid_type == 4u {
         // Snow: small, round, opaque white flakes
         particle.size = params.cell_size * 0.6;
-        particle.color = vec4<f32>(1.0, 1.0, 1.0, 0.9);
+        particle.color = vec4<f32>(vec3<f32>(1.0, 1.0, 1.0) * light, 0.9);
     } else {
         particle.size = params.cell_size * 1.5;  // Slightly larger than voxel
         // Steam color: white/grey, wispy
-        particle.color = vec4<f32>(0.9, 0.9, 0.95, 0.01);
+        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * light, 0.01);
     }
 
     // Animation data (time offset based on position for variation)

@@ -315,14 +315,12 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let lac = params.noise_lacunarity;
     let pers = params.noise_persistence;
     
-    // Ice (fluid_type == 2) is a rigid solid - no wave animation, static geometry.
-    let is_ice = u32(in.fluid_type + 0.5) == 2u;
-
     // Sample 3D Perlin noise with time-animated coordinates
     // The noise input spans multiple voxels based on noise_scale
+    // (ice no longer flows through this shader - it has its own mesh, see ice_mesh.wgsl)
     let noise_pos = wp * scale + vec3<f32>(t * 0.3, t * 0.17, t * 0.23);
     let noise = fbm_3d(noise_pos, octaves, lac, pers);
-    let displacement = select(noise.w * height, 0.0, is_ice);
+    let displacement = noise.w * height;
 
     let displaced_pos = wp + n * displacement;
 
@@ -330,7 +328,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // Scale gradient by wave_height and noise_scale for correct magnitude
     let grad_scale = height * scale;
     let noise_grad = noise.xyz * grad_scale;
-    let perturbed_normal = select(normalize(n - noise_grad + n * dot(noise_grad, n)), n, is_ice);
+    let perturbed_normal = normalize(n - noise_grad + n * dot(noise_grad, n));
 
     out.world_position = displaced_pos;
     out.world_normal = perturbed_normal;
@@ -342,16 +340,13 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
-// Fluid type colors
+// Fluid type colors (ice renders via its own shader, see ice_mesh.wgsl)
 const WATER_COLOR: vec3<f32> = vec3<f32>(0.2, 0.5, 0.9);
-const LAVA_COLOR: vec3<f32> = vec3<f32>(1.0, 0.3, 0.05);
 const STEAM_COLOR: vec3<f32> = vec3<f32>(0.9, 0.92, 0.95);
-const ICE_COLOR: vec3<f32> = vec3<f32>(0.92, 0.96, 1.0);
 
 fn get_fluid_color(fluid_type: f32) -> vec3<f32> {
     let ft = u32(fluid_type + 0.5);
     if ft == 1u { return WATER_COLOR; }
-    if ft == 2u { return ICE_COLOR; }
     if ft == 3u { return STEAM_COLOR; }
     return vec3<f32>(0.5, 0.5, 0.5); // Default gray
 }
@@ -359,7 +354,6 @@ fn get_fluid_color(fluid_type: f32) -> vec3<f32> {
 fn get_fluid_alpha(fluid_type: f32, base_alpha: f32) -> f32 {
     let ft = u32(fluid_type + 0.5);
     if ft == 1u { return base_alpha; } // Water - use user setting
-    if ft == 2u { return 1.0; } // Ice - solid, fully opaque
     if ft == 3u { return 1.0; } // Steam - fully opaque
     return base_alpha;
 }
@@ -371,16 +365,7 @@ struct FragmentOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
-    let ft_early = u32(in.fluid_type + 0.5);
-    // Ice is rendered heavily faceted: derive a flat per-triangle normal from
-    // screen-space position derivatives instead of using the smooth
-    // interpolated surface-nets normal, giving it a low-poly crystalline look.
-    var normal = normalize(in.world_normal);
-    if ft_early == 2u {
-        let face_normal = normalize(cross(dpdx(in.world_position), dpdy(in.world_position)));
-        // Orient to face the viewer (derivative cross product sign is arbitrary).
-        normal = select(face_normal, -face_normal, dot(face_normal, in.view_dir) < 0.0);
-    }
+    let normal = normalize(in.world_normal);
     let view_dir = normalize(in.view_dir);
     
     // Get base color from fluid type

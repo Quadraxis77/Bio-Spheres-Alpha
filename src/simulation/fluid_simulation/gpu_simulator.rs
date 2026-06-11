@@ -10,6 +10,18 @@ use wgpu::util::DeviceExt;
 
 use super::{GRID_RESOLUTION, TOTAL_VOXELS};
 
+// ---- Climate tunable defaults (see CLIMATE_SPEC) ----
+/// Default per-tick humidity diffusion rate (fraction of a voxel's humidity shared with each neighbor).
+const DEFAULT_HUMIDITY_DIFFUSION_RATE: f32 = 0.15;
+/// Default freeze debt accumulation rate (debt units per tick per degree below freeze threshold).
+const DEFAULT_FREEZE_RATE: f32 = 1.0;
+/// Default melt debt accumulation rate (debt units per tick per degree above melt threshold).
+const DEFAULT_MELT_RATE: f32 = 1.5;
+/// Default snow melt debt rate - snow melts faster than ice once warm.
+const DEFAULT_SNOW_MELT_RATE: f32 = 3.0;
+/// Default snow compaction debt rate (debt units per tick per degree below freeze threshold) - sustained cold packs snow into ice.
+const DEFAULT_SNOW_COMPACT_RATE: f32 = 1.0;
+
 /// GPU fluid simulation parameters (must match shader)
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -50,7 +62,29 @@ pub struct GpuFluidParams {
     // Overall sun brightness driving the thermal model's baseline air temperature
     // (0 = dark, 3 = comfortable max, >3 = extreme heat). Mirrors editor_state.sun_intensity.
     pub sun_brightness: f32,
-    pub _pad_rg2: u32,
+    // Thermal inertia (0.0-5.0 scale): controls how fast climate changes
+    pub thermal_inertia: f32,
+
+    // ---- Climate thresholds (0-255 internal scale) ----
+    pub freeze_threshold: u32,
+    pub melt_threshold: u32,
+    pub snow_threshold: u32,
+    pub evaporation_threshold: u32,
+    pub optimal_cell_temp: u32,
+    pub _pad_thresholds: u32,
+
+    // ---- Climate tunables (see CLIMATE_SPEC) ----
+    // Per-tick humidity diffusion rate (fraction of a voxel's humidity shared with each neighbor).
+    pub humidity_diffusion_rate: f32,
+    // Freeze debt accumulation rate (debt units per tick per degree below freeze threshold).
+    pub freeze_rate: f32,
+    // Melt debt accumulation rate (debt units per tick per degree above melt threshold).
+    pub melt_rate: f32,
+    // Snow melt debt rate - snow melts faster than ice once warm.
+    pub snow_melt_rate: f32,
+    // Snow compaction debt rate (debt units per tick per degree below freeze threshold) - sustained cold packs snow into ice.
+    pub snow_compact_rate: f32,
+    pub _pad_climate: f32,
 }
 
 /// Extract params (must match shader)
@@ -146,9 +180,33 @@ pub struct GpuFluidSimulator {
     /// Overall sun brightness driving the thermal model's baseline air temperature.
     sun_brightness: std::cell::Cell<f32>,
 
+    // ---- Climate tunables (defaults set in `new()`, adjustable via setters) ----
+    humidity_diffusion_rate: std::cell::Cell<f32>,
+    freeze_rate: std::cell::Cell<f32>,
+    melt_rate: std::cell::Cell<f32>,
+    snow_melt_rate: std::cell::Cell<f32>,
+    snow_compact_rate: std::cell::Cell<f32>,
+
+    // Thermal inertia (0-5 scale): controls how fast climate changes
+    thermal_inertia: std::cell::Cell<f32>,
+
+    // ---- Climate thresholds (0-255 internal scale) ----
+    freeze_threshold: std::cell::Cell<u32>,
+    melt_threshold: std::cell::Cell<u32>,
+    snow_threshold: std::cell::Cell<u32>,
+    evaporation_threshold: std::cell::Cell<u32>,
+    optimal_cell_temp: std::cell::Cell<u32>,
+
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
     update_temperature_pipeline: wgpu::ComputePipeline,
+    /// Vapor fog density pass (repurposed humidity diffusion). Massless but
+    /// climate-active: the light field attenuates sunlight through it.
+    diffuse_humidity_pipeline: wgpu::ComputePipeline,
+    /// Dormant: condensation now happens only via steam-on-surface contact;
+    /// this pass is not dispatched. Kept for possible future use.
+    #[allow(dead_code)]
+    condense_humidity_pipeline: wgpu::ComputePipeline,
     init_sphere_pipeline: wgpu::ComputePipeline,
     spawn_continuous_pipeline: wgpu::ComputePipeline,
     clear_pipeline: wgpu::ComputePipeline,
@@ -161,12 +219,29 @@ pub struct GpuFluidSimulator {
     // Bind group layout
     bind_group_layout: wgpu::BindGroupLayout,
 
+    // Light field (read-only, 128^3 f32 per voxel, owned by LightFieldSystem;
+    // cloned here so per-call bind groups can include it alongside the cached one).
+    light_field_buffer: wgpu::Buffer,
+
+    // Atmospheric humidity field (128^3 atomic u32 per voxel, fixed-point *256, ~8MB).
+    // Diffused/condensed via dedicated compute passes; read by the light field
+    // for fog attenuation.
+    humidity_buffer: wgpu::Buffer,
+
+    // Freeze/melt debt accumulator (128^3 f32 per voxel, ~8MB). Plain (non-atomic)
+    // storage - each invocation only reads/writes its own voxel's debt.
+    phase_debt_buffer: wgpu::Buffer,
+    temp_field_buffer: wgpu::Buffer,
+    /// Tick counter gating the every-Nth-tick climate passes.
+    climate_tick_counter: std::cell::Cell<u32>,
+
     // Water velocity field for cell drag (128^3 packed u32 per voxel, ~8MB)
     // Each u32 encodes the last movement direction of water at that voxel
     water_velocity_buffer: wgpu::Buffer,
 
     // Water bitfield for fast cell-water detection (32x compressed)
     water_bitfield_buffer: wgpu::Buffer,
+    ice_bitfield_buffer: wgpu::Buffer,
     water_grid_params_buffer: wgpu::Buffer,
     #[allow(dead_code)] // Kept alive - referenced by cached_bitfield_bind_group
     bitfield_params_buffer: wgpu::Buffer,
@@ -212,6 +287,7 @@ impl GpuFluidSimulator {
         world_radius: f32,
         world_center: Vec3,
         solid_mask_buffer: wgpu::Buffer,
+        light_field_buffer: &wgpu::Buffer,
     ) -> Self {
         let world_diameter = world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
@@ -251,7 +327,19 @@ impl GpuFluidSimulator {
             gravity_mode: 1, // default Y axis
             surface_pressure: 0.5,
             sun_brightness: 3.0,
-            _pad_rg2: 0,
+            thermal_inertia: 4.0,
+            freeze_threshold: 65,
+            melt_threshold: 75,
+            snow_threshold: 60,
+            evaporation_threshold: 120,
+            optimal_cell_temp: 105,
+            _pad_thresholds: 0,
+            humidity_diffusion_rate: DEFAULT_HUMIDITY_DIFFUSION_RATE,
+            freeze_rate: DEFAULT_FREEZE_RATE,
+            melt_rate: DEFAULT_MELT_RATE,
+            snow_melt_rate: DEFAULT_SNOW_MELT_RATE,
+            snow_compact_rate: DEFAULT_SNOW_COMPACT_RATE,
+            _pad_climate: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -291,6 +379,34 @@ impl GpuFluidSimulator {
             label: Some("Fluid Temperature Stats Staging Buffer"),
             size: TEMP_STATS_SIZE,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Atmospheric humidity field: atomic u32 per voxel, fixed-point (value * 256)
+        // representing the spec's 0-255 humidity scale. Cleared to 0 (dry air).
+        let humidity_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Humidity Buffer"),
+            size: buffer_size, // TOTAL_VOXELS * sizeof(u32)
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Freeze/melt debt accumulator: f32 per voxel, single buffer (no ping-pong -
+        // each voxel's debt depends only on its own prior value + temperature).
+        let phase_debt_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Phase Debt Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Per-voxel temperature field: atomic u32 fixed-point, offset-encoded
+        // ((celsius + 50) * 256). Zero = uninitialized sentinel; the shader's
+        // conduction pass seeds each voxel from ambient on first touch.
+        let temp_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Temperature Field Buffer"),
+            size: buffer_size, // TOTAL_VOXELS * sizeof(u32)
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -352,6 +468,50 @@ impl GpuFluidSimulator {
                     },
                     count: None,
                 },
+                // Binding 5: Light field (read-only f32 per voxel, 0.0 = shadowed, 1.0 = lit)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: Atmospheric humidity field (read-write atomic u32, fixed-point *256)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: Freeze/melt phase debt accumulator (read-write f32 per voxel)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 8: Per-voxel temperature field (read-write atomic u32, offset fixed-point)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -386,6 +546,26 @@ impl GpuFluidSimulator {
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some("update_temperature"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let diffuse_humidity_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Diffuse Humidity Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("diffuse_humidity"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let condense_humidity_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Condense Humidity Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("condense_humidity"),
                 compilation_options: Default::default(),
                 cache: None,
             });
@@ -474,6 +654,17 @@ impl GpuFluidSimulator {
                         },
                         count: None,
                     },
+                    // Binding 5: ice density output (read-write f32 per voxel)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -527,6 +718,15 @@ impl GpuFluidSimulator {
         let bitfield_size = (TOTAL_VOXELS / 32) as u64 * std::mem::size_of::<u32>() as u64;
         let water_bitfield_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Water Bitfield Buffer"),
+            size: bitfield_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Ice bitfield, same packing: cells treat ice as a solid obstacle
+        // (and get entombed when ice forms around them).
+        let ice_bitfield_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Bitfield Buffer"),
             size: bitfield_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -592,6 +792,17 @@ impl GpuFluidSimulator {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 3: ice bitfield (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -752,6 +963,22 @@ impl GpuFluidSimulator {
                     binding: 4,
                     resource: temp_stats_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: humidity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: phase_debt_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: temp_field_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -770,6 +997,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: water_bitfield_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: ice_bitfield_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -796,6 +1027,11 @@ impl GpuFluidSimulator {
         Self {
             state_buffer,
             solid_mask_buffer,
+            light_field_buffer: light_field_buffer.clone(),
+            humidity_buffer,
+            phase_debt_buffer,
+            temp_field_buffer,
+            climate_tick_counter: std::cell::Cell::new(0),
             params_buffer,
             world_radius,
             world_center,
@@ -803,6 +1039,8 @@ impl GpuFluidSimulator {
             continuous_spawn_enabled: std::cell::Cell::new(false),
             swap_pipeline,
             update_temperature_pipeline,
+            diffuse_humidity_pipeline,
+            condense_humidity_pipeline,
             init_sphere_pipeline,
             spawn_continuous_pipeline,
             clear_pipeline,
@@ -812,6 +1050,7 @@ impl GpuFluidSimulator {
             bind_group_layout,
             water_velocity_buffer,
             water_bitfield_buffer,
+            ice_bitfield_buffer,
             water_grid_params_buffer,
             bitfield_params_buffer,
             bitfield_pipeline,
@@ -830,6 +1069,17 @@ impl GpuFluidSimulator {
             gravity_magnitude: std::cell::Cell::new(9.8), // default gravity
             surface_pressure: std::cell::Cell::new(0.5),
             sun_brightness: std::cell::Cell::new(3.0),
+            thermal_inertia: std::cell::Cell::new(4.0),
+            freeze_threshold: std::cell::Cell::new(65),
+            melt_threshold: std::cell::Cell::new(75),
+            snow_threshold: std::cell::Cell::new(60),
+            evaporation_threshold: std::cell::Cell::new(120),
+            optimal_cell_temp: std::cell::Cell::new(105),
+            humidity_diffusion_rate: std::cell::Cell::new(DEFAULT_HUMIDITY_DIFFUSION_RATE),
+            freeze_rate: std::cell::Cell::new(DEFAULT_FREEZE_RATE),
+            melt_rate: std::cell::Cell::new(DEFAULT_MELT_RATE),
+            snow_melt_rate: std::cell::Cell::new(DEFAULT_SNOW_MELT_RATE),
+            snow_compact_rate: std::cell::Cell::new(DEFAULT_SNOW_COMPACT_RATE),
             paused: false,
             temp_stats_buffer,
             temp_stats_staging_buffer,
@@ -865,6 +1115,22 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: self.temp_stats_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.light_field_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.humidity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.phase_debt_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: self.temp_field_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -921,7 +1187,19 @@ impl GpuFluidSimulator {
             gravity_mode: self.gravity_mode.get(),
             surface_pressure: self.surface_pressure.get(),
             sun_brightness: self.sun_brightness.get(),
-            _pad_rg2: 0,
+            thermal_inertia: self.thermal_inertia.get(),
+            freeze_threshold: self.freeze_threshold.get(),
+            melt_threshold: self.melt_threshold.get(),
+            snow_threshold: self.snow_threshold.get(),
+            evaporation_threshold: self.evaporation_threshold.get(),
+            optimal_cell_temp: self.optimal_cell_temp.get(),
+            _pad_thresholds: 0,
+            humidity_diffusion_rate: self.humidity_diffusion_rate.get(),
+            freeze_rate: self.freeze_rate.get(),
+            melt_rate: self.melt_rate.get(),
+            snow_melt_rate: self.snow_melt_rate.get(),
+            snow_compact_rate: self.snow_compact_rate.get(),
+            _pad_climate: 0.0,
         };
 
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
@@ -1051,6 +1329,61 @@ impl GpuFluidSimulator {
         self.sun_brightness.set(brightness);
     }
 
+    /// Set thermal inertia (0-5 scale): controls how fast climate changes
+    pub fn set_thermal_inertia(&self, inertia: f32) {
+        self.thermal_inertia.set(inertia);
+    }
+
+    /// Set water freezing threshold (internal 0-255 scale, default 65 = 0°C)
+    pub fn set_freeze_threshold(&self, threshold: u32) {
+        self.freeze_threshold.set(threshold);
+    }
+
+    /// Set ice melting threshold (internal 0-255 scale, default 75 = 5°C)
+    pub fn set_melt_threshold(&self, threshold: u32) {
+        self.melt_threshold.set(threshold);
+    }
+
+    /// Set snow formation threshold (internal 0-255 scale, default 60 = -2°C)
+    pub fn set_snow_threshold(&self, threshold: u32) {
+        self.snow_threshold.set(threshold);
+    }
+
+    /// Set evaporation begins threshold (internal 0-255 scale, default 120 = 28°C)
+    pub fn set_evaporation_threshold(&self, threshold: u32) {
+        self.evaporation_threshold.set(threshold);
+    }
+
+    /// Set optimal cell temperature (internal 0-255 scale, default 105 = 20°C)
+    pub fn set_optimal_cell_temp(&self, temp: u32) {
+        self.optimal_cell_temp.set(temp);
+    }
+
+    /// Set per-tick humidity diffusion rate (fraction of a voxel's humidity shared with each neighbor).
+    pub fn set_humidity_diffusion_rate(&self, rate: f32) {
+        self.humidity_diffusion_rate.set(rate);
+    }
+
+    /// Set freeze debt accumulation rate (debt units per tick per degree below freeze threshold).
+    pub fn set_freeze_rate(&self, rate: f32) {
+        self.freeze_rate.set(rate);
+    }
+
+    /// Set melt debt accumulation rate (debt units per tick per degree above melt threshold).
+    pub fn set_melt_rate(&self, rate: f32) {
+        self.melt_rate.set(rate);
+    }
+
+    /// Set snow melt debt rate (snow melts faster than ice once warm).
+    pub fn set_snow_melt_rate(&self, rate: f32) {
+        self.snow_melt_rate.set(rate);
+    }
+
+    /// Set the snow compaction debt rate (debt units per tick per degree below freeze threshold).
+    pub fn set_snow_compact_rate(&self, rate: f32) {
+        self.snow_compact_rate.set(rate);
+    }
+
     /// Get the current simulation time (seconds).
     pub fn time(&self) -> f32 {
         self.time.get()
@@ -1114,32 +1447,62 @@ impl GpuFluidSimulator {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
-        // Per-tick thermal drift: water/ice ease toward ambient temperature with
-        // inertia. Runs once per step (not per sub-step) since thermal change is
-        // gradual relative to fluid movement, and as its own pass so it never
-        // contends with the swap CAS loops below. The accumulator is cleared
-        // immediately before so each tick's pass produces a fresh sum/count
-        // snapshot, then copied out for async readback (the rolling average
-        // itself is maintained as an EMA on the CPU side in poll_temperature_stats).
-        encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Fluid Update Temperature Pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.update_temperature_pipeline);
-            pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
-            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
-        }
-        if !self.temp_stats_copy_pending.get() && self.temp_stats_map_receiver.borrow().is_none() {
-            encoder.copy_buffer_to_buffer(
-                &self.temp_stats_buffer,
-                0,
-                &self.temp_stats_staging_buffer,
-                0,
-                self.temp_stats_buffer.size(),
-            );
-            self.temp_stats_copy_pending.set(true);
+        // Climate passes (thermal conduction, humidity diffusion/condensation)
+        // run every Nth tick - climate evolves over seconds, so spreading the
+        // 128^3 passes across ticks costs nothing visually. The shader
+        // compensates by scaling its per-pass rates by the same interval
+        // (CLIMATE_TICK_INTERVAL in fluid_sim.wgsl - keep them in sync).
+        const CLIMATE_TICK_INTERVAL: u32 = 4;
+        let climate_tick = self.climate_tick_counter.get().wrapping_add(1);
+        self.climate_tick_counter.set(climate_tick);
+        let run_climate = climate_tick % CLIMATE_TICK_INTERVAL == 0;
+
+        if run_climate {
+            // Thermal pass: conduction over the temperature field + solar
+            // forcing. Runs as its own pass so it never contends with the
+            // swap CAS loops below. The stats accumulator is cleared
+            // immediately before so each pass produces a fresh sum/count
+            // snapshot, then copied out for async readback (the rolling
+            // average itself is an EMA on the CPU side in poll_temperature_stats).
+            encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Fluid Update Temperature Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.update_temperature_pipeline);
+                pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+            }
+            if !self.temp_stats_copy_pending.get()
+                && self.temp_stats_map_receiver.borrow().is_none()
+            {
+                encoder.copy_buffer_to_buffer(
+                    &self.temp_stats_buffer,
+                    0,
+                    &self.temp_stats_staging_buffer,
+                    0,
+                    self.temp_stats_buffer.size(),
+                );
+                self.temp_stats_copy_pending.set(true);
+            }
+
+            // Vapor fog pass: derives the fog density field from the steam
+            // present in the scene (steam saturates, fog diffuses and
+            // decays). Carries no moisture mass, but it is climate-active:
+            // the light field attenuates sun rays through it, so vapor
+            // clouds shade and cool the world below (a self-stabilizing
+            // cloud-albedo feedback). The condense pass is intentionally NOT
+            // dispatched - moisture stays in tangible phases.
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Vapor Fog Density Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.diffuse_humidity_pipeline);
+                pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+            }
         }
 
         // Multi-pass fluid simulation with alternating checker phase
@@ -1167,6 +1530,7 @@ impl GpuFluidSimulator {
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
         }
+
     }
 
     /// Get current state buffer
@@ -1184,7 +1548,8 @@ impl GpuFluidSimulator {
         (self.world_radius, self.world_center)
     }
 
-    /// Extract density and fluid types to surface nets buffers
+    /// Extract density and fluid types to surface nets buffers.
+    /// Water and ice densities are separate fields - ice gets its own mesh.
     pub fn extract_to_surface_nets(
         &self,
         device: &wgpu::Device,
@@ -1192,6 +1557,7 @@ impl GpuFluidSimulator {
         queue: &wgpu::Queue,
         density_buffer: &wgpu::Buffer,
         fluid_type_buffer: &wgpu::Buffer,
+        ice_density_buffer: &wgpu::Buffer,
     ) {
         // Update extract params with current gravity mode each frame
         let world_diameter = self.world_radius * 2.0;
@@ -1244,6 +1610,10 @@ impl GpuFluidSimulator {
                         binding: 4,
                         resource: self.solid_mask_buffer.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: ice_density_buffer.as_entire_binding(),
+                    },
                 ],
             }));
         }
@@ -1290,9 +1660,24 @@ impl GpuFluidSimulator {
         &self.water_bitfield_buffer
     }
 
+    /// Get the ice bitfield buffer for cell physics (ice = solid obstacle)
+    pub fn ice_bitfield_buffer(&self) -> &wgpu::Buffer {
+        &self.ice_bitfield_buffer
+    }
+
     /// Get the water grid params buffer for cell physics
     pub fn water_grid_params_buffer(&self) -> &wgpu::Buffer {
         &self.water_grid_params_buffer
+    }
+
+    /// Get the atmospheric humidity field buffer (atomic u32, fixed-point *256 per voxel)
+    pub fn humidity_buffer(&self) -> &wgpu::Buffer {
+        &self.humidity_buffer
+    }
+
+    /// Get the freeze/melt phase debt accumulator buffer (f32 per voxel)
+    pub fn phase_debt_buffer(&self) -> &wgpu::Buffer {
+        &self.phase_debt_buffer
     }
 
     /// Update buoyancy multiplier
@@ -1419,15 +1804,15 @@ impl GpuFluidSimulator {
                             .slice(..)
                             .get_mapped_range();
                         let stats: &[u32] = bytemuck::cast_slice(&view);
-                        // Water has real thermal mass (THERMAL_INERTIA_RATE in the sim
-                        // is intentionally tiny), so its displayed rolling average is
-                        // smoothed heavily too - it should visibly lag and change far
-                        // slower than air. Air has no per-voxel inertia at all (it's a
-                        // direct ambient derivation), so it can react comparatively
-                        // quickly and still read as a believable "rolling average"
-                        // rather than flickering with every light change.
-                        const WATER_EMA_RATE: f32 = 0.01;
-                        const AIR_EMA_RATE: f32 = 0.05;
+                        // The temperature field itself has real physical inertia
+                        // (conduction + per-phase thermal mass), so the displayed
+                        // averages only need light smoothing to suppress readback
+                        // jitter. The GPU average already includes ice and snow
+                        // alongside liquid water - a frozen pool must read frozen
+                        // within seconds, not minutes (the old 0.01 rate made the
+                        // water readout lag so far behind it was misleading).
+                        const WATER_EMA_RATE: f32 = 0.2;
+                        const AIR_EMA_RATE: f32 = 0.2;
 
                         if stats[1] > 0 {
                             let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;

@@ -230,6 +230,7 @@ impl SceneManager {
                         simulator.water_grid_params_buffer(),
                         simulator.water_bitfield_buffer(),
                         simulator.water_velocity_buffer(),
+                        simulator.ice_bitfield_buffer(),
                     );
                 }
             }

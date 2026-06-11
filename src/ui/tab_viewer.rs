@@ -4322,6 +4322,92 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         );
     }
 
+    // Climate: humidity, freeze/melt, and snow tunables - advanced only
+    if state.show_advanced_options {
+        ui.add_space(4.0);
+        ui.label("Humidity Diffusion Rate:")
+            .on_hover_text("How quickly atmospheric humidity spreads between voxels each tick");
+        if ui
+            .add(
+                egui::Slider::new(
+                    &mut state.fluid_settings.climate.humidity_diffusion_rate,
+                    0.0..=1.0,
+                )
+                .step_by(0.01)
+                .fixed_decimals(2),
+            )
+            .changed()
+        {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.humidity_diffusion_rate =
+                    state.fluid_settings.climate.humidity_diffusion_rate;
+            }
+        }
+
+        ui.label("Freeze Rate:")
+            .on_hover_text("How quickly sustained cold accumulates freeze debt, converting water to ice");
+        if ui
+            .add(
+                egui::Slider::new(&mut state.fluid_settings.climate.freeze_rate, 0.0..=5.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.freeze_rate = state.fluid_settings.climate.freeze_rate;
+            }
+        }
+
+        ui.label("Melt Rate:")
+            .on_hover_text("How quickly sustained warmth accumulates melt debt, converting ice to water");
+        if ui
+            .add(
+                egui::Slider::new(&mut state.fluid_settings.climate.melt_rate, 0.0..=5.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.melt_rate = state.fluid_settings.climate.melt_rate;
+            }
+        }
+
+        ui.label("Snow Melt Rate:")
+            .on_hover_text("How quickly sustained warmth accumulates melt debt, converting snow to water");
+        if ui
+            .add(
+                egui::Slider::new(&mut state.fluid_settings.climate.snow_melt_rate, 0.0..=5.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.snow_melt_rate = state.fluid_settings.climate.snow_melt_rate;
+            }
+        }
+
+        ui.label("Snow Compaction Rate:")
+            .on_hover_text("How quickly sustained cold packs snow down into ice (debt units per tick per degree below freezing)");
+        if ui
+            .add(
+                egui::Slider::new(
+                    &mut state.fluid_settings.climate.snow_compact_rate,
+                    0.0..=5.0,
+                )
+                .step_by(0.05)
+                .fixed_decimals(2),
+            )
+            .changed()
+        {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.snow_compact_rate = state.fluid_settings.climate.snow_compact_rate;
+            }
+        }
+    }
+
     // Lateral flow probability - advanced only
     if state.show_advanced_options {
         let selected_fluid_type = context.editor_state.selected_fluid_type;
@@ -4354,6 +4440,128 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     // Condensation and vaporization are now purely a consequence of local
     // temperature and contact with air (see thermal model in fluid_sim.wgsl) -
     // no manual probability controls needed.
+
+    // === Ice Appearance ===
+    // Written to fluid_settings.ice (persisted with the UI state); app.rs
+    // pushes the values into the ice render params uniform every frame.
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("Ice Appearance");
+    ui.add_space(4.0);
+    {
+        let advanced = state.show_advanced_options;
+        let ice = &mut state.fluid_settings.ice;
+
+        ui.label("Facet Size:")
+            .on_hover_text("Size of each crystal face in world units. Faces are irregular Voronoi regions, independent of mesh tessellation");
+        let mut facet_size = 1.0 / ice.facet_scale.max(0.001);
+        if ui
+            .add(
+                egui::Slider::new(&mut facet_size, 1.0..=200.0)
+                    .step_by(1.0)
+                    .fixed_decimals(0)
+                    .logarithmic(true),
+            )
+            .changed()
+        {
+            ice.facet_scale = 1.0 / facet_size.max(1.0);
+        }
+
+        ui.add_space(4.0);
+        ui.label("Facet Depth:")
+            .on_hover_text("How far vertices are displaced onto each flat crystal facet plane. 0 = smooth ice (no displacement), higher = deeper, more angular faceting");
+        ui.add(
+            egui::Slider::new(&mut ice.displacement_strength, 0.0..=2.0)
+                .step_by(0.05)
+                .fixed_decimals(2),
+        );
+
+        ui.add_space(4.0);
+        ui.label("Facet Shading:")
+            .on_hover_text("How much the flat facet normals affect diffuse shading. Low = facets only show as glints; high = each face shades as its own patch (patchwork look)");
+        ui.add(
+            egui::Slider::new(&mut ice.facet_diffuse, 0.0..=1.0)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        );
+
+        ui.add_space(4.0);
+        ui.label("Glint Intensity:")
+            .on_hover_text("Brightness of the per-face specular sparkle");
+        ui.add(
+            egui::Slider::new(&mut ice.glint_strength, 0.0..=3.0)
+                .step_by(0.05)
+                .fixed_decimals(2),
+        );
+
+        ui.add_space(4.0);
+        ui.label("Opacity:")
+            .on_hover_text("Base opacity of the ice body. Grazing angles always read more solid");
+        ui.add(
+            egui::Slider::new(&mut ice.alpha, 0.2..=0.97)
+                .step_by(0.01)
+                .fixed_decimals(2),
+        );
+
+        ui.horizontal(|ui| {
+            ui.label("Surface Color");
+            let mut c = egui::Color32::from_rgb(
+                (ice.surface_color[0] * 255.0) as u8,
+                (ice.surface_color[1] * 255.0) as u8,
+                (ice.surface_color[2] * 255.0) as u8,
+            );
+            if ui.color_edit_button_srgba(&mut c).changed() {
+                ice.surface_color = [
+                    c.r() as f32 / 255.0,
+                    c.g() as f32 / 255.0,
+                    c.b() as f32 / 255.0,
+                ];
+            }
+            ui.label("Deep Color");
+            let mut d = egui::Color32::from_rgb(
+                (ice.deep_color[0] * 255.0) as u8,
+                (ice.deep_color[1] * 255.0) as u8,
+                (ice.deep_color[2] * 255.0) as u8,
+            );
+            if ui.color_edit_button_srgba(&mut d).changed() {
+                ice.deep_color = [
+                    d.r() as f32 / 255.0,
+                    d.g() as f32 / 255.0,
+                    d.b() as f32 / 255.0,
+                ];
+            }
+        });
+
+        if advanced {
+            ui.add_space(4.0);
+            ui.label("Glint Sharpness:")
+                .on_hover_text("Blinn-Phong exponent for the facet glints. Higher = tighter, sharper sparkles");
+            ui.add(
+                egui::Slider::new(&mut ice.glint_shininess, 4.0..=256.0)
+                    .step_by(1.0)
+                    .fixed_decimals(0)
+                    .logarithmic(true),
+            );
+
+            ui.add_space(4.0);
+            ui.label("Reflection:")
+                .on_hover_text("Fresnel-weighted environment reflection mix at grazing angles");
+            ui.add(
+                egui::Slider::new(&mut ice.fresnel_reflection, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            );
+
+            ui.add_space(4.0);
+            ui.label("Reflection Brightness:")
+                .on_hover_text("Brightness multiplier for the reflected environment");
+            ui.add(
+                egui::Slider::new(&mut ice.reflection_brightness, 0.0..=4.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            );
+        }
+    }
 
     // === Water Surface Lighting & Reflection ===
     ui.add_space(8.0);
@@ -5006,6 +5214,23 @@ impl AbsDiffEq for f32 {
     }
 }
 
+/// Push light-panel edits to the scene and persist them. Shared by the
+/// early-return (non-advanced) and full panel paths.
+fn apply_light_panel_changes(context: &mut PanelContext, sun_changed: bool) {
+    if sun_changed {
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            gpu_scene.show_sun = context.editor_state.show_sun;
+            gpu_scene.sun_intensity = context.editor_state.sun_intensity;
+            if let Some(ref mut sun) = gpu_scene.sun_renderer {
+                sun.sun_color = context.editor_state.sun_color;
+                sun.sun_angular_radius = context.editor_state.sun_angular_radius;
+            }
+        }
+    }
+    context.editor_state.light_params_dirty = true;
+    context.editor_state.save_light_settings();
+}
+
 fn render_light_settings_organized(
     ui: &mut Ui,
     context: &mut PanelContext,
@@ -5035,7 +5260,7 @@ fn render_light_settings_organized(
     let mut changed = false;
     let mut sun_changed = false;
 
-    egui::CollapsingHeader::new("Sun & Direction")
+    egui::CollapsingHeader::new("Sun")
         .default_open(true)
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -5043,23 +5268,31 @@ fn render_light_settings_organized(
                     .checkbox(&mut context.editor_state.show_sun, "Sun Disc")
                     .on_hover_text("Render the visible sun disc in the sky.")
                     .changed();
-                changed |= ui
-                    .checkbox(&mut context.editor_state.sun_cycle_enabled, "Cycle")
-                    .on_hover_text("Oscillate sun brightness between Min and Max.")
-                    .changed();
+                let orbit_toggle = ui
+                    .checkbox(&mut context.editor_state.sun_rotation_enabled, "Orbit")
+                    .on_hover_text("Rotate the sun along the defined orbit path.");
+                if orbit_toggle.changed() && context.editor_state.sun_rotation_enabled {
+                    context.editor_state.capture_sun_orbit_angle();
+                }
+                changed |= orbit_toggle.changed();
+                if context.editor_state.sun_rotation_enabled {
+                    changed |= ui
+                        .checkbox(&mut context.editor_state.show_orbit_ring, "Show Ring")
+                        .on_hover_text("Keep the orbit path ring visible in the scene.")
+                        .changed();
+                }
             });
 
             ui.add_space(4.0);
-            ui.label("Brightness");
+            ui.label("Brightness (0-5)");
             changed |= ui
                 .add(
-                    egui::Slider::new(&mut context.editor_state.sun_intensity, 0.01..=20.0)
-                        .logarithmic(true)
+                    egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=5.0)
                         .text("Brightness")
                         .step_by(0.1)
                         .fixed_decimals(1),
                 )
-                .on_hover_text("Directional sun intensity. Photocyte energy scales with this.")
+                .on_hover_text("Sun brightness controls baseline air temperature: 0=dark, 3=temperate (recommended), 5=extreme heat. Affects photocyte energy and thermal model.")
                 .changed();
             if changed {
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
@@ -5081,32 +5314,16 @@ fn render_light_settings_organized(
             });
 
             ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                let orbit_toggle = ui
-                    .checkbox(&mut context.editor_state.sun_rotation_enabled, "Orbit")
-                    .on_hover_text("Rotate the sun along the defined orbit path.");
-                if orbit_toggle.changed() && context.editor_state.sun_rotation_enabled {
-                    context.editor_state.capture_sun_orbit_angle();
-                }
-                changed |= orbit_toggle.changed();
-                changed |= ui
-                    .checkbox(&mut context.editor_state.show_orbit_ring, "Show Ring")
-                    .on_hover_text("Keep the orbit path ring visible in the scene.")
-                    .changed();
-            });
             if context.editor_state.sun_rotation_enabled {
                 let mut orbit_angle = context.editor_state.sun_orbit_angle;
                 ui.label("Position");
                 if ui
                     .add(
-                        egui::Slider::new(
-                            &mut orbit_angle,
-                            0.0..=360.0,
-                        )
-                        .text("Position")
-                        .suffix("°")
-                        .step_by(0.1)
-                        .fixed_decimals(1),
+                        egui::Slider::new(&mut orbit_angle, 0.0..=360.0)
+                            .text("Position")
+                            .suffix("°")
+                            .step_by(0.1)
+                            .fixed_decimals(1),
                     )
                     .on_hover_text("Sun position along the visible orbit ring.")
                     .changed()
@@ -5133,80 +5350,43 @@ fn render_light_settings_organized(
                     changed = true;
                 }
 
-                ui.add_space(4.0);
-                ui.label("Path");
-                let (mut orbit_pitch, mut orbit_yaw) =
-                    light_dir_to_pitch_yaw(context.editor_state.sun_rotation_axis);
-                let mut orbit_changed = false;
-                ui.label("Path Tilt");
-                orbit_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut orbit_pitch, -90.0..=90.0)
-                            .text("Tilt")
-                            .suffix("°")
-                            .fixed_decimals(0),
-                    )
-                    .on_hover_text("Tilt of the orbit plane. 0° = equatorial, 90° = polar.")
-                    .changed();
-                ui.label("Path Yaw");
-                orbit_changed |= ui
-                    .add(
-                        egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
-                            .text("Direction")
-                            .suffix("°")
-                            .fixed_decimals(0),
-                    )
-                    .on_hover_text("Compass direction the orbit tilts toward.")
-                    .changed();
-                if orbit_changed {
-                    context.editor_state.sun_rotation_axis =
-                        pitch_yaw_to_light_dir(orbit_pitch, orbit_yaw);
-                    context.editor_state.apply_sun_orbit();
-                    changed = true;
+                if state.show_advanced_options {
+                    let (mut orbit_pitch, mut orbit_yaw) =
+                        light_dir_to_pitch_yaw(context.editor_state.sun_rotation_axis);
+                    let mut orbit_changed = false;
+                    ui.label("Path Tilt");
+                    orbit_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut orbit_pitch, -90.0..=90.0)
+                                .text("Tilt")
+                                .suffix("°")
+                                .fixed_decimals(0),
+                        )
+                        .on_hover_text("Tilt of the orbit plane. 0° = equatorial, 90° = polar.")
+                        .changed();
+                    ui.label("Path Yaw");
+                    orbit_changed |= ui
+                        .add(
+                            egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
+                                .text("Direction")
+                                .suffix("°")
+                                .fixed_decimals(0),
+                        )
+                        .on_hover_text("Compass direction the orbit tilts toward.")
+                        .changed();
+                    if orbit_changed {
+                        context.editor_state.sun_rotation_axis =
+                            pitch_yaw_to_light_dir(orbit_pitch, orbit_yaw);
+                        context.editor_state.apply_sun_orbit();
+                        changed = true;
+                    }
                 }
-
             } else {
-                ui.add_space(4.0);
                 changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
             }
 
-            if context.editor_state.sun_cycle_enabled {
-                ui.add_space(6.0);
-                ui.label("Brightness Cycle");
-                ui.label("Min");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut context.editor_state.sun_cycle_min, 0.0..=20.0)
-                            .text("Min")
-                            .step_by(0.1)
-                            .fixed_decimals(1),
-                    )
-                    .changed();
-                ui.label("Max");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut context.editor_state.sun_cycle_max, 0.0..=20.0)
-                            .text("Max")
-                            .step_by(0.1)
-                            .fixed_decimals(1),
-                    )
-                    .changed();
-                ui.label("Period");
-                changed |= ui
-                    .add(
-                        egui::Slider::new(
-                            &mut context.editor_state.sun_cycle_period,
-                            10.0..=3600.0,
-                        )
-                        .text("Period s")
-                        .step_by(1.0)
-                        .fixed_decimals(0),
-                    )
-                    .changed();
-            }
-
             if state.show_advanced_options && context.editor_state.show_sun {
-                ui.add_space(6.0);
+                ui.add_space(4.0);
                 ui.label("Disc Size");
                 sun_changed |= ui
                     .add(
@@ -5224,6 +5404,101 @@ fn render_light_settings_organized(
 
     ui.separator();
 
+    egui::CollapsingHeader::new("Day & Night")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label("Night Ratio (0-1)");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.sun_night_ratio, 0.0..=1.0)
+                        .text("Night Ratio")
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .on_hover_text(
+                    "Fraction of each cycle spent in full darkness. 0.0 = no night, 0.5 = \
+                     half of every cycle is pitch-black, with smooth dawn/dusk transitions. \
+                     Independent of the sun's orbit position.",
+                )
+                .changed();
+            ui.label("Cycle Length");
+            changed |= ui
+                .add(
+                    egui::Slider::new(&mut context.editor_state.sun_cycle_period, 10.0..=3600.0)
+                        .text("Cycle Length")
+                        .suffix(" s")
+                        .step_by(1.0)
+                        .fixed_decimals(0),
+                )
+                .on_hover_text("Length of one full day/night (and seasonal) cycle in seconds.")
+                .changed();
+
+            // Climate response speed lives here because the day/night cycle
+            // is what drives temperature swings. Edits the persisted climate
+            // setting (app.rs syncs it into the scene each frame).
+            ui.label("Thermal Inertia (0-5)");
+            if ui
+                .add(
+                    egui::Slider::new(
+                        &mut state.fluid_settings.climate.thermal_inertia,
+                        0.0..=5.0,
+                    )
+                    .text("Inertia")
+                    .step_by(0.1)
+                    .fixed_decimals(1),
+                )
+                .on_hover_text("Controls how fast climate changes: 0=arcade (fast), 3=stable, 4=very stable (recommended), 5=planetary (slow)")
+                .changed()
+            {
+                changed = true;
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.thermal_inertia = state.fluid_settings.climate.thermal_inertia;
+                }
+            }
+
+            ui.add_space(6.0);
+            changed |= ui
+                .checkbox(&mut context.editor_state.sun_cycle_enabled, "Seasonal Cycle")
+                .on_hover_text(
+                    "Oscillate daytime brightness between Min and Max over the cycle \
+                     length, overriding the Brightness slider.",
+                )
+                .changed();
+            if context.editor_state.sun_cycle_enabled {
+                ui.label("Season Min");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut context.editor_state.sun_cycle_min, 0.0..=20.0)
+                            .text("Min")
+                            .step_by(0.1)
+                            .fixed_decimals(1),
+                    )
+                    .changed();
+                ui.label("Season Max");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut context.editor_state.sun_cycle_max, 0.0..=20.0)
+                            .text("Max")
+                            .step_by(0.1)
+                            .fixed_decimals(1),
+                    )
+                    .changed();
+            }
+        });
+
+    // Everything below is rendering/engine tuning the player doesn't touch
+    // during normal play - gated behind Advanced to keep the panel focused on
+    // sun brightness, day/night cycles, timing, and color.
+    if !state.show_advanced_options {
+        if changed || sun_changed {
+            apply_light_panel_changes(context, sun_changed);
+        }
+        ui.add_space(10.0);
+        return;
+    }
+
+    ui.separator();
+
     egui::CollapsingHeader::new("Surfaces & Shadows")
         .default_open(true)
         .show(ui, |ui| {
@@ -5232,25 +5507,27 @@ fn render_light_settings_organized(
                 .checkbox(&mut context.editor_state.shadow_enabled, "Surface Shadows")
                 .on_hover_text("Use the light field to shade cave walls, cells, and surfaces.")
                 .changed();
-            ui.label("Strength");
-            shadow_changed |= ui
-                .add(
-                    egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
-                        .text("Strength")
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .changed();
-            ui.label("Quality");
-            shadow_changed |= ui
-                .add(
-                    egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
-                        .text("Quality")
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                )
-                .on_hover_text("Higher values reduce banding but increase sampling cost.")
-                .changed();
+            ui.add_enabled_ui(context.editor_state.shadow_enabled, |ui| {
+                ui.label("Strength");
+                shadow_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
+                            .text("Strength")
+                            .step_by(0.01)
+                            .fixed_decimals(2),
+                    )
+                    .changed();
+                ui.label("Quality");
+                shadow_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
+                            .text("Quality")
+                            .step_by(0.01)
+                            .fixed_decimals(2),
+                    )
+                    .on_hover_text("Higher values reduce banding but increase sampling cost.")
+                    .changed();
+            });
 
             if shadow_changed {
                 changed = true;
@@ -5265,7 +5542,7 @@ fn render_light_settings_organized(
 
             if state.show_advanced_options {
                 ui.add_space(6.0);
-                ui.label("Light Field");
+                ui.label(egui::RichText::new("Light Field").strong());
                 let mut steps = context.editor_state.light_field_max_steps as i32;
                 ui.label("Ray Steps");
                 if ui
@@ -5368,6 +5645,7 @@ fn render_light_settings_organized(
                         .step_by(0.01)
                         .fixed_decimals(2),
                     )
+                    .on_hover_text("How strongly fog scatters light toward the viewer (god-ray sharpness).")
                     .changed();
                 ui.label("Absorption");
                 changed |= ui
@@ -5398,89 +5676,87 @@ fn render_light_settings_organized(
                 });
                 context.editor_state.fog_color = fog_color;
 
-                if state.show_advanced_options {
-                    ui.add_space(6.0);
-                    ui.label("Height Fog");
-                    ui.label("Bottom Density");
-                    changed |= ui
-                        .add(
-                            egui::Slider::new(
-                                &mut context.editor_state.fog_height_density,
-                                0.0..=2.0,
-                            )
-                            .text("Bottom Density")
-                            .step_by(0.01)
-                            .fixed_decimals(2),
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Height Fog").strong());
+                ui.label("Bottom Density");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut context.editor_state.fog_height_density,
+                            0.0..=2.0,
                         )
-                        .changed();
-                    ui.label("Falloff");
-                    changed |= ui
-                        .add(
-                            egui::Slider::new(
-                                &mut context.editor_state.fog_height_falloff,
-                                0.001..=0.1,
-                            )
-                            .text("Falloff")
-                            .step_by(0.001)
-                            .fixed_decimals(3),
+                        .text("Bottom Density")
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                    )
+                    .changed();
+                ui.label("Falloff");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut context.editor_state.fog_height_falloff,
+                            0.001..=0.1,
                         )
-                        .changed();
+                        .text("Falloff")
+                        .step_by(0.001)
+                        .fixed_decimals(3),
+                    )
+                    .changed();
 
-                    ui.add_space(6.0);
-                    ui.label("Quality");
-                    let mut fsteps = context.editor_state.fog_steps as i32;
-                    ui.label("Steps");
-                    if ui
-                        .add(egui::Slider::new(&mut fsteps, 8..=128).text("Steps"))
-                        .changed()
-                    {
-                        context.editor_state.fog_steps = fsteps as u32;
-                        changed = true;
-                    }
-                    changed |= ui
-                        .checkbox(&mut context.editor_state.fog_smooth_light_field, "Smooth Voxels")
-                        .on_hover_text("Trilinear light-field sampling for fog.")
-                        .changed();
-                    ui.label("Blur");
-                    changed |= ui
-                        .add(
-                            egui::Slider::new(
-                                &mut context.editor_state.fog_composite_blur,
-                                0.25..=4.0,
-                            )
-                            .text("Blur")
-                            .step_by(0.25)
-                            .fixed_decimals(2),
-                        )
-                        .changed();
-
-                    ui.add_space(6.0);
-                    ui.label("Water Distortion");
-                    ui.label("Strength");
-                    changed |= ui
-                        .add(
-                            egui::Slider::new(
-                                &mut context.editor_state.fog_water_wave_strength,
-                                0.0..=2.0,
-                            )
-                            .text("Strength")
-                            .step_by(0.05)
-                            .fixed_decimals(2),
-                        )
-                        .changed();
-                    ui.label("Scale");
-                    changed |= ui
-                        .add(
-                            egui::Slider::new(
-                                &mut context.editor_state.fog_water_wave_scale,
-                                0.01..=1.0,
-                            )
-                            .text("Scale")
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                        )
-                        .changed();
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Quality").strong());
+                let mut fsteps = context.editor_state.fog_steps as i32;
+                ui.label("Steps");
+                if ui
+                    .add(egui::Slider::new(&mut fsteps, 8..=128).text("Steps"))
+                    .changed()
+                {
+                    context.editor_state.fog_steps = fsteps as u32;
+                    changed = true;
                 }
+                changed |= ui
+                    .checkbox(&mut context.editor_state.fog_smooth_light_field, "Smooth Voxels")
+                    .on_hover_text("Trilinear light-field sampling for fog.")
+                    .changed();
+                ui.label("Blur");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut context.editor_state.fog_composite_blur,
+                            0.25..=4.0,
+                        )
+                        .text("Blur")
+                        .step_by(0.25)
+                        .fixed_decimals(2),
+                    )
+                    .changed();
+
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Water Distortion").strong());
+                ui.label("Strength");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut context.editor_state.fog_water_wave_strength,
+                            0.0..=2.0,
+                        )
+                        .text("Strength")
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                    )
+                    .changed();
+                ui.label("Scale");
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut context.editor_state.fog_water_wave_scale,
+                            0.01..=1.0,
+                        )
+                        .text("Scale")
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                    )
+                    .changed();
             });
         });
 
@@ -5722,21 +5998,8 @@ fn render_light_settings_organized(
     state.world_settings.physics_hz = phz;
     state.world_settings.max_physics_steps_per_frame = max_steps;
 
-    if sun_changed {
-        changed = true;
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.show_sun = context.editor_state.show_sun;
-            gpu_scene.sun_intensity = context.editor_state.sun_intensity;
-            if let Some(ref mut sun) = gpu_scene.sun_renderer {
-                sun.sun_color = context.editor_state.sun_color;
-                sun.sun_angular_radius = context.editor_state.sun_angular_radius;
-            }
-        }
-    }
-
-    if changed {
-        context.editor_state.light_params_dirty = true;
-        context.editor_state.save_light_settings();
+    if changed || sun_changed {
+        apply_light_panel_changes(context, sun_changed);
     }
 
     ui.add_space(10.0);
@@ -5840,11 +6103,11 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
     ui.heading("Sun");
     ui.add_space(4.0);
 
-    ui.label("Brightness:")
-        .on_hover_text("Overall intensity of the directional sun light. Also affects how much energy photocyte cells generate from light");
+    ui.label("Brightness (0-5):")
+        .on_hover_text("Overall intensity of the directional sun light (0=dark, 3=recommended, 5=extreme heat). Also affects how much energy photocyte cells generate from light");
     let brightness_changed = ui
         .add(
-            egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=20.0)
+            egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=5.0)
                 .step_by(0.1)
                 .fixed_decimals(1),
         )

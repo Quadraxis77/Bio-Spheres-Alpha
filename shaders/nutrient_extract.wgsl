@@ -10,7 +10,8 @@ struct NutrientExtractParams {
     world_radius: f32,
     spawn_probability: f32,  // Legacy parameter (kept for compatibility)
     nutrient_density: f32,   // Density parameter for population shader
-    _padding: vec2<f32>,
+    sun_brightness: f32,     // Normalized sun brightness (0-1.2) for particle lighting
+    _padding: f32,
 }
 
 struct NutrientParticle {
@@ -31,6 +32,10 @@ struct NutrientParticleCounter {
 @group(0) @binding(3) var<storage, read> solid_mask: array<u32>;
 @group(0) @binding(4) var<uniform> params: NutrientExtractParams;
 @group(0) @binding(5) var<storage, read> nutrient_voxels: array<u32>;  // 0 = empty, 1 = has nutrient, 2 = consumed
+// Light field intensity per voxel (0 = shadowed, 1 = lit) - particle lighting
+// is baked into the instance color here, so nutrients in caves or at night
+// are dark instead of self-illuminated.
+@group(0) @binding(6) var<storage, read> light_field: array<f32>;
 
 // Atomic counter helper - returns the slot index, or max_particles if full.
 // Checks capacity BEFORE incrementing so the counter never overflows past max_particles.
@@ -111,10 +116,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         fract(sin(f32(voxel_index) * 19.1)) * 0.8 - 0.4
     ) * params.cell_size;
     
+    // Lit by the local light field and overall sun brightness - no ambient
+    // self-illumination (nutrients in dark water render dark).
+    let light = clamp(light_field[voxel_index] * params.sun_brightness, 0.0, 1.2);
     particles[particle_count] = NutrientParticle(
         world_pos + offset,
         0.1 + fract(sin(f32(voxel_index) * 7.3)) * 0.05,  // Small size with variation (0.1-0.15)
-        vec4<f32>(0.6, 0.4, 0.2, 1.0),  // Brown opaque color
+        vec4<f32>(vec3<f32>(0.6, 0.4, 0.2) * light, 1.0),  // Brown opaque color, light-field lit
         vec4<f32>(
             params.time + fract(sin(f32(voxel_index) * 12.9898)) * 6.28,  // Animation time offset
             2.0 + fract(sin(f32(voxel_index) * 13.7)),  // Rotation speed

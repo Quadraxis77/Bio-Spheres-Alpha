@@ -412,6 +412,12 @@ pub struct FluidSettings {
     /// Organism skin rendering settings
     #[serde(default)]
     pub organism_skin: OrganismSkinSettings,
+    /// Climate/weather tunables (humidity, freeze/melt, snow)
+    #[serde(default)]
+    pub climate: ClimateSettings,
+    /// Ice mesh appearance (facets, glints, colors, opacity)
+    #[serde(default)]
+    pub ice: IceAppearanceSettings,
 }
 
 impl Default for FluidSettings {
@@ -419,8 +425,206 @@ impl Default for FluidSettings {
         Self {
             surface_pressure: 0.5,
             organism_skin: OrganismSkinSettings::default(),
+            climate: ClimateSettings::default(),
+            ice: IceAppearanceSettings::default(),
         }
     }
+}
+
+/// Ice mesh appearance tunables - mirrors `IceRenderParams` in the renderer.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct IceAppearanceSettings {
+    /// Facets per world unit (lower = larger crystal faces)
+    #[serde(default = "default_ice_facet_scale")]
+    pub facet_scale: f32,
+    /// How far each crystal facet plane tilts off the smooth surface, and
+    /// how far vertices are displaced onto it (0 = no displacement, smooth)
+    #[serde(default = "default_ice_displacement_strength")]
+    pub displacement_strength: f32,
+    /// Fraction of flat facet normal in diffuse shading (high = patchwork)
+    #[serde(default = "default_ice_facet_diffuse")]
+    pub facet_diffuse: f32,
+    /// Blinn-Phong exponent for per-face glints
+    #[serde(default = "default_ice_glint_shininess")]
+    pub glint_shininess: f32,
+    /// Glint intensity multiplier
+    #[serde(default = "default_ice_glint_strength")]
+    pub glint_strength: f32,
+    /// Base opacity (fresnel adds on top)
+    #[serde(default = "default_ice_alpha")]
+    pub alpha: f32,
+    /// Environment reflection brightness
+    #[serde(default = "default_ice_reflection_brightness")]
+    pub reflection_brightness: f32,
+    /// Fresnel-weighted reflection mix at grazing angles
+    #[serde(default = "default_ice_fresnel_reflection")]
+    pub fresnel_reflection: f32,
+    /// Pale color of faces toward the viewer
+    #[serde(default = "default_ice_surface_color")]
+    pub surface_color: [f32; 3],
+    /// Deep interior color at glancing angles
+    #[serde(default = "default_ice_deep_color")]
+    pub deep_color: [f32; 3],
+}
+
+impl Default for IceAppearanceSettings {
+    fn default() -> Self {
+        Self {
+            facet_scale: default_ice_facet_scale(),
+            displacement_strength: default_ice_displacement_strength(),
+            facet_diffuse: default_ice_facet_diffuse(),
+            glint_shininess: default_ice_glint_shininess(),
+            glint_strength: default_ice_glint_strength(),
+            alpha: default_ice_alpha(),
+            reflection_brightness: default_ice_reflection_brightness(),
+            fresnel_reflection: default_ice_fresnel_reflection(),
+            surface_color: default_ice_surface_color(),
+            deep_color: default_ice_deep_color(),
+        }
+    }
+}
+
+fn default_ice_facet_scale() -> f32 {
+    0.02
+}
+fn default_ice_displacement_strength() -> f32 {
+    0.9
+}
+fn default_ice_facet_diffuse() -> f32 {
+    0.2
+}
+fn default_ice_glint_shininess() -> f32 {
+    64.0
+}
+fn default_ice_glint_strength() -> f32 {
+    1.0
+}
+fn default_ice_alpha() -> f32 {
+    0.82
+}
+fn default_ice_reflection_brightness() -> f32 {
+    1.0
+}
+fn default_ice_fresnel_reflection() -> f32 {
+    0.35
+}
+fn default_ice_surface_color() -> [f32; 3] {
+    [0.80, 0.90, 1.00]
+}
+fn default_ice_deep_color() -> [f32; 3] {
+    [0.25, 0.45, 0.75]
+}
+
+/// Climate/weather simulation tunables - humidity diffusion and
+/// debt-based freeze/melt/snow-compaction rates.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ClimateSettings {
+    /// Atmospheric humidity diffusion rate per tick (0.0-1.0)
+    #[serde(default = "default_humidity_diffusion_rate")]
+    pub humidity_diffusion_rate: f32,
+
+    /// Global thermal inertia (0-5): how fast all heat flow runs.
+    /// 0 = arcade (fast), 4 = very stable (recommended), 5 = planetary (slow)
+    #[serde(default = "default_thermal_inertia")]
+    pub thermal_inertia: f32,
+
+    /// Freeze debt accumulation rate for water -> ice
+    #[serde(default = "default_freeze_rate")]
+    pub freeze_rate: f32,
+
+    /// Melt debt accumulation rate for ice -> water
+    #[serde(default = "default_melt_rate")]
+    pub melt_rate: f32,
+
+    /// Melt debt accumulation rate for snow -> water
+    #[serde(default = "default_snow_melt_rate")]
+    pub snow_melt_rate: f32,
+
+    /// Compaction debt accumulation rate for snow -> ice (sustained cold packs snow into ice)
+    #[serde(default = "default_snow_compact_rate")]
+    pub snow_compact_rate: f32,
+
+    /// Water freezing threshold (internal 0-255 scale). Default: 65 (0°C/32°F)
+    #[serde(default = "default_freeze_threshold")]
+    pub freeze_threshold: u32,
+
+    /// Ice melting threshold (internal 0-255 scale). Default: 75 (5°C/41°F)
+    #[serde(default = "default_melt_threshold")]
+    pub melt_threshold: u32,
+
+    /// Snow formation threshold (internal 0-255 scale). Default: 60 (-2°C/28°F)
+    #[serde(default = "default_snow_threshold")]
+    pub snow_threshold: u32,
+
+    /// Evaporation begins threshold (internal 0-255 scale). Default: 120 (28°C/82°F)
+    #[serde(default = "default_evaporation_threshold")]
+    pub evaporation_threshold: u32,
+
+    /// Optimal cell temperature (internal 0-255 scale). Default: 105 (20°C/68°F)
+    #[serde(default = "default_optimal_cell_temp")]
+    pub optimal_cell_temp: u32,
+}
+
+impl Default for ClimateSettings {
+    fn default() -> Self {
+        Self {
+            humidity_diffusion_rate: default_humidity_diffusion_rate(),
+            thermal_inertia: default_thermal_inertia(),
+            freeze_rate: default_freeze_rate(),
+            melt_rate: default_melt_rate(),
+            snow_melt_rate: default_snow_melt_rate(),
+            snow_compact_rate: default_snow_compact_rate(),
+            freeze_threshold: default_freeze_threshold(),
+            melt_threshold: default_melt_threshold(),
+            snow_threshold: default_snow_threshold(),
+            evaporation_threshold: default_evaporation_threshold(),
+            optimal_cell_temp: default_optimal_cell_temp(),
+        }
+    }
+}
+
+fn default_humidity_diffusion_rate() -> f32 {
+    0.15
+}
+
+fn default_thermal_inertia() -> f32 {
+    4.0
+}
+
+fn default_freeze_rate() -> f32 {
+    1.0
+}
+
+fn default_melt_rate() -> f32 {
+    1.5
+}
+
+fn default_snow_melt_rate() -> f32 {
+    3.0
+}
+
+fn default_snow_compact_rate() -> f32 {
+    1.0
+}
+
+fn default_freeze_threshold() -> u32 {
+    65 // 0°C / 32°F
+}
+
+fn default_melt_threshold() -> u32 {
+    75 // 5°C / 41°F
+}
+
+fn default_snow_threshold() -> u32 {
+    60 // -2°C / 28°F
+}
+
+fn default_evaporation_threshold() -> u32 {
+    120 // 28°C / 82°F
+}
+
+fn default_optimal_cell_temp() -> u32 {
+    105 // 20°C / 68°F
 }
 
 /// Organism skin rendering settings.
