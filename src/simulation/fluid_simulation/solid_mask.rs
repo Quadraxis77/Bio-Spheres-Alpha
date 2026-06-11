@@ -74,10 +74,8 @@ impl SolidMaskGenerator {
         // Cull small isolated rock chunks so collision matches the rendered
         // cave mesh (which applies the same world-space volume threshold) -
         // floating noise debris neither renders nor collides.
-        let min_voxels = (crate::rendering::cave_system::MIN_ISOLATED_CHUNK_VOLUME
-            / cell_size.powi(3))
-        .ceil()
-        .max(1.0) as usize;
+        let min_voxels =
+            crate::rendering::cave_system::isolated_chunk_min_voxels(cave_params, cell_size);
         let culled = crate::rendering::cave_system::cull_isolated_solid_chunks(
             &mut solid, grid_size, min_voxels,
         );

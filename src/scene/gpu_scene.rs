@@ -211,10 +211,9 @@ pub struct GpuScene {
     pub snow_compact_rate: f32,
     /// Thermal inertia (0-5 scale): controls how fast climate changes
     pub thermal_inertia: f32,
-    /// Frame counter throttling ice mesh re-extraction (ice changes over
-    /// seconds; re-running a full surface-nets extraction every frame is
-    /// wasted work).
-    ice_extract_counter: u32,
+    /// Frame counter throttling water mesh extraction. The voxel simulation
+    /// still runs every frame; this only decimates render-mesh rebuilds.
+    fluid_mesh_extract_counter: u32,
     /// Water freezing threshold (internal 0-255 scale, default 65 = 0°C)
     pub freeze_threshold: u32,
     /// Ice melting threshold (internal 0-255 scale, default 75 = 5°C)
@@ -783,7 +782,7 @@ impl GpuScene {
             snow_melt_rate: 3.0,
             snow_compact_rate: 1.0,
             thermal_inertia: 4.0,
-            ice_extract_counter: 0,
+            fluid_mesh_extract_counter: 0,
             freeze_threshold: 65,
             melt_threshold: 75,
             snow_threshold: 60,
@@ -5500,7 +5499,7 @@ impl GpuScene {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
-            gpu_surface_nets.extract_mesh(encoder);
+            gpu_surface_nets.extract_mesh_with_counter_readback(encoder);
         }
     }
 
@@ -7205,6 +7204,7 @@ impl GpuScene {
             params.smoothness = editor_state.cave_smoothness;
             params.seed = editor_state.cave_seed;
             params.grid_resolution = editor_state.cave_resolution;
+            params.isolated_chunk_cull_volume = editor_state.cave_isolated_chunk_cull_volume;
             params.geothermal_enabled = u32::from(editor_state.geothermal_enabled);
             params.geothermal_count = editor_state.geothermal_count;
             params.geothermal_placement_mode = editor_state.geothermal_placement_mode.min(1);
@@ -8499,35 +8499,42 @@ impl Scene for GpuScene {
             let fluid_changed = !self.paused || self.current_cell_count > 0;
 
             if fluid_changed {
+                self.fluid_mesh_extract_counter = self.fluid_mesh_extract_counter.wrapping_add(1);
+                let rebuild_water_mesh = self.fluid_mesh_extract_counter % 2 == 1;
+                // % 8 == 1 so the very first frame extracts immediately.
+                let rebuild_ice_mesh = self.fluid_mesh_extract_counter % 8 == 1;
+
                 // First extract density from fluid simulator to surface nets buffers
-                if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) =
-                    (&self.fluid_simulator, &self.gpu_surface_nets)
-                {
-                    fluid_sim.extract_to_surface_nets(
-                        device,
-                        &mut encoder,
-                        queue,
-                        gpu_surface_nets.density_buffer(),
-                        gpu_surface_nets.fluid_type_buffer(),
-                        gpu_surface_nets.ice_density_buffer(),
-                    );
+                if rebuild_water_mesh || rebuild_ice_mesh {
+                    if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) =
+                        (&self.fluid_simulator, &self.gpu_surface_nets)
+                    {
+                        fluid_sim.extract_to_surface_nets(
+                            device,
+                            &mut encoder,
+                            queue,
+                            gpu_surface_nets.density_buffer(),
+                            gpu_surface_nets.fluid_type_buffer(),
+                            gpu_surface_nets.ice_density_buffer(),
+                        );
+                    }
                 }
 
                 if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
-                    // Smooth the raw density: spatial blur + temporal blend
-                    gpu_surface_nets.smooth_density(&mut encoder);
+                    if rebuild_water_mesh {
+                        // Smooth the raw density: spatial blur + temporal blend
+                        gpu_surface_nets.smooth_density(&mut encoder);
 
-                    // Run compute shaders to extract mesh from smoothed density buffer
-                    gpu_surface_nets.extract_mesh(&mut encoder);
+                        // Run compute shaders to extract mesh from smoothed density buffer
+                        gpu_surface_nets.extract_mesh(&mut encoder);
+                    }
 
                     // Ice gets its own mesh: raw ice density, no smoothing,
                     // no waves - a rigid faceted surface. Ice only changes
                     // through slow freeze/melt events, so re-extracting every
                     // 8th frame (~130ms latency) is visually identical and
                     // skips a full second surface-nets extraction per frame.
-                    self.ice_extract_counter = self.ice_extract_counter.wrapping_add(1);
-                    // % 8 == 1 so the very first frame extracts immediately.
-                    if self.ice_extract_counter % 8 == 1 {
+                    if rebuild_ice_mesh {
                         // Blur the binary ice density field before extraction
                         // so surface-nets can place vertices off the voxel
                         // grid, removing the staircase look on the base

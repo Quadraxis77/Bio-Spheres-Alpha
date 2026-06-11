@@ -3587,6 +3587,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut smoothness = params.smoothness;
             let mut seed = params.seed as i32;
             let mut resolution = params.grid_resolution as i32;
+            let mut isolated_chunk_cull_volume = params.isolated_chunk_cull_volume;
             let mut geothermal_enabled = params.geothermal_enabled != 0;
             let mut geothermal_count = params.geothermal_count as i32;
             let mut geothermal_placement_mode = params.geothermal_placement_mode;
@@ -3641,6 +3642,16 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .on_hover_text("Voxel grid resolution for the cave mesh. Higher values produce more detailed geometry but take longer to generate and use more memory");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut resolution, 32..=128))
+                    .changed();
+
+                ui.add_space(4.0);
+                ui.label("Fragment Cull:")
+                    .on_hover_text("Minimum isolated fragment volume to keep. Higher values remove larger floating cave chunks; 0 disables fragment cleanup");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut isolated_chunk_cull_volume,
+                        0.0..=500.0,
+                    ))
                     .changed();
             }
 
@@ -3819,6 +3830,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.cave_smoothness = smoothness;
                 context.editor_state.cave_seed = seed as u32;
                 context.editor_state.cave_resolution = resolution as u32;
+                context.editor_state.cave_isolated_chunk_cull_volume = isolated_chunk_cull_volume;
                 context.editor_state.geothermal_enabled = geothermal_enabled;
                 context.editor_state.geothermal_count = geothermal_count.max(0) as u32;
                 context.editor_state.geothermal_placement_mode = geothermal_placement_mode.min(1);

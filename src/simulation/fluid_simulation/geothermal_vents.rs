@@ -137,7 +137,13 @@ fn surface_shift(solid: &[bool], origin: Vec3, axis: Vec3, res: usize, max_searc
 /// Checks that the voxels ahead of `origin` along `axis` are open for at
 /// least `min_clear` steps, so the vent opening doesn't exhale straight into
 /// more rock.
-fn has_clear_opening(solid: &[bool], origin: IVec3, axis: Vec3, res: usize, min_clear: i32) -> bool {
+fn has_clear_opening(
+    solid: &[bool],
+    origin: IVec3,
+    axis: Vec3,
+    res: usize,
+    min_clear: i32,
+) -> bool {
     let origin_f = Vec3::new(origin.x as f32, origin.y as f32, origin.z as f32);
     for d in 1..=min_clear {
         let q = round_vec3(origin_f + axis * d as f32);
@@ -505,8 +511,7 @@ pub(crate) fn stack_voxels(
 
                 for h in 0..=spec.depth {
                     let height_t = h as f32 / spec.depth.max(1) as f32;
-                    let outer = (base_outer as f32 * (1.0 - height_t)
-                        + top_outer as f32 * height_t)
+                    let outer = (base_outer as f32 * (1.0 - height_t) + top_outer as f32 * height_t)
                         .round()
                         .max(top_outer as f32) as i32;
                     if radial_len > outer as f32 + 0.25 {

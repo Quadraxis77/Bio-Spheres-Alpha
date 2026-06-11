@@ -1859,6 +1859,15 @@ impl GpuSurfaceNets {
 
     /// Run surface nets extraction on GPU
     pub fn extract_mesh(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.extract_mesh_inner(encoder, false);
+    }
+
+    /// Run surface nets extraction and copy counters for CPU readback.
+    pub fn extract_mesh_with_counter_readback(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.extract_mesh_inner(encoder, true);
+    }
+
+    fn extract_mesh_inner(&self, encoder: &mut wgpu::CommandEncoder, copy_counters: bool) {
         let workgroup_count = (PADDED_RESOLUTION + 3) / 4;
 
         // Pass 0: Reset counters
@@ -1905,14 +1914,15 @@ impl GpuSurfaceNets {
             pass.dispatch_workgroups(1, 1, 1);
         }
 
-        // Copy counters for readback (optional, for debug/stats)
-        encoder.copy_buffer_to_buffer(
-            &self.counter_buffer,
-            0,
-            &self.counter_staging_buffer,
-            0,
-            std::mem::size_of::<Counters>() as u64,
-        );
+        if copy_counters {
+            encoder.copy_buffer_to_buffer(
+                &self.counter_buffer,
+                0,
+                &self.counter_staging_buffer,
+                0,
+                std::mem::size_of::<Counters>() as u64,
+            );
+        }
     }
 
     /// Extract the ice mesh from the ice density field. Reuses the water

@@ -196,6 +196,7 @@ pub struct GenomeEditorState {
     pub cave_smoothness: f32,
     pub cave_seed: u32,
     pub cave_resolution: u32,
+    pub cave_isolated_chunk_cull_volume: f32,
     pub geothermal_enabled: bool,
     pub geothermal_count: u32,
     pub geothermal_placement_mode: u32,
@@ -703,6 +704,7 @@ impl GenomeEditorState {
             cave_smoothness,
             cave_seed,
             cave_resolution,
+            cave_isolated_chunk_cull_volume,
             geothermal_enabled,
             geothermal_count,
             geothermal_placement_mode,
@@ -892,6 +894,7 @@ impl GenomeEditorState {
             cave_smoothness,
             cave_seed,
             cave_resolution,
+            cave_isolated_chunk_cull_volume,
             geothermal_enabled,
             geothermal_count,
             geothermal_placement_mode,
@@ -1128,6 +1131,7 @@ impl GenomeEditorState {
             self.cave_smoothness,
             self.cave_seed,
             self.cave_resolution,
+            self.cave_isolated_chunk_cull_volume,
             self.geothermal_enabled,
             self.geothermal_count,
             self.geothermal_placement_mode,
@@ -1204,6 +1208,7 @@ impl GenomeEditorState {
         smoothness: f32,
         seed: u32,
         resolution: u32,
+        isolated_chunk_cull_volume: f32,
         geothermal_enabled: bool,
         geothermal_count: u32,
         geothermal_placement_mode: u32,
@@ -1259,6 +1264,7 @@ impl GenomeEditorState {
             smoothness: f32,
             seed: u32,
             resolution: u32,
+            isolated_chunk_cull_volume: f32,
             geothermal_enabled: bool,
             geothermal_count: u32,
             geothermal_placement_mode: u32,
@@ -1314,6 +1320,7 @@ impl GenomeEditorState {
             smoothness,
             seed,
             resolution,
+            isolated_chunk_cull_volume,
             geothermal_enabled,
             geothermal_count,
             geothermal_placement_mode,
@@ -1422,6 +1429,7 @@ impl GenomeEditorState {
         f32,
         u32,
         u32,
+        f32,
         bool,
         u32,
         u32,
@@ -1478,6 +1486,8 @@ impl GenomeEditorState {
             seed: u32,
             #[serde(default = "default_resolution")]
             resolution: u32,
+            #[serde(default = "default_isolated_chunk_cull_volume")]
+            isolated_chunk_cull_volume: f32,
             #[serde(default = "default_geothermal_enabled")]
             geothermal_enabled: bool,
             #[serde(default = "default_geothermal_count")]
@@ -1570,6 +1580,9 @@ impl GenomeEditorState {
 
         fn default_resolution() -> u32 {
             128
+        }
+        fn default_isolated_chunk_cull_volume() -> f32 {
+            crate::rendering::cave_system::DEFAULT_ISOLATED_CHUNK_CULL_VOLUME
         }
         fn default_geothermal_enabled() -> bool {
             true
@@ -1719,6 +1732,7 @@ impl GenomeEditorState {
                             settings.smoothness,
                             settings.seed,
                             settings.resolution,
+                            settings.isolated_chunk_cull_volume,
                             settings.geothermal_enabled,
                             settings.geothermal_count,
                             settings.geothermal_placement_mode,
@@ -1785,6 +1799,7 @@ impl GenomeEditorState {
             0.0,
             12345u32,
             128u32,
+            crate::rendering::cave_system::DEFAULT_ISOLATED_CHUNK_CULL_VOLUME,
             true,
             10u32,
             0u32,

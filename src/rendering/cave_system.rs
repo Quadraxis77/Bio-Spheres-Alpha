@@ -7,6 +7,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
+use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -80,8 +81,11 @@ pub struct CaveParams {
     pub geothermal_glow_strength: f32,
     pub geothermal_glow_radius: f32,
     pub geothermal_glow_color: [f32; 3],
+    /// Minimum world-space volume for isolated cave fragments to survive.
+    /// 0 disables fragment culling.
+    pub isolated_chunk_cull_volume: f32,
 
-    _padding: [f32; 170],
+    _padding: [f32; 169],
 }
 
 impl Default for CaveParams {
@@ -118,7 +122,8 @@ impl Default for CaveParams {
             geothermal_glow_strength: 2.8,
             geothermal_glow_radius: 10.0,
             geothermal_glow_color: [1.0, 0.32, 0.055],
-            _padding: [0.0; 170],
+            isolated_chunk_cull_volume: DEFAULT_ISOLATED_CHUNK_CULL_VOLUME,
+            _padding: [0.0; 169],
         }
     }
 }
@@ -995,7 +1000,17 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
 /// culled from both the rendered cave mesh and the collision solid mask -
 /// floating noise debris neither renders nor collides. Large isolated
 /// islands above this volume are deliberate features and are kept.
-pub const MIN_ISOLATED_CHUNK_VOLUME: f32 = 50.0;
+pub const DEFAULT_ISOLATED_CHUNK_CULL_VOLUME: f32 = 50.0;
+
+pub fn isolated_chunk_min_voxels(params: &CaveParams, cell_size: f32) -> usize {
+    if params.isolated_chunk_cull_volume <= 0.0 {
+        return 0;
+    }
+
+    (params.isolated_chunk_cull_volume / cell_size.powi(3))
+        .ceil()
+        .max(1.0) as usize
+}
 
 /// Remove small isolated solid chunks from a flat solid grid (`dims`³ cells,
 /// indexed `x + y*dims + z*dims²`, 6-connectivity).
@@ -1009,6 +1024,10 @@ pub const MIN_ISOLATED_CHUNK_VOLUME: f32 = 50.0;
 /// (with `min_voxels` derived from the same world-space volume) so rendering
 /// and collision agree about which chunks exist.
 pub fn cull_isolated_solid_chunks(solid: &mut [bool], dims: usize, min_voxels: usize) -> usize {
+    if min_voxels == 0 {
+        return 0;
+    }
+
     let total = dims * dims * dims;
     debug_assert_eq!(solid.len(), total);
     let mut visited = vec![false; total];
@@ -1132,9 +1151,7 @@ impl CaveSystemRenderer {
                     }
                 }
             }
-            let min_voxels = (MIN_ISOLATED_CHUNK_VOLUME / cell_size.powi(3))
-                .ceil()
-                .max(1.0) as usize;
+            let min_voxels = isolated_chunk_min_voxels(params, cell_size);
             let culled = cull_isolated_solid_chunks(&mut solid, dims, min_voxels);
             if culled > 0 {
                 log::info!("Cave generation: culled {culled} voxels of isolated debris");
@@ -1180,7 +1197,131 @@ impl CaveSystemRenderer {
             }
         }
 
+        let removed_triangles = Self::cull_small_mesh_components(
+            &mut vertices,
+            &mut indices,
+            params.isolated_chunk_cull_volume,
+            cell_size,
+            world_center - Vec3::splat(cave_generation_radius),
+            world_center + Vec3::splat(cave_generation_radius),
+        );
+        if removed_triangles > 0 {
+            log::info!("Cave generation: culled {removed_triangles} isolated mesh triangles");
+        }
+
         (vertices, indices)
+    }
+
+    fn cull_small_mesh_components(
+        vertices: &mut Vec<CaveVertex>,
+        indices: &mut Vec<u32>,
+        min_volume: f32,
+        cell_size: f32,
+        grid_min: Vec3,
+        grid_max: Vec3,
+    ) -> usize {
+        if min_volume <= 0.0 || indices.is_empty() {
+            return 0;
+        }
+
+        let tri_count = indices.len() / 3;
+        let quantize = |p: [f32; 3]| -> (i32, i32, i32) {
+            let q = (cell_size * 0.0001).max(0.0001);
+            (
+                (p[0] / q).round() as i32,
+                (p[1] / q).round() as i32,
+                (p[2] / q).round() as i32,
+            )
+        };
+
+        let mut vertex_to_tris: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
+        let mut tri_keys = vec![[(0, 0, 0); 3]; tri_count];
+        for tri in 0..tri_count {
+            for corner in 0..3 {
+                let vertex_idx = indices[tri * 3 + corner] as usize;
+                let key = quantize(vertices[vertex_idx].position);
+                tri_keys[tri][corner] = key;
+                vertex_to_tris.entry(key).or_default().push(tri);
+            }
+        }
+
+        let mut visited = vec![false; tri_count];
+        let mut stack = Vec::new();
+        let mut component = Vec::new();
+        let mut keep_triangles = vec![true; tri_count];
+        let mut removed = 0usize;
+        let boundary_margin = cell_size * 1.5;
+
+        for start in 0..tri_count {
+            if visited[start] {
+                continue;
+            }
+
+            visited[start] = true;
+            stack.push(start);
+            component.clear();
+
+            let mut bounds_min = Vec3::splat(f32::INFINITY);
+            let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
+            let mut touches_boundary = false;
+
+            while let Some(tri) = stack.pop() {
+                component.push(tri);
+                for corner in 0..3 {
+                    let vertex_idx = indices[tri * 3 + corner] as usize;
+                    let p = Vec3::from(vertices[vertex_idx].position);
+                    bounds_min = bounds_min.min(p);
+                    bounds_max = bounds_max.max(p);
+                    touches_boundary |= p.x <= grid_min.x + boundary_margin
+                        || p.y <= grid_min.y + boundary_margin
+                        || p.z <= grid_min.z + boundary_margin
+                        || p.x >= grid_max.x - boundary_margin
+                        || p.y >= grid_max.y - boundary_margin
+                        || p.z >= grid_max.z - boundary_margin;
+
+                    for &next in vertex_to_tris
+                        .get(&tri_keys[tri][corner])
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[])
+                    {
+                        if !visited[next] {
+                            visited[next] = true;
+                            stack.push(next);
+                        }
+                    }
+                }
+            }
+
+            let extent = (bounds_max - bounds_min).max(Vec3::splat(cell_size));
+            let component_volume = extent.x * extent.y * extent.z;
+            if !touches_boundary && component_volume < min_volume {
+                for &tri in &component {
+                    keep_triangles[tri] = false;
+                }
+                removed += component.len();
+            }
+        }
+
+        if removed == 0 {
+            return 0;
+        }
+
+        let old_vertices = std::mem::take(vertices);
+        let old_indices = std::mem::take(indices);
+        for tri in 0..tri_count {
+            if !keep_triangles[tri] {
+                continue;
+            }
+
+            let base = vertices.len() as u32;
+            for corner in 0..3 {
+                let old_idx = old_indices[tri * 3 + corner] as usize;
+                vertices.push(old_vertices[old_idx]);
+                indices.push(base + corner as u32);
+            }
+        }
+
+        removed
     }
 
     /// Hash function for single random value at integer coordinates (no gradients)
