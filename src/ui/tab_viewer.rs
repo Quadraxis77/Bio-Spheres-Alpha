@@ -4496,9 +4496,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.add_space(4.0);
         ui.label("Opacity:")
-            .on_hover_text("Base opacity of the ice body. Grazing angles always read more solid");
+            .on_hover_text("Base opacity of the ice body. Grazing angles always read more solid. At 1.00, ice is rendered fully opaque (no transparency blending).");
         ui.add(
-            egui::Slider::new(&mut ice.alpha, 0.2..=0.97)
+            egui::Slider::new(&mut ice.alpha, 0.2..=1.0)
                 .step_by(0.01)
                 .fixed_decimals(2),
         );

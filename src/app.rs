@@ -2544,7 +2544,7 @@ impl App {
                 }
 
                 // Always update render params every frame (time drives wave animation)
-                if let Some(ref surface_nets) = gpu_scene.gpu_surface_nets {
+                if let Some(ref mut surface_nets) = gpu_scene.gpu_surface_nets {
                     let params = crate::rendering::DensityMeshParams {
                         base_color: [0.2, 0.5, 0.9],
                         ambient: self.editor_state.fluid_ambient,

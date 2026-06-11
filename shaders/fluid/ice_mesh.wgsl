@@ -102,14 +102,21 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) view_dir: vec3<f32>,
     // Geometric normal of this vertex's facet plane, computed in the vertex
-    // shader and flat-interpolated. Screen-space derivatives (dpdx/dpdy)
-    // degenerate for near-horizontal facets viewed from directly above (the
-    // tiny vertical displacement gets swamped by the much larger x/z screen
-    // derivatives, so the cross product collapses back to the smooth
-    // normal) - a top-down view of a flat ice sheet showed no faceting at
-    // all. Carrying the true per-facet plane normal from the vertex shader
-    // is view-independent and fixes that.
-    @location(3) @interpolate(flat) facet_normal: vec3<f32>,
+    // shader. Screen-space derivatives (dpdx/dpdy) degenerate for
+    // near-horizontal facets viewed from directly above (the tiny vertical
+    // displacement gets swamped by the much larger x/z screen derivatives,
+    // so the cross product collapses back to the smooth normal) - a
+    // top-down view of a flat ice sheet showed no faceting at all. Carrying
+    // the true per-facet plane normal from the vertex shader is
+    // view-independent and fixes that.
+    //
+    // Smoothly interpolated (not flat): each vertex's facet_normal can
+    // belong to a different Voronoi cell, so flat interpolation (constant
+    // per triangle, picked from one provoking vertex) drew a hard-edged grid
+    // of differently-shaded triangles - "a bunch of squares". Interpolating
+    // and renormalizing blends between neighboring cells' facet normals
+    // across each triangle, turning those hard edges into soft gradients.
+    @location(3) facet_normal: vec3<f32>,
 }
 
 // Sample light field at world position with trilinear interpolation
@@ -179,28 +186,57 @@ fn hash3_vec(p: vec3<f32>) -> vec3<f32> {
     return fract(sin(q) * 43758.5453123);
 }
 
-// Returns the integer cell coordinate of the nearest Voronoi crystal feature
-// point in `p` (already scaled by facet_scale) - constant across each
-// irregular polygonal region, with sharp boundaries between regions.
-fn voronoi_cell(p: vec3<f32>) -> vec3<f32> {
+// Returns the integer cell coordinates of the two nearest Voronoi crystal
+// feature points to `p` (already scaled by facet_scale), along with the
+// (non-squared) distances to each. `cell_a`/`da` is the nearest, `cell_b`/`db`
+// the second-nearest. Used by facet_displace to blend smoothly between two
+// adjacent crystal faces near their shared boundary instead of snapping
+// discontinuously from one face's plane to the other.
+struct VoronoiPair {
+    cell_a: vec3<f32>,
+    cell_b: vec3<f32>,
+    da: f32,
+    db: f32,
+}
+
+fn voronoi_pair(p: vec3<f32>) -> VoronoiPair {
     let base = floor(p);
     var best_d = 1e9;
+    var second_d = 1e9;
     var best_cell = base;
+    var second_cell = base;
     for (var x = -1; x <= 1; x++) {
         for (var y = -1; y <= 1; y++) {
             for (var z = -1; z <= 1; z++) {
                 let cell = base + vec3<f32>(f32(x), f32(y), f32(z));
                 let feature = cell + hash3_vec(cell);
                 let diff = p - feature;
-                let d = dot(diff, diff);
+                let d = length(diff);
                 if (d < best_d) {
+                    second_d = best_d;
+                    second_cell = best_cell;
                     best_d = d;
                     best_cell = cell;
+                } else if (d < second_d) {
+                    second_d = d;
+                    second_cell = cell;
                 }
             }
         }
     }
-    return best_cell;
+    return VoronoiPair(best_cell, second_cell, best_d, second_d);
+}
+
+// Builds the random per-cell facet normal: a fixed lean (1.0x smooth_normal)
+// plus a random tilt confined to the plane PERPENDICULAR to smooth_normal.
+// This guarantees dot(smooth_normal, facet_normal) >= ~0.5 (max ~60 degrees
+// off smooth_normal) for every random tilt and every surface orientation, so
+// the plane is never near-degenerate relative to the displacement direction
+// (see facet_displace for the history behind this formula).
+fn facet_plane_normal(cell: vec3<f32>, smooth_normal: vec3<f32>) -> vec3<f32> {
+    let tilt = hash3_vec(cell + vec3<f32>(17.31, 47.7, 93.1)) * 2.0 - 1.0;
+    let tilt_perp = tilt - smooth_normal * dot(tilt, smooth_normal);
+    return normalize(smooth_normal * 1.0 + tilt_perp);
 }
 
 // Projects `pos` onto the flat facet plane of its Voronoi cell, moving along
@@ -226,22 +262,38 @@ fn facet_displace(pos: vec3<f32>, smooth_normal: vec3<f32>) -> FacetResult {
 
     let scale = max(params.facet_scale, 0.001);
     let p = pos * scale;
-    let cell = voronoi_cell(p);
-    let feature_world = (cell + hash3_vec(cell)) / scale;
-
-    let tilt = hash3_vec(cell + vec3<f32>(17.31, 47.7, 93.1)) * 2.0 - 1.0;
-    let facet_normal = normalize(smooth_normal + tilt);
-
-    // Skip near-degenerate planes (facet normal nearly perpendicular to the
-    // direction we're displacing along) rather than risk a huge spike.
-    let denom = dot(smooth_normal, facet_normal);
-    if abs(denom) < 0.2 {
-        return FacetResult(pos, smooth_normal);
-    }
-
-    let t_plane = dot(feature_world - pos, facet_normal) / denom;
+    let pair = voronoi_pair(p);
     let max_disp = 1.0 / scale;
-    let t = clamp(t_plane, -max_disp, max_disp) * params.displacement_strength;
+
+    // Each vertex picks its own nearest/second-nearest cell pair, so right at
+    // a Voronoi boundary the two vertices on either side disagree about which
+    // cell is "nearest" - querying only the nearest cell's plane (the old
+    // approach) made the displaced position jump discontinuously across that
+    // boundary, splitting the shared mesh edge into a crack (rendered as a
+    // bright line where the background shows through). Fix: evaluate BOTH
+    // candidate planes and blend between them with a smoothstep based on how
+    // close their distances are. At the boundary itself da == db for both
+    // vertices (just with cell_a/cell_b swapped), so both sides compute the
+    // same 50/50 blend of the same two planes and land on the same position -
+    // no crack. Away from boundaries da << db (or vice versa), so the blend
+    // collapses to a single plane and the facet stays flat.
+    //
+    // The transition band is kept very narrow (BLEND_WIDTH) so facets read as
+    // sharp flat crystal shards with crisp straight edges - just wide enough
+    // to remain continuous (no crack) without visibly rounding the edge.
+    let normal_a = facet_plane_normal(pair.cell_a, smooth_normal);
+    let normal_b = facet_plane_normal(pair.cell_b, smooth_normal);
+    let feature_a = (pair.cell_a + hash3_vec(pair.cell_a)) / scale;
+    let feature_b = (pair.cell_b + hash3_vec(pair.cell_b)) / scale;
+
+    let t_a = clamp(dot(feature_a - pos, normal_a) / dot(smooth_normal, normal_a), -max_disp, max_disp);
+    let t_b = clamp(dot(feature_b - pos, normal_b) / dot(smooth_normal, normal_b), -max_disp, max_disp);
+
+    const BLEND_WIDTH: f32 = 0.02;
+    let w = smoothstep(-BLEND_WIDTH, BLEND_WIDTH, pair.da - pair.db);
+
+    let t = mix(t_a, t_b, w) * params.displacement_strength;
+    let facet_normal = normalize(mix(normal_a, normal_b, w));
     return FacetResult(pos + smooth_normal * t, facet_normal);
 }
 
@@ -261,22 +313,22 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
-struct FragmentOutput {
-    @location(0) accum: vec4<f32>,   // WBOIT accumulation (premultiplied color * weight, weight)
-    @location(1) revealage: vec4<f32>, // WBOIT revealage (1 - alpha product)
+struct ShadeResult {
+    color: vec3<f32>,
+    fresnel: f32,
+    facing: f32,
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> FragmentOutput {
-    // Deeply faceted: vertices were displaced onto flat per-Voronoi-cell
-    // planes in the vertex shader, so each triangle is genuinely planar.
-    // Use the per-facet plane normal carried (flat) from the vertex shader -
-    // this drives SPECULAR almost exclusively; body color and base diffuse
-    // come from the smooth normal, so facets read as glassy faces catching
-    // the light differently, not as patches of different paint (full facet
-    // diffuse looked like a patchwork quilt). Screen-space derivatives
-    // (dpdx/dpdy) were used previously, but degenerate to the smooth normal
-    // for near-horizontal facets viewed from directly above.
+// Deeply faceted: vertices were displaced onto flat per-Voronoi-cell planes
+// in the vertex shader, so each triangle is genuinely planar. Uses the
+// per-facet plane normal carried (flat) from the vertex shader - this drives
+// SPECULAR almost exclusively; body color and base diffuse come from the
+// smooth normal, so facets read as glassy faces catching the light
+// differently, not as patches of different paint (full facet diffuse looked
+// like a patchwork quilt). Screen-space derivatives (dpdx/dpdy) were used
+// previously, but degenerate to the smooth normal for near-horizontal
+// facets viewed from directly above.
+fn shade_ice(in: VertexOutput) -> ShadeResult {
     let smooth_normal = normalize(in.world_normal);
     let view_dir = normalize(in.view_dir);
     let facet_normal = normalize(in.facet_normal);
@@ -323,22 +375,23 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         fresnel * params.fresnel_reflection,
     );
 
-    // Mostly opaque with a hint of translucency: ice is a dense solid, and
-    // WBOIT's weighted average already softens it against whatever is behind
-    // - a low alpha here reads as ghostly rather than icy. Grazing facets
+    return ShadeResult(final_color, fresnel, facing);
+}
+
+// Renders straight into the scene's color+depth targets with depth write
+// enabled and ordinary alpha blending - a rigid solid, not an OIT fluid. No
+// WBOIT: ice is a single front-facing layer per pixel (back faces culled),
+// so there's no order-independence to gain, and WBOIT's weighted-average
+// compositing made near-opaque ice look "ice-tinted" by whatever was behind
+// it (and overflowed Rgba16Float at high alpha with HDR glints/reflections).
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let shaded = shade_ice(in);
+
+    // Mostly opaque with just a hint of translucency: ice is a dense solid -
+    // a low alpha here reads as ghostly rather than icy. Grazing facets
     // (fresnel) and interior-facing facets push toward fully solid.
-    let alpha = clamp(params.alpha_base + fresnel * 0.12 + (1.0 - facing) * 0.06, 0.0, 0.97);
+    let alpha = clamp(params.alpha_base + shaded.fresnel * 0.12 + (1.0 - shaded.facing) * 0.06, 0.0, 1.0);
 
-    // WBOIT weight function (McGuire & Bavoil 2013) - same shape as
-    // density_mesh so ice and water composite order-independently, but
-    // boosted so the dense solid dominates the weighted average where its
-    // fragments coincide with the water surface or sit in front of it.
-    const ICE_WEIGHT_BOOST: f32 = 6.0;
-    let depth = in.clip_position.z;
-    let w = ICE_WEIGHT_BOOST * alpha * max(1e-2, min(3e3, 10.0 / (1e-5 + pow(depth / 200.0, 4.0))));
-
-    var out: FragmentOutput;
-    out.accum = vec4<f32>(final_color * w, w);
-    out.revealage = vec4<f32>(alpha, 0.0, 0.0, alpha);
-    return out;
+    return vec4<f32>(shaded.color, alpha);
 }

@@ -108,9 +108,11 @@ pub struct GpuSurfaceNets {
     render_pipeline: wgpu::RenderPipeline,
 
     // Ice mesh: separate full-volume surface from water (rigid, faceted,
-    // semitransparent, alpha-blended forward pass instead of WBOIT).
-    // Reuses the same surface-nets compute pipelines with its own buffers.
-    ice_render_pipeline: wgpu::RenderPipeline,
+    // semitransparent, alpha-blended forward pass with depth write -
+    // drawn directly into the scene targets before the WBOIT pass, not
+    // part of OIT). Reuses the same surface-nets compute pipelines with
+    // its own buffers.
+    ice_pipeline: wgpu::RenderPipeline,
     ice_density_buffer: wgpu::Buffer,
     ice_vertex_buffer: wgpu::Buffer,
     ice_index_buffer: wgpu::Buffer,
@@ -125,6 +127,20 @@ pub struct GpuSurfaceNets {
     /// Ice appearance uniform (UI-driven) + its camera/params bind group.
     ice_render_params_buffer: wgpu::Buffer,
     ice_render_bind_group: wgpu::BindGroup,
+
+    // Ice density smoothing: same 3x3x3 box blur as the water density
+    // smoothing pass (see `smooth_pipeline` below), reused on the ice
+    // density field. Ice density is binary (1.0 = full voxel, 0.0 = empty),
+    // so surface-nets produced a Minecraft-style staircase mesh aligned to
+    // voxel boundaries. Blurring grades the field near the surface so
+    // surface-nets can place vertices at sub-voxel positions, smoothing the
+    // base surface; the crystal facet displacement in ice_mesh.wgsl then
+    // adds the sharp shard geometry on top of that smooth base.
+    ice_smoothed_density_buffer: wgpu::Buffer,
+    ice_smooth_temp_buffer: wgpu::Buffer,
+    #[allow(dead_code)]
+    ice_smooth_params_buffer: wgpu::Buffer,
+    ice_smooth_bind_group: wgpu::BindGroup,
 
     // Buffers
     density_buffer: wgpu::Buffer,
@@ -963,7 +979,14 @@ impl GpuSurfaceNets {
             ),
         });
 
-        let ice_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        // Renders directly into the scene color+depth targets (depth write
+        // enabled) before the WBOIT pass, with ordinary alpha blending - a
+        // single front-facing layer per pixel (back faces culled), so there's
+        // no order-independence to gain from WBOIT, and a near-opaque ice
+        // surface no longer reads as "tinted" by whatever's behind it. A
+        // small negative depth bias avoids z-fighting where the ice and water
+        // surfaces are coincident at the freeze boundary.
+        let ice_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Ice Mesh Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -995,53 +1018,17 @@ impl GpuSurfaceNets {
             fragment: Some(wgpu::FragmentState {
                 module: &ice_shader,
                 entry_point: Some("fs_main"),
-                // Same WBOIT targets as the water pipeline: ice draws into
-                // the shared OIT pass, so water and ice composite
-                // order-independently with no depth contention (a depth-write
-                // forward pass z-fought the water surface at the ice boundary
-                // and hid water behind ice completely).
-                targets: &[
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::One,
-                                dst_factor: wgpu::BlendFactor::One,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                            alpha: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::One,
-                                dst_factor: wgpu::BlendFactor::One,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::R8Unorm,
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Zero,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                            alpha: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Zero,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                // Cull back faces so a slab contributes one layer to the
-                // weighted blend instead of front + back doubling its alpha.
                 cull_mode: Some(wgpu::Face::Back),
                 unclipped_depth: false,
                 polygon_mode: wgpu::PolygonMode::Fill,
@@ -1049,10 +1036,14 @@ impl GpuSurfaceNets {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth_format,
-                depth_write_enabled: false, // OIT: no depth writes for transparents
+                depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: -2,
+                    slope_scale: -1.0,
+                    clamp: 0.0,
+                },
             }),
             multisample: wgpu::MultisampleState {
                 count: 1,
@@ -1183,6 +1174,61 @@ impl GpuSurfaceNets {
             entry_point: Some("smooth_density"),
             compilation_options: Default::default(),
             cache: None,
+        });
+
+        // === Ice density smoothing (reuses smooth_pipeline above) ===
+        let ice_smoothed_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Smoothed Density Buffer"),
+            size: density_buf_size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let ice_smooth_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Smooth Temp Buffer"),
+            size: density_buf_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        // blend_factor = 1.0: ice only re-extracts every 8th frame, so each
+        // run should reflect the current blur instantly with no temporal lag
+        // (unlike water's continuous per-frame smoothing).
+        let ice_smooth_params = SmoothDensityParams {
+            grid_resolution: GRID_RESOLUTION,
+            blend_factor: 1.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+        let ice_smooth_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Ice Smooth Density Params Buffer"),
+            contents: bytemuck::cast_slice(&[ice_smooth_params]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let ice_smooth_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Ice Smooth Density Bind Group"),
+            layout: &smooth_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ice_smooth_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: ice_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: ice_smoothed_density_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: ice_smooth_temp_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         // === Environment cubemap creation ===
@@ -1361,7 +1407,7 @@ impl GpuSurfaceNets {
             index_pipeline,
             finalize_pipeline,
             render_pipeline,
-            ice_render_pipeline,
+            ice_pipeline,
             ice_density_buffer,
             ice_vertex_buffer,
             ice_index_buffer,
@@ -1372,6 +1418,10 @@ impl GpuSurfaceNets {
             ice_compute_bind_group,
             ice_render_params_buffer,
             ice_render_bind_group,
+            ice_smoothed_density_buffer,
+            ice_smooth_temp_buffer,
+            ice_smooth_params_buffer,
+            ice_smooth_bind_group,
             density_buffer,
             fluid_type_buffer,
             solid_mask_buffer,
@@ -1519,6 +1569,42 @@ impl GpuSurfaceNets {
             &self.smoothed_density_buffer,
             0,
             &self.density_buffer,
+            0,
+            buf_size,
+        );
+    }
+
+    /// Run ice density smoothing: 3x3x3 box blur (no temporal lag).
+    /// Call before extract_ice_mesh. Smoothed result is copied back to
+    /// ice_density_buffer so ice surface-nets extraction reads it - turns
+    /// the binary per-voxel ice field into a graded field near the surface
+    /// so the mesh isn't a voxel-aligned staircase.
+    pub fn smooth_ice_density(&self, encoder: &mut wgpu::CommandEncoder) {
+        let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+        let buf_size = (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64;
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Smooth Ice Density Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.smooth_pipeline);
+            pass.set_bind_group(0, &self.ice_smooth_bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+
+        encoder.copy_buffer_to_buffer(
+            &self.ice_smooth_temp_buffer,
+            0,
+            &self.ice_smoothed_density_buffer,
+            0,
+            buf_size,
+        );
+
+        encoder.copy_buffer_to_buffer(
+            &self.ice_smoothed_density_buffer,
+            0,
+            &self.ice_density_buffer,
             0,
             buf_size,
         );
@@ -1912,6 +1998,48 @@ impl GpuSurfaceNets {
             bytemuck::cast_slice(&[camera_uniform]),
         );
 
+        // === Pass 0: Ice mesh ===
+        // Drawn into the scene's color+depth targets directly, before WBOIT,
+        // with depth write enabled and ordinary alpha blending - not part of
+        // OIT. Writing real depth means anything behind it is then culled by
+        // the WBOIT pass's read-only depth test.
+        {
+            let mut ice_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Ice Mesh Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            ice_pass.set_pipeline(&self.ice_pipeline);
+            ice_pass.set_bind_group(0, &self.ice_render_bind_group, &[]);
+            if let Some(ref shadow_bg) = self.shadow_bind_group {
+                ice_pass.set_bind_group(1, shadow_bg, &[]);
+            } else {
+                return; // Shadow bind group not yet ready - skip draw to avoid validation error
+            }
+            ice_pass.set_bind_group(2, &self.cubemap_bind_group, &[]);
+            ice_pass.set_vertex_buffer(0, self.ice_vertex_buffer.slice(..));
+            ice_pass.set_index_buffer(self.ice_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            ice_pass.draw_indexed_indirect(&self.ice_indirect_draw_buffer, 0);
+        }
+
         // === Pass 1: WBOIT accumulation into offscreen targets ===
         {
             let mut oit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1972,15 +2100,6 @@ impl GpuSurfaceNets {
             oit_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             oit_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             oit_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
-
-            // Ice mesh: same OIT pass, its own faceted pipeline and its own
-            // appearance params at group(0) - weighted blending composites
-            // ice and water order-independently.
-            oit_pass.set_pipeline(&self.ice_render_pipeline);
-            oit_pass.set_bind_group(0, &self.ice_render_bind_group, &[]);
-            oit_pass.set_vertex_buffer(0, self.ice_vertex_buffer.slice(..));
-            oit_pass.set_index_buffer(self.ice_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            oit_pass.draw_indexed_indirect(&self.ice_indirect_draw_buffer, 0);
         }
 
         // === Pass 2: Composite OIT result over the scene ===

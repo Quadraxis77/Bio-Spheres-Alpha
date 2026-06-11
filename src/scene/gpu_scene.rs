@@ -8442,6 +8442,12 @@ impl Scene for GpuScene {
                     self.ice_extract_counter = self.ice_extract_counter.wrapping_add(1);
                     // % 8 == 1 so the very first frame extracts immediately.
                     if self.ice_extract_counter % 8 == 1 {
+                        // Blur the binary ice density field before extraction
+                        // so surface-nets can place vertices off the voxel
+                        // grid, removing the staircase look on the base
+                        // surface (crystal facets are layered on top in the
+                        // ice shader).
+                        gpu_surface_nets.smooth_ice_density(&mut encoder);
                         gpu_surface_nets.extract_ice_mesh(&mut encoder);
                     }
                 }
