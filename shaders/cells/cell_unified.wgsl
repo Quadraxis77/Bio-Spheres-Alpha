@@ -190,10 +190,12 @@ fn vs_main(
         lod_level = 3u;
     }
 
-    // Devorocyte (type 11): expand billboard to accommodate spikes extending beyond the sphere.
-    // Spikes reach 0.75 radii beyond the surface, so we need radius * (1.1 + 0.75) = 1.85.
+    // Devorocyte expands beyond the base sphere for spikes.
     let cell_type_vs = u32(round(instance.type_data_1.w));
-    let billboard_scale = select(1.1, 1.85, cell_type_vs == 11u);
+    var billboard_scale = 1.1;
+    if (cell_type_vs == 11u) {
+        billboard_scale = 1.85;
+    }
     let world_size_scaled = instance.radius * billboard_scale;
     let world_pos = instance.position + right * quad_pos.x * world_size_scaled + up * quad_pos.y * world_size_scaled;
 
@@ -616,6 +618,21 @@ fn internals_cognocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+// Type 17: Siphonocyte - rear directional nozzle/intake aperture.
+// type_data_0: x=aperture_radius, y=aperture_darkness, z=rim_brightness, w=nozzle_height
+fn internals_siphonocyte(p: vec3<f32>, r: f32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let aperture_radius = clamp(type_data_0.x, 0.08, 0.65) * mix(0.82, 1.12, clamp(type_data_0.w, 0.0, 0.55) / 0.55);
+    let darkness = clamp(type_data_0.y, 0.0, 1.0);
+    let rim_brightness = clamp(type_data_0.z, 0.0, 1.5);
+    let rear_cap = smoothstep(0.15, 0.85, -p.z);
+    let aperture_r = length(p.xy);
+    let dark_core = smoothstep(aperture_radius, aperture_radius * 0.35, aperture_r) * rear_cap;
+    let rim = smoothstep(aperture_radius * 1.35, aperture_radius, aperture_r)
+            * smoothstep(aperture_radius * 0.55, aperture_radius, aperture_r)
+            * rear_cap;
+    return vec3<f32>(rim * rim_brightness * 0.35, rim * 0.20 - dark_core * darkness * 0.65, 0.0);
+}
+
 // Type 7: Oculocyte - handled inline in fs_main (needs surface direction, not interior pos).
 
 // Type 1: Flagellocyte - Same as test cell (tail is rendered separately).
@@ -870,6 +887,8 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32, type_dat
         case 14u: { return internals_cognocyte(p, r, camera.time); }
         case 15u: { return internals_memorocyte(p, r, camera.time); }
         case 16u: { return internals_luminocyte(p, r, camera.time, type_data_0); }
+        case 17u: { return internals_siphonocyte(p, r, type_data_0); }
+        case 18u: { return vec3<f32>(0.0); }
         default: { return internals_test(p, r, type_data_0); }
     }
 }

@@ -437,6 +437,29 @@ impl CellTypeVisuals {
                 v.nucleus_scale = 0.5;
                 v.membrane_noise_speed = 1.7;
             }
+            CellType::Siphonocyte => {
+                // Directional nozzle: raised volcanic crater with a dark central throat.
+                v.param_a = 0.32; // aperture_radius
+                v.param_b = 0.85; // aperture_darkness
+                v.param_c = 0.55; // rim_brightness
+                v.param_d = 0.28; // nozzle_height
+                v.specular_strength = 0.55;
+                v.specular_power = 72.0;
+                v.fresnel_strength = 0.42;
+                v.nucleus_scale = 0.45;
+            }
+            CellType::Plumocyte => {
+                // Eight passive feather arms on a gravity-oriented equator.
+                v.param_a = 1.0; // feather_length
+                v.param_b = 0.08; // feather_width
+                v.param_c = 0.85; // feather_brightness
+                v.param_d = 1.6; // stroke_speed
+                v.specular_strength = 0.22;
+                v.specular_power = 28.0;
+                v.fresnel_strength = 0.5;
+                v.nucleus_scale = 0.45;
+                v.membrane_noise_speed = 0.25;
+            }
         }
         v
     }
@@ -592,11 +615,13 @@ pub enum CellType {
     Cognocyte = 14,
     Memorocyte = 15,
     Luminocyte = 16,
+    Siphonocyte = 17,
+    Plumocyte = 18,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 17;
+    pub const COUNT: usize = 19;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -621,6 +646,8 @@ impl CellType {
             CellType::Cognocyte,
             CellType::Memorocyte,
             CellType::Luminocyte,
+            CellType::Siphonocyte,
+            CellType::Plumocyte,
         ]
     }
 
@@ -649,6 +676,8 @@ impl CellType {
             CellType::Cognocyte => "Cognocyte",
             CellType::Memorocyte => "Memorocyte",
             CellType::Luminocyte => "Luminocyte",
+            CellType::Siphonocyte => "Siphonocyte",
+            CellType::Plumocyte => "Plumocyte",
         }
     }
 
@@ -672,6 +701,8 @@ impl CellType {
             "Cognocyte",
             "Memorocyte",
             "Luminocyte",
+            "Siphonocyte",
+            "Plumocyte",
         ]
     }
 
@@ -695,6 +726,8 @@ impl CellType {
             14 => Some(CellType::Cognocyte),
             15 => Some(CellType::Memorocyte),
             16 => Some(CellType::Luminocyte),
+            17 => Some(CellType::Siphonocyte),
+            18 => Some(CellType::Plumocyte),
             _ => None,
         }
     }
@@ -804,6 +837,18 @@ impl CellType {
                 "A signal-reactive lantern cell. Changes its glow intensity from \
                  incoming signals and emits local light into the light field, letting \
                  surrounding fog and surfaces receive rays and shadows."
+            }
+
+            CellType::Siphonocyte => {
+                "A directional water interface. Takes in local environmental water, \
+                 shares strongly with directly bonded Vasculocytes, and can expel \
+                 reserve water as a focused impulse without creating fluid voxels."
+            }
+
+            CellType::Plumocyte => {
+                "A feathery passive coupling cell. Increases drag and medium coupling \
+                 so currents and falls affect the body more, without generating thrust \
+                 in still air or water."
             }
         }
     }
@@ -1023,6 +1068,18 @@ impl CellType {
                 applies_muscle_contraction: 0,
                 _padding: [0; 7],
             },
+            CellType::Siphonocyte | CellType::Plumocyte => GpuCellTypeBehaviorFlags {
+                ignores_split_interval: 0,
+                applies_swim_force: 0,
+                uses_texture_atlas: 0,
+                has_procedural_tail: 0,
+                gains_mass_from_light: 0,
+                is_storage_cell: 0,
+                applies_buoyancy: 0,
+                applies_cilia_force: 0,
+                applies_muscle_contraction: 0,
+                _padding: [0; 7],
+            },
         }
     }
 
@@ -1137,6 +1194,25 @@ impl CellType {
                 mode.luminocyte_signal_channel = 0;
                 mode.luminocyte_threshold = 1.0;
                 mode.luminocyte_invert = false;
+            }
+            CellType::Siphonocyte => {
+                mode.nutrient_priority = 1.4;
+                mode.max_cell_size = 1.7;
+                mode.split_mass = 3.1;
+                mode.siphon_intake_rate = 1.0;
+                mode.siphon_expel_rate = 0.8;
+                mode.siphon_impulse = 0.6;
+                mode.siphon_signal_channel = 0;
+                mode.siphon_mode = 2;
+            }
+            CellType::Plumocyte => {
+                mode.nutrient_priority = 1.2;
+                mode.max_cell_size = 1.6;
+                mode.split_mass = 3.1;
+                mode.plumocyte_extension = 1.0;
+                mode.plumocyte_drag_mult = 0.7;
+                mode.plumocyte_flow_coupling = 0.5;
+                mode.plumocyte_exposure_mult = 0.25;
             }
             _ => {}
         }

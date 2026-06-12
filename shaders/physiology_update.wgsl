@@ -101,12 +101,18 @@ var<storage, read> fluid_state: array<atomic<u32>>;
 var<storage, read> voxel_temperature: array<atomic<u32>>;
 @group(2) @binding(6)
 var<storage, read> geothermal_heat: array<f32>;
+@group(2) @binding(7)
+var<storage, read> mode_properties_v14: array<vec4<f32>>;
+@group(2) @binding(8)
+var<storage, read> mode_properties_v15: array<vec4<f32>>;
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 
 const CELL_TYPE_MYOCYTE: u32 = 9u;
 const CELL_TYPE_VASCULOCYTE: u32 = 12u;
+const CELL_TYPE_SIPHONOCYTE: u32 = 17u;
+const CELL_TYPE_PLUMOCYTE: u32 = 18u;
 
 const STATE_DEEP_FROZEN: u32 = 0u;
 const STATE_FROZEN: u32 = 1u;
@@ -153,11 +159,17 @@ fn water_capacity(cell_type: u32) -> f32 {
     if (cell_type == CELL_TYPE_VASCULOCYTE) {
         return 10.0;
     }
+    if (cell_type == CELL_TYPE_SIPHONOCYTE) {
+        return 1.5;
+    }
     return 1.0;
 }
 
 fn water_transfer_mult(cell_type: u32) -> f32 {
     if (cell_type == CELL_TYPE_VASCULOCYTE) {
+        return 4.0;
+    }
+    if (cell_type == CELL_TYPE_SIPHONOCYTE) {
         return 4.0;
     }
     return 1.0;
@@ -167,7 +179,28 @@ fn heat_transfer_mult(cell_type: u32) -> f32 {
     if (cell_type == CELL_TYPE_VASCULOCYTE) {
         return 4.0;
     }
+    if (cell_type == CELL_TYPE_SIPHONOCYTE) {
+        return 3.0;
+    }
+    if (cell_type == CELL_TYPE_PLUMOCYTE) {
+        return 1.35;
+    }
     return 1.0;
+}
+
+fn water_pair_conductance(cell_type: u32, neighbor_type: u32) -> f32 {
+    let self_siphon = cell_type == CELL_TYPE_SIPHONOCYTE;
+    let neighbor_siphon = neighbor_type == CELL_TYPE_SIPHONOCYTE;
+    let self_vascular = cell_type == CELL_TYPE_VASCULOCYTE;
+    let neighbor_vascular = neighbor_type == CELL_TYPE_VASCULOCYTE;
+
+    if ((self_siphon && neighbor_vascular) || (neighbor_siphon && self_vascular)) {
+        return 4.0;
+    }
+    if (self_siphon || neighbor_siphon) {
+        return 0.0;
+    }
+    return 0.8 * sqrt(water_transfer_mult(cell_type) * water_transfer_mult(neighbor_type));
 }
 
 fn thermal_mass_for(water: f32) -> f32 {
@@ -225,6 +258,28 @@ fn read_voxel_environment(world_pos: vec3<f32>) -> VoxelEnvironment {
     return VoxelEnvironment(true, fluid_type, fill_fraction, temp_internal);
 }
 
+fn siphon_intake_amount(siphon_idx: u32, mode_idx: u32, dt: f32) -> f32 {
+    var intake_rate = 1.0;
+    if (mode_idx < arrayLength(&mode_properties_v14)) {
+        intake_rate = max(mode_properties_v14[mode_idx].x, 0.0);
+    }
+
+    let env = read_voxel_environment(positions[siphon_idx].xyz);
+    if (!env.valid) {
+        return 0.0;
+    }
+
+    var intake_source = 0.0;
+    if (env.fluid_type == 1u) {
+        intake_source = env.fill_fraction;
+    } else if (env.fluid_type == 3u) {
+        intake_source = env.fill_fraction * 0.25;
+    } else if (env.fluid_type == 2u || env.fluid_type == 4u) {
+        intake_source = env.fill_fraction * 0.08;
+    }
+    return intake_source * intake_rate * 0.18 * dt;
+}
+
 fn is_frozen_state(state: u32) -> bool {
     return state <= STATE_FROZEN;
 }
@@ -267,6 +322,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let dt = max(params.delta_time * PHYSIOLOGY_TICK_SCALE, 0.0);
     let cell_type = cell_type_for(cell_idx);
+    let mode_idx = mode_indices[cell_idx];
     let capacity = water_capacity(cell_type);
     let old_water = clamp(cell_water[cell_idx], 0.0, capacity);
     let old_heat = max(cell_heat_energy[cell_idx], 0.0);
@@ -277,10 +333,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var heat_delta = 0.0;
 
     let env = read_voxel_environment(positions[cell_idx].xyz);
+    var exposure_mult = 1.0;
+    if (cell_type == CELL_TYPE_PLUMOCYTE && mode_idx < arrayLength(&mode_properties_v15)) {
+        let plum = mode_properties_v15[mode_idx];
+        exposure_mult += clamp(plum.x, 0.0, 1.0) * max(plum.w, 0.0);
+    }
 
     // Passive environment coupling. The cell samples only the voxel it occupies
     // and never writes moisture or heat back into the fluid grid.
-    if (env.valid) {
+    if (cell_type == CELL_TYPE_SIPHONOCYTE) {
+        water_delta += siphon_intake_amount(cell_idx, mode_idx, dt);
+    } else if (cell_type != CELL_TYPE_VASCULOCYTE && env.valid) {
         var water_target_fraction = 0.45;
         var water_exchange = 0.006;
         if (env.fluid_type == 1u) {
@@ -302,19 +365,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let fill_fraction = old_water / max(capacity, 0.001);
             water_target_fraction = mix(water_target_fraction, HOT_DRY_AIR_TARGET_FRACTION, hot_dry_factor);
             water_exchange = mix(water_exchange, 0.012, hot_dry_factor);
-            water_delta -= HOT_DRY_AIR_MAX_LOSS_RATE * hot_dry_factor * fill_fraction * dt;
+            water_delta -= HOT_DRY_AIR_MAX_LOSS_RATE * hot_dry_factor * fill_fraction * dt * exposure_mult;
         }
-        water_delta += water_exchange * (water_target_fraction * capacity - old_water) * dt;
+        water_delta += water_exchange * exposure_mult * (water_target_fraction * capacity - old_water) * dt;
     } else {
-        water_delta += 0.015 * (capacity - old_water) * dt;
+        if (cell_type != CELL_TYPE_SIPHONOCYTE && cell_type != CELL_TYPE_VASCULOCYTE) {
+            water_delta += 0.015 * (capacity - old_water) * dt;
+        }
     }
     let env_exchange = select(0.04, 0.02, cell_type == CELL_TYPE_VASCULOCYTE);
     let env_temp = select(BASE_ENV_TEMP, env.temp_internal, env.valid);
-    heat_delta += (env_temp - old_temp) * env_exchange * dt;
+    heat_delta += (env_temp - old_temp) * env_exchange * exposure_mult * dt;
 
     // Heat stress slowly dehydrates cells; Plumocyte/Siphonocyte specialization is later.
     if (old_temp > 140.0) {
-        water_delta -= (old_temp - 140.0) * 0.0015 * dt;
+        water_delta -= (old_temp - 140.0) * 0.0015 * dt * exposure_mult;
     }
 
     // Myocyte heat is generated by contraction change, not by static posture.
@@ -369,7 +434,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_pressure = neighbor_water / max(neighbor_capacity, 0.001);
         let pressure_diff = neighbor_pressure - self_pressure;
         if (abs(pressure_diff) > WATER_DEADBAND) {
-            let conductance = 0.8 * sqrt(water_transfer_mult(cell_type) * water_transfer_mult(neighbor_type)) * frozen_mult;
+            let conductance = water_pair_conductance(cell_type, neighbor_type) * frozen_mult;
             water_delta += pressure_diff * conductance * dt;
         }
 

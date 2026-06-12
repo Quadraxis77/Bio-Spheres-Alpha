@@ -343,6 +343,19 @@ pub struct ModeSettings {
     pub luminocyte_threshold: f32,      // Signal value required to switch state
     pub luminocyte_invert: bool, // If true, bright by default and dims on signal (on without signal)
 
+    // Siphonocyte settings
+    pub siphon_intake_rate: f32, // Local read-only voxel intake rate into cell/Vasculocyte reserve
+    pub siphon_expel_rate: f32,  // Water spent per second while expelling
+    pub siphon_impulse: f32,     // Directional impulse strength when expelling
+    pub siphon_signal_channel: i32, // Signal channel used when siphon_mode is signal-driven
+    pub siphon_mode: i32,        // 0 = intake, 1 = expel, 2 = signal-driven
+
+    // Plumocyte settings
+    pub plumocyte_extension: f32,     // Passive extension amount, 0.0 retracted to 1.0 extended
+    pub plumocyte_drag_mult: f32,     // Extra drag in still or moving media
+    pub plumocyte_flow_coupling: f32, // Coupling strength toward local medium/current motion
+    pub plumocyte_exposure_mult: f32, // Weak heat/water exposure multiplier
+
     // Child settings
     pub child_a: ChildSettings,
     pub child_b: ChildSettings,
@@ -497,6 +510,15 @@ impl Default for ModeSettings {
             luminocyte_signal_channel: 0,
             luminocyte_threshold: 1.0,
             luminocyte_invert: false,
+            siphon_intake_rate: 1.0,
+            siphon_expel_rate: 0.8,
+            siphon_impulse: 0.6,
+            siphon_signal_channel: 0,
+            siphon_mode: 2,
+            plumocyte_extension: 1.0,
+            plumocyte_drag_mult: 0.7,
+            plumocyte_flow_coupling: 0.5,
+            plumocyte_exposure_mult: 0.25,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

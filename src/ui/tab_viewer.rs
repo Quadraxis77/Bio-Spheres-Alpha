@@ -7708,6 +7708,15 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     luminocyte_signal_channel: 0,
                     luminocyte_threshold: 1.0,
                     luminocyte_invert: false,
+                    siphon_intake_rate: 1.0,
+                    siphon_expel_rate: 0.8,
+                    siphon_impulse: 0.6,
+                    siphon_signal_channel: 0,
+                    siphon_mode: 2,
+                    plumocyte_extension: 1.0,
+                    plumocyte_drag_mult: 0.7,
+                    plumocyte_flow_coupling: 0.5,
+                    plumocyte_exposure_mult: 0.25,
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -8479,6 +8488,102 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.style_mut().spacing.slider_width = slider_width;
                         ui.add(egui::Slider::new(&mut mode.emissive, 0.0..=8.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.emissive).speed(0.05).range(0.0..=8.0));
+                    });
+                });
+            } else if mode.cell_type == 17 { // Siphonocyte (cell_type == 17)
+                group_container(ui, "Siphonocyte Functions", egui::Color32::from_rgb(90, 190, 230), |ui| {
+                    ui.label("Intake Rate:")
+                        .on_hover_text("Reads the occupied voxel and fills internal reserve. This never removes volume, changes phase, or writes back into voxels.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.siphon_intake_rate, 0.0..=4.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.siphon_intake_rate).speed(0.01).range(0.0..=4.0));
+                    });
+
+                    ui.label("Expel Rate:")
+                        .on_hover_text("Internal reserve spent per second while expelling. Expulsion does not create water, steam, spray, droplets, or voxel phase.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.siphon_expel_rate, 0.0..=4.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.siphon_expel_rate).speed(0.01).range(0.0..=4.0));
+                    });
+
+                    ui.label("Impulse:")
+                        .on_hover_text("Directional impulse applied to the cell body when expelling.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.siphon_impulse, 0.0..=3.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.siphon_impulse).speed(0.01).range(0.0..=3.0));
+                    });
+
+                    let mode_names = ["Intake", "Expel", "Signal"];
+                    egui::ComboBox::from_id_salt("siphon_mode")
+                        .selected_text(mode_names[mode.siphon_mode.clamp(0, 2) as usize])
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut mode.siphon_mode, 0, "Intake");
+                            ui.selectable_value(&mut mode.siphon_mode, 1, "Expel");
+                            ui.selectable_value(&mut mode.siphon_mode, 2, "Signal");
+                        });
+
+                    if mode.siphon_mode == 2 {
+                        ui.label("Signal Channel:")
+                            .on_hover_text("Channel that enables expulsion when its signal value is at least 1.");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            mode.siphon_signal_channel = mode.siphon_signal_channel.clamp(0, 15);
+                            ui.add(egui::Slider::new(&mut mode.siphon_signal_channel, 0..=15).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.siphon_signal_channel).speed(0.1).range(0..=15));
+                        });
+                    }
+                });
+            } else if mode.cell_type == 18 { // Plumocyte (cell_type == 18)
+                group_container(ui, "Plumocyte Functions", egui::Color32::from_rgb(150, 210, 190), |ui| {
+                    ui.label("Extension:")
+                        .on_hover_text("How extended the passive tendrils are. Higher values increase drag and exposure.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.plumocyte_extension, 0.0..=1.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.plumocyte_extension).speed(0.01).range(0.0..=1.0));
+                    });
+
+                    ui.label("Drag:")
+                        .on_hover_text("Passive fall-slowing multiplier. It resists downward motion along gravity without braking organism-initiated forward movement.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.plumocyte_drag_mult, 0.0..=3.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.plumocyte_drag_mult).speed(0.01).range(0.0..=3.0));
+                    });
+
+                    ui.label("Flow Coupling:")
+                        .on_hover_text("Passive coupling strength to surrounding medium. Current v1 strengthens fall-slowing in water without adding thrust.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.plumocyte_flow_coupling, 0.0..=3.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.plumocyte_flow_coupling).speed(0.01).range(0.0..=3.0));
+                    });
+
+                    ui.label("Exposure:")
+                        .on_hover_text("Weak multiplier for environmental heat exchange and hot/dry water loss while extended.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.plumocyte_exposure_mult, 0.0..=2.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.plumocyte_exposure_mult).speed(0.01).range(0.0..=2.0));
                     });
                 });
             } else if mode.cell_type == 4 { // Lipocyte (cell_type == 4)
@@ -11975,6 +12080,104 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.style_mut().spacing.slider_width = slider_width;
                     ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.5).show_value(false));
                     ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.005).range(0.0..=0.5));
+                });
+            }
+
+            // Siphonocyte: rear aperture appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Siphonocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Nozzle").strong());
+                ui.add_space(4.0);
+
+                ui.label("Crater Radius:")
+                    .on_hover_text("Base radius of the rear Siphonocyte volcanic nozzle.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.08..=0.65).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.005).range(0.08..=0.65));
+                });
+
+                ui.label("Throat Darkness:")
+                    .on_hover_text("Darkening strength inside the nozzle throat.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.0..=1.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.0..=1.0));
+                });
+
+                ui.label("Rim Brightness:")
+                    .on_hover_text("Highlight strength on the raised crater rim.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.0..=1.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.0..=1.5));
+                });
+
+                ui.label("Nozzle Height:")
+                    .on_hover_text("How far the rear crater rises off the cell surface.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=0.55).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.005).range(0.0..=0.55));
+                });
+            }
+
+            // Plumocyte: feathered starfish appearance
+            if cell_types.get(selected_idx) == Some(&CellType::Plumocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Feathers").strong());
+                ui.add_space(4.0);
+
+                ui.label("Feather Length:")
+                    .on_hover_text("Length of each of the 8 fixed radial feathers. The feather equator is oriented to local gravity.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.2..=1.35).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.01).range(0.2..=1.35));
+                });
+
+                ui.label("Feather Width:")
+                    .on_hover_text("Thickness of each feather stroke and its barbs. Higher values create broader, softer feathers.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.025..=0.22).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.002).range(0.025..=0.22));
+                });
+
+                ui.label("Feather Brightness:")
+                    .on_hover_text("Brightness of the feathered starfish pattern inside the Plumocyte.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.0..=1.8).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.0..=1.8));
+                });
+
+                ui.label("Stroke Speed:")
+                    .on_hover_text("Speed of the alternating even/odd feather stroke cycle. Frozen cells halt the animation.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=8.0).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.05).range(0.0..=8.0));
                 });
             }
 

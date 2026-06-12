@@ -360,5 +360,7 @@ pub fn create_behavior(cell_type: crate::cell::CellType) -> Box<dyn CellBehavior
         crate::cell::CellType::Cognocyte => Box::new(cognocyte::CognocyteBehavior),
         crate::cell::CellType::Memorocyte => Box::new(memorocyte::MemoryocyteBehavior),
         crate::cell::CellType::Luminocyte => Box::new(luminocyte::LuminocyteBehavior),
+        crate::cell::CellType::Siphonocyte => Box::new(test_cell::TestCellBehavior),
+        crate::cell::CellType::Plumocyte => Box::new(test_cell::TestCellBehavior),
     }
 }

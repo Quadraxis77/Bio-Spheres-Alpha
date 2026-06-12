@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use crate::rendering::fov_cone::FovConeRenderer;
 use crate::rendering::{
     AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, PreviewSkyboxRenderer,
-    SplitRingRenderer, TailInstance, TailRenderer,
+    PlumageInstance, SiphonApertureInstance, SplitRingRenderer, TailInstance, TailRenderer,
 };
 use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
@@ -301,6 +301,8 @@ impl Scene for PreviewScene {
 
             // Build tail instances for flagellocyte cells
             let tail_instances = self.build_tail_instances(cell_type_visuals);
+            let plumage_instances = self.build_plumage_instances(cell_type_visuals);
+            let siphon_instances = self.build_siphon_aperture_instances(cell_type_visuals);
 
             if !tail_instances.is_empty() {
                 self.tail_renderer.render(
@@ -310,6 +312,38 @@ impl Scene for PreviewScene {
                     view,
                     &self.renderer.depth_view,
                     &tail_instances,
+                    self.camera.position(),
+                    self.camera.rotation,
+                    self.state.display_time,
+                    self.camera.horizontal_fov_degrees,
+                    self.renderer.width,
+                    self.renderer.height,
+                );
+            }
+            if !plumage_instances.is_empty() {
+                self.tail_renderer.render_plumage(
+                    device,
+                    queue,
+                    &mut encoder,
+                    view,
+                    &self.renderer.depth_view,
+                    &plumage_instances,
+                    self.camera.position(),
+                    self.camera.rotation,
+                    self.state.display_time,
+                    self.camera.horizontal_fov_degrees,
+                    self.renderer.width,
+                    self.renderer.height,
+                );
+            }
+            if !siphon_instances.is_empty() {
+                self.tail_renderer.render_siphon_apertures(
+                    device,
+                    queue,
+                    &mut encoder,
+                    view,
+                    &self.renderer.depth_view,
+                    &siphon_instances,
                     self.camera.position(),
                     self.camera.rotation,
                     self.state.display_time,
@@ -562,6 +596,111 @@ impl PreviewScene {
                 tail_taper: visuals.tail_taper,
                 time: self.state.display_time,
                 _pad: 0.0,
+            });
+        }
+
+        instances
+    }
+
+    fn build_plumage_instances(
+        &self,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
+    ) -> Vec<PlumageInstance> {
+        use crate::cell::CellType;
+
+        let mut instances = Vec::new();
+        let plumocyte_index = CellType::Plumocyte as usize;
+        let visuals = cell_type_visuals
+            .and_then(|v| v.get(plumocyte_index))
+            .copied()
+            .unwrap_or_else(|| crate::cell::types::CellTypeVisuals::default_for_type(CellType::Plumocyte));
+
+        for i in 0..self.state.display_state.cell_count {
+            let mode_index = self.state.display_state.mode_indices[i];
+            let cell_type_index = if mode_index < self.genome.modes.len() {
+                self.genome.modes[mode_index].cell_type as u32
+            } else {
+                0
+            };
+            if cell_type_index != CellType::Plumocyte as u32 {
+                continue;
+            }
+
+            let position = self.state.display_state.positions[i];
+            let rotation = self.state.display_state.rotations[i];
+            let radius = self.state.display_state.radii[i];
+            let color = if mode_index < self.genome.modes.len() {
+                let mode = &self.genome.modes[mode_index];
+                [mode.color.x, mode.color.y, mode.color.z, mode.opacity]
+            } else {
+                [0.55, 0.9, 0.72, 1.0]
+            };
+            let frozen = self
+                .state
+                .display_state
+                .cell_thermal_state
+                .get(i)
+                .copied()
+                .unwrap_or(4)
+                <= 1;
+
+            instances.push(PlumageInstance {
+                cell_position: position.to_array(),
+                cell_radius: radius,
+                rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+                color,
+                feather_length: visuals.param_a,
+                feather_width: visuals.param_b,
+                feather_brightness: visuals.param_c,
+                stroke_speed: visuals.param_d,
+                frozen: if frozen { 1.0 } else { 0.0 },
+                _pad: [0.0; 3],
+            });
+        }
+
+        instances
+    }
+
+    fn build_siphon_aperture_instances(
+        &self,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
+    ) -> Vec<SiphonApertureInstance> {
+        use crate::cell::CellType;
+
+        let mut instances = Vec::new();
+        let siphon_index = CellType::Siphonocyte as usize;
+        let visuals = cell_type_visuals
+            .and_then(|v| v.get(siphon_index))
+            .copied()
+            .unwrap_or_else(|| crate::cell::types::CellTypeVisuals::default_for_type(CellType::Siphonocyte));
+
+        for i in 0..self.state.display_state.cell_count {
+            let mode_index = self.state.display_state.mode_indices[i];
+            let Some(mode) = self.genome.modes.get(mode_index) else {
+                continue;
+            };
+            if mode.cell_type != CellType::Siphonocyte as i32 {
+                continue;
+            }
+
+            let activity = match mode.siphon_mode.clamp(0, 2) {
+                0 => (mode.siphon_intake_rate / 4.0).clamp(0.15, 1.0),
+                1 => ((mode.siphon_expel_rate + mode.siphon_impulse) / 7.0).clamp(0.2, 1.0),
+                _ => 0.55,
+            };
+            let position = self.state.display_state.positions[i];
+            let rotation = self.state.display_state.rotations[i];
+            instances.push(SiphonApertureInstance {
+                cell_position: position.to_array(),
+                cell_radius: self.state.display_state.radii[i],
+                rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+                color: [mode.color.x, mode.color.y, mode.color.z, mode.opacity],
+                aperture_radius: visuals.param_a,
+                aperture_darkness: visuals.param_b,
+                rim_brightness: visuals.param_c,
+                nozzle_height: visuals.param_d,
+                activity,
+                _pad: [0.0; 3],
             });
         }
 

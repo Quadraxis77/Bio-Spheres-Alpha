@@ -2021,6 +2021,14 @@ impl GpuPhysicsPipelines {
                     binding: 6,
                     resource: geothermal_heat.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.mode_properties_v14.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: buffers.mode_properties_v15.as_entire_binding(),
+                },
             ],
         })
     }
@@ -4227,6 +4235,8 @@ impl GpuPhysicsPipelines {
                 ro(4), // fluid voxel state
                 ro(5), // per-voxel temperature field
                 ro(6), // geothermal heat field
+                ro(7), // mode_properties_v14: Siphonocyte params
+                ro(8), // mode_properties_v15: Plumocyte params
             ],
         })
     }
@@ -7098,6 +7108,61 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 12: Siphonocyte mode params
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 13: Plumocyte mode params
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 14: cell water reserve, read-write for Siphonocyte expulsion spend
+                wgpu::BindGroupLayoutEntry {
+                    binding: 14,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 15: cell heat reserve, read-write for steam-assisted heat spend
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 16: thermal state, read-only freeze gate for Plumocytes
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -7243,6 +7308,26 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 11,
                     resource: water_bitfield_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: triple_buffers.mode_properties_v14.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: triple_buffers.mode_properties_v15.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: triple_buffers.cell_water.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: triple_buffers.cell_heat_energy.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: triple_buffers.cell_thermal_state.as_entire_binding(),
                 },
             ],
         })

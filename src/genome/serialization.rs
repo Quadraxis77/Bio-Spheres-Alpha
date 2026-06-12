@@ -416,6 +416,24 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub luminocyte_invert: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub siphon_intake_rate: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub siphon_expel_rate: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub siphon_impulse: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub siphon_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub siphon_mode: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plumocyte_extension: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plumocyte_drag_mult: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plumocyte_flow_coupling: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plumocyte_exposure_mult: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -969,6 +987,21 @@ fn mode_to_serializable(
         ),
         luminocyte_threshold: diff_f32(mode.luminocyte_threshold, default.luminocyte_threshold),
         luminocyte_invert: diff_bool(mode.luminocyte_invert, default.luminocyte_invert),
+        siphon_intake_rate: diff_f32(mode.siphon_intake_rate, default.siphon_intake_rate),
+        siphon_expel_rate: diff_f32(mode.siphon_expel_rate, default.siphon_expel_rate),
+        siphon_impulse: diff_f32(mode.siphon_impulse, default.siphon_impulse),
+        siphon_signal_channel: diff_i32(mode.siphon_signal_channel, default.siphon_signal_channel),
+        siphon_mode: diff_i32(mode.siphon_mode, default.siphon_mode),
+        plumocyte_extension: diff_f32(mode.plumocyte_extension, default.plumocyte_extension),
+        plumocyte_drag_mult: diff_f32(mode.plumocyte_drag_mult, default.plumocyte_drag_mult),
+        plumocyte_flow_coupling: diff_f32(
+            mode.plumocyte_flow_coupling,
+            default.plumocyte_flow_coupling,
+        ),
+        plumocyte_exposure_mult: diff_f32(
+            mode.plumocyte_exposure_mult,
+            default.plumocyte_exposure_mult,
+        ),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(
@@ -1114,6 +1147,15 @@ impl SerializableModeSettings {
             || self.luminocyte_signal_channel.is_some()
             || self.luminocyte_threshold.is_some()
             || self.luminocyte_invert.is_some()
+            || self.siphon_intake_rate.is_some()
+            || self.siphon_expel_rate.is_some()
+            || self.siphon_impulse.is_some()
+            || self.siphon_signal_channel.is_some()
+            || self.siphon_mode.is_some()
+            || self.plumocyte_extension.is_some()
+            || self.plumocyte_drag_mult.is_some()
+            || self.plumocyte_flow_coupling.is_some()
+            || self.plumocyte_exposure_mult.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -1461,6 +1503,33 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.myocyte_grip_extended {
         mode.myocyte_grip_extended = v;
+    }
+    if let Some(v) = ser.siphon_intake_rate {
+        mode.siphon_intake_rate = v;
+    }
+    if let Some(v) = ser.siphon_expel_rate {
+        mode.siphon_expel_rate = v;
+    }
+    if let Some(v) = ser.siphon_impulse {
+        mode.siphon_impulse = v;
+    }
+    if let Some(v) = ser.siphon_signal_channel {
+        mode.siphon_signal_channel = v;
+    }
+    if let Some(v) = ser.siphon_mode {
+        mode.siphon_mode = v;
+    }
+    if let Some(v) = ser.plumocyte_extension {
+        mode.plumocyte_extension = v;
+    }
+    if let Some(v) = ser.plumocyte_drag_mult {
+        mode.plumocyte_drag_mult = v;
+    }
+    if let Some(v) = ser.plumocyte_flow_coupling {
+        mode.plumocyte_flow_coupling = v;
+    }
+    if let Some(v) = ser.plumocyte_exposure_mult {
+        mode.plumocyte_exposure_mult = v;
     }
     if let Some(v) = ser.embryocyte_use_timer {
         mode.embryocyte_use_timer = v;

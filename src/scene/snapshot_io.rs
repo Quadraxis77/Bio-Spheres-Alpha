@@ -1451,6 +1451,12 @@ impl GpuScene {
                 .sync_devorocyte_mode_properties(queue, &self.genomes);
             self.gpu_triple_buffers
                 .sync_vasculocyte_mode_properties(queue, &self.genomes);
+            self.gpu_triple_buffers
+                .sync_gametocyte_mode_properties(queue, &self.genomes);
+            self.gpu_triple_buffers
+                .sync_siphonocyte_mode_properties(queue, &self.genomes);
+            self.gpu_triple_buffers
+                .sync_plumocyte_mode_properties(queue, &self.genomes);
         }
 
         // Mark instance builder dirty so rendering picks up the new state.

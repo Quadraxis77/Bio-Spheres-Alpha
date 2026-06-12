@@ -173,7 +173,7 @@ pub use skybox::SkyboxRenderer;
 pub use split_rings::SplitRingRenderer;
 pub use steam_particles::SteamParticleRenderer;
 pub use sun_renderer::SunRenderer;
-pub use tail_renderer::{TailInstance, TailRenderer};
+pub use tail_renderer::{PlumageInstance, SiphonApertureInstance, TailInstance, TailRenderer};
 pub use volumetric_fog::VolumetricFogRenderer;
 pub use voxel_renderer::{VoxelInstance, VoxelRenderer};
 pub use water_particles::WaterParticleRenderer;

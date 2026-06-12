@@ -584,6 +584,28 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 24: cell thermal state, used to freeze visual animation
+                wgpu::BindGroupLayoutEntry {
+                    binding: 24,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 25: mode_properties_v14 - Siphonocyte params per mode
+                wgpu::BindGroupLayoutEntry {
+                    binding: 25,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1426,6 +1448,8 @@ impl InstanceBuilder {
         signal_flags_buffer: &wgpu::Buffer,
         mode_properties_v7_buffer: &wgpu::Buffer,
         solid_mask_buffer: &wgpu::Buffer,
+        cell_thermal_state_buffer: &wgpu::Buffer,
+        mode_properties_v14_buffer: &wgpu::Buffer,
     ) {
         // Create a dummy 1x1 texture for binding 11 (Hi-Z removed)
         let (_dummy_texture, dummy_view) = Self::create_dummy_hiz_texture(device);
@@ -1531,6 +1555,14 @@ impl InstanceBuilder {
                     binding: 23,
                     resource: solid_mask_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: cell_thermal_state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: mode_properties_v14_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1594,6 +1626,8 @@ impl InstanceBuilder {
         lod_debug_colors: bool,
         cell_count_hint: u32, // Live cell count for dispatch scaling
         solid_mask_buffer: &wgpu::Buffer,
+        cell_thermal_state_buffer: &wgpu::Buffer,
+        mode_properties_v14_buffer: &wgpu::Buffer,
     ) {
         if cell_capacity == 0 {
             self.last_visible_count = 0;
@@ -1696,6 +1730,8 @@ impl InstanceBuilder {
                 signal_flags_buffer,
                 mode_properties_v7_buffer,
                 solid_mask_buffer,
+                cell_thermal_state_buffer,
+                mode_properties_v14_buffer,
             );
         }
 
@@ -1786,6 +1822,8 @@ impl InstanceBuilder {
         lod_debug_colors: bool,
         cell_count_hint: u32,
         solid_mask_buffer: &wgpu::Buffer,
+        cell_thermal_state_buffer: &wgpu::Buffer,
+        mode_properties_v14_buffer: &wgpu::Buffer,
     ) {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Instance Builder Encoder"),
@@ -1813,6 +1851,8 @@ impl InstanceBuilder {
             lod_debug_colors,
             cell_count_hint,
             solid_mask_buffer,
+            cell_thermal_state_buffer,
+            mode_properties_v14_buffer,
         );
 
         queue.submit(std::iter::once(encoder.finish()));

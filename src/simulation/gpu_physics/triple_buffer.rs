@@ -382,6 +382,14 @@ pub struct GpuTripleBufferSystem {
     /// v13: [merge_range, 0.0, 0.0, 0.0]
     pub mode_properties_v13: wgpu::Buffer,
 
+    /// Mode properties v14 for Siphonocyte parameters (16 bytes per mode each)
+    /// v14: [intake_rate, expel_rate, impulse, packed_signal_channel_and_mode]
+    pub mode_properties_v14: wgpu::Buffer,
+
+    /// Mode properties v15 for Plumocyte parameters (16 bytes per mode each)
+    /// v15: [extension, drag_mult, flow_coupling, exposure_mult]
+    pub mode_properties_v15: wgpu::Buffer,
+
     /// Per-cell Embryocyte reserve buffer (one u32 per cell).
     /// Embryocytes: sole energy source; burns at 10 units/sec when free.
     /// Non-Embryocytes: provides extended life; burns before normal nutrients.
@@ -524,6 +532,8 @@ impl GpuTripleBufferSystem {
     fn physiology_water_capacity_for_cell_type(cell_type: u32) -> f32 {
         if cell_type == 12 {
             10.0
+        } else if cell_type == 17 {
+            1.5
         } else {
             1.0
         }
@@ -783,6 +793,10 @@ impl GpuTripleBufferSystem {
         // Mode properties v13 for Gametocyte parameters (16 bytes per mode each)
         let mode_properties_v13 =
             Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V13");
+        let mode_properties_v14 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V14");
+        let mode_properties_v15 =
+            Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V15");
 
         // Per-cell Embryocyte reserve buffer (one u32 per cell, zero-initialized)
         let embryocyte_reserve_buffer = Self::create_zero_initialized_storage_buffer(
@@ -989,6 +1003,8 @@ impl GpuTripleBufferSystem {
             mode_properties_v11,
             mode_properties_v12,
             mode_properties_v13,
+            mode_properties_v14,
+            mode_properties_v15,
             embryocyte_reserve_buffer,
             mode_cell_types,
             behavior_flags,
@@ -1445,6 +1461,8 @@ impl GpuTripleBufferSystem {
 
         // Sync cilia mode properties for cilia_force shader (v5, v6)
         self.sync_cilia_mode_properties(queue, genomes);
+        self.sync_siphonocyte_mode_properties(queue, genomes);
+        self.sync_plumocyte_mode_properties(queue, genomes);
 
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.sync_mode_cell_types(queue, genomes);
@@ -1653,6 +1671,9 @@ impl GpuTripleBufferSystem {
         self.mode_properties_v10 = Self::create_storage_buffer(device, m16, "Mode Properties V10");
         self.mode_properties_v11 = Self::create_storage_buffer(device, m16, "Mode Properties V11");
         self.mode_properties_v12 = Self::create_storage_buffer(device, m16, "Mode Properties V12");
+        self.mode_properties_v13 = Self::create_storage_buffer(device, m16, "Mode Properties V13");
+        self.mode_properties_v14 = Self::create_storage_buffer(device, m16, "Mode Properties V14");
+        self.mode_properties_v15 = Self::create_storage_buffer(device, m16, "Mode Properties V15");
 
         self.mode_cell_types = Self::create_storage_buffer(device, m4, "Mode Cell Types");
         self.glueocyte_env_adhesion_flags =
@@ -2300,6 +2321,114 @@ impl GpuTripleBufferSystem {
                 &self.mode_properties_v13,
                 offset,
                 bytemuck::cast_slice(&v13),
+            );
+        }
+    }
+
+    /// Sync Siphonocyte mode properties.
+    /// v14: [intake_rate, expel_rate, impulse, signal_channel + siphon_mode * 16]
+    pub fn sync_siphonocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
+        let mut v14: Vec<[f32; 4]> = Vec::new();
+        for genome in genomes {
+            for mode in &genome.modes {
+                let packed =
+                    mode.siphon_signal_channel.clamp(0, 15) + mode.siphon_mode.clamp(0, 2) * 16;
+                v14.push([
+                    mode.siphon_intake_rate,
+                    mode.siphon_expel_rate,
+                    mode.siphon_impulse,
+                    packed as f32,
+                ]);
+            }
+        }
+        if !v14.is_empty() {
+            queue.write_buffer(&self.mode_properties_v14, 0, bytemuck::cast_slice(&v14));
+        }
+    }
+
+    /// Incremental sync of Siphonocyte mode properties for a single genome.
+    pub fn incremental_sync_siphonocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
+        let v14: Vec<[f32; 4]> = genome
+            .modes
+            .iter()
+            .map(|mode| {
+                let packed = mode.siphon_signal_channel.clamp(0, 15)
+                    + mode.siphon_mode.clamp(0, 2) * 16;
+                [
+                    mode.siphon_intake_rate,
+                    mode.siphon_expel_rate,
+                    mode.siphon_impulse,
+                    packed as f32,
+                ]
+            })
+            .collect();
+        if !v14.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(
+                &self.mode_properties_v14,
+                offset,
+                bytemuck::cast_slice(&v14),
+            );
+        }
+    }
+
+    /// Sync Plumocyte mode properties.
+    /// v15: [extension, drag_mult, flow_coupling, exposure_mult]
+    pub fn sync_plumocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genomes: &[crate::genome::Genome],
+    ) {
+        let mut v15: Vec<[f32; 4]> = Vec::new();
+        for genome in genomes {
+            for mode in &genome.modes {
+                v15.push([
+                    mode.plumocyte_extension,
+                    mode.plumocyte_drag_mult,
+                    mode.plumocyte_flow_coupling,
+                    mode.plumocyte_exposure_mult,
+                ]);
+            }
+        }
+        if !v15.is_empty() {
+            queue.write_buffer(&self.mode_properties_v15, 0, bytemuck::cast_slice(&v15));
+        }
+    }
+
+    /// Incremental sync of Plumocyte mode properties for a single genome.
+    pub fn incremental_sync_plumocyte_mode_properties(
+        &self,
+        queue: &wgpu::Queue,
+        genome: &crate::genome::Genome,
+        global_start_index: usize,
+    ) {
+        let v15: Vec<[f32; 4]> = genome
+            .modes
+            .iter()
+            .map(|mode| {
+                [
+                    mode.plumocyte_extension,
+                    mode.plumocyte_drag_mult,
+                    mode.plumocyte_flow_coupling,
+                    mode.plumocyte_exposure_mult,
+                ]
+            })
+            .collect();
+        if !v15.is_empty() {
+            let offset = (global_start_index * 16) as u64;
+            queue.write_buffer(
+                &self.mode_properties_v15,
+                offset,
+                bytemuck::cast_slice(&v15),
             );
         }
     }

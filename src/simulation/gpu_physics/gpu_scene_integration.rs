@@ -89,6 +89,8 @@ pub struct PhysicsFeatureFlags {
     pub has_flagellocytes: bool,
     pub has_buoyocytes: bool,
     pub has_ciliocytes: bool,
+    pub has_siphonocytes: bool,
+    pub has_plumocytes: bool,
     pub has_glueocytes: bool,
 }
 
@@ -290,7 +292,7 @@ pub fn execute_gpu_physics_step(
 
         // Stage 5.5: Swim force (256 threads) - applies thrust for Flagellocyte cells
         // Accumulates swim force to force buffers based on cell rotation and mode swim_force setting
-        if features.has_flagellocytes {
+        if features.has_flagellocytes || features.has_siphonocytes || features.has_plumocytes {
             compute_pass.set_pipeline(&pipelines.swim_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(
@@ -669,7 +671,7 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 5.5: Swim force
-        if features.has_flagellocytes {
+        if features.has_flagellocytes || features.has_siphonocytes || features.has_plumocytes {
             compute_pass.set_pipeline(&pipelines.swim_force);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(

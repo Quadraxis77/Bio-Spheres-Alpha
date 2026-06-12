@@ -230,9 +230,14 @@ struct CaveCullParams {
 }
 @group(0) @binding(22) var<uniform> cave_cull: CaveCullParams;
 @group(0) @binding(23) var<storage, read> cave_solid_mask: array<u32>;
+@group(0) @binding(24) var<storage, read> cell_thermal_state: array<u32>;
+
+// mode_properties_v14 per mode: [siphon_intake_rate, siphon_expel_rate, siphon_impulse, signal_channel + siphon_mode * 16]
+@group(0) @binding(25) var<storage, read> mode_properties_v14: array<vec4<f32>>;
 
 const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
+const THERMAL_STATE_FROZEN: u32 = 1u;
 
 // ============================================================================
 // Random Number Generation
@@ -635,13 +640,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //   Buoyocyte (5):   param_a/b/c/d -> [bubble_scale, rotation_speed, wall_brightness, gas_brightness]
         //   Devorocyte (11): param_a/b/c/d -> [spike_height, spike_sharpness, spike_embed, tip_fade]
         //   Luminocyte (16): param_a/b/c/d -> [band_frequency, band_width, core_glow, color_shift]
+        //   Siphonocyte (17):param_a/b/c/d -> [aperture_radius, aperture_darkness, rim_brightness, nozzle_height]
+        //   Plumocyte (18):  param_a/b/c/d -> [feather_length, feather_width, feather_brightness, stroke_speed]
         //   Photocyte (3):   goldberg -> [subdivision, ridge_width, meander, ridge_strength]
         //   Glueocyte (6):   goldberg -> [voro_scale, border_width, meander, border_dark]
         //   Oculocyte (7):   goldberg -> [pupil_size, iris_freq, iris_texture, pupil_dark]
         //   Myocyte (9):     goldberg -> [line_freq, bulge_strength, warp_amt, unused]
         //   Embryocyte (10): goldberg -> [yolk_radius, -yolk_drop (negated), yolk_brightness, unused]
         //   Vasculocyte (12):goldberg -> [cell_scale, border_width, meander, border_depth]
-        // type_data_1: [nucleus_scale, anim_speed, debug_colors, cell_type]
+        // type_data_1: [nucleus_scale/frozen_flag, anim_speed, debug_colors, cell_type]
         if (cell_type < params.cell_type_count) {
             let visuals = cell_type_visuals[cell_type];
             // For types with dedicated params (Test=0, Phagocyte=2, Lipocyte=4,
@@ -649,8 +656,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // For all others (Photocyte=3, Glueocyte=6, Oculocyte=7, Myocyte=9,
             // Embryocyte=10, Vasculocyte=12) use goldberg fields.
             let use_params = (cell_type == 0u || cell_type == 2u || cell_type == 4u
-                           || cell_type == 5u || cell_type == 11u || cell_type == 16u);
-            if (use_params) {
+                           || cell_type == 5u || cell_type == 11u || cell_type == 16u
+                           || cell_type == 17u || cell_type == 18u);
+            if (cell_type == 17u) {
+                instance.type_data_0 = vec4<f32>(
+                    visuals.param_a,
+                    visuals.param_b,
+                    visuals.param_c,
+                    visuals.param_d
+                );
+            } else if (use_params) {
                 instance.type_data_0 = vec4<f32>(
                     visuals.param_a,
                     visuals.param_b,
@@ -688,7 +703,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // type_data_1: x=nucleus_scale (photocyte hex sphere radius), y=anim_speed, z=debug_colors, w=cell_type
         // NOTE: glueocyte reads .x as cell_seed via type_data_1.x - use nuc_scale here since
         // glueocyte reads it as fract(type_data_1.x * small_constant) which is stable for any value.
-        instance.type_data_1 = vec4<f32>(nuc_scale, anim_speed_val, f32(params.lod_debug_colors), f32(cell_type));
+        var extra_x = nuc_scale;
+        var extra_y = anim_speed_val;
+        if (cell_type == 17u && mode_index < arrayLength(&mode_properties_v14)) {
+            let siphon = mode_properties_v14[mode_index];
+            let packed = u32(clamp(siphon.w, 0.0, 47.0));
+            let siphon_channel = packed & 15u;
+            let siphon_mode = min(packed / 16u, 2u);
+            if (siphon_mode == 0u) {
+                extra_y = clamp(siphon.x / 4.0, 0.15, 1.0);
+            } else if (siphon_mode == 1u) {
+                extra_y = clamp((siphon.y + siphon.z) / 7.0, 0.2, 1.0);
+            } else {
+                extra_y = 0.55;
+            }
+            var output_active = siphon_mode == 1u;
+            if (siphon_mode == 2u) {
+                let raw_signal = signal_flags[idx * 16u + siphon_channel];
+                output_active = (raw_signal & 2047u) >= 1u;
+                extra_y = select(0.18, extra_y, output_active);
+            }
+            if (output_active && (siphon.y > 0.001 || siphon.z > 0.001)) {
+                extra_x = select(1.0, 2.0, idx < arrayLength(&cell_thermal_state) && cell_thermal_state[idx] >= 6u);
+            } else {
+                extra_x = 0.0;
+            }
+        }
+        if (cell_type == 18u && idx < arrayLength(&cell_thermal_state)) {
+            extra_x = select(0.0, 1.0, cell_thermal_state[idx] <= THERMAL_STATE_FROZEN);
+        }
+        instance.type_data_1 = vec4<f32>(extra_x, extra_y, f32(params.lod_debug_colors), f32(cell_type));
     }
 
     // Dynamic instance allocation - single buffer for all cell types

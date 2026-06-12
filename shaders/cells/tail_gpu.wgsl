@@ -10,9 +10,9 @@ struct Camera {
     camera_pos: vec3<f32>,
     time: f32,
     partition_offset: u32,  // Offset into instance buffer for Flagellocyte partition
-    _padding0: u32,         // Padding to maintain alignment
-    _padding1: u32,
-    _padding2: u32,
+    gravity_mode: u32,
+    gravity: f32,
+    _padding: f32,
 }
 
 struct Lighting {

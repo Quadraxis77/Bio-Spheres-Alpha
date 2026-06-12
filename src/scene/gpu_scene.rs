@@ -1556,6 +1556,15 @@ impl GpuScene {
                 luminocyte_signal_channel: 0,
                 luminocyte_threshold: 1.0,
                 luminocyte_invert: false,
+                siphon_intake_rate: 1.0,
+                siphon_expel_rate: 0.8,
+                siphon_impulse: 0.6,
+                siphon_signal_channel: 0,
+                siphon_mode: 2,
+                plumocyte_extension: 1.0,
+                plumocyte_drag_mult: 0.7,
+                plumocyte_flow_coupling: 0.5,
+                plumocyte_exposure_mult: 0.25,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -2018,6 +2027,8 @@ impl GpuScene {
                 has_flagellocytes: true,
                 has_buoyocytes: true,
                 has_ciliocytes: true,
+                has_siphonocytes: true,
+                has_plumocytes: true,
                 has_glueocytes: true,
             }
         } else {
@@ -2689,6 +2700,8 @@ impl GpuScene {
         let devorocyte_type = CellType::Devorocyte as u32 as i32;
         let gametocyte_type = CellType::Gametocyte as u32 as i32;
         let luminocyte_type = CellType::Luminocyte as u32 as i32;
+        let siphonocyte_type = CellType::Siphonocyte as u32 as i32;
+        let plumocyte_type = CellType::Plumocyte as u32 as i32;
         self.has_oculocytes = false;
         self.has_glueocytes = false;
         self.has_phagocytes = false;
@@ -2717,6 +2730,12 @@ impl GpuScene {
                 }
                 if m.cell_type == ciliocyte_type {
                     self.physics_features.has_ciliocytes = true;
+                }
+                if m.cell_type == siphonocyte_type {
+                    self.physics_features.has_siphonocytes = true;
+                }
+                if m.cell_type == plumocyte_type {
+                    self.physics_features.has_plumocytes = true;
                 }
                 if m.cell_type == myocyte_type {
                     self.physics_features.has_myocytes = true;
@@ -2803,6 +2822,10 @@ impl GpuScene {
         // Update gametocyte mode properties for this genome's modes only
         self.gpu_triple_buffers
             .incremental_sync_gametocyte_mode_properties(queue, &genome, global_start_index);
+        self.gpu_triple_buffers
+            .incremental_sync_siphonocyte_mode_properties(queue, &genome, global_start_index);
+        self.gpu_triple_buffers
+            .incremental_sync_plumocyte_mode_properties(queue, &genome, global_start_index);
 
         // Update child mode indices for this genome's modes only
         self.gpu_triple_buffers.incremental_sync_child_mode_indices(
@@ -3291,6 +3314,10 @@ impl GpuScene {
         // Sync gametocyte mode properties (v13)
         self.gpu_triple_buffers
             .sync_gametocyte_mode_properties(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_siphonocyte_mode_properties(queue, &self.genomes);
+        self.gpu_triple_buffers
+            .sync_plumocyte_mode_properties(queue, &self.genomes);
 
         // Sync mode cell types lookup table (for deriving cell_type from mode_index)
         self.gpu_triple_buffers
@@ -8134,6 +8161,8 @@ impl Scene for GpuScene {
             // doesn't early-out before the async readback has caught up.
             self.total_cell_slots.max(if cell_inserted { 1 } else { 0 }),
             solid_mask_buf,
+            &self.gpu_triple_buffers.cell_thermal_state,
+            &self.gpu_triple_buffers.mode_properties_v14,
         );
 
         // End of "Instance Build & Culling" segment.
@@ -8356,6 +8385,57 @@ impl Scene for GpuScene {
                 self.renderer.height,
                 self.instance_builder.capacity(),
             );
+            if self.physics_features.has_plumocytes {
+                self.tail_renderer.render_plumage_from_gpu_buffer(
+                    device,
+                    queue,
+                    &mut encoder,
+                    scene_target,
+                    &self.renderer.depth_view,
+                    self.instance_builder.get_instance_buffer(),
+                    self.instance_builder.get_indirect_buffer(),
+                    self.camera.position(),
+                    camera_view_rotation,
+                    self.current_time,
+                    self.camera.horizontal_fov_degrees,
+                    self.renderer.width,
+                    self.renderer.height,
+                    self.gravity,
+                    self.gravity_mode,
+                );
+            }
+            if self.physics_features.has_siphonocytes {
+                self.tail_renderer.render_siphon_apertures_from_gpu_buffer(
+                    device,
+                    queue,
+                    &mut encoder,
+                    scene_target,
+                    &self.renderer.depth_view,
+                    self.instance_builder.get_instance_buffer(),
+                    self.instance_builder.get_indirect_buffer(),
+                    self.camera.position(),
+                    camera_view_rotation,
+                    self.current_time,
+                    self.camera.horizontal_fov_degrees,
+                    self.renderer.width,
+                    self.renderer.height,
+                );
+                self.tail_renderer.render_siphon_jets_from_gpu_buffer(
+                    device,
+                    queue,
+                    &mut encoder,
+                    scene_target,
+                    &self.renderer.depth_view,
+                    self.instance_builder.get_instance_buffer(),
+                    self.instance_builder.get_indirect_buffer(),
+                    self.camera.position(),
+                    camera_view_rotation,
+                    self.current_time,
+                    self.camera.horizontal_fov_degrees,
+                    self.renderer.width,
+                    self.renderer.height,
+                );
+            }
         }
 
         // Update light field time for caustic animation

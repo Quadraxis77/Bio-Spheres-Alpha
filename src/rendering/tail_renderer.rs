@@ -35,6 +35,61 @@ pub struct TailInstance {
     pub _pad: f32,
 }
 
+/// Vertex data for Plumocyte feather ribbon strokes.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct PlumageVertex {
+    /// x = feather index, y = line kind (0 arm, 1 barb), z = t along stroke, w = ribbon side
+    pub data0: [f32; 4],
+    /// x = barb root t, y = barb side, zw = unused
+    pub data1: [f32; 4],
+}
+
+/// Per-instance data for Plumocyte feather rendering (used by PreviewScene).
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct PlumageInstance {
+    pub cell_position: [f32; 3],
+    pub cell_radius: f32,
+    pub rotation: [f32; 4],
+    pub color: [f32; 4],
+    pub feather_length: f32,
+    pub feather_width: f32,
+    pub feather_brightness: f32,
+    pub stroke_speed: f32,
+    pub frozen: f32,
+    pub _pad: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct SiphonApertureVertex {
+    /// x/y = unit circle direction, z = radial band 0..1, w = unused
+    pub data: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct SiphonJetVertex {
+    /// x/y = billboard corner, z = distance along jet 0..1, w = random seed
+    pub data: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct SiphonApertureInstance {
+    pub cell_position: [f32; 3],
+    pub cell_radius: f32,
+    pub rotation: [f32; 4],
+    pub color: [f32; 4],
+    pub aperture_radius: f32,
+    pub aperture_darkness: f32,
+    pub rim_brightness: f32,
+    pub nozzle_height: f32,
+    pub activity: f32,
+    pub _pad: [f32; 3],
+}
+
 /// Camera uniform for tail shader
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -43,7 +98,9 @@ struct TailCameraUniform {
     camera_pos: [f32; 3],
     time: f32,
     partition_offset: u32,
-    _padding: [u32; 3],
+    gravity_mode: u32,
+    gravity: f32,
+    _padding: f32,
 }
 
 /// Lighting uniform for tail shader
@@ -70,22 +127,46 @@ pub struct TailRenderer {
     pipeline: wgpu::RenderPipeline,
     // Pipeline for GPU instance buffer (GpuScene) - reads from CellInstance buffer
     gpu_pipeline: wgpu::RenderPipeline,
+    plumage_pipeline: Option<wgpu::RenderPipeline>,
+    plumage_gpu_pipeline: Option<wgpu::RenderPipeline>,
+    siphon_pipeline: Option<wgpu::RenderPipeline>,
+    siphon_gpu_pipeline: Option<wgpu::RenderPipeline>,
+    siphon_jet_gpu_pipeline: Option<wgpu::RenderPipeline>,
+    bind_group_layout: wgpu::BindGroupLayout,
     gpu_bind_group_layout: wgpu::BindGroupLayout,
+    plumage_gpu_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    siphon_gpu_bind_group_layout: Option<wgpu::BindGroupLayout>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    plumage_vertex_buffer: wgpu::Buffer,
+    plumage_index_buffer: wgpu::Buffer,
+    siphon_vertex_buffer: wgpu::Buffer,
+    siphon_index_buffer: wgpu::Buffer,
+    siphon_jet_vertex_buffer: wgpu::Buffer,
+    siphon_jet_index_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
+    plumage_instance_buffer: wgpu::Buffer,
+    siphon_instance_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     lighting_buffer: wgpu::Buffer,
     light_color: [f32; 3],
     bind_group: wgpu::BindGroup,
     // Indexed indirect buffer for GPU rendering (persistent, updated via copy)
     indexed_indirect_buffer: wgpu::Buffer,
+    plumage_indexed_indirect_buffer: wgpu::Buffer,
+    siphon_indexed_indirect_buffer: wgpu::Buffer,
     // LOD info for each level
     lod_info: [TailLodInfo; 4],
     // Default LOD index count (for backward compatibility)
     #[allow(dead_code)]
     index_count: u32,
+    plumage_index_count: u32,
+    siphon_index_count: u32,
+    siphon_jet_index_count: u32,
     instance_capacity: usize,
+    plumage_instance_capacity: usize,
+    siphon_instance_capacity: usize,
+    surface_format: wgpu::TextureFormat,
     width: u32,
     height: u32,
 }
@@ -140,6 +221,12 @@ impl TailRenderer {
 
         // Use LOD 2 as default for backward compatibility
         let index_count = lod_info[2].index_count;
+        let (plumage_vertices, plumage_indices) = Self::generate_plumage_mesh();
+        let plumage_index_count = plumage_indices.len() as u32;
+        let (siphon_vertices, siphon_indices) = Self::generate_siphon_aperture_mesh();
+        let siphon_index_count = siphon_indices.len() as u32;
+        let (siphon_jet_vertices, siphon_jet_indices) = Self::generate_siphon_jet_mesh();
+        let siphon_jet_index_count = siphon_jet_indices.len() as u32;
 
         // Create vertex buffer with all LOD meshes
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -167,10 +254,94 @@ impl TailRenderer {
             .copy_from_slice(bytemuck::cast_slice(&all_indices));
         index_buffer.unmap();
 
+        let plumage_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Plumocyte Feather Vertex Buffer"),
+            size: (plumage_vertices.len() * std::mem::size_of::<PlumageVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        plumage_vertex_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&plumage_vertices));
+        plumage_vertex_buffer.unmap();
+
+        let plumage_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Plumocyte Feather Index Buffer"),
+            size: (plumage_indices.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        plumage_index_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&plumage_indices));
+        plumage_index_buffer.unmap();
+
+        let siphon_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Aperture Vertex Buffer"),
+            size: (siphon_vertices.len() * std::mem::size_of::<SiphonApertureVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        siphon_vertex_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&siphon_vertices));
+        siphon_vertex_buffer.unmap();
+
+        let siphon_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Aperture Index Buffer"),
+            size: (siphon_indices.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        siphon_index_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&siphon_indices));
+        siphon_index_buffer.unmap();
+
+        let siphon_jet_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Jet Vertex Buffer"),
+            size: (siphon_jet_vertices.len() * std::mem::size_of::<SiphonJetVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        siphon_jet_vertex_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&siphon_jet_vertices));
+        siphon_jet_vertex_buffer.unmap();
+
+        let siphon_jet_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Jet Index Buffer"),
+            size: (siphon_jet_indices.len() * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        siphon_jet_index_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&siphon_jet_indices));
+        siphon_jet_index_buffer.unmap();
+
         // Create instance buffer for CPU-built instances
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Tail Instance Buffer"),
             size: (capacity * std::mem::size_of::<TailInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let plumage_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Plumocyte Feather Instance Buffer"),
+            size: (capacity * std::mem::size_of::<PlumageInstance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let siphon_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Aperture Instance Buffer"),
+            size: (capacity * std::mem::size_of::<SiphonApertureInstance>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -206,7 +377,7 @@ impl TailRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -480,22 +651,58 @@ impl TailRenderer {
             usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let plumage_indexed_indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Plumocyte Feather Indexed Indirect Buffer"),
+            size: 20,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let siphon_indexed_indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Aperture Indexed Indirect Buffer"),
+            size: 20,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Self {
             pipeline,
             gpu_pipeline,
+            plumage_pipeline: None,
+            plumage_gpu_pipeline: None,
+            siphon_pipeline: None,
+            siphon_gpu_pipeline: None,
+            siphon_jet_gpu_pipeline: None,
+            bind_group_layout,
             gpu_bind_group_layout,
+            plumage_gpu_bind_group_layout: None,
+            siphon_gpu_bind_group_layout: None,
             vertex_buffer,
             index_buffer,
+            plumage_vertex_buffer,
+            plumage_index_buffer,
+            siphon_vertex_buffer,
+            siphon_index_buffer,
+            siphon_jet_vertex_buffer,
+            siphon_jet_index_buffer,
             instance_buffer,
+            plumage_instance_buffer,
+            siphon_instance_buffer,
             camera_buffer,
             lighting_buffer,
             light_color: [1.0, 0.98, 0.95], // Default warm white
             bind_group,
             indexed_indirect_buffer,
+            plumage_indexed_indirect_buffer,
+            siphon_indexed_indirect_buffer,
             lod_info,
             index_count,
+            plumage_index_count,
+            siphon_index_count,
+            siphon_jet_index_count,
             instance_capacity: capacity,
+            plumage_instance_capacity: capacity,
+            siphon_instance_capacity: capacity,
+            surface_format,
             width: 800,
             height: 600,
         }
@@ -554,6 +761,99 @@ impl TailRenderer {
         (vertices, indices)
     }
 
+    fn push_ribbon_line(
+        vertices: &mut Vec<PlumageVertex>,
+        indices: &mut Vec<u32>,
+        feather_index: u32,
+        line_kind: f32,
+        root_t: f32,
+        barb_side: f32,
+        segments: u32,
+    ) {
+        let base = vertices.len() as u32;
+        for i in 0..=segments {
+            let t = i as f32 / segments as f32;
+            for &side in &[-1.0f32, 1.0] {
+                vertices.push(PlumageVertex {
+                    data0: [feather_index as f32, line_kind, t, side],
+                    data1: [root_t, barb_side, 0.0, 0.0],
+                });
+            }
+        }
+
+        for i in 0..segments {
+            let a = base + i * 2;
+            let b = a + 1;
+            let c = a + 2;
+            let d = a + 3;
+            indices.extend_from_slice(&[a, b, c, b, d, c]);
+        }
+    }
+
+    fn generate_plumage_mesh() -> (Vec<PlumageVertex>, Vec<u32>) {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for feather in 0..8 {
+            Self::push_ribbon_line(&mut vertices, &mut indices, feather, 0.0, 0.0, 0.0, 10);
+
+            for barb in 0..5 {
+                let root_t = 0.28 + barb as f32 * 0.12;
+                Self::push_ribbon_line(&mut vertices, &mut indices, feather, 1.0, root_t, -1.0, 3);
+                Self::push_ribbon_line(&mut vertices, &mut indices, feather, 1.0, root_t, 1.0, 3);
+            }
+        }
+        (vertices, indices)
+    }
+
+    fn generate_siphon_aperture_mesh() -> (Vec<SiphonApertureVertex>, Vec<u32>) {
+        let segments = 32u32;
+        let bands = 5u32;
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        for band in 0..=bands {
+            let radial = band as f32 / bands as f32;
+            for segment in 0..segments {
+                let angle = segment as f32 / segments as f32 * std::f32::consts::TAU;
+                vertices.push(SiphonApertureVertex {
+                    data: [angle.cos(), angle.sin(), radial, 0.0],
+                });
+            }
+        }
+
+        for band in 0..bands {
+            let row = band * segments;
+            let next_row = (band + 1) * segments;
+            for segment in 0..segments {
+                let next = (segment + 1) % segments;
+                let a = row + segment;
+                let b = row + next;
+                let c = next_row + segment;
+                let d = next_row + next;
+                indices.extend_from_slice(&[a, c, b, b, c, d]);
+            }
+        }
+
+        (vertices, indices)
+    }
+
+    fn generate_siphon_jet_mesh() -> (Vec<SiphonJetVertex>, Vec<u32>) {
+        let particles = 18u32;
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for i in 0..particles {
+            let t = i as f32 / particles as f32;
+            let seed = ((i * 37 + 11) % 101) as f32 / 101.0;
+            let base = vertices.len() as u32;
+            vertices.push(SiphonJetVertex { data: [-1.0, -1.0, t, seed] });
+            vertices.push(SiphonJetVertex { data: [1.0, -1.0, t, seed] });
+            vertices.push(SiphonJetVertex { data: [-1.0, 1.0, t, seed] });
+            vertices.push(SiphonJetVertex { data: [1.0, 1.0, t, seed] });
+            indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
+        }
+        (vertices, indices)
+    }
+
     /// Update camera uniform
     fn update_camera(
         &self,
@@ -563,6 +863,8 @@ impl TailRenderer {
         time: f32,
         partition_offset: u32,
         horizontal_fov_degrees: f32,
+        gravity: f32,
+        gravity_mode: u32,
     ) {
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
         let aspect = self.width as f32 / self.height as f32;
@@ -582,7 +884,9 @@ impl TailRenderer {
             camera_pos: camera_pos.to_array(),
             time,
             partition_offset,
-            _padding: [0; 3],
+            gravity_mode,
+            gravity,
+            _padding: 0.0,
         };
 
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
@@ -617,6 +921,442 @@ impl TailRenderer {
             });
             self.instance_capacity = new_capacity;
         }
+    }
+
+    fn ensure_plumage_capacity(&mut self, device: &wgpu::Device, required: usize) {
+        if required > self.plumage_instance_capacity {
+            let new_capacity = required.max(self.plumage_instance_capacity * 2);
+            self.plumage_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Plumocyte Feather Instance Buffer"),
+                size: (new_capacity * std::mem::size_of::<PlumageInstance>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.plumage_instance_capacity = new_capacity;
+        }
+    }
+
+    fn ensure_plumage_pipelines(&mut self, device: &wgpu::Device) {
+        if self.plumage_pipeline.is_some() && self.plumage_gpu_pipeline.is_some() {
+            return;
+        }
+
+        let plumage_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Plumocyte Feather Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cells/plumocyte_feathers.wgsl").into(),
+            ),
+        });
+        let plumage_gpu_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Plumocyte Feather GPU Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cells/plumocyte_feathers_gpu.wgsl").into(),
+            ),
+        });
+
+        let plumage_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Plumocyte Feather Pipeline Layout"),
+                bind_group_layouts: &[&self.bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let plumage_gpu_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Plumocyte Feather GPU Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let plumage_gpu_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Plumocyte Feather GPU Pipeline Layout"),
+                bind_group_layouts: &[&plumage_gpu_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let plumage_vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<PlumageVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        };
+        let plumage_instance_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<PlumageInstance>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
+        };
+
+        self.plumage_pipeline = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("Plumocyte Feather Render Pipeline"),
+                layout: Some(&plumage_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &plumage_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[plumage_vertex_layout.clone(), plumage_instance_layout],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &plumage_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: self.surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Self::DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            },
+        ));
+
+        self.plumage_gpu_pipeline = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("Plumocyte Feather GPU Render Pipeline"),
+                layout: Some(&plumage_gpu_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &plumage_gpu_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[plumage_vertex_layout],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &plumage_gpu_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: self.surface_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Self::DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            },
+        ));
+        self.plumage_gpu_bind_group_layout = Some(plumage_gpu_bind_group_layout);
+    }
+
+    fn ensure_siphon_capacity(&mut self, device: &wgpu::Device, required: usize) {
+        if required > self.siphon_instance_capacity {
+            let new_capacity = required.max(self.siphon_instance_capacity * 2);
+            self.siphon_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Siphonocyte Aperture Instance Buffer"),
+                size: (new_capacity * std::mem::size_of::<SiphonApertureInstance>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.siphon_instance_capacity = new_capacity;
+        }
+    }
+
+    fn ensure_siphon_pipelines(&mut self, device: &wgpu::Device) {
+        if self.siphon_pipeline.is_some() && self.siphon_gpu_pipeline.is_some() {
+            if self.siphon_jet_gpu_pipeline.is_some() {
+                return;
+            }
+        }
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Siphonocyte Aperture Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cells/siphonocyte_aperture.wgsl").into(),
+            ),
+        });
+        let gpu_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Siphonocyte Aperture GPU Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cells/siphonocyte_aperture_gpu.wgsl").into(),
+            ),
+        });
+        let jet_gpu_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Siphonocyte Jet GPU Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../shaders/cells/siphonocyte_jet_gpu.wgsl").into(),
+            ),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Siphonocyte Aperture Pipeline Layout"),
+            bind_group_layouts: &[&self.bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let gpu_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Siphonocyte Aperture GPU Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let gpu_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Siphonocyte Aperture GPU Pipeline Layout"),
+            bind_group_layouts: &[&gpu_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SiphonApertureVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x4,
+            }],
+        };
+        let instance_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SiphonApertureInstance>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute { offset: 12, shader_location: 2, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
+                wgpu::VertexAttribute { offset: 32, shader_location: 4, format: wgpu::VertexFormat::Float32x4 },
+                wgpu::VertexAttribute { offset: 48, shader_location: 5, format: wgpu::VertexFormat::Float32x4 },
+                wgpu::VertexAttribute { offset: 64, shader_location: 6, format: wgpu::VertexFormat::Float32 },
+            ],
+        };
+
+        let primitive = wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        };
+        let depth_stencil = Some(wgpu::DepthStencilState {
+            format: Self::DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
+
+        self.siphon_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Siphonocyte Aperture Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout.clone(), instance_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive,
+            depth_stencil: depth_stencil.clone(),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        }));
+
+        self.siphon_gpu_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Siphonocyte Aperture GPU Render Pipeline"),
+            layout: Some(&gpu_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &gpu_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gpu_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive,
+            depth_stencil,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        }));
+        self.siphon_jet_gpu_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Siphonocyte Jet GPU Render Pipeline"),
+            layout: Some(&gpu_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &jet_gpu_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<SiphonJetVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x4,
+                    }],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &jet_gpu_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: Self::DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        }));
+        self.siphon_gpu_bind_group_layout = Some(gpu_bind_group_layout);
     }
 
     /// Resize the renderer
@@ -662,6 +1402,8 @@ impl TailRenderer {
             time,
             0,
             horizontal_fov_degrees,
+            1.0,
+            1,
         );
         self.update_lighting(queue);
 
@@ -730,6 +1472,128 @@ impl TailRenderer {
         }
     }
 
+    pub fn render_plumage(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        instances: &[PlumageInstance],
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+        horizontal_fov_degrees: f32,
+        width: u32,
+        height: u32,
+    ) {
+        if instances.is_empty() {
+            return;
+        }
+
+        self.width = width;
+        self.height = height;
+        self.ensure_plumage_pipelines(device);
+        self.ensure_plumage_capacity(device, instances.len());
+        queue.write_buffer(
+            &self.plumage_instance_buffer,
+            0,
+            bytemuck::cast_slice(instances),
+        );
+        self.update_camera(
+            queue,
+            camera_pos,
+            camera_rotation,
+            time,
+            0,
+            horizontal_fov_degrees,
+            1.0,
+            1,
+        );
+        self.update_lighting(queue);
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Plumocyte Feather Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(self.plumage_pipeline.as_ref().unwrap());
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.plumage_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.plumage_instance_buffer.slice(..));
+        render_pass.set_index_buffer(self.plumage_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.plumage_index_count, 0, 0..instances.len() as u32);
+    }
+
+    pub fn render_siphon_apertures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        instances: &[SiphonApertureInstance],
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+        horizontal_fov_degrees: f32,
+        width: u32,
+        height: u32,
+    ) {
+        if instances.is_empty() {
+            return;
+        }
+        self.width = width;
+        self.height = height;
+        self.ensure_siphon_pipelines(device);
+        self.ensure_siphon_capacity(device, instances.len());
+        queue.write_buffer(&self.siphon_instance_buffer, 0, bytemuck::cast_slice(instances));
+        self.update_camera(queue, camera_pos, camera_rotation, time, 0, horizontal_fov_degrees, 1.0, 1);
+        self.update_lighting(queue);
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Siphonocyte Aperture Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(self.siphon_pipeline.as_ref().unwrap());
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.siphon_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.siphon_instance_buffer.slice(..));
+        render_pass.set_index_buffer(self.siphon_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.siphon_index_count, 0, 0..instances.len() as u32);
+    }
+
     /// Render tails using GPU instance buffer (for GpuScene)
     /// Reads cell instances directly from the instance builder's partitioned buffer.
     /// Uses first_instance to offset into the Flagellocyte partition.
@@ -768,6 +1632,8 @@ impl TailRenderer {
             time,
             0,
             horizontal_fov_degrees,
+            1.0,
+            1,
         );
         self.update_lighting(queue);
 
@@ -848,5 +1714,221 @@ impl TailRenderer {
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed_indirect(&self.indexed_indirect_buffer, 0);
         }
+    }
+
+    pub fn render_plumage_from_gpu_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        cell_instance_buffer: &wgpu::Buffer,
+        indirect_buffer: &wgpu::Buffer,
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+        horizontal_fov_degrees: f32,
+        width: u32,
+        height: u32,
+        gravity: f32,
+        gravity_mode: u32,
+    ) {
+        self.width = width;
+        self.height = height;
+        self.ensure_plumage_pipelines(device);
+        self.update_camera(
+            queue,
+            camera_pos,
+            camera_rotation,
+            time,
+            0,
+            horizontal_fov_degrees,
+            gravity,
+            gravity_mode,
+        );
+        self.update_lighting(queue);
+
+        let indexed_indirect_data: [u32; 5] = [self.plumage_index_count, 0, 0, 0, 0];
+        queue.write_buffer(
+            &self.plumage_indexed_indirect_buffer,
+            0,
+            bytemuck::cast_slice(&indexed_indirect_data),
+        );
+        encoder.copy_buffer_to_buffer(
+            indirect_buffer,
+            4,
+            &self.plumage_indexed_indirect_buffer,
+            4,
+            4,
+        );
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Plumocyte Feather GPU Bind Group"),
+            layout: self.plumage_gpu_bind_group_layout.as_ref().unwrap(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.lighting_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: cell_instance_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Plumocyte Feather GPU Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(self.plumage_gpu_pipeline.as_ref().unwrap());
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.plumage_vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.plumage_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed_indirect(&self.plumage_indexed_indirect_buffer, 0);
+    }
+
+    pub fn render_siphon_apertures_from_gpu_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        cell_instance_buffer: &wgpu::Buffer,
+        indirect_buffer: &wgpu::Buffer,
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+        horizontal_fov_degrees: f32,
+        width: u32,
+        height: u32,
+    ) {
+        self.width = width;
+        self.height = height;
+        self.ensure_siphon_pipelines(device);
+        self.update_camera(queue, camera_pos, camera_rotation, time, 0, horizontal_fov_degrees, 1.0, 1);
+        self.update_lighting(queue);
+
+        let indexed_indirect_data: [u32; 5] = [self.siphon_index_count, 0, 0, 0, 0];
+        queue.write_buffer(&self.siphon_indexed_indirect_buffer, 0, bytemuck::cast_slice(&indexed_indirect_data));
+        encoder.copy_buffer_to_buffer(indirect_buffer, 4, &self.siphon_indexed_indirect_buffer, 4, 4);
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Siphonocyte Aperture GPU Bind Group"),
+            layout: self.siphon_gpu_bind_group_layout.as_ref().unwrap(),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.lighting_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: cell_instance_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Siphonocyte Aperture GPU Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(self.siphon_gpu_pipeline.as_ref().unwrap());
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.siphon_vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.siphon_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed_indirect(&self.siphon_indexed_indirect_buffer, 0);
+    }
+
+    pub fn render_siphon_jets_from_gpu_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        cell_instance_buffer: &wgpu::Buffer,
+        indirect_buffer: &wgpu::Buffer,
+        camera_pos: Vec3,
+        camera_rotation: Quat,
+        time: f32,
+        horizontal_fov_degrees: f32,
+        width: u32,
+        height: u32,
+    ) {
+        self.width = width;
+        self.height = height;
+        self.ensure_siphon_pipelines(device);
+        self.update_camera(queue, camera_pos, camera_rotation, time, 0, horizontal_fov_degrees, 1.0, 1);
+        self.update_lighting(queue);
+
+        let indexed_indirect_data: [u32; 5] = [self.siphon_jet_index_count, 0, 0, 0, 0];
+        queue.write_buffer(&self.siphon_indexed_indirect_buffer, 0, bytemuck::cast_slice(&indexed_indirect_data));
+        encoder.copy_buffer_to_buffer(indirect_buffer, 4, &self.siphon_indexed_indirect_buffer, 4, 4);
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Siphonocyte Jet GPU Bind Group"),
+            layout: self.siphon_gpu_bind_group_layout.as_ref().unwrap(),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.camera_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.lighting_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: cell_instance_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Siphonocyte Jet GPU Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(self.siphon_jet_gpu_pipeline.as_ref().unwrap());
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.siphon_jet_vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.siphon_jet_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed_indirect(&self.siphon_indexed_indirect_buffer, 0);
     }
 }

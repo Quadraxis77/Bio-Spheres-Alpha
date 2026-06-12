@@ -129,9 +129,29 @@ var<uniform> water_params: WaterGridParams;
 @group(2) @binding(11)
 var<storage, read> water_bitfield: array<u32>;
 
+@group(2) @binding(12)
+var<storage, read> mode_properties_v14: array<vec4<f32>>;
+
+@group(2) @binding(13)
+var<storage, read> mode_properties_v15: array<vec4<f32>>;
+
+@group(2) @binding(14)
+var<storage, read_write> cell_water: array<f32>;
+
+@group(2) @binding(15)
+var<storage, read_write> cell_heat_energy: array<f32>;
+
+@group(2) @binding(16)
+var<storage, read> cell_thermal_state: array<u32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const SWIM_FORCE_MULTIPLIER: f32 = 50.0; // Scale swim_force (0-1) to actual force magnitude
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
+const CELL_TYPE_SIPHONOCYTE: u32 = 17u;
+const CELL_TYPE_PLUMOCYTE: u32 = 18u;
+const SIPHON_WATER_CAPACITY: f32 = 1.5;
+const STEAM_SAFE_FLOOR_TEMP: f32 = 115.0;
+const THERMAL_STATE_FROZEN: u32 = 1u;
 
 // Convert float to fixed-point i32 for atomic accumulation
 fn float_to_fixed(v: f32) -> i32 {
@@ -176,11 +196,122 @@ fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     return v + ((uv * q.w) + uuv) * 2.0;
 }
 
+fn temperature_for(heat_energy: f32, water: f32) -> f32 {
+    return heat_energy / max(1.0 + water, 0.001);
+}
+
+fn heat_for_temperature(temp: f32, water: f32) -> f32 {
+    return temp * max(1.0 + water, 0.001);
+}
+
+fn unpack_signal_channel(packed: f32) -> u32 {
+    return u32(clamp(packed, 0.0, 47.0)) & 15u;
+}
+
+fn unpack_siphon_mode(packed: f32) -> u32 {
+    return min(u32(clamp(packed, 0.0, 47.0)) / 16u, 2u);
+}
+
+fn siphon_should_expel(cell_idx: u32, mode_idx: u32, props: vec4<f32>) -> bool {
+    let mode = unpack_siphon_mode(props.w);
+    if (mode == 0u) {
+        return false;
+    }
+    if (mode == 1u) {
+        return true;
+    }
+    let channel = unpack_signal_channel(props.w);
+    let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + channel]);
+    return f32(raw_signal & 2047u) >= 1.0;
+}
+
+fn apply_siphon_force(cell_idx: u32, mode_idx: u32) {
+    if (mode_idx >= arrayLength(&mode_properties_v14)) {
+        return;
+    }
+
+    let props = mode_properties_v14[mode_idx];
+    if (!siphon_should_expel(cell_idx, mode_idx, props)) {
+        return;
+    }
+
+    let water = clamp(cell_water[cell_idx], 0.0, SIPHON_WATER_CAPACITY);
+    if (water <= 0.001) {
+        return;
+    }
+
+    let rotation = rotations[cell_idx];
+    let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
+    let expel_rate = max(props.y, 0.0);
+    let impulse = max(props.z, 0.0);
+    let dt = max(params.delta_time, 0.0);
+
+    var water_cost = expel_rate * dt;
+    var impulse_mult = 1.0;
+
+    // Steam assist spends only excess heat above the safe floor and never cools
+    // below that floor. It changes internal reserves only; no steam voxels exist.
+    let heat = max(cell_heat_energy[cell_idx], 0.0);
+    let temp = temperature_for(heat, water);
+    if (temp > 130.0) {
+        let safe_heat = heat_for_temperature(STEAM_SAFE_FLOOR_TEMP, water);
+        let available_heat = max(heat - safe_heat, 0.0);
+        let heat_spend = min(available_heat, impulse * 6.0 * dt);
+        if (heat_spend > 0.0) {
+            cell_heat_energy[cell_idx] = heat - heat_spend;
+            water_cost *= 0.55;
+            impulse_mult = 1.35;
+        }
+    }
+
+    let spent = min(water, water_cost);
+    if (spent <= 0.0) {
+        return;
+    }
+    cell_water[cell_idx] = water - spent;
+
+    let force_magnitude = impulse * 80.0 * impulse_mult * clamp(spent / max(water_cost, 0.001), 0.0, 1.0);
+    let force = forward * force_magnitude;
+    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(force.x));
+    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(force.y));
+    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(force.z));
+}
+
+fn apply_plumocyte_force(cell_idx: u32, mode_idx: u32) {
+    if (mode_idx >= arrayLength(&mode_properties_v15)) {
+        return;
+    }
+    if (cell_idx < arrayLength(&cell_thermal_state) && cell_thermal_state[cell_idx] <= THERMAL_STATE_FROZEN) {
+        return;
+    }
+    let props = mode_properties_v15[mode_idx];
+    let extension = clamp(props.x, 0.0, 1.0);
+    if (extension <= 0.001) {
+        return;
+    }
+
+    let velocity = velocities_in[cell_idx].xyz;
+    let anti_gravity = anti_gravity_direction(positions_in[cell_idx].xyz);
+    let fall_speed = dot(velocity, -anti_gravity);
+    if (fall_speed <= 0.001) {
+        return;
+    }
+
+    let in_water = is_in_water(positions_in[cell_idx].xyz);
+    let medium_mult = select(0.35, 1.0, in_water);
+    let drag_mult = max(props.y, 0.0);
+    let flow_coupling = max(props.z, 0.0);
+    let drag = anti_gravity * fall_speed * (drag_mult + flow_coupling * medium_mult) * extension * 18.0;
+    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(drag.x));
+    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(drag.y));
+    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(drag.z));
+}
+
 fn anti_gravity_direction(pos: vec3<f32>) -> vec3<f32> {
     if (params.gravity_mode == 3u) {
         let r = length(pos);
         if (r > 0.001) {
-            return pos / r;
+            return (pos / r) * select(1.0, -1.0, params.gravity < 0.0);
         }
         return vec3<f32>(0.0, 1.0, 0.0);
     }
@@ -217,6 +348,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Derive cell type from mode (always up-to-date with genome settings)
     let cell_type = mode_cell_types[mode_idx];
+
+    if (cell_type == CELL_TYPE_SIPHONOCYTE) {
+        apply_siphon_force(cell_idx, mode_idx);
+        return;
+    }
+
+    if (cell_type == CELL_TYPE_PLUMOCYTE) {
+        apply_plumocyte_force(cell_idx, mode_idx);
+        return;
+    }
 
     // Check if this cell type applies swim force using behavior flags
     let behavior = type_behaviors[cell_type];
