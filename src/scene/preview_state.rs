@@ -467,6 +467,15 @@ impl PreviewState {
             mode.luminocyte_signal_channel.hash(&mut hasher);
             mode.luminocyte_threshold.to_bits().hash(&mut hasher);
             mode.luminocyte_invert.hash(&mut hasher);
+
+            // Siphonocyte pump/signal settings
+            mode.siphon_intake_rate.to_bits().hash(&mut hasher);
+            mode.siphon_expel_rate.to_bits().hash(&mut hasher);
+            mode.siphon_impulse.to_bits().hash(&mut hasher);
+            mode.siphon_signal_channel.hash(&mut hasher);
+            mode.siphon_signal_threshold.to_bits().hash(&mut hasher);
+            mode.siphon_signal_invert.hash(&mut hasher);
+            mode.siphon_mode.hash(&mut hasher);
         }
 
         // Scaffold rules affect bond topology during resim.

@@ -683,10 +683,10 @@ impl PreviewScene {
                 continue;
             }
 
-            let activity = match mode.siphon_mode.clamp(0, 2) {
-                0 => (mode.siphon_intake_rate / 4.0).clamp(0.15, 1.0),
-                1 => ((mode.siphon_expel_rate + mode.siphon_impulse) / 7.0).clamp(0.2, 1.0),
-                _ => 0.55,
+            let activity = match mode.siphon_mode.clamp(0, 3) {
+                0 | 1 => ((mode.siphon_expel_rate + mode.siphon_impulse) / 7.0).clamp(0.2, 1.0),
+                2 => (mode.siphon_intake_rate / 4.0).clamp(0.15, 1.0),
+                _ => (mode.siphon_expel_rate / 4.0).clamp(0.15, 1.0),
             };
             let position = self.state.display_state.positions[i];
             let rotation = self.state.display_state.rotations[i];
@@ -700,7 +700,8 @@ impl PreviewScene {
                 rim_brightness: visuals.param_c,
                 nozzle_height: visuals.param_d,
                 activity,
-                _pad: [0.0; 3],
+                embed_depth: visuals.goldberg_ridge_strength,
+                _pad: [0.0; 2],
             });
         }
 

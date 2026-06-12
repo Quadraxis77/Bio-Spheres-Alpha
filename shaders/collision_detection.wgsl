@@ -217,7 +217,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let r_hat = pos / safe_dist;  // Outward radial direction
         let normal = -r_hat;  // Inward direction
         // Only apply force when penetration > 0 (clamped_pen handles this naturally)
-        force += normal * clamped_pen * clamped_pen * 500.0;
+        let boundary_force_mag = clamped_pen * clamped_pen * 500.0;
+        force += normal * boundary_force_mag;
+
+        // Rolling / sliding friction against the world sphere. The wall is
+        // stationary, so tangent contact should trade slip for cell spin.
+        let r_contact = r_hat * radius;
+        let omega = angular_velocities[cell_idx].xyz;
+        let v_contact = vel + cross(omega, r_contact);
+        let v_tangent = v_contact - dot(v_contact, normal) * normal;
+        let tangent_speed = length(v_tangent);
+        if (tangent_speed > 0.0001 && boundary_force_mag > 0.0) {
+            let friction_dir = -v_tangent / tangent_speed;
+            let friction_mag = min(
+                FRICTION_COEFF * boundary_force_mag,
+                tangent_speed * my_stiffness * 0.1
+            );
+            let friction_force = friction_dir * friction_mag;
+            force += friction_force;
+            torque += cross(r_contact, friction_force);
+        }
         
         // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
         // DISABLED: Remove barrier spinning force
@@ -357,13 +376,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 
                 force += coll_normal * normal_force_mag;
 
-                // Tangential damping: damp relative sliding between cells.
-                // Uses only linear velocities (no angular_velocities[other_idx] read)
-                // which avoids the cache-thrashing random memory access that made the
-                // full Coulomb friction 2x slower in dense clusters.
-                // Provides the same pool-settling effect at a fraction of the cost.
-                let rel_vel_tangential = relative_vel - dot(relative_vel, coll_normal) * coll_normal;
-                force -= rel_vel_tangential * (FRICTION_COEFF * combined_stiffness * 0.01);
+                // Rolling / sliding friction at the actual contact point.
+                // Match the CPU preview path: tangential slip applies both a
+                // linear friction force and a torque so tangent impacts spin.
+                let r_a = -coll_normal * radius;
+                let r_b = coll_normal * other_radius;
+                let omega_a = angular_velocities[cell_idx].xyz;
+                let omega_b = angular_velocities[other_idx].xyz;
+                let v_contact_a = vel + cross(omega_a, r_a);
+                let v_contact_b = other_vel + cross(omega_b, r_b);
+                let v_slip = v_contact_a - v_contact_b;
+                let v_slip_tangential = v_slip - dot(v_slip, coll_normal) * coll_normal;
+                let slip_speed = length(v_slip_tangential);
+
+                if (slip_speed > 0.0001) {
+                    let friction_dir = -v_slip_tangential / slip_speed;
+                    let friction_mag = min(
+                        FRICTION_COEFF * abs(normal_force_mag),
+                        slip_speed * combined_stiffness * 0.1
+                    );
+                    let friction_force = friction_dir * friction_mag;
+                    force += friction_force;
+                    torque += cross(r_a, friction_force);
+                }
             }
         }
     }

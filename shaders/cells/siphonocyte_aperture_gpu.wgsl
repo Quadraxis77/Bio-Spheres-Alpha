@@ -50,13 +50,6 @@ fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
 fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
     var out: VertexOutput;
     let instance = cell_instances[camera.partition_offset + instance_index];
-    let cell_type = u32(round(instance.type_data_1.w));
-    if (cell_type != 17u) {
-        out.clip_position = vec4<f32>(2.0, 2.0, 2.0, 0.0);
-        out.color = vec4<f32>(0.0);
-        out.shade = 0.0;
-        return out;
-    }
 
     let radial = clamp(in.data.z, 0.0, 1.0);
     let dir = vec3<f32>(in.data.x, in.data.y, 0.0);
@@ -64,6 +57,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     let darkness = clamp(instance.type_data_0.y, 0.0, 1.0);
     let rim_brightness = clamp(instance.type_data_0.z, 0.0, 1.5);
     let nozzle_height = clamp(instance.type_data_0.w, 0.0, 0.55);
+    let embed_depth = clamp(instance.visual_params.w, 0.0, 0.28);
     let activity = clamp(instance.type_data_1.y, 0.0, 1.0);
     let pulse = 0.5 + 0.5 * sin(camera.time * mix(2.2, 8.0, activity));
 
@@ -76,7 +70,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     let skirt = smoothstep(0.72, 1.0, radial);
     let inner_slope = (1.0 - radial) * 0.10;
     let cone_height = nozzle_height * (lip * 0.95 + inner_slope) + rock_ripple * lip;
-    let embedded_base = skirt * mix(0.025, 0.075, nozzle_height);
+    let embedded_base = skirt * embed_depth;
     let local = vec3<f32>(
         dir.x * band_radius,
         dir.y * band_radius,
@@ -88,13 +82,14 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     let world_normal = normalize(quat_rotate(instance.rotation, local_normal));
     let light = max(dot(world_normal, -normalize(lighting.light_dir)), 0.0);
 
-    let rock = mix(instance.color.rgb * 0.70, vec3<f32>(0.42, 0.30, 0.26), 0.58);
+    let tissue = instance.color.rgb;
+    let rock = tissue * mix(0.70, 0.92, radial) + vec3<f32>(0.025) * rim_brightness;
     let inner_dark = (1.0 - radial) * darkness;
     let rim = lip * rim_brightness;
     let contact_shadow = skirt * (1.0 - smoothstep(0.92, 1.0, radial));
     out.clip_position = camera.view_proj * vec4<f32>(world_position, 1.0);
     out.color = vec4<f32>(
-        rock + rim * vec3<f32>(0.18, 0.13, 0.08)
+        rock + rim * (tissue * 0.16 + vec3<f32>(0.08))
             - inner_dark * vec3<f32>(0.32, 0.25, 0.22)
             - contact_shadow * vec3<f32>(0.07, 0.055, 0.045),
         instance.color.a
@@ -105,5 +100,5 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color.rgb * in.shade, in.color.a);
+    return vec4<f32>(in.color.rgb * in.shade, 1.0);
 }

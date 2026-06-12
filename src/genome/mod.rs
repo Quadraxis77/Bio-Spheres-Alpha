@@ -347,8 +347,10 @@ pub struct ModeSettings {
     pub siphon_intake_rate: f32, // Local read-only voxel intake rate into cell/Vasculocyte reserve
     pub siphon_expel_rate: f32,  // Water spent per second while expelling
     pub siphon_impulse: f32,     // Directional impulse strength when expelling
-    pub siphon_signal_channel: i32, // Signal channel used when siphon_mode is signal-driven
-    pub siphon_mode: i32,        // 0 = intake, 1 = expel, 2 = signal-driven
+    pub siphon_signal_channel: i32, // Signal channel used by signal-gated siphon modes
+    pub siphon_signal_threshold: f32, // Signal value required for signal-gated siphon modes
+    pub siphon_signal_invert: bool, // If true, signal-gated modes are active below threshold
+    pub siphon_mode: i32, // 0 = impulse, 1 = signal impulse, 2 = signal intake, 3 = signal expulsion
 
     // Plumocyte settings
     pub plumocyte_extension: f32,     // Passive extension amount, 0.0 retracted to 1.0 extended
@@ -514,7 +516,9 @@ impl Default for ModeSettings {
             siphon_expel_rate: 0.8,
             siphon_impulse: 0.6,
             siphon_signal_channel: 0,
-            siphon_mode: 2,
+            siphon_signal_threshold: 1.0,
+            siphon_signal_invert: false,
+            siphon_mode: 0,
             plumocyte_extension: 1.0,
             plumocyte_drag_mult: 0.7,
             plumocyte_flow_coupling: 0.5,

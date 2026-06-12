@@ -1560,7 +1560,9 @@ impl GpuScene {
                 siphon_expel_rate: 0.8,
                 siphon_impulse: 0.6,
                 siphon_signal_channel: 0,
-                siphon_mode: 2,
+                siphon_signal_threshold: 1.0,
+                siphon_signal_invert: false,
+                siphon_mode: 0,
                 plumocyte_extension: 1.0,
                 plumocyte_drag_mult: 0.7,
                 plumocyte_flow_coupling: 0.5,
@@ -4553,6 +4555,50 @@ impl GpuScene {
                     },
                     count: None,
                 },
+                // @binding(4): torque_accum_x (read_write atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(5): torque_accum_y (read_write atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(6): torque_accum_z (read_write atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // @binding(7): angular_velocities (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -4612,6 +4658,23 @@ impl GpuScene {
                     resource: self
                         .gpu_triple_buffers
                         .cell_count_buffer
+                        .as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.adhesion_buffers.torque_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.adhesion_buffers.torque_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.adhesion_buffers.torque_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.adhesion_buffers.angular_velocities[buffer_index]
                         .as_entire_binding(),
                 },
             ],
@@ -8157,12 +8220,15 @@ impl Scene for GpuScene {
             self.lod_threshold_medium,
             self.lod_threshold_high,
             self.lod_debug_colors,
+            self.current_time,
             // Use max(1) when a cell was just inserted so the instance builder
             // doesn't early-out before the async readback has caught up.
             self.total_cell_slots.max(if cell_inserted { 1 } else { 0 }),
             solid_mask_buf,
             &self.gpu_triple_buffers.cell_thermal_state,
             &self.gpu_triple_buffers.mode_properties_v14,
+            &self.gpu_triple_buffers.cell_water,
+            &self.gpu_triple_buffers.velocity[self.gpu_triple_buffers.current_index()],
         );
 
         // End of "Instance Build & Culling" segment.
@@ -8392,8 +8458,8 @@ impl Scene for GpuScene {
                     &mut encoder,
                     scene_target,
                     &self.renderer.depth_view,
-                    self.instance_builder.get_instance_buffer(),
-                    self.instance_builder.get_indirect_buffer(),
+                    self.instance_builder.get_siphon_instance_buffer(),
+                    self.instance_builder.get_indirect_buffer_for_type(crate::cell::CellType::Siphonocyte),
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
@@ -8411,8 +8477,8 @@ impl Scene for GpuScene {
                     &mut encoder,
                     scene_target,
                     &self.renderer.depth_view,
-                    self.instance_builder.get_instance_buffer(),
-                    self.instance_builder.get_indirect_buffer(),
+                    self.instance_builder.get_siphon_instance_buffer(),
+                    self.instance_builder.get_indirect_buffer_for_type(crate::cell::CellType::Siphonocyte),
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
@@ -8426,11 +8492,15 @@ impl Scene for GpuScene {
                     &mut encoder,
                     scene_target,
                     &self.renderer.depth_view,
-                    self.instance_builder.get_instance_buffer(),
-                    self.instance_builder.get_indirect_buffer(),
+                    self.instance_builder.get_siphon_instance_buffer(),
+                    self.instance_builder.get_siphon_instance_velocity_buffer(),
+                    self.instance_builder.get_counters_buffer(),
+                    self.instance_builder.get_indirect_buffer_for_type(crate::cell::CellType::Siphonocyte),
+                    self.instance_builder.cell_capacity(),
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
+                    self.last_delta_time,
                     self.camera.horizontal_fov_degrees,
                     self.renderer.width,
                     self.renderer.height,

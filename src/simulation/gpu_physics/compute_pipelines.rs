@@ -190,8 +190,8 @@ pub struct CachedBindGroups {
     pub clear_forces: wgpu::BindGroup,
     /// Collision force accum bind groups for each buffer index [0, 1, 2]
     pub collision_force_accum: [wgpu::BindGroup; 3],
-    /// Position update force accum bind group (same for all frames)
-    pub position_update_force_accum: wgpu::BindGroup,
+    /// Position update force accum bind groups for each buffer index [0, 1, 2]
+    pub position_update_force_accum: [wgpu::BindGroup; 3],
     /// Velocity update angular bind groups for each buffer index [0, 1, 2]
     /// Each uses rotations[buffer_index] so angular velocity integration reads/writes
     /// the same rotation buffer that physics is currently processing.
@@ -1932,6 +1932,7 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &super::adhesion_buffers::AdhesionBuffers,
         water_grid_params_buffer: Option<&wgpu::Buffer>,
         fluid_state_buffer: Option<&wgpu::Buffer>,
         temperature_field_buffer: Option<&wgpu::Buffer>,
@@ -2028,6 +2029,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: buffers.mode_properties_v15.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: adhesion_buffers.signal_flags.as_entire_binding(),
                 },
             ],
         })
@@ -2248,15 +2253,38 @@ impl GpuPhysicsPipelines {
 
         // Position update force accum bind group (same for all frames)
         // Water buffers are None - will use default empty buffers
-        let position_update_force_accum = self.create_position_update_force_accum_bind_group(
-            device,
-            adhesion_buffers,
-            buffers,
-            None,
-            None,
-            None,
-            None,
-        );
+        let position_update_force_accum = [
+            self.create_position_update_force_accum_bind_group(
+                device,
+                adhesion_buffers,
+                buffers,
+                0,
+                None,
+                None,
+                None,
+                None,
+            ),
+            self.create_position_update_force_accum_bind_group(
+                device,
+                adhesion_buffers,
+                buffers,
+                1,
+                None,
+                None,
+                None,
+                None,
+            ),
+            self.create_position_update_force_accum_bind_group(
+                device,
+                adhesion_buffers,
+                buffers,
+                2,
+                None,
+                None,
+                None,
+                None,
+            ),
+        ];
 
         // Velocity update angular bind groups - one per rotation buffer index.
         // The shader reads/writes rotations[buffer_index] in-place, so we must
@@ -2366,8 +2394,15 @@ impl GpuPhysicsPipelines {
             ],
         });
         let physiology = self.create_physiology_bind_group(device, buffers);
-        let physiology_cell_data =
-            self.create_physiology_cell_data_bind_group(device, buffers, None, None, None, None);
+        let physiology_cell_data = self.create_physiology_cell_data_bind_group(
+            device,
+            buffers,
+            adhesion_buffers,
+            None,
+            None,
+            None,
+            None,
+        );
 
         // Glueocyte env adhesion bind groups
         let env_adhesion_force_accum = [
@@ -4237,6 +4272,7 @@ impl GpuPhysicsPipelines {
                 ro(6), // geothermal heat field
                 ro(7), // mode_properties_v14: Siphonocyte params
                 ro(8), // mode_properties_v15: Plumocyte params
+                ro(9), // signal flags for signal-gated Siphonocyte intake
             ],
         })
     }
@@ -5227,6 +5263,50 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 9: Torque accumulation X (read-write atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 10: Torque accumulation Y (read-write atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 11: Torque accumulation Z (read-write atomic)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 12: Angular velocities (read)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -5436,6 +5516,7 @@ impl GpuPhysicsPipelines {
         device: &wgpu::Device,
         adhesion_buffers: &super::AdhesionBuffers,
         triple_buffers: &GpuTripleBufferSystem,
+        buffer_index: usize,
         water_grid_params_buffer: Option<&wgpu::Buffer>,
         water_bitfield_buffer: Option<&wgpu::Buffer>,
         water_velocity_buffer: Option<&wgpu::Buffer>,
@@ -5561,6 +5642,22 @@ impl GpuPhysicsPipelines {
                     binding: 8,
                     resource: ice_bitfield_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: adhesion_buffers.angular_velocities[buffer_index].as_entire_binding(),
+                },
             ],
         })
     }
@@ -5594,7 +5691,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: adhesion_buffers.angular_velocities[0].as_entire_binding(),
+                    resource: adhesion_buffers.angular_velocities[buffer_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -8658,15 +8755,38 @@ impl CachedBindGroups {
         temperature_field_buffer: &wgpu::Buffer,
         geothermal_heat_buffer: &wgpu::Buffer,
     ) {
-        self.position_update_force_accum = pipelines.create_position_update_force_accum_bind_group(
-            device,
-            adhesion_buffers,
-            triple_buffers,
-            Some(water_grid_params_buffer),
-            Some(water_bitfield_buffer),
-            Some(water_velocity_buffer),
-            Some(ice_bitfield_buffer),
-        );
+        self.position_update_force_accum = [
+            pipelines.create_position_update_force_accum_bind_group(
+                device,
+                adhesion_buffers,
+                triple_buffers,
+                0,
+                Some(water_grid_params_buffer),
+                Some(water_bitfield_buffer),
+                Some(water_velocity_buffer),
+                Some(ice_bitfield_buffer),
+            ),
+            pipelines.create_position_update_force_accum_bind_group(
+                device,
+                adhesion_buffers,
+                triple_buffers,
+                1,
+                Some(water_grid_params_buffer),
+                Some(water_bitfield_buffer),
+                Some(water_velocity_buffer),
+                Some(ice_bitfield_buffer),
+            ),
+            pipelines.create_position_update_force_accum_bind_group(
+                device,
+                adhesion_buffers,
+                triple_buffers,
+                2,
+                Some(water_grid_params_buffer),
+                Some(water_bitfield_buffer),
+                Some(water_velocity_buffer),
+                Some(ice_bitfield_buffer),
+            ),
+        ];
         self.swim_force_cell_data = pipelines.create_swim_force_cell_data_bind_group(
             device,
             triple_buffers,
@@ -8677,6 +8797,7 @@ impl CachedBindGroups {
         self.physiology_cell_data = pipelines.create_physiology_cell_data_bind_group(
             device,
             triple_buffers,
+            adhesion_buffers,
             Some(water_grid_params_buffer),
             Some(fluid_state_buffer),
             Some(temperature_field_buffer),

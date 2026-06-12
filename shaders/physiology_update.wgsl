@@ -105,6 +105,8 @@ var<storage, read> geothermal_heat: array<f32>;
 var<storage, read> mode_properties_v14: array<vec4<f32>>;
 @group(2) @binding(8)
 var<storage, read> mode_properties_v15: array<vec4<f32>>;
+@group(2) @binding(9)
+var<storage, read> signal_flags: array<atomic<u32>>;
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
@@ -260,8 +262,39 @@ fn read_voxel_environment(world_pos: vec3<f32>) -> VoxelEnvironment {
 
 fn siphon_intake_amount(siphon_idx: u32, mode_idx: u32, dt: f32) -> f32 {
     var intake_rate = 1.0;
+    var impulse = 0.0;
+    var mode = 0u;
+    var signal_active = false;
     if (mode_idx < arrayLength(&mode_properties_v14)) {
-        intake_rate = max(mode_properties_v14[mode_idx].x, 0.0);
+        let props = mode_properties_v14[mode_idx];
+        intake_rate = max(props.x, 0.0);
+        impulse = max(props.z, 0.0);
+        let packed = u32(clamp(props.w, 0.0, 262143.0));
+        mode = min((packed / 32u) & 3u, 3u);
+        let channel = packed & 15u;
+        let invert = (packed & 16u) != 0u;
+        let threshold = f32(packed / 128u);
+        let raw_signal = atomicLoad(&signal_flags[siphon_idx * 16u + channel]);
+        let above = f32(raw_signal & 2047u) >= threshold;
+        signal_active = select(above, !above, invert);
+    }
+
+    var stroke_gate = 1.0;
+    if (mode == 0u || mode == 1u) {
+        let stroke_phase = fract(params.current_time * mix(0.85, 2.4, clamp(impulse / 3.0, 0.0, 1.0)) + f32(siphon_idx & 1023u) * 0.013);
+        stroke_gate = smoothstep(0.05, 0.18, stroke_phase) * (1.0 - smoothstep(0.36, 0.48, stroke_phase));
+        if (stroke_gate <= 0.001) {
+            return 0.0;
+        }
+        if (mode == 1u && !signal_active) {
+            return 0.0;
+        }
+    } else if (mode == 2u) {
+        if (!signal_active) {
+            return 0.0;
+        }
+    } else {
+        return 0.0;
     }
 
     let env = read_voxel_environment(positions[siphon_idx].xyz);
@@ -277,7 +310,7 @@ fn siphon_intake_amount(siphon_idx: u32, mode_idx: u32, dt: f32) -> f32 {
     } else if (env.fluid_type == 2u || env.fluid_type == 4u) {
         intake_source = env.fill_fraction * 0.08;
     }
-    return intake_source * intake_rate * 0.18 * dt;
+    return intake_source * intake_rate * mix(0.45, 1.25, stroke_gate) * dt;
 }
 
 fn is_frozen_state(state: u32) -> bool {

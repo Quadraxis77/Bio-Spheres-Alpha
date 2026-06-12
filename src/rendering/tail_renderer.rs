@@ -6,6 +6,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3};
+use wgpu::util::DeviceExt;
 
 /// Vertex data for tail mesh
 #[repr(C)]
@@ -87,8 +88,41 @@ pub struct SiphonApertureInstance {
     pub rim_brightness: f32,
     pub nozzle_height: f32,
     pub activity: f32,
-    pub _pad: [f32; 3],
+    pub embed_depth: f32,
+    pub _pad: [f32; 2],
 }
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct SiphonJetParticle {
+    position: [f32; 3],
+    size: f32,
+    velocity: [f32; 3],
+    age: f32,
+    max_age: f32,
+    style: f32,
+    seed: f32,
+    _pad: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<SiphonJetParticle>() == 48);
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct SiphonJetParams {
+    delta_time: f32,
+    current_time: f32,
+    current_frame: u32,
+    max_particles: u32,
+    cell_capacity: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: [f32; 4],
+    _pad4: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<SiphonJetParams>() == 64);
 
 /// Camera uniform for tail shader
 #[repr(C)]
@@ -132,10 +166,13 @@ pub struct TailRenderer {
     siphon_pipeline: Option<wgpu::RenderPipeline>,
     siphon_gpu_pipeline: Option<wgpu::RenderPipeline>,
     siphon_jet_gpu_pipeline: Option<wgpu::RenderPipeline>,
+    siphon_jet_spawn_pipeline: Option<wgpu::ComputePipeline>,
+    siphon_jet_age_pipeline: Option<wgpu::ComputePipeline>,
     bind_group_layout: wgpu::BindGroupLayout,
     gpu_bind_group_layout: wgpu::BindGroupLayout,
     plumage_gpu_bind_group_layout: Option<wgpu::BindGroupLayout>,
     siphon_gpu_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    siphon_jet_compute_bind_group_layout: Option<wgpu::BindGroupLayout>,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     plumage_vertex_buffer: wgpu::Buffer,
@@ -147,6 +184,9 @@ pub struct TailRenderer {
     instance_buffer: wgpu::Buffer,
     plumage_instance_buffer: wgpu::Buffer,
     siphon_instance_buffer: wgpu::Buffer,
+    siphon_jet_particle_buffer: wgpu::Buffer,
+    siphon_jet_counter_buffer: wgpu::Buffer,
+    siphon_jet_params_buffer: wgpu::Buffer,
     camera_buffer: wgpu::Buffer,
     lighting_buffer: wgpu::Buffer,
     light_color: [f32; 3],
@@ -166,6 +206,7 @@ pub struct TailRenderer {
     instance_capacity: usize,
     plumage_instance_capacity: usize,
     siphon_instance_capacity: usize,
+    siphon_jet_frame: u32,
     surface_format: wgpu::TextureFormat,
     width: u32,
     height: u32,
@@ -173,6 +214,8 @@ pub struct TailRenderer {
 
 impl TailRenderer {
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+    const MAX_SIPHON_JET_PARTICLES: u32 = 32_768;
+    const SIPHON_JET_EMISSION_LANES: u32 = 4;
 
     // LOD mesh parameters: (segments_along_length, radial_segments)
     // LOD 0 (far): 4 segments, 3 radial = minimal detail
@@ -343,6 +386,24 @@ impl TailRenderer {
             label: Some("Siphonocyte Aperture Instance Buffer"),
             size: (capacity * std::mem::size_of::<SiphonApertureInstance>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let siphon_jet_particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Jet Particle Buffer"),
+            size: Self::MAX_SIPHON_JET_PARTICLES as u64
+                * std::mem::size_of::<SiphonJetParticle>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+        let siphon_jet_counter_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Siphonocyte Jet Ring Counter"),
+            contents: bytemuck::cast_slice(&[0u32]),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let siphon_jet_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Siphonocyte Jet Params"),
+            size: std::mem::size_of::<SiphonJetParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -672,10 +733,13 @@ impl TailRenderer {
             siphon_pipeline: None,
             siphon_gpu_pipeline: None,
             siphon_jet_gpu_pipeline: None,
+            siphon_jet_spawn_pipeline: None,
+            siphon_jet_age_pipeline: None,
             bind_group_layout,
             gpu_bind_group_layout,
             plumage_gpu_bind_group_layout: None,
             siphon_gpu_bind_group_layout: None,
+            siphon_jet_compute_bind_group_layout: None,
             vertex_buffer,
             index_buffer,
             plumage_vertex_buffer,
@@ -687,6 +751,9 @@ impl TailRenderer {
             instance_buffer,
             plumage_instance_buffer,
             siphon_instance_buffer,
+            siphon_jet_particle_buffer,
+            siphon_jet_counter_buffer,
+            siphon_jet_params_buffer,
             camera_buffer,
             lighting_buffer,
             light_color: [1.0, 0.98, 0.95], // Default warm white
@@ -702,6 +769,7 @@ impl TailRenderer {
             instance_capacity: capacity,
             plumage_instance_capacity: capacity,
             siphon_instance_capacity: capacity,
+            siphon_jet_frame: 0,
             surface_format,
             width: 800,
             height: 600,
@@ -1157,7 +1225,10 @@ impl TailRenderer {
 
     fn ensure_siphon_pipelines(&mut self, device: &wgpu::Device) {
         if self.siphon_pipeline.is_some() && self.siphon_gpu_pipeline.is_some() {
-            if self.siphon_jet_gpu_pipeline.is_some() {
+            if self.siphon_jet_gpu_pipeline.is_some()
+                && self.siphon_jet_spawn_pipeline.is_some()
+                && self.siphon_jet_age_pipeline.is_some()
+            {
                 return;
             }
         }
@@ -1219,13 +1290,64 @@ impl TailRenderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
+        let ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let rw = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let uni = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let jet_compute_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Siphonocyte Jet Compute Bind Group Layout"),
+                entries: &[uni(0), ro(1), ro(2), rw(3), rw(4), ro(5)],
+            });
         let gpu_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Siphonocyte Aperture GPU Pipeline Layout"),
             bind_group_layouts: &[&gpu_bind_group_layout],
             push_constant_ranges: &[],
         });
+        let jet_compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Siphonocyte Jet Compute Pipeline Layout"),
+                bind_group_layouts: &[&jet_compute_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let vertex_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<SiphonApertureVertex>() as u64,
@@ -1246,6 +1368,7 @@ impl TailRenderer {
                 wgpu::VertexAttribute { offset: 32, shader_location: 4, format: wgpu::VertexFormat::Float32x4 },
                 wgpu::VertexAttribute { offset: 48, shader_location: 5, format: wgpu::VertexFormat::Float32x4 },
                 wgpu::VertexAttribute { offset: 64, shader_location: 6, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 68, shader_location: 7, format: wgpu::VertexFormat::Float32 },
             ],
         };
 
@@ -1280,7 +1403,7 @@ impl TailRenderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -1306,7 +1429,7 @@ impl TailRenderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -1317,21 +1440,44 @@ impl TailRenderer {
             multiview: None,
             cache: None,
         }));
+        self.siphon_jet_spawn_pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Siphonocyte Jet Spawn Pipeline"),
+            layout: Some(&jet_compute_pipeline_layout),
+            module: &jet_gpu_shader,
+            entry_point: Some("spawn_jets"),
+            compilation_options: Default::default(),
+            cache: None,
+        }));
+        self.siphon_jet_age_pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Siphonocyte Jet Age Pipeline"),
+            layout: Some(&jet_compute_pipeline_layout),
+            module: &jet_gpu_shader,
+            entry_point: Some("age_jets"),
+            compilation_options: Default::default(),
+            cache: None,
+        }));
+
+        let siphon_jet_particle_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SiphonJetParticle>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 2, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute { offset: 28, shader_location: 3, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 32, shader_location: 4, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 36, shader_location: 5, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 40, shader_location: 6, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 44, shader_location: 7, format: wgpu::VertexFormat::Float32 },
+            ],
+        };
         self.siphon_jet_gpu_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Siphonocyte Jet GPU Render Pipeline"),
             layout: Some(&gpu_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &jet_gpu_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<SiphonJetVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute {
-                        offset: 0,
-                        shader_location: 0,
-                        format: wgpu::VertexFormat::Float32x4,
-                    }],
-                }],
+                buffers: &[siphon_jet_particle_layout],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -1357,6 +1503,7 @@ impl TailRenderer {
             cache: None,
         }));
         self.siphon_gpu_bind_group_layout = Some(gpu_bind_group_layout);
+        self.siphon_jet_compute_bind_group_layout = Some(jet_compute_bind_group_layout);
     }
 
     /// Resize the renderer
@@ -1845,6 +1992,7 @@ impl TailRenderer {
                 wgpu::BindGroupEntry { binding: 0, resource: self.camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: self.lighting_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: cell_instance_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: cell_instance_buffer.as_entire_binding() },
             ],
         });
 
@@ -1880,10 +2028,14 @@ impl TailRenderer {
         view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         cell_instance_buffer: &wgpu::Buffer,
-        indirect_buffer: &wgpu::Buffer,
+        velocity_buffer: &wgpu::Buffer,
+        counters_buffer: &wgpu::Buffer,
+        _indirect_buffer: &wgpu::Buffer,
+        cell_capacity: usize,
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
+        delta_time: f32,
         horizontal_fov_degrees: f32,
         width: u32,
         height: u32,
@@ -1893,10 +2045,54 @@ impl TailRenderer {
         self.ensure_siphon_pipelines(device);
         self.update_camera(queue, camera_pos, camera_rotation, time, 0, horizontal_fov_degrees, 1.0, 1);
         self.update_lighting(queue);
+        self.siphon_jet_frame = self.siphon_jet_frame.wrapping_add(1);
 
-        let indexed_indirect_data: [u32; 5] = [self.siphon_jet_index_count, 0, 0, 0, 0];
-        queue.write_buffer(&self.siphon_indexed_indirect_buffer, 0, bytemuck::cast_slice(&indexed_indirect_data));
-        encoder.copy_buffer_to_buffer(indirect_buffer, 4, &self.siphon_indexed_indirect_buffer, 4, 4);
+        let params = SiphonJetParams {
+            delta_time: delta_time.clamp(0.0, 0.1),
+            current_time: time,
+            current_frame: self.siphon_jet_frame,
+            max_particles: Self::MAX_SIPHON_JET_PARTICLES,
+            cell_capacity: cell_capacity as u32,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            _pad3: [0.0; 4],
+            _pad4: [0.0; 4],
+        };
+        queue.write_buffer(&self.siphon_jet_params_buffer, 0, bytemuck::bytes_of(&params));
+
+        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Siphonocyte Jet Compute Bind Group"),
+            layout: self.siphon_jet_compute_bind_group_layout.as_ref().unwrap(),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.siphon_jet_params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: cell_instance_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: velocity_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.siphon_jet_particle_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: self.siphon_jet_counter_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: counters_buffer.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Siphonocyte Jet Spawn"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(self.siphon_jet_spawn_pipeline.as_ref().unwrap());
+            pass.set_bind_group(0, &compute_bind_group, &[]);
+            let spawn_invocations = cell_capacity as u32 * Self::SIPHON_JET_EMISSION_LANES;
+            pass.dispatch_workgroups((spawn_invocations + 63) / 64, 1, 1);
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Siphonocyte Jet Age"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(self.siphon_jet_age_pipeline.as_ref().unwrap());
+            pass.set_bind_group(0, &compute_bind_group, &[]);
+            pass.dispatch_workgroups((Self::MAX_SIPHON_JET_PARTICLES + 255) / 256, 1, 1);
+        }
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Siphonocyte Jet GPU Bind Group"),
@@ -1905,6 +2101,7 @@ impl TailRenderer {
                 wgpu::BindGroupEntry { binding: 0, resource: self.camera_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: self.lighting_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: cell_instance_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: velocity_buffer.as_entire_binding() },
             ],
         });
 
@@ -1927,8 +2124,7 @@ impl TailRenderer {
 
         render_pass.set_pipeline(self.siphon_jet_gpu_pipeline.as_ref().unwrap());
         render_pass.set_bind_group(0, &bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.siphon_jet_vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.siphon_jet_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        render_pass.draw_indexed_indirect(&self.siphon_indexed_indirect_buffer, 0);
+        render_pass.set_vertex_buffer(0, self.siphon_jet_particle_buffer.slice(..));
+        render_pass.draw(0..6, 0..Self::MAX_SIPHON_JET_PARTICLES);
     }
 }

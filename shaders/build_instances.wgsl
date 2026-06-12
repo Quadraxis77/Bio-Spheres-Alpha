@@ -144,8 +144,7 @@ struct BuildParams {
     lod_debug_colors: u32,  // 0 = disabled, 1 = enabled
     // Cell buffer capacity for partition size calculation
     cell_capacity: u32,
-    // Padding to maintain 16-byte alignment
-    _padding0: f32,
+    current_time: f32,
     // Frustum planes (6 planes: left, right, bottom, top, near, far)
     frustum_planes: array<FrustumPlane, 6>,
 }
@@ -217,7 +216,11 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 // mode_properties_v7 per mode: [luminocyte_invert, unused, signal_channel, threshold]
 @group(0) @binding(21) var<storage, read> mode_properties_v7: array<vec4<f32>>;
 
-// Cave solid-mask culling (bindings 22-23)
+// Cave solid-mask data (bindings 22-23). This stays bound for compatibility
+// with the instance-builder layout, but cells are deliberately not culled by
+// this mask: contact with cave walls or the world boundary can place a cell
+// center inside a solid voxel for a frame, and render-culling that state makes
+// the cell blink out until physics pushes it back.
 struct CaveCullParams {
     enabled: u32,           // 0 = disabled (no cave), 1 = enabled
     grid_resolution: u32,   // voxel grid side length (128)
@@ -232,8 +235,14 @@ struct CaveCullParams {
 @group(0) @binding(23) var<storage, read> cave_solid_mask: array<u32>;
 @group(0) @binding(24) var<storage, read> cell_thermal_state: array<u32>;
 
-// mode_properties_v14 per mode: [siphon_intake_rate, siphon_expel_rate, siphon_impulse, signal_channel + siphon_mode * 16]
+// mode_properties_v14 per mode: [siphon_intake_rate, siphon_expel_rate, siphon_impulse, packed signal settings]
+// packed = threshold * 128 + mode * 32 + invert * 16 + channel
 @group(0) @binding(25) var<storage, read> mode_properties_v14: array<vec4<f32>>;
+@group(0) @binding(26) var<storage, read> cell_water: array<f32>;
+@group(0) @binding(27) var<storage, read> velocities: array<vec4<f32>>;
+@group(0) @binding(28) var<storage, read_write> instance_velocities: array<vec4<f32>>;
+@group(0) @binding(29) var<storage, read_write> siphon_instances: array<CellInstance>;
+@group(0) @binding(30) var<storage, read_write> siphon_instance_velocities: array<vec4<f32>>;
 
 const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
@@ -414,21 +423,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Cave solid-mask cull: skip cells whose voxel is inside solid rock.
-    if (cave_cull.enabled != 0u) {
-        let res = i32(cave_cull.grid_resolution);
-        let gx = i32((position.x - cave_cull.origin_x) / cave_cull.cell_size);
-        let gy = i32((position.y - cave_cull.origin_y) / cave_cull.cell_size);
-        let gz = i32((position.z - cave_cull.origin_z) / cave_cull.cell_size);
-        if (gx >= 0 && gx < res && gy >= 0 && gy < res && gz >= 0 && gz < res) {
-            let solid_idx = u32(gx + gy * res + gz * res * res);
-            if (cave_solid_mask[solid_idx] != 0u) {
-                atomicAdd(&counters[3], 1u); // occluded counter
-                return;
-            }
-        }
-    }
-    
     let rotation = rotations[idx];
     // Calculate radius from mass (GPU-side) for proper growth visualization
     // This ensures cells visually grow as mass increases from mass_accum shader
@@ -641,6 +635,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //   Devorocyte (11): param_a/b/c/d -> [spike_height, spike_sharpness, spike_embed, tip_fade]
         //   Luminocyte (16): param_a/b/c/d -> [band_frequency, band_width, core_glow, color_shift]
         //   Siphonocyte (17):param_a/b/c/d -> [aperture_radius, aperture_darkness, rim_brightness, nozzle_height]
+        //                   goldberg_ridge_strength -> visual_params.w nozzle_embed_depth
         //   Plumocyte (18):  param_a/b/c/d -> [feather_length, feather_width, feather_brightness, stroke_speed]
         //   Photocyte (3):   goldberg -> [subdivision, ridge_width, meander, ridge_strength]
         //   Glueocyte (6):   goldberg -> [voro_scale, border_width, meander, border_dark]
@@ -707,23 +702,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var extra_y = anim_speed_val;
         if (cell_type == 17u && mode_index < arrayLength(&mode_properties_v14)) {
             let siphon = mode_properties_v14[mode_index];
-            let packed = u32(clamp(siphon.w, 0.0, 47.0));
+            let packed = u32(clamp(siphon.w, 0.0, 262143.0));
             let siphon_channel = packed & 15u;
-            let siphon_mode = min(packed / 16u, 2u);
-            if (siphon_mode == 0u) {
-                extra_y = clamp(siphon.x / 4.0, 0.15, 1.0);
-            } else if (siphon_mode == 1u) {
+            let siphon_invert = (packed & 16u) != 0u;
+            let siphon_mode = min((packed / 32u) & 3u, 3u);
+            let siphon_threshold = f32(packed / 128u);
+            let stroke_phase = fract(params.current_time * mix(0.85, 2.4, clamp(siphon.z / 3.0, 0.0, 1.0)) + f32(cell_id & 1023u) * 0.013);
+            let expel_stroke = smoothstep(0.54, 0.64, stroke_phase) * (1.0 - smoothstep(0.82, 0.96, stroke_phase));
+            if (siphon_mode == 0u || siphon_mode == 1u) {
                 extra_y = clamp((siphon.y + siphon.z) / 7.0, 0.2, 1.0);
+            } else if (siphon_mode == 2u) {
+                extra_y = clamp(siphon.x / 4.0, 0.15, 1.0);
             } else {
-                extra_y = 0.55;
+                extra_y = clamp(siphon.y / 4.0, 0.15, 1.0);
             }
-            var output_active = siphon_mode == 1u;
-            if (siphon_mode == 2u) {
-                let raw_signal = signal_flags[idx * 16u + siphon_channel];
-                output_active = (raw_signal & 2047u) >= 1u;
-                extra_y = select(0.18, extra_y, output_active);
+            let raw_signal = signal_flags[idx * 16u + siphon_channel];
+            let signal_active = select(f32(raw_signal & 2047u) >= siphon_threshold, f32(raw_signal & 2047u) < siphon_threshold, siphon_invert);
+            var output_active = siphon_mode == 0u || ((siphon_mode == 1u || siphon_mode == 3u) && signal_active);
+            let has_water = idx < arrayLength(&cell_water) && cell_water[idx] > 0.001;
+            if (output_active && !has_water) {
+                extra_y = select(extra_y, 0.18, siphon_mode != 0u);
             }
-            if (output_active && (siphon.y > 0.001 || siphon.z > 0.001)) {
+            if (output_active && has_water && expel_stroke > 0.05 && (siphon.y > 0.001 || siphon.z > 0.001)) {
                 extra_x = select(1.0, 2.0, idx < arrayLength(&cell_thermal_state) && cell_thermal_state[idx] >= 6u);
             } else {
                 extra_x = 0.0;
@@ -746,8 +746,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Also track per-type counts for stats (counters[4..4+MAX_TYPES])
     let counter_index = 4u + cell_type;
-    atomicAdd(&counters[counter_index], 1u);
+    let type_output_index = atomicAdd(&counters[counter_index], 1u);
 
     // Write instance
     instances[output_index] = instance;
+    instance_velocities[output_index] = velocities[idx];
+
+    if (cell_type == 17u && type_output_index < params.cell_capacity) {
+        var siphon_instance = instance;
+        if (cell_type < params.cell_type_count) {
+            siphon_instance.visual_params.w = clamp(cell_type_visuals[cell_type].goldberg_ridge_strength, 0.0, 0.28);
+        }
+        siphon_instances[type_output_index] = siphon_instance;
+        siphon_instance_velocities[type_output_index] = velocities[idx];
+    }
 }

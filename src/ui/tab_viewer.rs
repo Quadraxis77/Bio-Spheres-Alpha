@@ -7712,7 +7712,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     siphon_expel_rate: 0.8,
                     siphon_impulse: 0.6,
                     siphon_signal_channel: 0,
-                    siphon_mode: 2,
+                    siphon_signal_threshold: 1.0,
+                    siphon_signal_invert: false,
+                    siphon_mode: 0,
                     plumocyte_extension: 1.0,
                     plumocyte_drag_mult: 0.7,
                     plumocyte_flow_coupling: 0.5,
@@ -8522,18 +8524,24 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.siphon_impulse).speed(0.01).range(0.0..=3.0));
                     });
 
-                    let mode_names = ["Intake", "Expel", "Signal"];
+                    let mode_names = [
+                        "Impulse",
+                        "Signal Impulse",
+                        "Signal Intake",
+                        "Signal Expulsion",
+                    ];
                     egui::ComboBox::from_id_salt("siphon_mode")
-                        .selected_text(mode_names[mode.siphon_mode.clamp(0, 2) as usize])
+                        .selected_text(mode_names[mode.siphon_mode.clamp(0, 3) as usize])
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut mode.siphon_mode, 0, "Intake");
-                            ui.selectable_value(&mut mode.siphon_mode, 1, "Expel");
-                            ui.selectable_value(&mut mode.siphon_mode, 2, "Signal");
+                            ui.selectable_value(&mut mode.siphon_mode, 0, "Impulse");
+                            ui.selectable_value(&mut mode.siphon_mode, 1, "Signal Impulse");
+                            ui.selectable_value(&mut mode.siphon_mode, 2, "Signal Intake");
+                            ui.selectable_value(&mut mode.siphon_mode, 3, "Signal Expulsion");
                         });
 
-                    if mode.siphon_mode == 2 {
+                    if mode.siphon_mode >= 1 {
                         ui.label("Signal Channel:")
-                            .on_hover_text("Channel that enables expulsion when its signal value is at least 1.");
+                            .on_hover_text("Channel used by the selected signal-gated siphon behavior.");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -8542,6 +8550,19 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::Slider::new(&mut mode.siphon_signal_channel, 0..=15).show_value(false));
                             ui.add(egui::DragValue::new(&mut mode.siphon_signal_channel).speed(0.1).range(0..=15));
                         });
+
+                        ui.label("Signal Threshold:")
+                            .on_hover_text("Signal value required by signal-gated siphon modes.");
+                        ui.horizontal(|ui| {
+                            let available = ui.available_width();
+                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                            ui.style_mut().spacing.slider_width = slider_width;
+                            ui.add(egui::Slider::new(&mut mode.siphon_signal_threshold, 0.0..=2047.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.siphon_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                        });
+
+                        ui.checkbox(&mut mode.siphon_signal_invert, "Invert")
+                            .on_hover_text("When checked, the signal-gated siphon behavior is active below the threshold instead of above it.");
                     }
                 });
             } else if mode.cell_type == 18 { // Plumocyte (cell_type == 18)
@@ -12129,6 +12150,16 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.style_mut().spacing.slider_width = slider_width;
                     ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=0.55).show_value(false));
                     ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.005).range(0.0..=0.55));
+                });
+
+                ui.label("Embed Depth:")
+                    .on_hover_text("How deeply the nozzle base sinks into the cell border so it reads as attached tissue.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.28).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.002).range(0.0..=0.28));
                 });
             }
 

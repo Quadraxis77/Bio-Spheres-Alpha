@@ -99,11 +99,17 @@ struct CaveParams {
 @group(0) @binding(1) var<storage, read_write> positions: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> velocities: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> cell_count_buffer: array<u32>;
+@group(0) @binding(4) var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+@group(0) @binding(5) var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+@group(0) @binding(6) var<storage, read_write> torque_accum_z: array<atomic<i32>>;
+@group(0) @binding(7) var<storage, read> angular_velocities: array<vec4<f32>>;
 
 @group(1) @binding(0) var<uniform> cave_params: CaveParams;
 
 // Constants
 const EPSILON: f32 = 0.0001;
+const FIXED_POINT_SCALE: f32 = 1000.0;
+const CONTACT_FRICTION: f32 = 0.35;
 
 // Hash function for single random value at integer coordinates (no gradients)
 fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
@@ -301,10 +307,33 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
                 // Remove inward velocity and apply damping
                 vel = vel + normal * vel_into_wall * cave_params.collision_damping;
             }
+
+            // Rolling / sliding friction against the cave wall. The cave wall is
+            // stationary, so contact-point slip should spin the cell instead of
+            // only damping linear tangent velocity.
+            let r_contact = -normal * radius;
+            let omega = angular_velocities[cell_idx].xyz;
+            let v_contact = vel + cross(omega, r_contact);
+            let v_tangent = v_contact - dot(v_contact, normal) * normal;
+            let tangent_speed = length(v_tangent);
+            if (tangent_speed > 0.0001) {
+                let friction_dir = -v_tangent / tangent_speed;
+                let normal_force_mag = min(cave_params.collision_stiffness * penetration, 1000.0);
+                let friction_mag = min(
+                    CONTACT_FRICTION * normal_force_mag,
+                    tangent_speed * cave_params.collision_stiffness * 0.01
+                );
+                let friction_force = friction_dir * friction_mag;
+                let contact_torque = cross(r_contact, friction_force);
+                atomicAdd(&torque_accum_x[cell_idx], i32(contact_torque.x * FIXED_POINT_SCALE));
+                atomicAdd(&torque_accum_y[cell_idx], i32(contact_torque.y * FIXED_POINT_SCALE));
+                atomicAdd(&torque_accum_z[cell_idx], i32(contact_torque.z * FIXED_POINT_SCALE));
+            }
+
             // Surface friction: resist sliding along the cave wall
             let vel_normal_comp = dot(vel, normal);
             let vel_tangent = vel - normal * vel_normal_comp;
-            let friction = 0.35;
+            let friction = CONTACT_FRICTION;
             vel = normal * vel_normal_comp + vel_tangent * (1.0 - friction);
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }

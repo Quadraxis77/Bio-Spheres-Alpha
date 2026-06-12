@@ -77,6 +77,9 @@ pub struct InstanceBuilder {
 
     // Output buffer (instance data for rendering)
     pub instance_buffer: wgpu::Buffer,
+    pub instance_velocity_buffer: wgpu::Buffer,
+    pub siphon_instance_buffer: wgpu::Buffer,
+    pub siphon_instance_velocity_buffer: wgpu::Buffer,
 
     // Indirect draw buffer for GPU-driven rendering (total visible count)
     pub indirect_buffer: wgpu::Buffer,
@@ -199,8 +202,7 @@ struct BuildParams {
     lod_debug_colors: u32, // 0 = disabled, 1 = enabled
     // Cell buffer capacity for partition size calculation
     cell_capacity: u32,
-    // Padding to maintain 16-byte alignment
-    _padding: f32,
+    current_time: f32,
     // Frustum planes array needs 16-byte alignment
     frustum_planes: [FrustumPlane; 6],
 }
@@ -606,6 +608,57 @@ impl InstanceBuilder {
                     },
                     count: None,
                 },
+                // Binding 26: cell water reserve, used to suppress dry Siphonocyte output visuals
+                wgpu::BindGroupLayoutEntry {
+                    binding: 26,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 27,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 28,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 29,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 30,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -692,6 +745,19 @@ impl InstanceBuilder {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        let instance_velocity_buffer =
+            Self::create_storage_buffer(device, "Instance Builder Output Velocities", cell_capacity * 16);
+        let siphon_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Builder Siphonocyte Output"),
+            size: (cell_capacity * std::mem::size_of::<CellInstance>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let siphon_instance_velocity_buffer =
+            Self::create_storage_buffer(device, "Instance Builder Siphonocyte Output Velocities", cell_capacity * 16);
 
         // Indirect draw buffer: vertex_count, instance_count, first_vertex, first_instance
         // Main buffer for total visible count (legacy, kept for compatibility)
@@ -781,6 +847,9 @@ impl InstanceBuilder {
             behavior_flags_buffer,
             mode_properties_v5_buffer,
             instance_buffer,
+            instance_velocity_buffer,
+            siphon_instance_buffer,
+            siphon_instance_velocity_buffer,
             indirect_buffer,
             indirect_buffers,
             counters_buffer,
@@ -1415,6 +1484,19 @@ impl InstanceBuilder {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        self.instance_velocity_buffer =
+            Self::create_storage_buffer(device, "Instance Builder Output Velocities", new_capacity * 16);
+        self.siphon_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Instance Builder Siphonocyte Output"),
+            size: (new_capacity * std::mem::size_of::<CellInstance>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        self.siphon_instance_velocity_buffer =
+            Self::create_storage_buffer(device, "Instance Builder Siphonocyte Output Velocities", new_capacity * 16);
 
         self.bind_group = None;
         self.mark_all_dirty();
@@ -1450,6 +1532,8 @@ impl InstanceBuilder {
         solid_mask_buffer: &wgpu::Buffer,
         cell_thermal_state_buffer: &wgpu::Buffer,
         mode_properties_v14_buffer: &wgpu::Buffer,
+        cell_water_buffer: &wgpu::Buffer,
+        velocity_buffer: &wgpu::Buffer,
     ) {
         // Create a dummy 1x1 texture for binding 11 (Hi-Z removed)
         let (_dummy_texture, dummy_view) = Self::create_dummy_hiz_texture(device);
@@ -1563,6 +1647,26 @@ impl InstanceBuilder {
                     binding: 25,
                     resource: mode_properties_v14_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 26,
+                    resource: cell_water_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 27,
+                    resource: velocity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 28,
+                    resource: self.instance_velocity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 29,
+                    resource: self.siphon_instance_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 30,
+                    resource: self.siphon_instance_velocity_buffer.as_entire_binding(),
+                },
             ],
         }));
     }
@@ -1624,10 +1728,13 @@ impl InstanceBuilder {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         lod_debug_colors: bool,
+        current_time: f32,
         cell_count_hint: u32, // Live cell count for dispatch scaling
         solid_mask_buffer: &wgpu::Buffer,
         cell_thermal_state_buffer: &wgpu::Buffer,
         mode_properties_v14_buffer: &wgpu::Buffer,
+        cell_water_buffer: &wgpu::Buffer,
+        velocity_buffer: &wgpu::Buffer,
     ) {
         if cell_capacity == 0 {
             self.last_visible_count = 0;
@@ -1688,8 +1795,7 @@ impl InstanceBuilder {
             lod_debug_colors: if lod_debug_colors { 1 } else { 0 },
             // Cell buffer capacity for partition size calculation
             cell_capacity: cell_capacity as u32,
-            // Padding to maintain 16-byte alignment
-            _padding: 0.0,
+            current_time,
             frustum_planes,
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -1732,6 +1838,8 @@ impl InstanceBuilder {
                 solid_mask_buffer,
                 cell_thermal_state_buffer,
                 mode_properties_v14_buffer,
+                cell_water_buffer,
+                velocity_buffer,
             );
         }
 
@@ -1820,10 +1928,13 @@ impl InstanceBuilder {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         lod_debug_colors: bool,
+        current_time: f32,
         cell_count_hint: u32,
         solid_mask_buffer: &wgpu::Buffer,
         cell_thermal_state_buffer: &wgpu::Buffer,
         mode_properties_v14_buffer: &wgpu::Buffer,
+        cell_water_buffer: &wgpu::Buffer,
+        velocity_buffer: &wgpu::Buffer,
     ) {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Instance Builder Encoder"),
@@ -1849,10 +1960,13 @@ impl InstanceBuilder {
             lod_threshold_medium,
             lod_threshold_high,
             lod_debug_colors,
+            current_time,
             cell_count_hint,
             solid_mask_buffer,
             cell_thermal_state_buffer,
             mode_properties_v14_buffer,
+            cell_water_buffer,
+            velocity_buffer,
         );
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1980,6 +2094,22 @@ impl InstanceBuilder {
     /// Get the instance buffer for rendering.
     pub fn get_instance_buffer(&self) -> &wgpu::Buffer {
         &self.instance_buffer
+    }
+
+    pub fn get_instance_velocity_buffer(&self) -> &wgpu::Buffer {
+        &self.instance_velocity_buffer
+    }
+
+    pub fn get_siphon_instance_buffer(&self) -> &wgpu::Buffer {
+        &self.siphon_instance_buffer
+    }
+
+    pub fn get_siphon_instance_velocity_buffer(&self) -> &wgpu::Buffer {
+        &self.siphon_instance_velocity_buffer
+    }
+
+    pub fn get_counters_buffer(&self) -> &wgpu::Buffer {
+        &self.counters_buffer
     }
 
     /// Get the current cell capacity.

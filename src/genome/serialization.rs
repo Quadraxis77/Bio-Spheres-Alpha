@@ -424,6 +424,10 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub siphon_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub siphon_signal_threshold: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub siphon_signal_invert: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub siphon_mode: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plumocyte_extension: Option<f32>,
@@ -991,6 +995,11 @@ fn mode_to_serializable(
         siphon_expel_rate: diff_f32(mode.siphon_expel_rate, default.siphon_expel_rate),
         siphon_impulse: diff_f32(mode.siphon_impulse, default.siphon_impulse),
         siphon_signal_channel: diff_i32(mode.siphon_signal_channel, default.siphon_signal_channel),
+        siphon_signal_threshold: diff_f32(
+            mode.siphon_signal_threshold,
+            default.siphon_signal_threshold,
+        ),
+        siphon_signal_invert: diff_bool(mode.siphon_signal_invert, default.siphon_signal_invert),
         siphon_mode: diff_i32(mode.siphon_mode, default.siphon_mode),
         plumocyte_extension: diff_f32(mode.plumocyte_extension, default.plumocyte_extension),
         plumocyte_drag_mult: diff_f32(mode.plumocyte_drag_mult, default.plumocyte_drag_mult),
@@ -1151,6 +1160,8 @@ impl SerializableModeSettings {
             || self.siphon_expel_rate.is_some()
             || self.siphon_impulse.is_some()
             || self.siphon_signal_channel.is_some()
+            || self.siphon_signal_threshold.is_some()
+            || self.siphon_signal_invert.is_some()
             || self.siphon_mode.is_some()
             || self.plumocyte_extension.is_some()
             || self.plumocyte_drag_mult.is_some()
@@ -1515,6 +1526,12 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.siphon_signal_channel {
         mode.siphon_signal_channel = v;
+    }
+    if let Some(v) = ser.siphon_signal_threshold {
+        mode.siphon_signal_threshold = v;
+    }
+    if let Some(v) = ser.siphon_signal_invert {
+        mode.siphon_signal_invert = v;
     }
     if let Some(v) = ser.siphon_mode {
         mode.siphon_mode = v;

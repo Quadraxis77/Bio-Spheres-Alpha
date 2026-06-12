@@ -100,10 +100,23 @@ var<storage, read> cell_grip: array<f32>;
 @group(2) @binding(8)
 var<storage, read> ice_bitfield: array<u32>;
 
+@group(2) @binding(9)
+var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+
+@group(2) @binding(10)
+var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+
+@group(2) @binding(11)
+var<storage, read_write> torque_accum_z: array<atomic<i32>>;
+
+@group(2) @binding(12)
+var<storage, read> angular_velocities: array<vec4<f32>>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 const MIN_SAFE_DT: f32 = 0.0001;
 const MAX_CELL_ACCELERATION: f32 = 300.0;
+const ICE_CONTACT_FRICTION: f32 = 0.35;
 
 // Convert fixed-point i32 back to float
 fn fixed_to_float(v: i32) -> f32 {
@@ -198,6 +211,49 @@ fn is_embedded_in_ice(world_pos: vec3<f32>, radius: f32) -> bool {
                  is_in_ice(world_pos + vec3<f32>(0.0, 0.0, -sample_dist));
 
     return x_axis && y_axis && z_axis;
+}
+
+fn ice_collision_normal(previous_pos: vec3<f32>, probe_pos: vec3<f32>) -> vec3<f32> {
+    let from_motion = previous_pos - probe_pos;
+    let motion_len = length(from_motion);
+    if (motion_len > 0.0001) {
+        return from_motion / motion_len;
+    }
+
+    let sample_dist = max(water_params.cell_size, 0.25);
+    let sx0 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>( sample_dist, 0.0, 0.0)));
+    let sx1 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(-sample_dist, 0.0, 0.0)));
+    let sy0 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0,  sample_dist, 0.0)));
+    let sy1 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0, -sample_dist, 0.0)));
+    let sz0 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0, 0.0,  sample_dist)));
+    let sz1 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0, 0.0, -sample_dist)));
+    let grad = vec3<f32>(sx0 - sx1, sy0 - sy1, sz0 - sz1);
+    let grad_len = length(grad);
+    if (grad_len > 0.0001) {
+        return -grad / grad_len;
+    }
+
+    return vec3<f32>(0.0, 1.0, 0.0);
+}
+
+fn accumulate_ice_contact_torque(cell_idx: u32, normal: vec3<f32>, radius: f32, vel: vec3<f32>, stiffness: f32) {
+    let r_contact = -normal * radius;
+    let omega = angular_velocities[cell_idx].xyz;
+    let v_contact = vel + cross(omega, r_contact);
+    let v_tangent = v_contact - dot(v_contact, normal) * normal;
+    let tangent_speed = length(v_tangent);
+    if (tangent_speed > 0.0001) {
+        let friction_dir = -v_tangent / tangent_speed;
+        let friction_mag = min(
+            ICE_CONTACT_FRICTION * stiffness,
+            tangent_speed * stiffness * 0.1
+        );
+        let friction_force = friction_dir * friction_mag;
+        let contact_torque = cross(r_contact, friction_force);
+        atomicAdd(&torque_accum_x[cell_idx], i32(contact_torque.x * FIXED_POINT_SCALE));
+        atomicAdd(&torque_accum_y[cell_idx], i32(contact_torque.y * FIXED_POINT_SCALE));
+        atomicAdd(&torque_accum_z[cell_idx], i32(contact_torque.z * FIXED_POINT_SCALE));
+    }
 }
 
 // Decode a packed velocity u32 into a direction vector.
@@ -449,7 +505,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Zero stored acceleration so no Verlet momentum builds up while frozen.
         entombed_acceleration = vec3<f32>(0.0);
     } else if (is_embedded_in_ice(final_pos, radius)) {
+        let normal = ice_collision_normal(pos, final_pos);
+        accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
         final_pos = pos;
+        let vel_normal = dot(final_vel, normal);
+        let vel_tangent = final_vel - vel_normal * normal;
+        final_vel = vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
+    } else if (is_in_ice(final_pos)) {
+        let normal = ice_collision_normal(pos, final_pos);
+        accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
+        final_pos = pos;
+        let vel_normal = dot(final_vel, normal);
+        let vel_tangent = final_vel - vel_normal * normal;
+        let vel_normal_out = max(vel_normal, 0.0) * normal;
+        final_vel = vel_normal_out + vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
     }
 
     // Write updated position and velocity

@@ -438,11 +438,12 @@ impl CellTypeVisuals {
                 v.membrane_noise_speed = 1.7;
             }
             CellType::Siphonocyte => {
-                // Directional nozzle: raised volcanic crater with a dark central throat.
+                // Directional nozzle: raised same-tissue crater with a dark central throat.
                 v.param_a = 0.32; // aperture_radius
                 v.param_b = 0.85; // aperture_darkness
                 v.param_c = 0.55; // rim_brightness
                 v.param_d = 0.28; // nozzle_height
+                v.goldberg_ridge_strength = 0.075; // nozzle_embed_depth
                 v.specular_strength = 0.55;
                 v.specular_power = 72.0;
                 v.fresnel_strength = 0.42;
@@ -1203,7 +1204,9 @@ impl CellType {
                 mode.siphon_expel_rate = 0.8;
                 mode.siphon_impulse = 0.6;
                 mode.siphon_signal_channel = 0;
-                mode.siphon_mode = 2;
+                mode.siphon_signal_threshold = 1.0;
+                mode.siphon_signal_invert = false;
+                mode.siphon_mode = 0;
             }
             CellType::Plumocyte => {
                 mode.nutrient_priority = 1.2;

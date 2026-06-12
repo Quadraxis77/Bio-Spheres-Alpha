@@ -2326,7 +2326,8 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync Siphonocyte mode properties.
-    /// v14: [intake_rate, expel_rate, impulse, signal_channel + siphon_mode * 16]
+    /// v14: [intake_rate, expel_rate, impulse, packed signal settings]
+    /// packed = threshold * 128 + mode * 32 + invert * 16 + channel
     pub fn sync_siphonocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2335,8 +2336,10 @@ impl GpuTripleBufferSystem {
         let mut v14: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
-                let packed =
-                    mode.siphon_signal_channel.clamp(0, 15) + mode.siphon_mode.clamp(0, 2) * 16;
+                let packed = mode.siphon_signal_channel.clamp(0, 15)
+                    + (if mode.siphon_signal_invert { 1 } else { 0 }) * 16
+                    + mode.siphon_mode.clamp(0, 3) * 32
+                    + mode.siphon_signal_threshold.clamp(0.0, 2047.0).round() as i32 * 128;
                 v14.push([
                     mode.siphon_intake_rate,
                     mode.siphon_expel_rate,
@@ -2362,7 +2365,9 @@ impl GpuTripleBufferSystem {
             .iter()
             .map(|mode| {
                 let packed = mode.siphon_signal_channel.clamp(0, 15)
-                    + mode.siphon_mode.clamp(0, 2) * 16;
+                    + (if mode.siphon_signal_invert { 1 } else { 0 }) * 16
+                    + mode.siphon_mode.clamp(0, 3) * 32
+                    + mode.siphon_signal_threshold.clamp(0.0, 2047.0).round() as i32 * 128;
                 [
                     mode.siphon_intake_rate,
                     mode.siphon_expel_rate,

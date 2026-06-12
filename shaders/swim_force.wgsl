@@ -150,6 +150,7 @@ const WATER_GRID_X_GROUPS: u32 = 4u;  // 128 / 32 = 4 u32s per row
 const CELL_TYPE_SIPHONOCYTE: u32 = 17u;
 const CELL_TYPE_PLUMOCYTE: u32 = 18u;
 const SIPHON_WATER_CAPACITY: f32 = 1.5;
+const SIPHON_MIN_IMPULSE_WATER: f32 = 0.01;
 const STEAM_SAFE_FLOOR_TEMP: f32 = 115.0;
 const THERMAL_STATE_FROZEN: u32 = 1u;
 
@@ -205,24 +206,52 @@ fn heat_for_temperature(temp: f32, water: f32) -> f32 {
 }
 
 fn unpack_signal_channel(packed: f32) -> u32 {
-    return u32(clamp(packed, 0.0, 47.0)) & 15u;
+    return u32(clamp(packed, 0.0, 262143.0)) & 15u;
+}
+
+fn unpack_siphon_invert(packed: f32) -> bool {
+    return (u32(clamp(packed, 0.0, 262143.0)) & 16u) != 0u;
 }
 
 fn unpack_siphon_mode(packed: f32) -> u32 {
-    return min(u32(clamp(packed, 0.0, 47.0)) / 16u, 2u);
+    return min((u32(clamp(packed, 0.0, 262143.0)) / 32u) & 3u, 3u);
+}
+
+fn unpack_siphon_threshold(packed: f32) -> f32 {
+    return f32(u32(clamp(packed, 0.0, 262143.0)) / 128u);
+}
+
+fn siphon_signal_active(cell_idx: u32, props: vec4<f32>) -> bool {
+    let channel = unpack_signal_channel(props.w);
+    let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + channel]);
+    let signal_value = f32(raw_signal & 2047u);
+    let above = signal_value >= unpack_siphon_threshold(props.w);
+    return select(above, !above, unpack_siphon_invert(props.w));
 }
 
 fn siphon_should_expel(cell_idx: u32, mode_idx: u32, props: vec4<f32>) -> bool {
     let mode = unpack_siphon_mode(props.w);
-    if (mode == 0u) {
+    if (mode == 2u) {
         return false;
     }
-    if (mode == 1u) {
+    let impulse = max(props.z, 0.0);
+    let stroke_phase = fract(params.current_time * mix(0.85, 2.4, clamp(impulse / 3.0, 0.0, 1.0)) + f32(cell_idx & 1023u) * 0.013);
+    let expel_stroke = smoothstep(0.54, 0.64, stroke_phase) * (1.0 - smoothstep(0.82, 0.96, stroke_phase));
+    if (mode == 0u || mode == 1u) {
+        if (expel_stroke <= 0.05) {
+            return false;
+        }
+    }
+    if (mode == 0u) {
         return true;
     }
-    let channel = unpack_signal_channel(props.w);
-    let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + channel]);
-    return f32(raw_signal & 2047u) >= 1.0;
+    if (mode == 1u) {
+        return siphon_signal_active(cell_idx, props);
+    }
+    if (mode == 3u) {
+        return siphon_signal_active(cell_idx, props);
+    }
+    return false;
 }
 
 fn apply_siphon_force(cell_idx: u32, mode_idx: u32) {
@@ -236,7 +265,7 @@ fn apply_siphon_force(cell_idx: u32, mode_idx: u32) {
     }
 
     let water = clamp(cell_water[cell_idx], 0.0, SIPHON_WATER_CAPACITY);
-    if (water <= 0.001) {
+    if (water < SIPHON_MIN_IMPULSE_WATER) {
         return;
     }
 
