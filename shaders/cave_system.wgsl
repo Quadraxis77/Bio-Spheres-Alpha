@@ -364,9 +364,9 @@ fn layered_rock_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f3
     color = mix(color, cool_slate, noise(world_pos.xy * 0.025 + vec2<f32>(11.0, 31.0)) * 0.22);
 
     let grain = texture_value - 0.5;
-    let patch = noise(world_pos.xz * 0.032 + vec2<f32>(19.0, 7.0));
+    let patch_noise = noise(world_pos.xz * 0.032 + vec2<f32>(19.0, 7.0));
     color += vec3<f32>(grain * 0.09);
-    color *= mix(0.82, 1.16, patch);
+    color *= mix(0.82, 1.16, patch_noise);
     color *= 1.0 - dark_seam * 0.28;
 
     // Steeper walls show crisper sediment lines; flatter caps keep a subtler,
