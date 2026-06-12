@@ -1580,6 +1580,16 @@ impl GpuFluidSimulator {
         &self.state_buffer
     }
 
+    /// Get the authoritative per-voxel temperature field.
+    pub fn temperature_field_buffer(&self) -> &wgpu::Buffer {
+        &self.temp_field_buffer
+    }
+
+    /// Get the prebaked geothermal heat source field.
+    pub fn geothermal_heat_buffer(&self) -> &wgpu::Buffer {
+        &self.geothermal_heat_buffer
+    }
+
     /// Get solid mask buffer
     pub fn solid_mask_buffer(&self) -> &wgpu::Buffer {
         &self.solid_mask_buffer

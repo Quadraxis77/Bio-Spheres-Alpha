@@ -257,6 +257,18 @@ var<storage, read> is_initial_mode: array<u32>;
 @group(2) @binding(44)
 var<storage, read_write> organism_cell_ids: array<u32>;
 
+@group(2) @binding(45)
+var<storage, read_write> cell_water: array<f32>;
+
+@group(2) @binding(46)
+var<storage, read_write> cell_heat_energy: array<f32>;
+
+@group(2) @binding(47)
+var<storage, read_write> cell_cached_temperature: array<f32>;
+
+@group(2) @binding(48)
+var<storage, read_write> cell_thermal_state: array<u32>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -508,6 +520,47 @@ fn derive_organism_cell_id(parent_id: u32, branch_slot: u32) -> u32 {
 }
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
+const CELL_TYPE_VASCULOCYTE: u32 = 12u;
+const DRY_THERMAL_MASS: f32 = 1.0;
+const WATER_THERMAL_MASS_FACTOR: f32 = 1.0;
+const THERMAL_STATE_DEEP_FROZEN: u32 = 0u;
+const THERMAL_STATE_FROZEN: u32 = 1u;
+const THERMAL_STATE_CHILLED: u32 = 2u;
+const THERMAL_STATE_STABLE_COOL: u32 = 3u;
+const THERMAL_STATE_IDEAL: u32 = 4u;
+const THERMAL_STATE_WARM: u32 = 5u;
+const THERMAL_STATE_HOT_SAFE: u32 = 6u;
+const THERMAL_STATE_OVERHEATED: u32 = 7u;
+const THERMAL_STATE_HEAT_SHOCK: u32 = 8u;
+const THERMAL_STATE_CRITICAL: u32 = 9u;
+
+fn physiology_water_capacity(cell_type: u32) -> f32 {
+    if (cell_type == CELL_TYPE_VASCULOCYTE) {
+        return 10.0;
+    }
+    return 1.0;
+}
+
+fn physiology_thermal_mass(water: f32) -> f32 {
+    return max(DRY_THERMAL_MASS + water * WATER_THERMAL_MASS_FACTOR, 0.001);
+}
+
+fn physiology_temperature(heat_energy: f32, water: f32) -> f32 {
+    return heat_energy / physiology_thermal_mass(water);
+}
+
+fn physiology_state_for_temperature(temp: f32) -> u32 {
+    if (temp <= 45.0) { return THERMAL_STATE_DEEP_FROZEN; }
+    if (temp < 60.0) { return THERMAL_STATE_FROZEN; }
+    if (temp < 85.0) { return THERMAL_STATE_CHILLED; }
+    if (temp < 100.0) { return THERMAL_STATE_STABLE_COOL; }
+    if (temp < 115.0) { return THERMAL_STATE_IDEAL; }
+    if (temp < 130.0) { return THERMAL_STATE_WARM; }
+    if (temp < 140.0) { return THERMAL_STATE_HOT_SAFE; }
+    if (temp < 150.0) { return THERMAL_STATE_OVERHEATED; }
+    if (temp < 160.0) { return THERMAL_STATE_HEAT_SHOCK; }
+    return THERMAL_STATE_CRITICAL;
+}
 
 // Cosine threshold for deciding when a new sibling bond occupies the same direction
 // as an existing inherited bond on the same cell (~8 degrees). Must match the CPU
@@ -606,6 +659,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read parent's Embryocyte reserve; will be halved for each child
     let parent_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
     let child_reserve = parent_reserve >> 1u;
+
+    let parent_water = cell_water[cell_idx];
+    let parent_heat_energy = cell_heat_energy[cell_idx];
+    let child_heat_energy = parent_heat_energy * 0.5;
 
     // Get parent's mode index for looking up child orientations and split direction
     let parent_mode_idx = mode_indices[cell_idx];
@@ -872,6 +929,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Set child A nutrients and reserve (reserve halved from parent)
     atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(child_a_nutrients));
     atomicStore(&embryocyte_reserves[cell_idx], child_reserve);
+    let child_a_water = min(parent_water * 0.5, physiology_water_capacity(child_a_cell_type));
+    let child_a_temp = physiology_temperature(child_heat_energy, child_a_water);
+    cell_water[cell_idx] = child_a_water;
+    cell_heat_energy[cell_idx] = child_heat_energy;
+    cell_cached_temperature[cell_idx] = child_a_temp;
+    cell_thermal_state[cell_idx] = physiology_state_for_temperature(child_a_temp);
 
     // === Create Child B (in assigned slot) ===
     positions_out[child_b_slot] = vec4<f32>(child_b_pos, child_b_mass);
@@ -922,6 +985,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Set child B nutrients and reserve (reserve halved from parent)
     atomicStore(&nutrients_buffer[child_b_slot], float_to_fixed(child_b_nutrients));
     atomicStore(&embryocyte_reserves[child_b_slot], child_reserve);
+    let child_b_water = min(parent_water * 0.5, physiology_water_capacity(child_b_cell_type));
+    let child_b_temp = physiology_temperature(child_heat_energy, child_b_water);
+    cell_water[child_b_slot] = child_b_water;
+    cell_heat_energy[child_b_slot] = child_heat_energy;
+    cell_cached_temperature[child_b_slot] = child_b_temp;
+    cell_thermal_state[child_b_slot] = physiology_state_for_temperature(child_b_temp);
 
     // Clear death flag for the new slot
     death_flags[child_b_slot] = 0u;

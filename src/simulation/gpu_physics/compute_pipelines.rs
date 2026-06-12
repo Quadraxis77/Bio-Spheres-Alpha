@@ -238,6 +238,10 @@ pub struct CachedBindGroups {
     /// Muscle contraction group 2: adhesion_connections, adhesion_settings_v0, adhesion_settings_v0_original, cell_adhesion_indices, adhesion_counts
     pub muscle_contraction_group2: wgpu::BindGroup,
 
+    /// Hidden cell physiology buffers: water, heat, cached temperature, thermal state.
+    pub physiology: wgpu::BindGroup,
+    pub physiology_cell_data: wgpu::BindGroup,
+
     // Signal system bind groups
     /// Signal flags bind group (Group 0 for signal_clear and signal_sense)
     pub signal_flags: wgpu::BindGroup,
@@ -342,6 +346,9 @@ pub struct GpuPhysicsPipelines {
     // Muscle contraction pipeline (modifies adhesion rest lengths for Myocyte cells)
     pub muscle_contraction: wgpu::ComputePipeline,
 
+    // Slow per-cell water/heat physiology pipeline
+    pub physiology_update: wgpu::ComputePipeline,
+
     // Boulder pipelines
     pub boulder_physics: wgpu::ComputePipeline,
     pub boulder_consume: wgpu::ComputePipeline,
@@ -426,6 +433,8 @@ pub struct GpuPhysicsPipelines {
     pub muscle_contraction_group0_layout: wgpu::BindGroupLayout,
     pub muscle_contraction_group1_layout: wgpu::BindGroupLayout,
     pub muscle_contraction_group2_layout: wgpu::BindGroupLayout,
+    pub physiology_layout: wgpu::BindGroupLayout,
+    pub physiology_cell_data_layout: wgpu::BindGroupLayout,
 
     // Glueocyte env adhesion bind group layouts
     pub env_adhesion_force_accum_layout: wgpu::BindGroupLayout,
@@ -509,6 +518,9 @@ impl GpuPhysicsPipelines {
         let cilia_force_cell_data_layout =
             Self::create_cilia_force_cell_data_bind_group_layout(device);
         let cilia_force_spatial_layout = Self::create_cilia_force_spatial_bind_group_layout(device);
+        let physiology_layout = Self::create_physiology_bind_group_layout(device);
+        let physiology_cell_data_layout =
+            Self::create_physiology_cell_data_bind_group_layout(device);
 
         // Create glueocyte env adhesion bind group layouts
         let env_adhesion_force_accum_layout =
@@ -1057,6 +1069,19 @@ impl GpuPhysicsPipelines {
             "Muscle Contraction",
         );
 
+        let physiology_update = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/physiology_update.wgsl"),
+            "main",
+            &[
+                &physics_layout,
+                &physiology_layout,
+                &physiology_cell_data_layout,
+                &adhesion_layout,
+            ],
+            "Physiology Update",
+        );
+
         // Signal system bind group layouts
         let signal_flags_layout = Self::create_signal_flags_bind_group_layout(device);
         let signal_propagate_flags_layout =
@@ -1355,6 +1380,7 @@ impl GpuPhysicsPipelines {
             glueocyte_cell_adhesion_release,
             cilia_force,
             muscle_contraction,
+            physiology_update,
             physics_layout,
             spatial_grid_layout,
             lifecycle_layout,
@@ -1394,6 +1420,8 @@ impl GpuPhysicsPipelines {
             muscle_contraction_group0_layout,
             muscle_contraction_group1_layout,
             muscle_contraction_group2_layout,
+            physiology_layout,
+            physiology_cell_data_layout,
             env_adhesion_force_accum_layout,
             env_adhesion_mode_data_layout,
             cell_adhesion_adhesion_layout,
@@ -1625,6 +1653,10 @@ impl GpuPhysicsPipelines {
                     binding: 21,
                     resource: buffers.mode_properties_v10.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 22,
+                    resource: buffers.cell_thermal_state.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1821,6 +1853,173 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 44,
                     resource: buffers.organism_cell_ids.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 45,
+                    resource: buffers.cell_water.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 46,
+                    resource: buffers.cell_heat_energy.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 47,
+                    resource: buffers.cell_cached_temperature.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 48,
+                    resource: buffers.cell_thermal_state.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Create mass accumulation bind group (nutrient gain rates and split nutrient thresholds per cell)
+    fn create_physiology_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Physiology Bind Group"),
+            layout: &self.physiology_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.cell_water.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.cell_heat_energy.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.cell_cached_temperature.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.cell_thermal_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.cell_water_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.cell_heat_energy_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.cell_cached_temperature_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.cell_thermal_state_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: buffers.cell_prev_muscle_contraction.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: buffers.muscle_contraction_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn create_physiology_cell_data_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+        water_grid_params_buffer: Option<&wgpu::Buffer>,
+        fluid_state_buffer: Option<&wgpu::Buffer>,
+        temperature_field_buffer: Option<&wgpu::Buffer>,
+        geothermal_heat_buffer: Option<&wgpu::Buffer>,
+    ) -> wgpu::BindGroup {
+        let dummy_water_params;
+        let water_grid_params = if let Some(buffer) = water_grid_params_buffer {
+            buffer
+        } else {
+            dummy_water_params = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Physiology Water Grid Params"),
+                size: 32,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: false,
+            });
+            &dummy_water_params
+        };
+
+        let dummy_fluid_state;
+        let fluid_state = if let Some(buffer) = fluid_state_buffer {
+            buffer
+        } else {
+            dummy_fluid_state = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Physiology Fluid State"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_fluid_state
+        };
+
+        let dummy_temperature_field;
+        let temperature_field = if let Some(buffer) = temperature_field_buffer {
+            buffer
+        } else {
+            dummy_temperature_field = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Physiology Temperature Field"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_temperature_field
+        };
+
+        let dummy_geothermal_heat;
+        let geothermal_heat = if let Some(buffer) = geothermal_heat_buffer {
+            buffer
+        } else {
+            dummy_geothermal_heat = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Physiology Geothermal Heat"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            &dummy_geothermal_heat
+        };
+
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Physiology Cell Data Bind Group"),
+            layout: &self.physiology_cell_data_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.mode_cell_types.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: water_grid_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: fluid_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: temperature_field.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: geothermal_heat.as_entire_binding(),
                 },
             ],
         })
@@ -2158,6 +2357,9 @@ impl GpuPhysicsPipelines {
                 },
             ],
         });
+        let physiology = self.create_physiology_bind_group(device, buffers);
+        let physiology_cell_data =
+            self.create_physiology_cell_data_bind_group(device, buffers, None, None, None, None);
 
         // Glueocyte env adhesion bind groups
         let env_adhesion_force_accum = [
@@ -2395,6 +2597,8 @@ impl GpuPhysicsPipelines {
             muscle_contraction_group0,
             muscle_contraction_group1,
             muscle_contraction_group2,
+            physiology,
+            physiology_cell_data,
             env_adhesion_force_accum,
             env_adhesion_mode_data,
             dummy_cave_collision,
@@ -3423,6 +3627,17 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Binding 22: Thermal state blocks frozen/heat-shock division.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 22,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         } else {
@@ -3903,9 +4118,117 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    // Bindings 45-48: Physiology inheritance on division.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 45,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 46,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 47,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 48,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         }
+    }
+
+    /// Create mass accumulation bind group layout (nutrient gain rates and split nutrient thresholds per cell)
+    fn create_physiology_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let rw = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Physiology Bind Group Layout"),
+            entries: &[
+                rw(0), // water current
+                rw(1), // heat current
+                rw(2), // cached temperature current
+                rw(3), // thermal state current
+                rw(4), // water next
+                rw(5), // heat next
+                rw(6), // cached temperature next
+                rw(7), // thermal state next
+                rw(8), // previous muscle contraction
+                rw(9), // current muscle contraction
+            ],
+        })
+    }
+
+    fn create_physiology_cell_data_bind_group_layout(
+        device: &wgpu::Device,
+    ) -> wgpu::BindGroupLayout {
+        let ro = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Physiology Cell Data Bind Group Layout"),
+            entries: &[
+                ro(0), // death flags
+                ro(1), // mode indices
+                ro(2), // mode cell types
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                ro(4), // fluid voxel state
+                ro(5), // per-voxel temperature field
+                ro(6), // geothermal heat field
+            ],
+        })
     }
 
     /// Create mass accumulation bind group layout (nutrient gain rates and split nutrient thresholds per cell)
@@ -8170,6 +8493,9 @@ impl CachedBindGroups {
         water_bitfield_buffer: &wgpu::Buffer,
         water_velocity_buffer: &wgpu::Buffer,
         ice_bitfield_buffer: &wgpu::Buffer,
+        fluid_state_buffer: &wgpu::Buffer,
+        temperature_field_buffer: &wgpu::Buffer,
+        geothermal_heat_buffer: &wgpu::Buffer,
     ) {
         self.position_update_force_accum = pipelines.create_position_update_force_accum_bind_group(
             device,
@@ -8186,6 +8512,14 @@ impl CachedBindGroups {
             adhesion_buffers,
             Some(water_grid_params_buffer),
             Some(water_bitfield_buffer),
+        );
+        self.physiology_cell_data = pipelines.create_physiology_cell_data_bind_group(
+            device,
+            triple_buffers,
+            Some(water_grid_params_buffer),
+            Some(fluid_state_buffer),
+            Some(temperature_field_buffer),
+            Some(geothermal_heat_buffer),
         );
     }
 }

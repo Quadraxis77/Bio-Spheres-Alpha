@@ -447,6 +447,18 @@ pub struct GpuTripleBufferSystem {
     /// mix(grip_extended, grip_contracted, contraction) — read by position_update for medium friction.
     pub cell_grip_buffer: wgpu::Buffer,
 
+    /// Per-cell physiology scalar buffers. Current values are read by the physiology pass,
+    /// next values are written by that pass and copied back on the low-frequency cadence.
+    pub cell_water: wgpu::Buffer,
+    pub cell_heat_energy: wgpu::Buffer,
+    pub cell_cached_temperature: wgpu::Buffer,
+    pub cell_thermal_state: wgpu::Buffer,
+    pub cell_water_next: wgpu::Buffer,
+    pub cell_heat_energy_next: wgpu::Buffer,
+    pub cell_cached_temperature_next: wgpu::Buffer,
+    pub cell_thermal_state_next: wgpu::Buffer,
+    pub cell_prev_muscle_contraction: wgpu::Buffer,
+
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
     pub glueocyte_boulder_adhesion_flags: wgpu::Buffer,
@@ -809,6 +821,40 @@ impl GpuTripleBufferSystem {
             "Cell Grip Buffer",
         );
 
+        let cell_water =
+            Self::create_storage_buffer(device, capacity as u64 * 4, "Cell Water Buffer");
+        let cell_heat_energy =
+            Self::create_storage_buffer(device, capacity as u64 * 4, "Cell Heat Energy Buffer");
+        let cell_cached_temperature = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Cell Cached Temperature Buffer",
+        );
+        let cell_thermal_state =
+            Self::create_storage_buffer(device, capacity as u64 * 4, "Cell Thermal State Buffer");
+        let cell_water_next =
+            Self::create_storage_buffer(device, capacity as u64 * 4, "Cell Water Next Buffer");
+        let cell_heat_energy_next = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Cell Heat Energy Next Buffer",
+        );
+        let cell_cached_temperature_next = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Cell Cached Temperature Next Buffer",
+        );
+        let cell_thermal_state_next = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Cell Thermal State Next Buffer",
+        );
+        let cell_prev_muscle_contraction = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Cell Previous Muscle Contraction Buffer",
+        );
+
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
         let oculocyte_params =
             Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
@@ -937,6 +983,15 @@ impl GpuTripleBufferSystem {
             env_anchor_buffer,
             muscle_contraction_buffer,
             cell_grip_buffer,
+            cell_water,
+            cell_heat_energy,
+            cell_cached_temperature,
+            cell_thermal_state,
+            cell_water_next,
+            cell_heat_energy_next,
+            cell_cached_temperature_next,
+            cell_thermal_state_next,
+            cell_prev_muscle_contraction,
             glueocyte_env_adhesion_flags,
             glueocyte_boulder_adhesion_flags,
             glueocyte_cell_adhesion_flags,
@@ -1174,6 +1229,46 @@ impl GpuTripleBufferSystem {
             .map(|&n| (n * 1000.0) as i32)
             .collect();
         queue.write_buffer(&self.nutrients_buffer, 0, bytemuck::cast_slice(&nutrients));
+
+        let cell_water = &state.cell_water[..state.cell_count];
+        let cell_heat_energy = &state.cell_heat_energy[..state.cell_count];
+        let cell_cached_temperature = &state.cell_cached_temperature[..state.cell_count];
+        let cell_thermal_state: Vec<u32> = state.cell_thermal_state[..state.cell_count]
+            .iter()
+            .map(|&s| s as u32)
+            .collect();
+        queue.write_buffer(&self.cell_water, 0, bytemuck::cast_slice(cell_water));
+        queue.write_buffer(
+            &self.cell_heat_energy,
+            0,
+            bytemuck::cast_slice(cell_heat_energy),
+        );
+        queue.write_buffer(
+            &self.cell_cached_temperature,
+            0,
+            bytemuck::cast_slice(cell_cached_temperature),
+        );
+        queue.write_buffer(
+            &self.cell_thermal_state,
+            0,
+            bytemuck::cast_slice(&cell_thermal_state),
+        );
+        queue.write_buffer(&self.cell_water_next, 0, bytemuck::cast_slice(cell_water));
+        queue.write_buffer(
+            &self.cell_heat_energy_next,
+            0,
+            bytemuck::cast_slice(cell_heat_energy),
+        );
+        queue.write_buffer(
+            &self.cell_cached_temperature_next,
+            0,
+            bytemuck::cast_slice(cell_cached_temperature),
+        );
+        queue.write_buffer(
+            &self.cell_thermal_state_next,
+            0,
+            bytemuck::cast_slice(&cell_thermal_state),
+        );
 
         // Split counts
         let split_counts: Vec<u32> = state.split_counts[..state.cell_count]
@@ -2760,6 +2855,52 @@ impl GpuTripleBufferSystem {
             &self.nutrients_buffer,
             offset,
             bytemuck::bytes_of(&initial_nutrients),
+        );
+
+        let initial_water = 1.0f32;
+        let initial_heat_energy = 210.0f32;
+        let initial_temperature = 105.0f32;
+        let initial_thermal_state = 4u32;
+        queue.write_buffer(&self.cell_water, offset, bytemuck::bytes_of(&initial_water));
+        queue.write_buffer(
+            &self.cell_heat_energy,
+            offset,
+            bytemuck::bytes_of(&initial_heat_energy),
+        );
+        queue.write_buffer(
+            &self.cell_cached_temperature,
+            offset,
+            bytemuck::bytes_of(&initial_temperature),
+        );
+        queue.write_buffer(
+            &self.cell_thermal_state,
+            offset,
+            bytemuck::bytes_of(&initial_thermal_state),
+        );
+        queue.write_buffer(
+            &self.cell_water_next,
+            offset,
+            bytemuck::bytes_of(&initial_water),
+        );
+        queue.write_buffer(
+            &self.cell_heat_energy_next,
+            offset,
+            bytemuck::bytes_of(&initial_heat_energy),
+        );
+        queue.write_buffer(
+            &self.cell_cached_temperature_next,
+            offset,
+            bytemuck::bytes_of(&initial_temperature),
+        );
+        queue.write_buffer(
+            &self.cell_thermal_state_next,
+            offset,
+            bytemuck::bytes_of(&initial_thermal_state),
+        );
+        queue.write_buffer(
+            &self.cell_prev_muscle_contraction,
+            offset,
+            bytemuck::bytes_of(&0.0f32),
         );
     }
 

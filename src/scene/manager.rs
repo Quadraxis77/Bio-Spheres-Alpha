@@ -241,6 +241,9 @@ impl SceneManager {
                         simulator.water_bitfield_buffer(),
                         simulator.water_velocity_buffer(),
                         simulator.ice_bitfield_buffer(),
+                        simulator.current_state_buffer(),
+                        simulator.temperature_field_buffer(),
+                        simulator.geothermal_heat_buffer(),
                     );
                 }
             }

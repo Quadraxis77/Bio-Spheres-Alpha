@@ -535,6 +535,18 @@ pub struct CanonicalState {
     /// Always 0.0 for non-Memorocyte cells.
     pub memo_state: Vec<f32>,
 
+    /// Per-cell internal water reserve for slow physiology.
+    pub cell_water: Vec<f32>,
+
+    /// Per-cell heat energy. Temperature is derived from this and water content.
+    pub cell_heat_energy: Vec<f32>,
+
+    /// Cached derived temperature, maintained by the GPU physiology pass.
+    pub cell_cached_temperature: Vec<f32>,
+
+    /// Thermal state enum stored compactly on CPU; GPU uses u32 storage.
+    pub cell_thermal_state: Vec<u8>,
+
     /// Track actual signal flow paths for visualization
     /// Maps (source_cell, target_cell) -> true if signal flowed from source to target
     pub signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker,
@@ -819,6 +831,13 @@ impl CanonicalState {
 
             // Memorocyte leaky-integrator state - 0.0 for all cells initially
             memo_state: vec![0.0f32; capacity],
+
+            // Hidden physiology state. Temperature starts in the ideal band:
+            // heat_energy / (dry_mass + water * water_mass_factor) = 105.
+            cell_water: vec![1.0; capacity],
+            cell_heat_energy: vec![210.0; capacity],
+            cell_cached_temperature: vec![105.0; capacity],
+            cell_thermal_state: vec![4; capacity],
         }
     }
 
@@ -932,6 +951,10 @@ impl CanonicalState {
         self.reserves[index] = 0;
         self.embryocyte_timers[index] = 0.0;
         self.memo_state[index] = 0.0;
+        self.cell_water[index] = 1.0;
+        self.cell_heat_energy[index] = 210.0;
+        self.cell_cached_temperature[index] = 105.0;
+        self.cell_thermal_state[index] = 4;
 
         Some(index)
     }
@@ -1053,6 +1076,10 @@ impl CanonicalState {
         self.reserves[slot_index] = 0;
         self.embryocyte_timers[slot_index] = 0.0;
         self.memo_state[slot_index] = 0.0;
+        self.cell_water[slot_index] = 1.0;
+        self.cell_heat_energy[slot_index] = 210.0;
+        self.cell_cached_temperature[slot_index] = 105.0;
+        self.cell_thermal_state[slot_index] = 4;
 
         Some(slot_index)
     }

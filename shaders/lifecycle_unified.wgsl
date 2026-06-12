@@ -159,6 +159,10 @@ var<storage, read> embryocyte_mode_v9: array<vec4<f32>>;
 @group(2) @binding(21)
 var<storage, read> embryocyte_mode_v10: array<vec4<f32>>;
 
+// Binding 22: Thermal state from the hidden physiology pass.
+@group(2) @binding(22)
+var<storage, read> cell_thermal_state: array<u32>;
+
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -188,6 +192,8 @@ const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 // Constants
 const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;  // Death when nutrients < 1.0
 const RING_BUFFER_CAPACITY: u32 = 262144u; // 256K slots, must match Rust side (supports 200K cells)
+const THERMAL_STATE_FROZEN: u32 = 1u;
+const THERMAL_STATE_HEAT_SHOCK: u32 = 8u;
 
 // Fixed-point conversion
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -410,6 +416,12 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Get cell type early (needed for Embryocyte handling before division checks)
     let mode_idx = mode_indices[cell_idx];
     let cell_type = mode_cell_types[mode_idx];
+
+    let thermal_state = cell_thermal_state[cell_idx];
+    if (thermal_state <= THERMAL_STATE_FROZEN || thermal_state >= THERMAL_STATE_HEAT_SHOCK) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
 
     // === EMBRYOCYTE RESERVE BURN + RELEASE TRIGGER ===
     // Embryocytes never divide normally. When free (no active adhesions) they burn

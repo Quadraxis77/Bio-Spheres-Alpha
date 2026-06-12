@@ -209,6 +209,51 @@ pub fn execute_gpu_physics_step(
     }
     // Implicit pipeline barrier: contraction writes are now visible to the physics pass.
 
+    if current_frame.rem_euclid(4) == 0 {
+        {
+            let mut physiology_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Physiology Update Pass"),
+                timestamp_writes: None,
+            });
+            physiology_pass.set_pipeline(&pipelines.physiology_update);
+            physiology_pass.set_bind_group(0, physics_bind_group, &[]);
+            physiology_pass.set_bind_group(1, &cached_bind_groups.physiology, &[]);
+            physiology_pass.set_bind_group(2, &cached_bind_groups.physiology_cell_data, &[]);
+            physiology_pass.set_bind_group(3, &cached_bind_groups.adhesion, &[]);
+            physiology_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+
+        let scalar_bytes = triple_buffers.capacity as u64 * 4;
+        encoder.copy_buffer_to_buffer(
+            &triple_buffers.cell_water_next,
+            0,
+            &triple_buffers.cell_water,
+            0,
+            scalar_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &triple_buffers.cell_heat_energy_next,
+            0,
+            &triple_buffers.cell_heat_energy,
+            0,
+            scalar_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &triple_buffers.cell_cached_temperature_next,
+            0,
+            &triple_buffers.cell_cached_temperature,
+            0,
+            scalar_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &triple_buffers.cell_thermal_state_next,
+            0,
+            &triple_buffers.cell_thermal_state,
+            0,
+            scalar_bytes,
+        );
+    }
+
     // Execute compute shader stages
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
