@@ -7220,6 +7220,8 @@ impl GpuScene {
             params.seed = editor_state.cave_seed;
             params.grid_resolution = editor_state.cave_resolution;
             params.isolated_chunk_cull_volume = editor_state.cave_isolated_chunk_cull_volume;
+            params.mesh_smoothing_iterations = editor_state.cave_mesh_smoothing_iterations;
+            params.mesh_smoothing_factor = editor_state.cave_mesh_smoothing_factor;
             params.geothermal_enabled = u32::from(editor_state.geothermal_enabled);
             params.geothermal_count = editor_state.geothermal_count;
             params.geothermal_placement_mode = editor_state.geothermal_placement_mode.min(1);

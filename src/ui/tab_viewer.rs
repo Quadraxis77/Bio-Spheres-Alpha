@@ -3590,6 +3590,8 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut seed = params.seed as i32;
             let mut resolution = params.grid_resolution as i32;
             let mut isolated_chunk_cull_volume = params.isolated_chunk_cull_volume;
+            let mut mesh_smoothing_iterations = params.mesh_smoothing_iterations as i32;
+            let mut mesh_smoothing_factor = params.mesh_smoothing_factor;
             let mut geothermal_enabled = params.geothermal_enabled != 0;
             let mut geothermal_count = params.geothermal_count as i32;
             let mut geothermal_placement_mode = params.geothermal_placement_mode;
@@ -3654,6 +3656,20 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                         &mut isolated_chunk_cull_volume,
                         0.0..=1000000.0,
                     ))
+                    .changed();
+
+                ui.add_space(4.0);
+                ui.label("Mesh Smoothing Iterations:")
+                    .on_hover_text("Number of Laplacian smoothing passes applied to the cave mesh after marching cubes. 0 disables smoothing; higher values round off the blocky voxel surface more");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut mesh_smoothing_iterations, 0..=8))
+                    .changed();
+
+                ui.add_space(4.0);
+                ui.label("Mesh Smoothing Factor:")
+                    .on_hover_text("How strongly each smoothing pass pulls vertices toward their neighbors' average position. 0 = no effect; 1 = fully snap to the average");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut mesh_smoothing_factor, 0.0..=1.0))
                     .changed();
             }
 
@@ -3833,6 +3849,9 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.cave_seed = seed as u32;
                 context.editor_state.cave_resolution = resolution as u32;
                 context.editor_state.cave_isolated_chunk_cull_volume = isolated_chunk_cull_volume;
+                context.editor_state.cave_mesh_smoothing_iterations =
+                    mesh_smoothing_iterations.max(0) as u32;
+                context.editor_state.cave_mesh_smoothing_factor = mesh_smoothing_factor;
                 context.editor_state.geothermal_enabled = geothermal_enabled;
                 context.editor_state.geothermal_count = geothermal_count.max(0) as u32;
                 context.editor_state.geothermal_placement_mode = geothermal_placement_mode.min(1);

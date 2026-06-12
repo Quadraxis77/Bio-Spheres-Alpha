@@ -7,7 +7,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -85,7 +85,14 @@ pub struct CaveParams {
     /// 0 disables fragment culling.
     pub isolated_chunk_cull_volume: f32,
 
-    _padding: [f32; 169],
+    /// Number of Laplacian smoothing passes applied to the marching cubes
+    /// mesh. 0 disables mesh smoothing (raw marching cubes geometry).
+    pub mesh_smoothing_iterations: u32,
+    /// Blend factor per smoothing pass: 0 = no movement, 1 = snap fully to
+    /// the average of neighboring vertices.
+    pub mesh_smoothing_factor: f32,
+
+    _padding: [f32; 167],
 }
 
 impl Default for CaveParams {
@@ -123,7 +130,9 @@ impl Default for CaveParams {
             geothermal_glow_radius: 10.0,
             geothermal_glow_color: [1.0, 0.32, 0.055],
             isolated_chunk_cull_volume: DEFAULT_ISOLATED_CHUNK_CULL_VOLUME,
-            _padding: [0.0; 169],
+            mesh_smoothing_iterations: DEFAULT_MESH_SMOOTHING_ITERATIONS,
+            mesh_smoothing_factor: DEFAULT_MESH_SMOOTHING_FACTOR,
+            _padding: [0.0; 167],
         }
     }
 }
@@ -1011,6 +1020,12 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
 /// islands above this volume are deliberate features and are kept.
 pub const DEFAULT_ISOLATED_CHUNK_CULL_VOLUME: f32 = 50.0;
 
+/// Default number of Laplacian smoothing passes applied to the marching
+/// cubes mesh. 0 means smoothing is off by default.
+pub const DEFAULT_MESH_SMOOTHING_ITERATIONS: u32 = 0;
+/// Default blend factor for mesh smoothing passes.
+pub const DEFAULT_MESH_SMOOTHING_FACTOR: f32 = 0.5;
+
 pub fn isolated_chunk_min_voxels(params: &CaveParams, cell_size: f32) -> usize {
     if params.isolated_chunk_cull_volume <= 0.0 {
         return 0;
@@ -1218,7 +1233,108 @@ impl CaveSystemRenderer {
             log::info!("Cave generation: culled {removed_triangles} isolated mesh triangles");
         }
 
+        Self::smooth_cave_mesh(
+            &mut vertices,
+            &indices,
+            params.mesh_smoothing_iterations,
+            params.mesh_smoothing_factor,
+            cell_size,
+        );
+
         (vertices, indices)
+    }
+
+    /// Apply Laplacian smoothing to the marching cubes mesh to soften the
+    /// blocky/stair-step look of raw voxel geometry. Marching cubes emits a
+    /// separate vertex per triangle corner, so vertices sharing a position
+    /// are first merged into shared points, smoothed together over
+    /// `iterations` passes, then written back. Normals and triplanar UVs are
+    /// recomputed from the smoothed geometry.
+    fn smooth_cave_mesh(
+        vertices: &mut [CaveVertex],
+        indices: &[u32],
+        iterations: u32,
+        factor: f32,
+        cell_size: f32,
+    ) {
+        if iterations == 0 || factor <= 0.0 || indices.is_empty() {
+            return;
+        }
+
+        let quantize = |p: [f32; 3]| -> (i32, i32, i32) {
+            let q = (cell_size * 0.0001).max(0.0001);
+            (
+                (p[0] / q).round() as i32,
+                (p[1] / q).round() as i32,
+                (p[2] / q).round() as i32,
+            )
+        };
+
+        // Merge vertices that share a position (edge-shared between
+        // triangles) into a single point.
+        let mut pos_to_id: HashMap<(i32, i32, i32), u32> = HashMap::new();
+        let mut positions: Vec<Vec3> = Vec::new();
+        let mut vertex_to_point: Vec<u32> = Vec::with_capacity(vertices.len());
+        for v in vertices.iter() {
+            let key = quantize(v.position);
+            let id = *pos_to_id.entry(key).or_insert_with(|| {
+                positions.push(Vec3::from(v.position));
+                (positions.len() - 1) as u32
+            });
+            vertex_to_point.push(id);
+        }
+
+        // Build edge adjacency between shared points from triangle indices.
+        let mut neighbors: Vec<HashSet<u32>> = vec![HashSet::new(); positions.len()];
+        for tri in indices.chunks_exact(3) {
+            let a = vertex_to_point[tri[0] as usize];
+            let b = vertex_to_point[tri[1] as usize];
+            let c = vertex_to_point[tri[2] as usize];
+            for &(p, q) in &[(a, b), (b, c), (c, a)] {
+                if p != q {
+                    neighbors[p as usize].insert(q);
+                    neighbors[q as usize].insert(p);
+                }
+            }
+        }
+
+        // Laplacian smoothing: blend each point toward the average of its
+        // neighbors, repeated for `iterations` passes.
+        for _ in 0..iterations {
+            let mut next = positions.clone();
+            for (i, neighs) in neighbors.iter().enumerate() {
+                if neighs.is_empty() {
+                    continue;
+                }
+                let sum: Vec3 = neighs.iter().map(|&n| positions[n as usize]).sum();
+                let avg = sum / neighs.len() as f32;
+                next[i] = positions[i].lerp(avg, factor);
+            }
+            positions = next;
+        }
+
+        // Write smoothed positions back to every (duplicated) vertex.
+        for (v, &id) in vertices.iter_mut().zip(vertex_to_point.iter()) {
+            v.position = positions[id as usize].to_array();
+        }
+
+        // Recompute flat normals and triplanar UVs from the smoothed geometry.
+        for tri in indices.chunks_exact(3) {
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+            let v0 = Vec3::from(vertices[i0].position);
+            let v1 = Vec3::from(vertices[i1].position);
+            let v2 = Vec3::from(vertices[i2].position);
+            let normal = (v1 - v0).cross(v2 - v0).normalize_or_zero();
+            if normal.length_squared() < 0.0001 {
+                continue;
+            }
+            for &i in &[i0, i1, i2] {
+                vertices[i].normal = normal.to_array();
+                vertices[i].uv = compute_triplanar_uv(Vec3::from(vertices[i].position), normal);
+            }
+        }
     }
 
     fn cull_small_mesh_components(
