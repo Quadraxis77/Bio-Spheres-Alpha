@@ -125,6 +125,10 @@ const WATER_THERMAL_MASS_FACTOR: f32 = 1.0;
 const BASE_ENV_TEMP: f32 = 105.0;
 const TEMP_DEADBAND: f32 = 0.25;
 const WATER_DEADBAND: f32 = 0.0025;
+const HOT_DRY_AIR_START_TEMP: f32 = 120.0;
+const HOT_DRY_AIR_FULL_TEMP: f32 = 170.0;
+const HOT_DRY_AIR_TARGET_FRACTION: f32 = 0.18;
+const HOT_DRY_AIR_MAX_LOSS_RATE: f32 = 0.014;
 const VOXEL_TEMP_MIN_C: f32 = -50.0;
 const VOXEL_TEMP_MAX_C: f32 = 150.0;
 const VOXEL_TEMP_FP: f32 = 256.0;
@@ -288,6 +292,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else if (env.fluid_type == 2u || env.fluid_type == 4u) {
             water_target_fraction = 0.0;
             water_exchange = 0.01;
+        }
+        if (env.fluid_type == 0u && env.temp_internal > HOT_DRY_AIR_START_TEMP) {
+            let hot_dry_factor = clamp(
+                (env.temp_internal - HOT_DRY_AIR_START_TEMP) / (HOT_DRY_AIR_FULL_TEMP - HOT_DRY_AIR_START_TEMP),
+                0.0,
+                1.0
+            );
+            let fill_fraction = old_water / max(capacity, 0.001);
+            water_target_fraction = mix(water_target_fraction, HOT_DRY_AIR_TARGET_FRACTION, hot_dry_factor);
+            water_exchange = mix(water_exchange, 0.012, hot_dry_factor);
+            water_delta -= HOT_DRY_AIR_MAX_LOSS_RATE * hot_dry_factor * fill_fraction * dt;
         }
         water_delta += water_exchange * (water_target_fraction * capacity - old_water) * dt;
     } else {

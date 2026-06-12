@@ -6220,6 +6220,17 @@ impl GpuPhysicsPipelines {
     fn create_cell_insertion_state_bind_group_layout(
         device: &wgpu::Device,
     ) -> wgpu::BindGroupLayout {
+        let rw_storage = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cell Insertion State Bind Group Layout"),
             entries: &[
@@ -6465,6 +6476,15 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Bindings 22-29: hidden physiology state, current and next.
+                rw_storage(22),
+                rw_storage(23),
+                rw_storage(24),
+                rw_storage(25),
+                rw_storage(26),
+                rw_storage(27),
+                rw_storage(28),
+                rw_storage(29),
             ],
         })
     }
@@ -6688,6 +6708,47 @@ impl GpuPhysicsPipelines {
                 // Binding 17: Embryocyte reserve buffer (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 17,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Bindings 18-21: hidden physiology state (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 18,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 19,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 20,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 21,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -8091,6 +8152,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 8: cell thermal state (critical heat saturates signal channels 0-7)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -8439,6 +8511,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: triple_buffers.oculocyte_light_filters.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: triple_buffers.cell_thermal_state.as_entire_binding(),
                 },
             ],
         })

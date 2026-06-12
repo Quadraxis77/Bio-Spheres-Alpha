@@ -17,6 +17,7 @@ const SIGNAL_VALUE_MASK: u32 = 2047u;
 const SIGNAL_HOP_SHIFT: u32 = 11u;
 const SIGNAL_SOURCE_FLAG: u32 = 1u << 24u;
 const SIGNAL_BUDGET_SCALE: u32 = 4u;
+const THERMAL_STATE_CRITICAL: u32 = 9u;
 
 @group(0) @binding(0)
 var<storage, read_write> signal_flags: array<atomic<u32>>;
@@ -52,6 +53,9 @@ var<storage, read> oculocyte_signal_values: array<f32>;
 // Oculocyte light filters: [target_r, target_g, target_b, tolerance] per mode.
 @group(1) @binding(7)
 var<storage, read> oculocyte_light_filters: array<vec4<f32>>;
+
+@group(1) @binding(8)
+var<storage, read> cell_thermal_state: array<u32>;
 
 // World data for barrier, food, and light sensing
 struct SignalSenseWorldParams {
@@ -363,6 +367,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let signal_value = SIGNAL_SOURCE_FLAG | (signal_budget << SIGNAL_HOP_SHIFT) | emit_value;
                 atomicStore(&signal_flags[idx * SIGNAL_CHANNELS + signal_channel], signal_value);
             }
+        }
+    }
+
+    // Critical heat saturates only sensory channels 0-7. Regulation channels 8-15
+    // are intentionally left untouched so thermal crisis does not impersonate
+    // authored regulation emissions.
+    if (cell_thermal_state[idx] == THERMAL_STATE_CRITICAL) {
+        let critical_signal = SIGNAL_SOURCE_FLAG | SIGNAL_VALUE_MASK;
+        let base = idx * SIGNAL_CHANNELS;
+        for (var ch = 0u; ch < 8u; ch++) {
+            atomicStore(&signal_flags[base + ch], critical_signal);
         }
     }
 

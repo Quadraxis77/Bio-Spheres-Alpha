@@ -231,6 +231,38 @@ impl GpuCellInsertion {
                     binding: 21,
                     resource: buffers.organism_cell_ids.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 22,
+                    resource: buffers.cell_water.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 23,
+                    resource: buffers.cell_heat_energy.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: buffers.cell_cached_temperature.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 25,
+                    resource: buffers.cell_thermal_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 26,
+                    resource: buffers.cell_water_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 27,
+                    resource: buffers.cell_heat_energy_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 28,
+                    resource: buffers.cell_cached_temperature_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 29,
+                    resource: buffers.cell_thermal_state_next.as_entire_binding(),
+                },
             ],
         });
 

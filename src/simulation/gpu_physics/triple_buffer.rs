@@ -521,6 +521,18 @@ pub struct GpuTripleBufferSystem {
 }
 
 impl GpuTripleBufferSystem {
+    fn physiology_water_capacity_for_cell_type(cell_type: u32) -> f32 {
+        if cell_type == 12 {
+            10.0
+        } else {
+            1.0
+        }
+    }
+
+    fn physiology_heat_for_temperature(temperature: f32, water: f32) -> f32 {
+        temperature * (1.0 + water)
+    }
+
     /// Create a new triple buffer system
     pub fn new(device: &wgpu::Device, capacity: u32) -> Self {
         let buffer_size = capacity as u64 * 16; // Vec4<f32> = 16 bytes
@@ -2857,9 +2869,10 @@ impl GpuTripleBufferSystem {
             bytemuck::bytes_of(&initial_nutrients),
         );
 
-        let initial_water = 1.0f32;
-        let initial_heat_energy = 210.0f32;
         let initial_temperature = 105.0f32;
+        let initial_water = Self::physiology_water_capacity_for_cell_type(cell_type);
+        let initial_heat_energy =
+            Self::physiology_heat_for_temperature(initial_temperature, initial_water);
         let initial_thermal_state = 4u32;
         queue.write_buffer(&self.cell_water, offset, bytemuck::bytes_of(&initial_water));
         queue.write_buffer(

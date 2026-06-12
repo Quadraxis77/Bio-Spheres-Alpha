@@ -204,6 +204,47 @@ var<storage, read_write> parent_lineage_hashes_out: array<vec2<u32>>;
 @group(2) @binding(21)
 var<storage, read_write> organism_cell_ids: array<u32>;
 
+@group(2) @binding(22)
+var<storage, read_write> cell_water: array<f32>;
+
+@group(2) @binding(23)
+var<storage, read_write> cell_heat_energy: array<f32>;
+
+@group(2) @binding(24)
+var<storage, read_write> cell_cached_temperature: array<f32>;
+
+@group(2) @binding(25)
+var<storage, read_write> cell_thermal_state: array<u32>;
+
+@group(2) @binding(26)
+var<storage, read_write> cell_water_next: array<f32>;
+
+@group(2) @binding(27)
+var<storage, read_write> cell_heat_energy_next: array<f32>;
+
+@group(2) @binding(28)
+var<storage, read_write> cell_cached_temperature_next: array<f32>;
+
+@group(2) @binding(29)
+var<storage, read_write> cell_thermal_state_next: array<u32>;
+
+const CELL_TYPE_VASCULOCYTE: u32 = 12u;
+const INITIAL_CELL_TEMPERATURE: f32 = 105.0;
+const THERMAL_STATE_IDEAL: u32 = 4u;
+const DRY_THERMAL_MASS: f32 = 1.0;
+const WATER_THERMAL_MASS_FACTOR: f32 = 1.0;
+
+fn physiology_water_capacity(cell_type: u32) -> f32 {
+    if (cell_type == CELL_TYPE_VASCULOCYTE) {
+        return 10.0;
+    }
+    return 1.0;
+}
+
+fn physiology_heat_for_temperature(temp: f32, water: f32) -> f32 {
+    return temp * max(DRY_THERMAL_MASS + water * WATER_THERMAL_MASS_FACTOR, 0.001);
+}
+
 struct U64 {
     lo: u32,
     hi: u32,
@@ -427,6 +468,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let default_reserve = select(0u, 65535000u, is_storage);
     let reserve_value = select(default_reserve, insertion_params.initial_reserve, insertion_params.initial_reserve != 0u);
     atomicStore(&embryocyte_reserves[slot], reserve_value);
+
+    let initial_water = physiology_water_capacity(insertion_params.cell_type);
+    let initial_heat_energy = physiology_heat_for_temperature(INITIAL_CELL_TEMPERATURE, initial_water);
+    cell_water[slot] = initial_water;
+    cell_heat_energy[slot] = initial_heat_energy;
+    cell_cached_temperature[slot] = INITIAL_CELL_TEMPERATURE;
+    cell_thermal_state[slot] = THERMAL_STATE_IDEAL;
+    cell_water_next[slot] = initial_water;
+    cell_heat_energy_next[slot] = initial_heat_energy;
+    cell_cached_temperature_next[slot] = INITIAL_CELL_TEMPERATURE;
+    cell_thermal_state_next[slot] = THERMAL_STATE_IDEAL;
 
     // Live cell count was reserved before slot allocation.
 }

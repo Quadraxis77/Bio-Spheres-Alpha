@@ -549,6 +549,10 @@ fn physiology_temperature(heat_energy: f32, water: f32) -> f32 {
     return heat_energy / physiology_thermal_mass(water);
 }
 
+fn physiology_heat_for_temperature(temp: f32, water: f32) -> f32 {
+    return temp * physiology_thermal_mass(water);
+}
+
 fn physiology_state_for_temperature(temp: f32) -> u32 {
     if (temp <= 45.0) { return THERMAL_STATE_DEEP_FROZEN; }
     if (temp < 60.0) { return THERMAL_STATE_FROZEN; }
@@ -662,7 +666,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let parent_water = cell_water[cell_idx];
     let parent_heat_energy = cell_heat_energy[cell_idx];
-    let child_heat_energy = parent_heat_energy * 0.5;
+    let parent_temp = physiology_temperature(max(parent_heat_energy, 0.0), max(parent_water, 0.0));
 
     // Get parent's mode index for looking up child orientations and split direction
     let parent_mode_idx = mode_indices[cell_idx];
@@ -930,9 +934,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(child_a_nutrients));
     atomicStore(&embryocyte_reserves[cell_idx], child_reserve);
     let child_a_water = min(parent_water * 0.5, physiology_water_capacity(child_a_cell_type));
-    let child_a_temp = physiology_temperature(child_heat_energy, child_a_water);
+    let child_a_temp = parent_temp;
+    let child_a_heat_energy = physiology_heat_for_temperature(child_a_temp, child_a_water);
     cell_water[cell_idx] = child_a_water;
-    cell_heat_energy[cell_idx] = child_heat_energy;
+    cell_heat_energy[cell_idx] = child_a_heat_energy;
     cell_cached_temperature[cell_idx] = child_a_temp;
     cell_thermal_state[cell_idx] = physiology_state_for_temperature(child_a_temp);
 
@@ -986,9 +991,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicStore(&nutrients_buffer[child_b_slot], float_to_fixed(child_b_nutrients));
     atomicStore(&embryocyte_reserves[child_b_slot], child_reserve);
     let child_b_water = min(parent_water * 0.5, physiology_water_capacity(child_b_cell_type));
-    let child_b_temp = physiology_temperature(child_heat_energy, child_b_water);
+    let child_b_temp = parent_temp;
+    let child_b_heat_energy = physiology_heat_for_temperature(child_b_temp, child_b_water);
     cell_water[child_b_slot] = child_b_water;
-    cell_heat_energy[child_b_slot] = child_heat_energy;
+    cell_heat_energy[child_b_slot] = child_b_heat_energy;
     cell_cached_temperature[child_b_slot] = child_b_temp;
     cell_thermal_state[child_b_slot] = physiology_state_for_temperature(child_b_temp);
 

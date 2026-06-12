@@ -714,6 +714,85 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(4.0);
 
+                // -- PHYSIOLOGY section --------------------------------------
+                section_header(ui, "PHYSIOLOGY");
+
+                let thermal_state_label = match data.cell_thermal_state {
+                    0 => "Deep frozen",
+                    1 => "Frozen",
+                    2 => "Chilled",
+                    3 => "Cool",
+                    4 => "Ideal",
+                    5 => "Warm",
+                    6 => "Hot safe",
+                    7 => "Overheated",
+                    8 => "Heat shock",
+                    9 => "Critical",
+                    _ => "Unknown",
+                };
+                let thermal_color = match data.cell_thermal_state {
+                    0 | 1 | 8 | 9 => palette().status_err,
+                    2 | 7 => palette().status_warn,
+                    3 | 4 | 5 | 6 => palette().status_ok,
+                    _ => palette().text_dim,
+                };
+                let cell_temp_c = data.cell_cached_temperature / 255.0 * 200.0 - 50.0;
+
+                egui::Grid::new("inspector_physiology_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("Water")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.3}", data.cell_water))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Heat")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.2}", data.cell_heat_energy))
+                                .size(11.0)
+                                .color(palette().text_primary),
+                        );
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Temperature")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("{:.1} C", cell_temp_c))
+                                .size(11.0)
+                                .color(thermal_color),
+                        );
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Thermal state")
+                                .size(11.0)
+                                .color(palette().text_secondary),
+                        );
+                        ui.label(
+                            egui::RichText::new(thermal_state_label)
+                                .size(11.0)
+                                .color(thermal_color),
+                        );
+                        ui.end_row();
+                    });
+
+                ui.add_space(4.0);
+
                 // -- PHYSICS section ------------------------------------------
                 section_header(ui, "PHYSICS");
 

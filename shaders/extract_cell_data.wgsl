@@ -81,6 +81,12 @@ struct InspectedCellData {
     reserve: u32,      // embryocyte reserve (0-65535); also used by non-embryocytes as head-start buffer
     _pad3: u32,
     _pad4: u32,
+
+    // Hidden physiology state (16 bytes)
+    cell_water: f32,
+    cell_heat_energy: f32,
+    cell_cached_temperature: f32,
+    cell_thermal_state: u32,
 }
 
 // Physics bind group (group 0) - standard 6-binding layout
@@ -168,6 +174,18 @@ var<storage, read> label_buffer: array<u32>;
 @group(2) @binding(17)
 var<storage, read> embryocyte_reserves: array<u32>;
 
+@group(2) @binding(18)
+var<storage, read> cell_water: array<f32>;
+
+@group(2) @binding(19)
+var<storage, read> cell_heat_energy: array<f32>;
+
+@group(2) @binding(20)
+var<storage, read> cell_cached_temperature: array<f32>;
+
+@group(2) @binding(21)
+var<storage, read> cell_thermal_state: array<u32>;
+
 // Output buffer for extracted cell data
 @group(3) @binding(0)
 var<storage, read_write> extracted_data: InspectedCellData;
@@ -209,6 +227,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         extracted_data.is_dead = 0u;
         extracted_data.organism_id = 0xFFFFFFFFu;
         extracted_data.reserve = 0u;
+        extracted_data.cell_water = 0.0;
+        extracted_data.cell_heat_energy = 0.0;
+        extracted_data.cell_cached_temperature = 0.0;
+        extracted_data.cell_thermal_state = 0u;
         return;
     }
     
@@ -264,6 +286,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Reserve
     extracted_data.reserve = embryocyte_reserves[cell_index];
+
+    // Hidden physiology state
+    extracted_data.cell_water = cell_water[cell_index];
+    extracted_data.cell_heat_energy = cell_heat_energy[cell_index];
+    extracted_data.cell_cached_temperature = cell_cached_temperature[cell_index];
+    extracted_data.cell_thermal_state = cell_thermal_state[cell_index];
     
     // Debug: log organism ID values
     if (extracted_data.organism_id == 0u) {

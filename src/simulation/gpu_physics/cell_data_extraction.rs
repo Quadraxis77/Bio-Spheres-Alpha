@@ -62,6 +62,12 @@ pub struct InspectedCellData {
     pub reserve: u32, // embryocyte reserve (0-65535); also used by non-embryocytes as head-start buffer
     pub _pad3: u32,
     pub _pad4: u32,
+
+    // Hidden physiology state (16 bytes)
+    pub cell_water: f32,
+    pub cell_heat_energy: f32,
+    pub cell_cached_temperature: f32,
+    pub cell_thermal_state: u32,
 }
 
 impl Default for InspectedCellData {
@@ -95,6 +101,10 @@ impl Default for InspectedCellData {
             reserve: 0,
             _pad3: 0,
             _pad4: 0,
+            cell_water: 0.0,
+            cell_heat_energy: 0.0,
+            cell_cached_temperature: 0.0,
+            cell_thermal_state: 0,
         }
     }
 }
@@ -301,6 +311,22 @@ impl GpuCellDataExtraction {
                 wgpu::BindGroupEntry {
                     binding: 17,
                     resource: buffers.embryocyte_reserve_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 18,
+                    resource: buffers.cell_water.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 19,
+                    resource: buffers.cell_heat_energy.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 20,
+                    resource: buffers.cell_cached_temperature.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 21,
+                    resource: buffers.cell_thermal_state.as_entire_binding(),
                 },
             ],
         });
