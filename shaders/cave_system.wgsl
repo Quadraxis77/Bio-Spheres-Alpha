@@ -619,9 +619,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let grid_size = shadow_params.cell_size * f32(shadow_params.grid_resolution);
     let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
     let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
-    let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
-    let shadow = mix(1.0, sample_light_field_lod(clamped_pos), shadow_params.shadow_strength);
-    let sun_color = sample_light_color_field(clamped_pos);
+    // Surfaces outside the light field grid (e.g. the world-boundary caps,
+    // which extend slightly past world_radius) have no occlusion data.
+    // Clamping their position onto the grid's outer shell would sample the
+    // boundary-solid voxels and incorrectly darken them, so treat them as
+    // fully sunlit instead - matching how the compute shader lights voxels
+    // outside the world sphere.
+    var shadow = 1.0;
+    var sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    if (all(in.world_position >= grid_min) && all(in.world_position <= grid_max)) {
+        let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
+        shadow = mix(1.0, sample_light_field_lod(clamped_pos), shadow_params.shadow_strength);
+        sun_color = sample_light_color_field(clamped_pos);
+    }
     // Ambient scales with sun_color so cave walls go pitch black when sun is off.
     let ambient = sun_color * 0.08 * ao;
     var final_color = final_base_color * (ambient + sun_color * diffuse * 0.7 * shadow) + sun_color * vec3<f32>(specular * 0.3 * shadow);
