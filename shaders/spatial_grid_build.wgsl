@@ -66,6 +66,18 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 @group(1) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
+// Unused in this shader but required for bind group layout compatibility
+@group(1) @binding(5)
+var<storage, read> organism_labels: array<u32>;
+
+// Dense list of buckets occupied this frame. Appended when a bucket first receives a cell.
+@group(1) @binding(6)
+var<storage, read_write> occupied_grid_cells: array<u32>;
+
+// [0] = occupied bucket count.
+@group(1) @binding(7)
+var<storage, read_write> occupied_grid_count: array<atomic<u32>>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
 
 fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32, grid_resolution: i32) -> u32 {
@@ -101,6 +113,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Atomically claim a slot in this grid cell and insert
     let slot = atomicAdd(&spatial_grid_counts[grid_idx], 1u);
+    if (slot == 0u) {
+        let occupied_slot = atomicAdd(&occupied_grid_count[0], 1u);
+        if (occupied_slot < params.cell_capacity) {
+            occupied_grid_cells[occupied_slot] = grid_idx;
+        }
+    }
     if (slot < MAX_CELLS_PER_GRID) {
         spatial_grid_cells[grid_idx * MAX_CELLS_PER_GRID + slot] = cell_idx;
     }

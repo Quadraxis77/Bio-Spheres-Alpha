@@ -625,8 +625,8 @@ fn sampled_mutation_is_meaningful(
 impl GpuScene {
     pub fn maybe_capture_lineage_interval(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
     ) -> Result<bool, SnapshotError> {
         let interval = self.lineage_capture_interval_seconds;
         if self.current_time < interval {
@@ -640,11 +640,40 @@ impl GpuScene {
             .unwrap_or(true);
 
         if due {
-            self.scan_lineage_for_viewer(device, queue)?;
+            self.scan_lineage_for_viewer_nonblocking()?;
             Ok(true)
         } else {
             Ok(false)
         }
+    }
+
+    /// Refresh lineage viewer metadata without blocking the GPU.
+    ///
+    /// This intentionally avoids per-cell GPU readbacks and uses the most recent
+    /// async cell-count values maintained by the main scene tick. It is suitable
+    /// for automatic lineage-panel refreshes while the simulation is running.
+    pub fn scan_lineage_for_viewer_nonblocking(&mut self) -> Result<(), SnapshotError> {
+        let live_cells = self.current_cell_count;
+        let slots_used = self.total_cell_slots.min(self.gpu_triple_buffers.capacity);
+
+        self.lineage_archive
+            .ensure_scene_genomes(&self.genomes, self.current_frame);
+        self.lineage_archive.record_scan_population(
+            self.current_frame,
+            self.current_time,
+            live_cells,
+            0,
+            live_cells,
+            false,
+        );
+
+        log::debug!(
+            "[Lineage] Nonblocking viewer refresh: frame={} live={} slots={}",
+            self.current_frame,
+            live_cells,
+            slots_used
+        );
+        Ok(())
     }
 
     /// Capture a frozen lineage/bestiary population scan for the UI.

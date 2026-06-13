@@ -1,22 +1,12 @@
-// Stage 4: Collision detection using O(1) spatial grid neighbor lookup
-// Only processes cells in neighboring 3x3x3 grid cells using spatial_grid_cells
-// Workgroup size: 256 threads for optimal GPU occupancy
+// Stage 4: Deduplicated cell collision broadphase.
 //
-// Optimizations applied:
-// - Pre-computed 27 neighbor grid indices (reduces redundant calculations)
-// - Branchless boundary checks using clamp + select (reduces warp divergence)
-// - 256-thread workgroups (8 warps = optimal GPU scheduling)
+// The spatial grid still preserves the full 3x3x3 logical neighborhood, but
+// collision pairs are generated per occupied bucket:
+// - all same-bucket pairs once
+// - all pairs against 13 lexicographically-forward neighbor buckets
 //
-// Algorithm:
-// 1. Get this cell's grid coordinates
-// 2. Pre-compute all 27 neighbor grid indices and counts
-// 3. For each neighbor grid cell:
-//    - Read count from pre-computed array
-//    - Iterate spatial_grid_cells[grid_base + 0..count] for O(1) lookup
-//    - Compute collision for each neighbor cell
-//
-// This is O(27 * max_cells_per_grid) = O(27 * 16) = O(432) per cell,
-// which is constant time regardless of total cell count.
+// This removes A->B / B->A duplicate checks without dropping edge- or
+// corner-adjacent voxel collisions.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -52,7 +42,6 @@ var<storage, read_write> positions_out: array<vec4<f32>>;
 @group(0) @binding(4)
 var<storage, read_write> velocities_out: array<vec4<f32>>;
 
-// GPU-side cell count: [0] = total cells, [1] = live cells
 @group(0) @binding(5)
 var<storage, read_write> cell_count_buffer: array<u32>;
 
@@ -65,21 +54,21 @@ var<storage, read_write> spatial_grid_offsets: array<u32>;
 @group(1) @binding(2)
 var<storage, read_write> cell_grid_indices: array<u32>;
 
-// Sorted cell indices by grid cell (16 cells per grid cell)
 @group(1) @binding(3)
 var<storage, read_write> spatial_grid_cells: array<u32>;
 
-// Per-cell membrane stiffness from genome mode
 @group(1) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
-// Per-cell organism ID for self-collision filtering
-// Cells with the same organism ID (same connected component) will not collide
-// 0xFFFFFFFF = dead/isolated cell (collides with everything)
 @group(1) @binding(5)
 var<storage, read> organism_labels: array<u32>;
 
-// Force accumulation buffers (group 2) - atomic i32 for multi-adhesion accumulation
+@group(1) @binding(6)
+var<storage, read_write> occupied_grid_cells: array<u32>;
+
+@group(1) @binding(7)
+var<storage, read_write> occupied_grid_count: array<atomic<u32>>;
+
 @group(2) @binding(0)
 var<storage, read_write> force_accum_x: array<atomic<i32>>;
 
@@ -89,7 +78,6 @@ var<storage, read_write> force_accum_y: array<atomic<i32>>;
 @group(2) @binding(2)
 var<storage, read_write> force_accum_z: array<atomic<i32>>;
 
-// Torque accumulation buffers - atomic i32 for boundary rotation force
 @group(2) @binding(3)
 var<storage, read_write> torque_accum_x: array<atomic<i32>>;
 
@@ -99,18 +87,12 @@ var<storage, read_write> torque_accum_y: array<atomic<i32>>;
 @group(2) @binding(5)
 var<storage, read_write> torque_accum_z: array<atomic<i32>>;
 
-// Cell rotations for boundary torque calculation
 @group(2) @binding(6)
 var<storage, read> rotations: array<vec4<f32>>;
 
-// Angular velocities for rolling friction (read-only; written by velocity_update)
 @group(2) @binding(7)
 var<storage, read> angular_velocities: array<vec4<f32>>;
 
-// Boulder state and count for cell-boulder collision (read-only).
-// Boulders are not in the cell slot system so they don't appear in the spatial grid.
-// Each cell thread checks all live boulders directly - with max 256 boulders this
-// is at most 256 extra reads per cell, which is negligible.
 struct GpuBoulder {
     position:         vec3<f32>,
     radius:           f32,
@@ -123,25 +105,35 @@ struct GpuBoulder {
 }
 @group(2) @binding(8) var<storage, read> boulder_state: array<GpuBoulder>;
 @group(2) @binding(9) var<storage, read> boulder_count: array<u32>;
-// Boulder force accumulator - cells write reaction forces here so boulders can be pushed.
-// Cleared by DMA each frame before collision detection runs.
-@group(2) @binding(10) var<storage, read_write> boulder_force_accum: array<atomic<i32>>; // 3 per boulder
+@group(2) @binding(10) var<storage, read_write> boulder_force_accum: array<atomic<i32>>;
 
 const MAX_CELLS_PER_GRID: u32 = 16u;
-const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
-// Rolling/sliding friction coefficient.
-// Applied as Coulomb friction: F_friction = FRICTION_COEFF * F_normal (clamped to prevent slip reversal).
 const FRICTION_COEFF: f32 = 0.3;
 const BOUNDARY_REDIRECT_FORCE: f32 = 15.0;
 const BOUNDARY_MAX_REDIRECT_FORCE: f32 = 250.0;
 const BOUNDARY_ALIGNMENT_TORQUE: f32 = 50.0;
 
+const FORWARD_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 13> = array<vec3<i32>, 13>(
+    vec3<i32>(0, 0, 1),
+    vec3<i32>(0, 1, -1),
+    vec3<i32>(0, 1, 0),
+    vec3<i32>(0, 1, 1),
+    vec3<i32>(1, -1, -1),
+    vec3<i32>(1, -1, 0),
+    vec3<i32>(1, -1, 1),
+    vec3<i32>(1, 0, -1),
+    vec3<i32>(1, 0, 0),
+    vec3<i32>(1, 0, 1),
+    vec3<i32>(1, 1, -1),
+    vec3<i32>(1, 1, 0),
+    vec3<i32>(1, 1, 1),
+);
+
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
 }
 
-// Rotate a vector by a quaternion
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let qv = vec3<f32>(q.x, q.y, q.z);
     let uv = cross(qv, v);
@@ -161,70 +153,129 @@ fn grid_index_to_coords(grid_idx: u32, grid_resolution: i32) -> vec3<i32> {
     return vec3<i32>(x, y, z);
 }
 
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let cell_idx = global_id.x;
-    // Read cell count from GPU buffer
-    let cell_count = cell_count_buffer[0];
-    if (cell_idx >= cell_count) {
+fn add_force(cell_idx: u32, force: vec3<f32>) {
+    atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
+    atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
+    atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
+}
+
+fn add_torque(cell_idx: u32, torque: vec3<f32>) {
+    atomicAdd(&torque_accum_x[cell_idx], i32(torque.x * FIXED_POINT_SCALE));
+    atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
+    atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
+}
+
+fn live_cell(cell_idx: u32) -> bool {
+    return cell_idx < cell_count_buffer[0] && positions_in[cell_idx].w >= 0.5;
+}
+
+fn should_collide(a_idx: u32, b_idx: u32) -> bool {
+    let a_organism_id = organism_labels[a_idx];
+    let b_organism_id = organism_labels[b_idx];
+    return !(a_organism_id != 0xFFFFFFFFu &&
+             b_organism_id != 0xFFFFFFFFu &&
+             a_organism_id == b_organism_id);
+}
+
+fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
+    if (a_idx == b_idx || !live_cell(a_idx) || !live_cell(b_idx) || !should_collide(a_idx, b_idx)) {
         return;
     }
-    
+
+    let pos_a = positions_in[a_idx].xyz;
+    let pos_b = positions_in[b_idx].xyz;
+    let mass_a = positions_in[a_idx].w;
+    let mass_b = positions_in[b_idx].w;
+    let radius_a = calculate_radius_from_mass(mass_a);
+    let radius_b = calculate_radius_from_mass(mass_b);
+    let delta = pos_a - pos_b;
+    let dist_sq = dot(delta, delta);
+    let min_dist = radius_a + radius_b;
+
+    if (dist_sq >= min_dist * min_dist) {
+        return;
+    }
+
+    let dist = sqrt(max(dist_sq, 0.0));
+    let penetration = min_dist - dist;
+    var normal: vec3<f32>;
+    if (dist > 0.0001) {
+        normal = delta / dist;
+    } else {
+        normal = select(vec3<f32>(-1.0, 0.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), a_idx > b_idx);
+    }
+
+    let stiffness_a = stiffnesses[a_idx];
+    let stiffness_b = stiffnesses[b_idx];
+    let combined_stiffness = (stiffness_a + stiffness_b) * 0.5;
+    let vel_a = velocities_in[a_idx].xyz;
+    let vel_b = velocities_in[b_idx].xyz;
+    let relative_vel = vel_a - vel_b;
+    let normal_damping = dot(relative_vel, normal) * 0.5;
+    let normal_force_mag = penetration * combined_stiffness - normal_damping;
+    let normal_force = normal * normal_force_mag;
+
+    var force_a = normal_force;
+    var force_b = -normal_force;
+    var torque_a = vec3<f32>(0.0);
+    var torque_b = vec3<f32>(0.0);
+
+    let r_a = -normal * radius_a;
+    let r_b = normal * radius_b;
+    let omega_a = angular_velocities[a_idx].xyz;
+    let omega_b = angular_velocities[b_idx].xyz;
+    let v_contact_a = vel_a + cross(omega_a, r_a);
+    let v_contact_b = vel_b + cross(omega_b, r_b);
+    let v_slip = v_contact_a - v_contact_b;
+    let v_slip_tangential = v_slip - dot(v_slip, normal) * normal;
+    let slip_speed = length(v_slip_tangential);
+
+    if (slip_speed > 0.0001) {
+        let friction_dir = -v_slip_tangential / slip_speed;
+        let friction_mag = min(
+            FRICTION_COEFF * abs(normal_force_mag),
+            slip_speed * combined_stiffness * 0.1
+        );
+        let friction_force = friction_dir * friction_mag;
+        force_a += friction_force;
+        force_b -= friction_force;
+        torque_a += cross(r_a, friction_force);
+        torque_b += cross(r_b, -friction_force);
+    }
+
+    add_force(a_idx, force_a);
+    add_force(b_idx, force_b);
+    add_torque(a_idx, torque_a);
+    add_torque(b_idx, torque_b);
+}
+
+fn apply_single_cell_forces(cell_idx: u32) {
+    if (!live_cell(cell_idx)) {
+        return;
+    }
+
     let pos = positions_in[cell_idx].xyz;
-    let mass = positions_in[cell_idx].w;
-
-    // Skip dead cells - they must not generate or receive collision forces
-    // No need to copy pos/vel to output - position_update handles that for all cells.
-    if (mass < 0.5) {
-        return;
-    }
-
     let vel = velocities_in[cell_idx].xyz;
+    let mass = positions_in[cell_idx].w;
     let radius = calculate_radius_from_mass(mass);
-    let my_stiffness = stiffnesses[cell_idx];
-    let my_grid_idx = cell_grid_indices[cell_idx];
-
-    // Overflow cells were not inserted into the spatial grid (their voxel was full).
-    // If they queried the grid they would receive one-sided collision forces that
-    // their unaware neighbours can't react to - violating Newton's third law and
-    // creating phantom momentum. Skip them entirely instead.
-    if (my_grid_idx == 0xFFFFFFFFu) {
-        return;
-    }
-
-    let my_grid_coords = grid_index_to_coords(my_grid_idx, params.grid_resolution);
-    
-    // Get organism ID for self-collision filtering
-    // 0xFFFFFFFF = dead/isolated cell (collides with everything)
-    let my_organism_id = organism_labels[cell_idx];
-    
+    let stiffness = stiffnesses[cell_idx];
     var force = vec3<f32>(0.0);
     var torque = vec3<f32>(0.0);
-    
-    // Boundary forces - soft spherical boundary (branchless)
-    // Only apply if cell is near boundary AND there are cells in nearby grid cells
+
     let dist_from_center = length(pos);
     let boundary_radius = params.world_size * 0.5;
     let soft_zone = 5.0;
     let soft_zone_start = boundary_radius - soft_zone;
-    
-    // Quick check: skip boundary forces if not in soft zone
-    if (dist_from_center <= soft_zone_start) {
-        // Skip boundary collision entirely - no cells nearby
-    } else {
-        // Cell is in boundary soft zone - apply boundary forces
+
+    if (dist_from_center > soft_zone_start) {
         let penetration = (dist_from_center - soft_zone_start) / soft_zone;
         let clamped_pen = clamp(penetration, 0.0, 1.0);
-        // Use select to avoid branch - safe_dist avoids division by zero
         let safe_dist = max(dist_from_center, 0.001);
-        let r_hat = pos / safe_dist;  // Outward radial direction
-        let normal = -r_hat;  // Inward direction
-        // Only apply force when penetration > 0 (clamped_pen handles this naturally)
+        let r_hat = pos / safe_dist;
+        let normal = -r_hat;
         let boundary_force_mag = clamped_pen * clamped_pen * 500.0;
         force += normal * boundary_force_mag;
 
-        // Rolling / sliding friction against the world sphere. The wall is
-        // stationary, so tangent contact should trade slip for cell spin.
         let r_contact = r_hat * radius;
         let omega = angular_velocities[cell_idx].xyz;
         let v_contact = vel + cross(omega, r_contact);
@@ -241,226 +292,127 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let friction_dir = -v_tangent / tangent_speed;
             let friction_mag = min(
                 FRICTION_COEFF * boundary_force_mag,
-                tangent_speed * my_stiffness * 0.1
+                tangent_speed * stiffness * 0.1
             );
             let friction_force = friction_dir * friction_mag;
             force += friction_force;
             torque += cross(r_contact, friction_force);
         }
-        
-        // Rotate cells to face back into the world instead of continuing to
-        // skim the boundary with their forward axis aimed into the shell.
+
         if (clamped_pen > 0.0) {
             let rotation = rotations[cell_idx];
             let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
-            let desired_direction = normal;
-            let rotation_axis = cross(forward, desired_direction);
+            let rotation_axis = cross(forward, normal);
             let rotation_axis_length = length(rotation_axis);
             if (rotation_axis_length > 0.001) {
                 let normalized_axis = rotation_axis / rotation_axis_length;
-                let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
+                let dot_product = clamp(dot(forward, normal), -1.0, 1.0);
                 let angle = acos(dot_product);
                 torque += normalized_axis * (BOUNDARY_ALIGNMENT_TORQUE * clamped_pen * angle);
             }
         }
     }
-    
-    // Pre-compute all 27 neighbor grid indices and counts to reduce redundant calculations
-    // and improve memory access patterns
-    var neighbor_indices: array<u32, 27>;
-    var neighbor_counts: array<u32, 27>;
-    var n_idx = 0u;
-    var total_neighbor_cells = 0u;
 
-    for (var dz = -1; dz <= 1; dz++) {
-        for (var dy = -1; dy <= 1; dy++) {
-            for (var dx = -1; dx <= 1; dx++) {
-                // Use clamp instead of branch for boundary check
-                let nx = clamp(my_grid_coords.x + dx, 0, params.grid_resolution - 1);
-                let ny = clamp(my_grid_coords.y + dy, 0, params.grid_resolution - 1);
-                let nz = clamp(my_grid_coords.z + dz, 0, params.grid_resolution - 1);
-                
-                // Check if this is actually a valid neighbor (not clamped)
-                let is_valid = (my_grid_coords.x + dx >= 0) && (my_grid_coords.x + dx < params.grid_resolution) &&
-                               (my_grid_coords.y + dy >= 0) && (my_grid_coords.y + dy < params.grid_resolution) &&
-                               (my_grid_coords.z + dz >= 0) && (my_grid_coords.z + dz < params.grid_resolution);
-                
-                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
-                neighbor_indices[n_idx] = neighbor_grid_idx;
-                // Use select to zero out invalid neighbors (branchless)
-                let cnt = select(0u, min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID), is_valid);
-                neighbor_counts[n_idx] = cnt;
-                total_neighbor_cells += cnt;
-                n_idx++;
-            }
-        }
-    }
-
-    // Early-out: if the only cell in the entire 3x3x3 neighbourhood is this cell
-    // itself, there is nothing to collide with - skip the inner loop entirely.
-    // This is the common case for cells in sparse regions of a large cluster.
-    if (total_neighbor_cells <= 1u) {
-        // Still need to write boundary forces if any were accumulated above.
-        if (force.x != 0.0 || force.y != 0.0 || force.z != 0.0) {
-            atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
-            atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
-            atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
-        }
-        if (torque.x != 0.0 || torque.y != 0.0 || torque.z != 0.0) {
-            atomicAdd(&torque_accum_x[cell_idx], i32(torque.x * FIXED_POINT_SCALE));
-            atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
-            atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
-        }
-        return;
-    }
-
-    for (var n = 0u; n < 27u; n++) {
-        let cell_count_in_grid = neighbor_counts[n];
-        if (cell_count_in_grid == 0u) {
-            continue;
-        }
-        
-        let grid_base_offset = neighbor_indices[n] * MAX_CELLS_PER_GRID;
-        
-        for (var i = 0u; i < cell_count_in_grid; i++) {
-            let other_idx = spatial_grid_cells[grid_base_offset + i];
-            
-            if (other_idx == cell_idx) {
-                continue;
-            }
-            
-            // Skip self-collision: cells in the same organism don't collide
-            // 0xFFFFFFFF = dead/isolated cell (collides with everything)
-            let other_organism_id = organism_labels[other_idx];
-            if (my_organism_id != 0xFFFFFFFFu && other_organism_id != 0xFFFFFFFFu && my_organism_id == other_organism_id) {
-                continue;
-            }
-            
-            let other_pos = positions_in[other_idx].xyz;
-            let other_mass = positions_in[other_idx].w;
-            // Skip dead neighbors - their stale positions cause phantom pinning forces
-            if (other_mass < 0.5) {
-                continue;
-            }
-            let other_radius = calculate_radius_from_mass(other_mass);
-            
-            let delta = pos - other_pos;
-            let dist = length(delta);
-            let min_dist = radius + other_radius;
-            
-            if (dist < min_dist) {
-                let coll_penetration = min_dist - dist;
-                
-                // Handle cells at same position - use deterministic separation direction
-                var coll_normal: vec3<f32>;
-                if (dist > 0.0001) {
-                    coll_normal = delta / dist;
-                } else {
-                    if (cell_idx > other_idx) {
-                        coll_normal = vec3<f32>(1.0, 0.0, 0.0);
-                    } else {
-                        coll_normal = vec3<f32>(-1.0, 0.0, 0.0);
-                    }
-                }
-                
-                // Use average of both cells' membrane stiffness for collision response
-                let other_stiffness = stiffnesses[other_idx];
-                let combined_stiffness = (my_stiffness + other_stiffness) * 0.5;
-                
-                // Normal spring force with damping
-                let other_vel = velocities_in[other_idx].xyz;
-                let relative_vel = vel - other_vel;
-                let normal_damping = dot(relative_vel, coll_normal) * 0.5;
-                let normal_force_mag = coll_penetration * combined_stiffness - normal_damping;
-                
-                force += coll_normal * normal_force_mag;
-
-                // Rolling / sliding friction at the actual contact point.
-                // Match the CPU preview path: tangential slip applies both a
-                // linear friction force and a torque so tangent impacts spin.
-                let r_a = -coll_normal * radius;
-                let r_b = coll_normal * other_radius;
-                let omega_a = angular_velocities[cell_idx].xyz;
-                let omega_b = angular_velocities[other_idx].xyz;
-                let v_contact_a = vel + cross(omega_a, r_a);
-                let v_contact_b = other_vel + cross(omega_b, r_b);
-                let v_slip = v_contact_a - v_contact_b;
-                let v_slip_tangential = v_slip - dot(v_slip, coll_normal) * coll_normal;
-                let slip_speed = length(v_slip_tangential);
-
-                if (slip_speed > 0.0001) {
-                    let friction_dir = -v_slip_tangential / slip_speed;
-                    let friction_mag = min(
-                        FRICTION_COEFF * abs(normal_force_mag),
-                        slip_speed * combined_stiffness * 0.1
-                    );
-                    let friction_force = friction_dir * friction_mag;
-                    force += friction_force;
-                    torque += cross(r_a, friction_force);
-                }
-            }
-        }
-    }
-    
-    // -- Cell-boulder collision ------------------------------------------------
     let num_boulders = boulder_count[0];
     for (var bi = 0u; bi < num_boulders; bi++) {
         let bld = boulder_state[bi];
         if (bld.dead != 0u || bld.radius <= 0.0) { continue; }
 
         let delta = pos - bld.position;
-        let dist  = length(delta);
+        let dist_sq = dot(delta, delta);
         let min_dist = radius + bld.radius;
 
-        if (dist < min_dist && dist > 0.0001) {
+        if (dist_sq < min_dist * min_dist && dist_sq > 0.00000001) {
+            let dist = sqrt(dist_sq);
             let penetration = min_dist - dist;
-            let coll_normal = delta / dist;
+            let normal = delta / dist;
+            let normal_force_mag = penetration * stiffness;
+            force += normal * normal_force_mag;
 
-            let normal_force_mag = penetration * my_stiffness;
-            force += coll_normal * normal_force_mag;
-
-            // Newton's third law: push the boulder in the opposite direction.
-            // The boulder has very high mass so this produces small acceleration.
-            let reaction = -coll_normal * normal_force_mag;
+            let reaction = -normal * normal_force_mag;
             atomicAdd(&boulder_force_accum[bi * 3u + 0u], i32(reaction.x * FIXED_POINT_SCALE));
             atomicAdd(&boulder_force_accum[bi * 3u + 1u], i32(reaction.y * FIXED_POINT_SCALE));
             atomicAdd(&boulder_force_accum[bi * 3u + 2u], i32(reaction.z * FIXED_POINT_SCALE));
 
-            // Rolling friction against boulder surface
-            let r_a = -coll_normal * radius;
+            let r_a = -normal * radius;
             let omega_a = angular_velocities[cell_idx].xyz;
             let v_contact_a = vel + cross(omega_a, r_a);
-            let v_slip = v_contact_a;
-            let v_slip_tangential = v_slip - dot(v_slip, coll_normal) * coll_normal;
+            let v_slip_tangential = v_contact_a - dot(v_contact_a, normal) * normal;
             let slip_speed = length(v_slip_tangential);
             if (slip_speed > 0.0001) {
                 let friction_dir = -v_slip_tangential / slip_speed;
                 let friction_mag = min(
                     FRICTION_COEFF * abs(normal_force_mag),
-                    slip_speed * my_stiffness * 0.1
+                    slip_speed * stiffness * 0.1
                 );
-                force  += friction_dir * friction_mag;
-                torque += cross(r_a, friction_dir * friction_mag);
+                let friction_force = friction_dir * friction_mag;
+                force += friction_force;
+                torque += cross(r_a, friction_force);
             }
         }
     }
 
-    // No gravity in this simulation (cells float in fluid)
-    // force.y -= params.gravity * mass;
-    
-    // Accumulate forces to force buffer using atomics (matching CPU pipeline)
-    // Forces will be integrated later in position_update shader using Verlet integration
-    // This ensures collision and adhesion forces are combined before integration
-    atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
-    atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
-    atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
-    
-    // Accumulate torques to torque buffer (for boundary rotation force)
-    // Torques will be integrated in velocity_update shader
-    atomicAdd(&torque_accum_x[cell_idx], i32(torque.x * FIXED_POINT_SCALE));
-    atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
-    atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
-    
-    // No position/velocity copy needed - position_update writes positions_out/velocities_out
-    // for all cells after forces are accumulated.
+    add_force(cell_idx, force);
+    add_torque(cell_idx, torque);
+}
+
+fn process_same_bucket(grid_idx: u32, count: u32) {
+    let base = grid_idx * MAX_CELLS_PER_GRID;
+    for (var i = 0u; i < count; i++) {
+        let a_idx = spatial_grid_cells[base + i];
+        apply_single_cell_forces(a_idx);
+        for (var j = i + 1u; j < count; j++) {
+            resolve_cell_pair(a_idx, spatial_grid_cells[base + j]);
+        }
+    }
+}
+
+fn process_neighbor_bucket(grid_idx_a: u32, count_a: u32, grid_idx_b: u32, count_b: u32) {
+    let base_a = grid_idx_a * MAX_CELLS_PER_GRID;
+    let base_b = grid_idx_b * MAX_CELLS_PER_GRID;
+    for (var i = 0u; i < count_a; i++) {
+        let a_idx = spatial_grid_cells[base_a + i];
+        for (var j = 0u; j < count_b; j++) {
+            resolve_cell_pair(a_idx, spatial_grid_cells[base_b + j]);
+        }
+    }
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let occupied_idx = global_id.x;
+    let occupied_count = atomicLoad(&occupied_grid_count[0]);
+    if (occupied_idx >= occupied_count) {
+        return;
+    }
+
+    let grid_idx = occupied_grid_cells[occupied_idx];
+    let count = min(spatial_grid_counts[grid_idx], MAX_CELLS_PER_GRID);
+    if (count == 0u) {
+        return;
+    }
+
+    process_same_bucket(grid_idx, count);
+
+    let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
+    for (var n = 0u; n < 13u; n++) {
+        let offset = FORWARD_NEIGHBOR_OFFSETS_3D[n];
+        let nx = coords.x + offset.x;
+        let ny = coords.y + offset.y;
+        let nz = coords.z + offset.z;
+        if (nx < 0 || ny < 0 || nz < 0 ||
+            nx >= params.grid_resolution ||
+            ny >= params.grid_resolution ||
+            nz >= params.grid_resolution) {
+            continue;
+        }
+
+        let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+        let neighbor_count = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
+        if (neighbor_count == 0u) {
+            continue;
+        }
+
+        process_neighbor_bucket(grid_idx, count, neighbor_grid_idx, neighbor_count);
+    }
 }

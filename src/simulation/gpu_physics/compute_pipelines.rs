@@ -241,6 +241,7 @@ pub struct CachedBindGroups {
     /// Hidden cell physiology buffers: water, heat, cached temperature, thermal state.
     pub physiology: wgpu::BindGroup,
     pub physiology_cell_data: wgpu::BindGroup,
+    pub physiology_transport: wgpu::BindGroup,
 
     // Signal system bind groups
     /// Signal flags bind group (Group 0 for signal_clear and signal_sense)
@@ -347,6 +348,7 @@ pub struct GpuPhysicsPipelines {
     pub muscle_contraction: wgpu::ComputePipeline,
 
     // Slow per-cell water/heat physiology pipeline
+    pub physiology_transport: wgpu::ComputePipeline,
     pub physiology_update: wgpu::ComputePipeline,
 
     // Boulder pipelines
@@ -435,6 +437,7 @@ pub struct GpuPhysicsPipelines {
     pub muscle_contraction_group2_layout: wgpu::BindGroupLayout,
     pub physiology_layout: wgpu::BindGroupLayout,
     pub physiology_cell_data_layout: wgpu::BindGroupLayout,
+    pub physiology_transport_layout: wgpu::BindGroupLayout,
 
     // Glueocyte env adhesion bind group layouts
     pub env_adhesion_force_accum_layout: wgpu::BindGroupLayout,
@@ -521,6 +524,8 @@ impl GpuPhysicsPipelines {
         let physiology_layout = Self::create_physiology_bind_group_layout(device);
         let physiology_cell_data_layout =
             Self::create_physiology_cell_data_bind_group_layout(device);
+        let physiology_transport_layout =
+            Self::create_physiology_transport_bind_group_layout(device);
 
         // Create glueocyte env adhesion bind group layouts
         let env_adhesion_force_accum_layout =
@@ -1069,6 +1074,19 @@ impl GpuPhysicsPipelines {
             "Muscle Contraction",
         );
 
+        let physiology_transport = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/physiology_transport.wgsl"),
+            "main",
+            &[
+                &physics_layout,
+                &physiology_layout,
+                &physiology_transport_layout,
+                &adhesion_layout,
+            ],
+            "Physiology Transport",
+        );
+
         let physiology_update = Self::create_compute_pipeline(
             device,
             include_str!("../../../shaders/physiology_update.wgsl"),
@@ -1077,7 +1095,6 @@ impl GpuPhysicsPipelines {
                 &physics_layout,
                 &physiology_layout,
                 &physiology_cell_data_layout,
-                &adhesion_layout,
             ],
             "Physiology Update",
         );
@@ -1381,6 +1398,7 @@ impl GpuPhysicsPipelines {
             cilia_force,
             muscle_contraction,
             physiology_update,
+            physiology_transport,
             physics_layout,
             spatial_grid_layout,
             lifecycle_layout,
@@ -1422,6 +1440,7 @@ impl GpuPhysicsPipelines {
             muscle_contraction_group2_layout,
             physiology_layout,
             physiology_cell_data_layout,
+            physiology_transport_layout,
             env_adhesion_force_accum_layout,
             env_adhesion_mode_data_layout,
             cell_adhesion_adhesion_layout,
@@ -1512,6 +1531,18 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: buffers.stiffnesses.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.stiffnesses.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.occupied_grid_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.occupied_grid_count.as_entire_binding(),
                 },
             ],
         });
@@ -1923,6 +1954,39 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 9,
                     resource: buffers.muscle_contraction_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: buffers.cell_water_delta.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: buffers.cell_heat_delta.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn create_physiology_transport_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffers: &GpuTripleBufferSystem,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Physiology Transport Bind Group"),
+            layout: &self.physiology_transport_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.mode_indices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.mode_cell_types.as_entire_binding(),
                 },
             ],
         })
@@ -2398,6 +2462,7 @@ impl GpuPhysicsPipelines {
             ],
         });
         let physiology = self.create_physiology_bind_group(device, buffers);
+        let physiology_transport = self.create_physiology_transport_bind_group(device, buffers);
         let physiology_cell_data = self.create_physiology_cell_data_bind_group(
             device,
             buffers,
@@ -2646,6 +2711,7 @@ impl GpuPhysicsPipelines {
             muscle_contraction_group2,
             physiology,
             physiology_cell_data,
+            physiology_transport,
             env_adhesion_force_accum,
             env_adhesion_mode_data,
             dummy_cave_collision,
@@ -3076,6 +3142,14 @@ impl GpuPhysicsPipelines {
                     binding: 5,
                     resource: label_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.occupied_grid_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.occupied_grid_count.as_entire_binding(),
+                },
             ],
         })
     }
@@ -3285,6 +3359,28 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Occupied grid cell ids, densely appended by spatial_grid_build
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Occupied grid cell count
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -4213,6 +4309,16 @@ impl GpuPhysicsPipelines {
 
     /// Create mass accumulation bind group layout (nutrient gain rates and split nutrient thresholds per cell)
     fn create_physiology_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let ro = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let rw = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -4227,16 +4333,42 @@ impl GpuPhysicsPipelines {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Physiology Bind Group Layout"),
             entries: &[
-                rw(0), // water current
-                rw(1), // heat current
-                rw(2), // cached temperature current
-                rw(3), // thermal state current
-                rw(4), // water next
-                rw(5), // heat next
-                rw(6), // cached temperature next
-                rw(7), // thermal state next
-                rw(8), // previous muscle contraction
-                rw(9), // current muscle contraction
+                ro(0),  // water current
+                ro(1),  // heat current
+                ro(2),  // cached temperature current
+                ro(3),  // thermal state current
+                rw(4),  // water next
+                rw(5),  // heat next
+                rw(6),  // cached temperature next
+                rw(7),  // thermal state next
+                rw(8),  // previous muscle contraction
+                rw(9),  // current muscle contraction
+                rw(10), // water transport delta
+                rw(11), // heat transport delta
+            ],
+        })
+    }
+
+    fn create_physiology_transport_bind_group_layout(
+        device: &wgpu::Device,
+    ) -> wgpu::BindGroupLayout {
+        let ro = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Physiology Transport Bind Group Layout"),
+            entries: &[
+                ro(0), // death flags
+                ro(1), // mode indices
+                ro(2), // mode cell types
             ],
         })
     }
@@ -4271,12 +4403,12 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                ro(4), // fluid voxel state
-                ro(5), // per-voxel temperature field
-                ro(6), // geothermal heat field
-                ro(7), // mode_properties_v14: Siphonocyte params
-                ro(8), // mode_properties_v15: Plumocyte params
-                ro(9), // signal flags for signal-gated Siphonocyte intake
+                ro(4),  // fluid voxel state
+                ro(5),  // per-voxel temperature field
+                ro(6),  // geothermal heat field
+                ro(7),  // mode_properties_v14: Siphonocyte params
+                ro(8),  // mode_properties_v15: Plumocyte params
+                ro(9),  // signal flags for signal-gated Siphonocyte intake
                 ro(10), // adhesion_settings_v0: rest length for bond heat behavior
             ],
         })

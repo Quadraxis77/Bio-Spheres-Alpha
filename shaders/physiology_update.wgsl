@@ -59,13 +59,13 @@ var<storage, read> positions: array<vec4<f32>>;
 var<storage, read_write> cell_count_buffer: array<u32>;
 
 @group(1) @binding(0)
-var<storage, read_write> cell_water: array<f32>;
+var<storage, read> cell_water: array<f32>;
 @group(1) @binding(1)
-var<storage, read_write> cell_heat_energy: array<f32>;
+var<storage, read> cell_heat_energy: array<f32>;
 @group(1) @binding(2)
-var<storage, read_write> cell_cached_temperature: array<f32>;
+var<storage, read> cell_cached_temperature: array<f32>;
 @group(1) @binding(3)
-var<storage, read_write> cell_thermal_state: array<u32>;
+var<storage, read> cell_thermal_state: array<u32>;
 @group(1) @binding(4)
 var<storage, read_write> cell_water_next: array<f32>;
 @group(1) @binding(5)
@@ -78,6 +78,10 @@ var<storage, read_write> cell_thermal_state_next: array<u32>;
 var<storage, read_write> prev_muscle_contraction: array<f32>;
 @group(1) @binding(9)
 var<storage, read_write> muscle_contraction: array<f32>;
+@group(1) @binding(10)
+var<storage, read_write> cell_water_delta: array<atomic<i32>>;
+@group(1) @binding(11)
+var<storage, read_write> cell_heat_delta: array<atomic<i32>>;
 
 @group(2) @binding(0)
 var<storage, read> death_flags: array<u32>;
@@ -85,13 +89,6 @@ var<storage, read> death_flags: array<u32>;
 var<storage, read> mode_indices: array<u32>;
 @group(2) @binding(2)
 var<storage, read> mode_cell_types: array<u32>;
-
-@group(3) @binding(0)
-var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
-@group(3) @binding(4)
-var<storage, read> adhesion_counts: array<u32>;
-@group(3) @binding(5)
-var<storage, read> cell_adhesion_indices: array<i32>;
 
 @group(2) @binding(3)
 var<uniform> water_params: WaterGridParams;
@@ -153,6 +150,7 @@ const VOXEL_TEMP_MIN_C: f32 = -50.0;
 const VOXEL_TEMP_MAX_C: f32 = 150.0;
 const VOXEL_TEMP_FP: f32 = 256.0;
 const FLUID_TYPE_MASK: u32 = 0x7u;
+const DELTA_FIXED_SCALE: f32 = 65536.0;
 
 struct VoxelEnvironment {
     valid: bool,
@@ -229,15 +227,8 @@ fn heat_for_temperature(temp: f32, water: f32) -> f32 {
     return temp * thermal_mass_for(water);
 }
 
-fn adhesion_effective_rest_length(connection: AdhesionConnection) -> f32 {
-    var rest_length = 1.0;
-    if (connection.mode_index < arrayLength(&adhesion_settings_v0)) {
-        rest_length = max(adhesion_settings_v0[connection.mode_index].z, 0.001);
-    }
-
-    let contraction_a = clamp(muscle_contraction[connection.cell_a_index], 0.0, 1.0);
-    let contraction_b = clamp(muscle_contraction[connection.cell_b_index], 0.0, 1.0);
-    return rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
+fn fixed_to_float(value: i32) -> f32 {
+    return f32(value) / DELTA_FIXED_SCALE;
 }
 
 fn celsius_to_internal_temp(temp_c: f32) -> f32 {
@@ -283,7 +274,7 @@ fn read_voxel_environment(world_pos: vec3<f32>) -> VoxelEnvironment {
     return VoxelEnvironment(true, fluid_type, fill_fraction, temp_internal);
 }
 
-fn siphon_intake_amount(siphon_idx: u32, mode_idx: u32, dt: f32) -> f32 {
+fn siphon_intake_amount(siphon_idx: u32, mode_idx: u32, dt: f32, env: VoxelEnvironment) -> f32 {
     var intake_rate = 1.0;
     var impulse = 0.0;
     var mode = 0u;
@@ -320,7 +311,6 @@ fn siphon_intake_amount(siphon_idx: u32, mode_idx: u32, dt: f32) -> f32 {
         return 0.0;
     }
 
-    let env = read_voxel_environment(positions[siphon_idx].xyz);
     if (!env.valid) {
         return 0.0;
     }
@@ -373,6 +363,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         cell_cached_temperature_next[cell_idx] = BASE_ENV_TEMP;
         cell_thermal_state_next[cell_idx] = STATE_IDEAL;
         prev_muscle_contraction[cell_idx] = 0.0;
+        atomicStore(&cell_water_delta[cell_idx], 0);
+        atomicStore(&cell_heat_delta[cell_idx], 0);
         return;
     }
 
@@ -387,6 +379,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var water_delta = 0.0;
     var heat_delta = 0.0;
+    water_delta += fixed_to_float(atomicLoad(&cell_water_delta[cell_idx]));
+    heat_delta += fixed_to_float(atomicLoad(&cell_heat_delta[cell_idx]));
+    atomicStore(&cell_water_delta[cell_idx], 0);
+    atomicStore(&cell_heat_delta[cell_idx], 0);
 
     let env = read_voxel_environment(positions[cell_idx].xyz);
     var exposure_mult = 1.0;
@@ -398,7 +394,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Passive environment coupling. The cell samples only the voxel it occupies
     // and never writes moisture or heat back into the fluid grid.
     if (cell_type == CELL_TYPE_SIPHONOCYTE) {
-        water_delta += siphon_intake_amount(cell_idx, mode_idx, dt);
+        water_delta += siphon_intake_amount(cell_idx, mode_idx, dt, env);
     } else if (cell_type != CELL_TYPE_VASCULOCYTE && env.valid) {
         var water_target_fraction = 0.45;
         var water_exchange = 0.006;
@@ -431,8 +427,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     let env_exchange = select(0.04, 0.02, cell_type == CELL_TYPE_VASCULOCYTE);
     let env_temp = select(BASE_ENV_TEMP, env.temp_internal, env.valid);
-    var env_exchange_scale = 1.0;
-    var long_bond_heat_expulsion = 0.0;
 
     // Heat stress slowly dehydrates cells; Plumocyte/Siphonocyte specialization is later.
     if (old_temp > 140.0) {
@@ -451,69 +445,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         prev_muscle_contraction[cell_idx] = 0.0;
     }
 
-    let adhesion_base = cell_idx * MAX_ADHESIONS_PER_CELL;
-    let total_adhesions = adhesion_counts[0];
-    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-        let adhesion_idx_signed = cell_adhesion_indices[adhesion_base + i];
-        if (adhesion_idx_signed < 0) {
-            continue;
-        }
-        let adhesion_idx = u32(adhesion_idx_signed);
-        if (adhesion_idx >= total_adhesions) {
-            continue;
-        }
-
-        let connection = adhesion_connections[adhesion_idx];
-        if (connection.is_active == 0u || (connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
-            continue;
-        }
-
-        var neighbor_idx: u32;
-        if (connection.cell_a_index == cell_idx) {
-            neighbor_idx = connection.cell_b_index;
-        } else if (connection.cell_b_index == cell_idx) {
-            neighbor_idx = connection.cell_a_index;
-        } else {
-            continue;
-        }
-
-        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
-            continue;
-        }
-
-        let neighbor_type = cell_type_for(neighbor_idx);
-        let neighbor_capacity = water_capacity(neighbor_type);
-        let neighbor_water = clamp(cell_water[neighbor_idx], 0.0, neighbor_capacity);
-        let neighbor_heat = max(cell_heat_energy[neighbor_idx], 0.0);
-        let neighbor_temp = temperature_for(neighbor_heat, neighbor_water);
-        let effective_rest_length = adhesion_effective_rest_length(connection);
-        let short_bond = 1.0 - smoothstep(SHORT_BOND_REST_LENGTH, SHORT_BOND_REST_LENGTH + 0.4, effective_rest_length);
-        let long_bond = smoothstep(LONG_BOND_REST_LENGTH, LONG_BOND_REST_LENGTH + 1.0, effective_rest_length);
-        env_exchange_scale *= 1.0 - short_bond * SHORT_BOND_ENV_SHIELD;
-        long_bond_heat_expulsion += long_bond * LONG_BOND_HEAT_EXPULSION_RATE;
-
-        let frozen_mult = select(1.0, 0.15, is_frozen_state(old_state) || is_frozen_state(cell_thermal_state[neighbor_idx]));
-        let self_pressure = old_water / max(capacity, 0.001);
-        let neighbor_pressure = neighbor_water / max(neighbor_capacity, 0.001);
-        let pressure_diff = neighbor_pressure - self_pressure;
-        if (abs(pressure_diff) > WATER_DEADBAND) {
-            let conductance = water_pair_conductance(cell_type, neighbor_type) * frozen_mult;
-            water_delta += pressure_diff * conductance * dt;
-        }
-
-        let temp_diff = neighbor_temp - old_temp;
-        if (abs(temp_diff) > TEMP_DEADBAND) {
-            let conductance = 0.65 * sqrt(heat_transfer_mult(cell_type) * heat_transfer_mult(neighbor_type)) * mix(1.0, 1.35, short_bond);
-            let heat_frozen_mult = select(1.0, 0.45, is_frozen_state(old_state) || is_frozen_state(cell_thermal_state[neighbor_idx]));
-            heat_delta += temp_diff * conductance * heat_frozen_mult * dt;
-        }
-    }
-    let base_env_exchange = env_exchange * clamp(env_exchange_scale, 0.25, 1.0);
+    let base_env_exchange = env_exchange;
     heat_delta += max(env_temp - old_temp, 0.0) * base_env_exchange * exposure_mult * dt;
-    if (long_bond_heat_expulsion > 0.0 && old_temp > COMFORT_LOW_TEMP) {
-        let extreme_heat_suppression = 1.0 - smoothstep(EXTREME_HEAT_START_TEMP, EXTREME_HEAT_FULL_TEMP, env_temp);
-        heat_delta -= (old_temp - COMFORT_LOW_TEMP) * long_bond_heat_expulsion * extreme_heat_suppression * dt;
-    }
 
     let next_water = clamp(old_water + water_delta, 0.0, capacity);
     // Water changes alter the cell's thermal mass, so dry cells still swing

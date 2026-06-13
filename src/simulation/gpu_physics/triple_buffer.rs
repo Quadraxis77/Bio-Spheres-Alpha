@@ -208,6 +208,12 @@ pub struct GpuTripleBufferSystem {
     /// cell_grid_indices[cell_idx] = which grid cell this cell belongs to
     pub cell_grid_indices: wgpu::Buffer,
 
+    /// Dense list of grid buckets occupied by at least one live cell this frame.
+    pub occupied_grid_cells: wgpu::Buffer,
+
+    /// Occupied bucket count: [0] = number of entries in occupied_grid_cells.
+    pub occupied_grid_count: wgpu::Buffer,
+
     /// Physics parameters uniform buffer
     pub physics_params: wgpu::Buffer,
 
@@ -466,6 +472,8 @@ pub struct GpuTripleBufferSystem {
     pub cell_cached_temperature_next: wgpu::Buffer,
     pub cell_thermal_state_next: wgpu::Buffer,
     pub cell_prev_muscle_contraction: wgpu::Buffer,
+    pub cell_water_delta: wgpu::Buffer,
+    pub cell_heat_delta: wgpu::Buffer,
 
     /// Per-mode glueocyte environment adhesion flags (one u32 per mode)
     pub glueocyte_env_adhesion_flags: wgpu::Buffer,
@@ -597,6 +605,14 @@ impl GpuTripleBufferSystem {
             16 * grid_size * 4, // 16 cells per grid cell * 2,097,152 grid cells * 4 bytes
             "Spatial Grid Cells",
         );
+
+        let occupied_grid_cells = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4, // at most one occupied bucket per live cell
+            "Occupied Spatial Grid Cells",
+        );
+        let occupied_grid_count =
+            Self::create_zero_initialized_storage_buffer(device, 16, "Occupied Spatial Grid Count");
 
         // Physics params uniform buffer (256 bytes aligned)
         let physics_params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -880,6 +896,16 @@ impl GpuTripleBufferSystem {
             capacity as u64 * 4,
             "Cell Previous Muscle Contraction Buffer",
         );
+        let cell_water_delta = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Cell Water Delta Buffer",
+        );
+        let cell_heat_delta = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Cell Heat Delta Buffer",
+        );
 
         // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
         let oculocyte_params =
@@ -951,6 +977,8 @@ impl GpuTripleBufferSystem {
             spatial_grid_offsets,
             spatial_grid_cells,
             cell_grid_indices,
+            occupied_grid_cells,
+            occupied_grid_count,
             physics_params,
             death_flags,
             nutrients_buffer,
@@ -1020,6 +1048,8 @@ impl GpuTripleBufferSystem {
             cell_cached_temperature_next,
             cell_thermal_state_next,
             cell_prev_muscle_contraction,
+            cell_water_delta,
+            cell_heat_delta,
             glueocyte_env_adhesion_flags,
             glueocyte_boulder_adhesion_flags,
             glueocyte_cell_adhesion_flags,

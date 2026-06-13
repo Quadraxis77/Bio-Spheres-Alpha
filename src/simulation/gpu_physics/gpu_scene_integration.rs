@@ -157,6 +157,7 @@ pub fn execute_gpu_physics_step(
     if _cell_count_hint > 0 {
         encoder.clear_buffer(&triple_buffers.mass_deltas_buffer, 0, None);
         encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+        encoder.clear_buffer(&triple_buffers.occupied_grid_count, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
@@ -213,6 +214,24 @@ pub fn execute_gpu_physics_step(
 
     if current_frame.rem_euclid(4) == 0 {
         {
+            let mut physiology_transport_pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Physiology Transport Pass"),
+                    timestamp_writes: None,
+                });
+            physiology_transport_pass.set_pipeline(&pipelines.physiology_transport);
+            physiology_transport_pass.set_bind_group(0, physics_bind_group, &[]);
+            physiology_transport_pass.set_bind_group(1, &cached_bind_groups.physiology, &[]);
+            physiology_transport_pass.set_bind_group(
+                2,
+                &cached_bind_groups.physiology_transport,
+                &[],
+            );
+            physiology_transport_pass.set_bind_group(3, &cached_bind_groups.adhesion, &[]);
+            physiology_transport_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+
+        {
             let mut physiology_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Physiology Update Pass"),
                 timestamp_writes: None,
@@ -221,11 +240,13 @@ pub fn execute_gpu_physics_step(
             physiology_pass.set_bind_group(0, physics_bind_group, &[]);
             physiology_pass.set_bind_group(1, &cached_bind_groups.physiology, &[]);
             physiology_pass.set_bind_group(2, &cached_bind_groups.physiology_cell_data, &[]);
-            physiology_pass.set_bind_group(3, &cached_bind_groups.adhesion, &[]);
             physiology_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
-        let scalar_bytes = triple_buffers.capacity as u64 * 4;
+        // Only slots below the GPU high-water mark can be read by later shaders.
+        // Copying the full allocation here turns sparse or partially-filled worlds
+        // into avoidable DMA work on every physiology tick.
+        let scalar_bytes = _cell_count_hint.min(triple_buffers.capacity) as u64 * 4;
         encoder.copy_buffer_to_buffer(
             &triple_buffers.cell_water_next,
             0,
@@ -621,6 +642,7 @@ pub fn execute_gpu_mechanics_step(
     // PERFORMANCE: Skip clearing when no cells - saves ~15MB DMA
     if _cell_count_hint > 0 {
         encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+        encoder.clear_buffer(&triple_buffers.occupied_grid_count, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
