@@ -133,6 +133,9 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 // Rolling/sliding friction coefficient.
 // Applied as Coulomb friction: F_friction = FRICTION_COEFF * F_normal (clamped to prevent slip reversal).
 const FRICTION_COEFF: f32 = 0.3;
+const BOUNDARY_REDIRECT_FORCE: f32 = 15.0;
+const BOUNDARY_MAX_REDIRECT_FORCE: f32 = 250.0;
+const BOUNDARY_ALIGNMENT_TORQUE: f32 = 50.0;
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
@@ -227,6 +230,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let v_contact = vel + cross(omega, r_contact);
         let v_tangent = v_contact - dot(v_contact, normal) * normal;
         let tangent_speed = length(v_tangent);
+        if (tangent_speed > 0.0001 && clamped_pen > 0.0) {
+            let redirect_force_mag = min(
+                tangent_speed * clamped_pen * BOUNDARY_REDIRECT_FORCE,
+                BOUNDARY_MAX_REDIRECT_FORCE
+            );
+            force += normal * redirect_force_mag;
+        }
         if (tangent_speed > 0.0001 && boundary_force_mag > 0.0) {
             let friction_dir = -v_tangent / tangent_speed;
             let friction_mag = min(
@@ -238,37 +248,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             torque += cross(r_contact, friction_force);
         }
         
-        // Apply torque to rotate cell to face inward (matching BioSpheres-Q reference)
-        // DISABLED: Remove barrier spinning force
-        // Only apply when in the soft zone (clamped_pen > 0)
-        // if (clamped_pen > 0.0) {
-        //     // Get the cell's forward direction (local +Z axis)
-        //     let rotation = rotations[cell_idx];
-        //     let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
-        //     
-        //     // Calculate desired direction (toward center)
-        //     let desired_direction = -r_hat;
-        //     
-        //     // Calculate rotation axis (cross product of current forward and desired direction)
-        //     let rotation_axis = cross(forward, desired_direction);
-        //     let rotation_axis_length = length(rotation_axis);
-        //     
-        //     // Only apply torque if there's a meaningful rotation needed
-        //     if (rotation_axis_length > 0.001) {
-        //         let normalized_axis = rotation_axis / rotation_axis_length;
-        //         
-        //         // Calculate angle between current and desired direction
-        //         let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
-        //         let angle = acos(dot_product);
-        //         
-        //         // Torque magnitude increases with penetration and angle
-        //         // Matching BioSpheres-Q: torque_strength = 50.0 * penetration * angle
-        //         let torque_strength = 50.0 * clamped_pen * angle;
-        //         
-        //         // Apply torque to rotate toward center
-        //         torque += normalized_axis * torque_strength;
-        //     }
-        // }
+        // Rotate cells to face back into the world instead of continuing to
+        // skim the boundary with their forward axis aimed into the shell.
+        if (clamped_pen > 0.0) {
+            let rotation = rotations[cell_idx];
+            let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
+            let desired_direction = normal;
+            let rotation_axis = cross(forward, desired_direction);
+            let rotation_axis_length = length(rotation_axis);
+            if (rotation_axis_length > 0.001) {
+                let normalized_axis = rotation_axis / rotation_axis_length;
+                let dot_product = clamp(dot(forward, desired_direction), -1.0, 1.0);
+                let angle = acos(dot_product);
+                torque += normalized_axis * (BOUNDARY_ALIGNMENT_TORQUE * clamped_pen * angle);
+            }
+        }
     }
     
     // Pre-compute all 27 neighbor grid indices and counts to reduce redundant calculations
@@ -311,6 +305,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
             atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
             atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
+        }
+        if (torque.x != 0.0 || torque.y != 0.0 || torque.z != 0.0) {
+            atomicAdd(&torque_accum_x[cell_idx], i32(torque.x * FIXED_POINT_SCALE));
+            atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
+            atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
         }
         return;
     }

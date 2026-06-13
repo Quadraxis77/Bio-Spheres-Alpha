@@ -743,7 +743,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new("Water")
+                            egui::RichText::new("Water reserve")
                                 .size(11.0)
                                 .color(palette().text_secondary),
                         );
@@ -755,19 +755,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Heat")
-                                .size(11.0)
-                                .color(palette().text_secondary),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!("{:.2}", data.cell_heat_energy))
-                                .size(11.0)
-                                .color(palette().text_primary),
-                        );
-                        ui.end_row();
-
-                        ui.label(
-                            egui::RichText::new("Temperature")
+                            egui::RichText::new("Body temp")
                                 .size(11.0)
                                 .color(palette().text_secondary),
                         );
@@ -779,7 +767,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("Thermal state")
+                            egui::RichText::new("Thermal comfort")
                                 .size(11.0)
                                 .color(palette().text_secondary),
                         );
@@ -3870,13 +3858,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
 
                 ui.label("Heat Output:")
-                    .on_hover_text("Directional heat injected inward from the sphere-boundary smoke stack footprint");
+                    .on_hover_text("Directional heat injected inward from the vent plume, in degrees Celsius");
                 params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0))
+                    .add(egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0).suffix(" C"))
                     .changed();
 
                 ui.label("Heat Radius:").on_hover_text(
-                    "Distance the baked inward heat plume reaches from the boundary, in voxels",
+                    "Distance and spread of the baked inward heat plume, in voxels",
                 );
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))

@@ -486,7 +486,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Reduce outward velocity smoothly based on penetration
             let damping_factor = 1.0 - (smooth_lerp * 0.8); // Max 80% reduction
             let vel_tangent = new_vel - vel_normal * inward_dir;
-            let vel_normal_damped = vel_normal * damping_factor;
+            let vel_normal_damped = max(vel_normal, 0.0) * damping_factor;
             // Surface friction: resist sliding along the boundary wall
             let friction_scale = 1.0 - smooth_lerp * 0.5;
             final_vel = vel_tangent * friction_scale + vel_normal_damped * inward_dir;
@@ -510,7 +510,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         final_pos = pos;
         let vel_normal = dot(final_vel, normal);
         let vel_tangent = final_vel - vel_normal * normal;
-        final_vel = vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
+        let vel_normal_out = max(vel_normal, 0.0) * normal;
+        final_vel = vel_normal_out + vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
     } else if (is_in_ice(final_pos)) {
         let normal = ice_collision_normal(pos, final_pos);
         accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);

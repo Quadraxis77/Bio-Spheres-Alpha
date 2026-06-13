@@ -2034,6 +2034,10 @@ impl GpuPhysicsPipelines {
                     binding: 9,
                     resource: adhesion_buffers.signal_flags.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: adhesion_buffers.adhesion_settings_v0.as_entire_binding(),
+                },
             ],
         })
     }
@@ -4273,6 +4277,7 @@ impl GpuPhysicsPipelines {
                 ro(7), // mode_properties_v14: Siphonocyte params
                 ro(8), // mode_properties_v15: Plumocyte params
                 ro(9), // signal flags for signal-gated Siphonocyte intake
+                ro(10), // adhesion_settings_v0: rest length for bond heat behavior
             ],
         })
     }
@@ -4535,6 +4540,17 @@ impl GpuPhysicsPipelines {
                 // Binding 6: mode_switch_time (read-only) - used to extend grace period after mode switch
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: cell thermal state (read-only) - cold bonds are more brittle
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -4816,6 +4832,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: triple_buffers.mode_switch_time.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: triple_buffers.cell_thermal_state.as_entire_binding(),
                 },
             ],
         })

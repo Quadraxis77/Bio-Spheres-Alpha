@@ -660,15 +660,16 @@ pub fn apply_to_solid_mask(
             } else {
                 spec.axis
             };
-            let source_depth = (spec.heat_radius / 8).clamp(1, 3);
             let source_radius = (spec.width / 2).max(1);
 
-            for h in 0..=source_depth {
+            for h in 0..=spec.heat_radius {
+                let axial_t = h as f32 / spec.heat_radius.max(1) as f32;
+                let cone_radius = source_radius + (h / 4).max(0);
                 let forward = p_f + radial_in * h as f32;
-                for a in -source_radius..=source_radius {
-                    for b in -source_radius..=source_radius {
+                for a in -cone_radius..=cone_radius {
+                    for b in -cone_radius..=cone_radius {
                         let lateral = ((a * a + b * b) as f32).sqrt();
-                        if lateral > source_radius as f32 + 0.25 {
+                        if lateral > cone_radius as f32 + 0.25 {
                             continue;
                         }
 
@@ -677,8 +678,8 @@ pub fn apply_to_solid_mask(
                             continue;
                         }
 
-                        let axial = 1.0 - h as f32 / (source_depth + 1) as f32;
-                        let radial = 1.0 - (lateral / source_radius.max(1) as f32).min(1.0) * 0.35;
+                        let axial = (1.0 - axial_t).max(0.0).powf(1.25);
+                        let radial = 1.0 - (lateral / cone_radius.max(1) as f32).min(1.0) * 0.55;
                         let heat_value =
                             params.geothermal_heat_output * axial.max(0.0) * radial.max(0.0);
                         let i = idx(q, res);

@@ -105,6 +105,9 @@ var<storage, read> cell_adhesion_indices: array<i32>;
 @group(1) @binding(6)
 var<storage, read> mode_switch_time: array<f32>;
 
+@group(1) @binding(7)
+var<storage, read> cell_thermal_state: array<u32>;
+
 // Rotations bind group (group 2)
 @group(2) @binding(0)
 var<storage, read> rotations_in: array<vec4<f32>>;
@@ -154,6 +157,22 @@ const PI: f32 = 3.14159265359;
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 const SCAFFOLD_STIFFNESS: f32 = 5000.0;
+const THERMAL_STATE_CHILLED: u32 = 2u;
+const THERMAL_STATE_STABLE_COOL: u32 = 3u;
+
+fn cold_brittleness_break_mult(state_a: u32, state_b: u32) -> f32 {
+    let coldest = min(state_a, state_b);
+    if (coldest <= 1u) {
+        return 0.28;
+    }
+    if (coldest == THERMAL_STATE_CHILLED) {
+        return 0.45;
+    }
+    if (coldest == THERMAL_STATE_STABLE_COOL) {
+        return 0.72;
+    }
+    return 1.0;
+}
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
     let volume = mass / 1.0;
@@ -565,7 +584,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // force spikes from maturation-triggered mode switches breaking ring bonds.
         // PERF: mode_switch_time reads are deferred inside the can_break check to avoid
         // two random buffer accesses per bond unconditionally (major cache thrash at 100k cells).
-        if (settings.can_break != 0 && spring_force_mag > settings.break_force && is_cell_a) {
+        let thermal_break_force = settings.break_force * cold_brittleness_break_mult(
+            cell_thermal_state[connection.cell_a_index],
+            cell_thermal_state[connection.cell_b_index]
+        );
+        if (settings.can_break != 0 && spring_force_mag > thermal_break_force && is_cell_a) {
             let bond_grace = (params.current_time - connection.birth_time) < 0.5;
             let switch_grace_a = (params.current_time - mode_switch_time[connection.cell_a_index]) < 1.5;
             let switch_grace_b = (params.current_time - mode_switch_time[connection.cell_b_index]) < 1.5;

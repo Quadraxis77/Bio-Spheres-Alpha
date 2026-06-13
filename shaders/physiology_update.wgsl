@@ -107,6 +107,8 @@ var<storage, read> mode_properties_v14: array<vec4<f32>>;
 var<storage, read> mode_properties_v15: array<vec4<f32>>;
 @group(2) @binding(9)
 var<storage, read> signal_flags: array<atomic<u32>>;
+@group(2) @binding(10)
+var<storage, read> adhesion_settings_v0: array<vec4<f32>>;
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
@@ -130,6 +132,7 @@ const STATE_CRITICAL: u32 = 9u;
 const PHYSIOLOGY_TICK_SCALE: f32 = 4.0;
 const DRY_THERMAL_MASS: f32 = 1.0;
 const WATER_THERMAL_MASS_FACTOR: f32 = 1.0;
+const WATER_MASS_TEMP_SHOCK_DAMPING: f32 = 0.75;
 const BASE_ENV_TEMP: f32 = 105.0;
 const TEMP_DEADBAND: f32 = 0.25;
 const WATER_DEADBAND: f32 = 0.0025;
@@ -137,6 +140,15 @@ const HOT_DRY_AIR_START_TEMP: f32 = 120.0;
 const HOT_DRY_AIR_FULL_TEMP: f32 = 170.0;
 const HOT_DRY_AIR_TARGET_FRACTION: f32 = 0.18;
 const HOT_DRY_AIR_MAX_LOSS_RATE: f32 = 0.014;
+const SHORT_BOND_REST_LENGTH: f32 = 0.75;
+const LONG_BOND_REST_LENGTH: f32 = 1.6;
+const SHORT_BOND_ENV_SHIELD: f32 = 0.18;
+const LONG_BOND_HEAT_EXPULSION_RATE: f32 = 0.018;
+const MYOCYTE_CONTRACTION_HEAT: f32 = 36.0;
+const MYOCYTE_VIBRATION_HEAT: f32 = 5.0;
+const COMFORT_LOW_TEMP: f32 = 100.0;
+const EXTREME_HEAT_START_TEMP: f32 = 140.0;
+const EXTREME_HEAT_FULL_TEMP: f32 = 170.0;
 const VOXEL_TEMP_MIN_C: f32 = -50.0;
 const VOXEL_TEMP_MAX_C: f32 = 150.0;
 const VOXEL_TEMP_FP: f32 = 256.0;
@@ -215,6 +227,17 @@ fn temperature_for(heat_energy: f32, water: f32) -> f32 {
 
 fn heat_for_temperature(temp: f32, water: f32) -> f32 {
     return temp * thermal_mass_for(water);
+}
+
+fn adhesion_effective_rest_length(connection: AdhesionConnection) -> f32 {
+    var rest_length = 1.0;
+    if (connection.mode_index < arrayLength(&adhesion_settings_v0)) {
+        rest_length = max(adhesion_settings_v0[connection.mode_index].z, 0.001);
+    }
+
+    let contraction_a = clamp(muscle_contraction[connection.cell_a_index], 0.0, 1.0);
+    let contraction_b = clamp(muscle_contraction[connection.cell_b_index], 0.0, 1.0);
+    return rest_length * max(1.0 - contraction_a * 0.5 - contraction_b * 0.5, 0.0);
 }
 
 fn celsius_to_internal_temp(temp_c: f32) -> f32 {
@@ -317,15 +340,15 @@ fn is_frozen_state(state: u32) -> bool {
     return state <= STATE_FROZEN;
 }
 
-fn classify_state(temp: f32, old_state: u32) -> u32 {
-    if (old_state == STATE_FROZEN && temp < 65.0) {
+fn classify_state(temp: f32, old_state: u32, entombed_in_ice: bool) -> u32 {
+    if (entombed_in_ice && old_state == STATE_FROZEN && temp < 65.0) {
         return STATE_FROZEN;
     }
     if (old_state == STATE_HEAT_SHOCK && temp > 145.0) {
         return STATE_HEAT_SHOCK;
     }
-    if (temp <= 45.0) { return STATE_DEEP_FROZEN; }
-    if (temp < 60.0) { return STATE_FROZEN; }
+    if (entombed_in_ice && temp <= 45.0) { return STATE_DEEP_FROZEN; }
+    if (entombed_in_ice && temp < 60.0) { return STATE_FROZEN; }
     if (temp < 85.0) { return STATE_CHILLED; }
     if (temp < 100.0) { return STATE_STABLE_COOL; }
     if (temp < 115.0) { return STATE_IDEAL; }
@@ -408,7 +431,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     let env_exchange = select(0.04, 0.02, cell_type == CELL_TYPE_VASCULOCYTE);
     let env_temp = select(BASE_ENV_TEMP, env.temp_internal, env.valid);
-    heat_delta += (env_temp - old_temp) * env_exchange * exposure_mult * dt;
+    var env_exchange_scale = 1.0;
+    var long_bond_heat_expulsion = 0.0;
 
     // Heat stress slowly dehydrates cells; Plumocyte/Siphonocyte specialization is later.
     if (old_temp > 140.0) {
@@ -420,7 +444,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let current_contraction = clamp(muscle_contraction[cell_idx], 0.0, 1.0);
         let previous_contraction = clamp(prev_muscle_contraction[cell_idx], 0.0, 1.0);
         let contraction_delta = abs(current_contraction - previous_contraction);
-        heat_delta += contraction_delta * 18.0;
+        let contraction_speed = contraction_delta / max(dt, 0.001);
+        heat_delta += contraction_delta * (MYOCYTE_CONTRACTION_HEAT + contraction_speed * MYOCYTE_VIBRATION_HEAT);
         prev_muscle_contraction[cell_idx] = current_contraction;
     } else {
         prev_muscle_contraction[cell_idx] = 0.0;
@@ -461,6 +486,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_water = clamp(cell_water[neighbor_idx], 0.0, neighbor_capacity);
         let neighbor_heat = max(cell_heat_energy[neighbor_idx], 0.0);
         let neighbor_temp = temperature_for(neighbor_heat, neighbor_water);
+        let effective_rest_length = adhesion_effective_rest_length(connection);
+        let short_bond = 1.0 - smoothstep(SHORT_BOND_REST_LENGTH, SHORT_BOND_REST_LENGTH + 0.4, effective_rest_length);
+        let long_bond = smoothstep(LONG_BOND_REST_LENGTH, LONG_BOND_REST_LENGTH + 1.0, effective_rest_length);
+        env_exchange_scale *= 1.0 - short_bond * SHORT_BOND_ENV_SHIELD;
+        long_bond_heat_expulsion += long_bond * LONG_BOND_HEAT_EXPULSION_RATE;
 
         let frozen_mult = select(1.0, 0.15, is_frozen_state(old_state) || is_frozen_state(cell_thermal_state[neighbor_idx]));
         let self_pressure = old_water / max(capacity, 0.001);
@@ -473,18 +503,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let temp_diff = neighbor_temp - old_temp;
         if (abs(temp_diff) > TEMP_DEADBAND) {
-            let conductance = 0.65 * sqrt(heat_transfer_mult(cell_type) * heat_transfer_mult(neighbor_type));
+            let conductance = 0.65 * sqrt(heat_transfer_mult(cell_type) * heat_transfer_mult(neighbor_type)) * mix(1.0, 1.35, short_bond);
             let heat_frozen_mult = select(1.0, 0.45, is_frozen_state(old_state) || is_frozen_state(cell_thermal_state[neighbor_idx]));
             heat_delta += temp_diff * conductance * heat_frozen_mult * dt;
         }
     }
+    let base_env_exchange = env_exchange * clamp(env_exchange_scale, 0.25, 1.0);
+    heat_delta += max(env_temp - old_temp, 0.0) * base_env_exchange * exposure_mult * dt;
+    if (long_bond_heat_expulsion > 0.0 && old_temp > COMFORT_LOW_TEMP) {
+        let extreme_heat_suppression = 1.0 - smoothstep(EXTREME_HEAT_START_TEMP, EXTREME_HEAT_FULL_TEMP, env_temp);
+        heat_delta -= (old_temp - COMFORT_LOW_TEMP) * long_bond_heat_expulsion * extreme_heat_suppression * dt;
+    }
 
     let next_water = clamp(old_water + water_delta, 0.0, capacity);
+    // Water changes alter the cell's thermal mass, so dry cells still swing
+    // faster than hydrated cells. Dampen that mass shock so rehydration does
+    // not instantly crash body temperature toward freezing.
+    let water_adjusted_heat = mix(old_heat, heat_for_temperature(old_temp, next_water), WATER_MASS_TEMP_SHOCK_DAMPING);
     let min_heat = heat_for_temperature(20.0, next_water);
     let max_heat = heat_for_temperature(180.0, next_water);
-    let next_heat = clamp(old_heat + heat_delta, min_heat, max_heat);
+    let next_heat = clamp(water_adjusted_heat + heat_delta, min_heat, max_heat);
     let next_temp = temperature_for(next_heat, next_water);
-    let next_state = classify_state(next_temp, old_state);
+    let entombed_in_ice = env.valid && env.fluid_type == 2u && env.fill_fraction > 0.5;
+    let next_state = classify_state(next_temp, old_state, entombed_in_ice);
 
     cell_water_next[cell_idx] = next_water;
     cell_heat_energy_next[cell_idx] = next_heat;

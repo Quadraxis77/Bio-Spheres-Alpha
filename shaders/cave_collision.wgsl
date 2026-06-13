@@ -109,7 +109,8 @@ struct CaveParams {
 // Constants
 const EPSILON: f32 = 0.0001;
 const FIXED_POINT_SCALE: f32 = 1000.0;
-const CONTACT_FRICTION: f32 = 0.35;
+const ROLLING_CONTACT_FRICTION: f32 = 0.18;
+const SURFACE_SLIDE_DAMPING: f32 = 0.05;
 
 // Hash function for single random value at integer coordinates (no gradients)
 fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
@@ -320,7 +321,7 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
                 let friction_dir = -v_tangent / tangent_speed;
                 let normal_force_mag = min(cave_params.collision_stiffness * penetration, 1000.0);
                 let friction_mag = min(
-                    CONTACT_FRICTION * normal_force_mag,
+                    ROLLING_CONTACT_FRICTION * normal_force_mag,
                     tangent_speed * cave_params.collision_stiffness * 0.01
                 );
                 let friction_force = friction_dir * friction_mag;
@@ -330,11 +331,12 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
                 atomicAdd(&torque_accum_z[cell_idx], i32(contact_torque.z * FIXED_POINT_SCALE));
             }
 
-            // Surface friction: resist sliding along the cave wall
+            // Surface drag is intentionally light: rolling friction above handles
+            // contact spin/slip, while this only trims numerical scrape jitter.
             let vel_normal_comp = dot(vel, normal);
             let vel_tangent = vel - normal * vel_normal_comp;
-            let friction = CONTACT_FRICTION;
-            vel = normal * vel_normal_comp + vel_tangent * (1.0 - friction);
+            let vel_normal_out = max(vel_normal_comp, 0.0);
+            vel = normal * vel_normal_out + vel_tangent * (1.0 - SURFACE_SLIDE_DAMPING);
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }
     }
