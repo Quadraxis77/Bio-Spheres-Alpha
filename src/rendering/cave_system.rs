@@ -91,8 +91,11 @@ pub struct CaveParams {
     /// Blend factor per smoothing pass: 0 = no movement, 1 = snap fully to
     /// the average of neighboring vertices.
     pub mesh_smoothing_factor: f32,
+    /// 1 = average normals across shared vertices for soft lighting, 0 = flat
+    /// triangle normals.
+    pub mesh_smooth_normals: u32,
 
-    /// Cave appearance preset index. 0 = Layered Shale.
+    /// Cave appearance preset index. 0 = Layered Shale, 1 = Lava Tubes.
     pub appearance: u32,
     pub rock_dark_color: [f32; 3],
     pub rock_layer_scale: f32,
@@ -129,7 +132,7 @@ pub struct CaveParams {
     pub rock_geometry_conform: f32,
     pub rock_parallax_depth: f32,
 
-    _padding: [f32; 124],
+    _padding: [f32; 123],
 }
 
 impl Default for CaveParams {
@@ -169,6 +172,7 @@ impl Default for CaveParams {
             isolated_chunk_cull_volume: DEFAULT_ISOLATED_CHUNK_CULL_VOLUME,
             mesh_smoothing_iterations: DEFAULT_MESH_SMOOTHING_ITERATIONS,
             mesh_smoothing_factor: DEFAULT_MESH_SMOOTHING_FACTOR,
+            mesh_smooth_normals: 0,
             appearance: 0,
             rock_dark_color: [0.105, 0.100, 0.092],
             rock_layer_scale: 0.075,
@@ -204,7 +208,7 @@ impl Default for CaveParams {
             rock_seam_high: 0.98,
             rock_geometry_conform: 0.0,
             rock_parallax_depth: 0.0,
-            _padding: [0.0; 124],
+            _padding: [0.0; 123],
         }
     }
 }
@@ -1356,6 +1360,12 @@ impl CaveSystemRenderer {
             params.mesh_smoothing_factor,
             cell_size,
         );
+        Self::recompute_cave_normals(
+            &mut vertices,
+            &indices,
+            cell_size,
+            params.mesh_smooth_normals != 0,
+        );
 
         (vertices, indices)
     }
@@ -1365,7 +1375,7 @@ impl CaveSystemRenderer {
     /// separate vertex per triangle corner, so vertices sharing a position
     /// are first merged into shared points, smoothed together over
     /// `iterations` passes, then written back. Normals and triplanar UVs are
-    /// recomputed from the smoothed geometry.
+    /// recomputed afterwards by `recompute_cave_normals`.
     fn smooth_cave_mesh(
         vertices: &mut [CaveVertex],
         indices: &[u32],
@@ -1434,7 +1444,66 @@ impl CaveSystemRenderer {
             v.position = positions[id as usize].to_array();
         }
 
-        // Recompute flat normals and triplanar UVs from the smoothed geometry.
+    }
+
+    fn recompute_cave_normals(
+        vertices: &mut [CaveVertex],
+        indices: &[u32],
+        cell_size: f32,
+        smooth_normals: bool,
+    ) {
+        if indices.is_empty() {
+            return;
+        }
+
+        let quantize = |p: [f32; 3]| -> (i32, i32, i32) {
+            let q = (cell_size * 0.0001).max(0.0001);
+            (
+                (p[0] / q).round() as i32,
+                (p[1] / q).round() as i32,
+                (p[2] / q).round() as i32,
+            )
+        };
+
+        if smooth_normals {
+            let mut normal_sums: HashMap<(i32, i32, i32), Vec3> = HashMap::new();
+            for tri in indices.chunks_exact(3) {
+                let i0 = tri[0] as usize;
+                let i1 = tri[1] as usize;
+                let i2 = tri[2] as usize;
+                let v0 = Vec3::from(vertices[i0].position);
+                let v1 = Vec3::from(vertices[i1].position);
+                let v2 = Vec3::from(vertices[i2].position);
+                let area_normal = (v1 - v0).cross(v2 - v0);
+                if area_normal.length_squared() < 0.0001 {
+                    continue;
+                }
+
+                for &i in &[i0, i1, i2] {
+                    let key = quantize(vertices[i].position);
+                    *normal_sums.entry(key).or_insert(Vec3::ZERO) += area_normal;
+                }
+            }
+
+            for v in vertices.iter_mut() {
+                let key = quantize(v.position);
+                let normal = normal_sums
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(Vec3::Y)
+                    .normalize_or_zero();
+                let normal = if normal.length_squared() < 0.0001 {
+                    Vec3::Y
+                } else {
+                    normal
+                };
+                v.normal = normal.to_array();
+                v.uv = compute_triplanar_uv(Vec3::from(v.position), normal);
+            }
+            return;
+        }
+
+        // Flat normals and triplanar UVs from the final geometry.
         for tri in indices.chunks_exact(3) {
             let i0 = tri[0] as usize;
             let i1 = tri[1] as usize;

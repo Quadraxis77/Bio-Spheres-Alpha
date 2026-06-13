@@ -296,7 +296,7 @@ fn is_thermally_mobile(fluid_type: u32, solid: bool) -> bool {
 const NATURAL_VAPORIZATION_RATE: f32 = 0.15;  // base per-tick chance scalar once warm enough to evaporate
 const NATURAL_CONDENSATION_RATE: f32 = 0.15;  // base per-tick chance scalar once cool enough to condense
 
-const DARKNESS_PENALTY_MAX_C: f32 = 25.0; // unlit voxels run at most this much colder than baseline - large enough that prolonged local darkness can push water below freezing even when overall brightness is moderate
+const DARKNESS_PENALTY_MAX_C: f32 = 8.0; // unlit voxels run at most this much colder than baseline; at sun brightness 3, even fully shadowed air remains temperate (~70°F)
 
 // ---- Humidity model constants (see CLIMATE_SPEC) ----
 const HUMIDITY_FIXED_POINT: f32 = 256.0;     // fixed-point scale for the humidity buffer (stored = value * 256)
@@ -356,8 +356,7 @@ fn local_brightness_from_field(light_idx: u32) -> f32 {
 
 // Per-voxel ambient air temperature: starts from the brightness-derived
 // baseline, then voxels that receive less local light run cooler — clamped
-// to at most DARKNESS_PENALTY_MAX_C below baseline (a fully dark voxel is
-// never colder than "baseline minus 10", not an independently-floored value).
+// to at most DARKNESS_PENALTY_MAX_C below baseline.
 fn ambient_temp_c(light_idx: u32) -> f32 {
     let baseline_c = baseline_air_temp_c(params.sun_brightness);
 

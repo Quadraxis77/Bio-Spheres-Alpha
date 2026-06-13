@@ -42,6 +42,7 @@ struct CaveParams {
     isolated_chunk_cull_volume: f32,
     mesh_smoothing_iterations: u32,
     mesh_smoothing_factor: f32,
+    mesh_smooth_normals: u32,
     appearance: u32,
     rock_dark_r: f32,
     rock_dark_g: f32,
@@ -413,6 +414,92 @@ fn layered_rock_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f3
     return clamp(color, vec3<f32>(cave_params.rock_min_color), vec3<f32>(cave_params.rock_max_color));
 }
 
+fn lava_tube_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f32) -> vec3<f32> {
+    let basalt_black = vec3<f32>(cave_params.rock_dark_r, cave_params.rock_dark_g, cave_params.rock_dark_b);
+    let blue_glass = vec3<f32>(cave_params.rock_cool_r, cave_params.rock_cool_g, cave_params.rock_cool_b);
+    let iron_skin = vec3<f32>(cave_params.rock_warm_r, cave_params.rock_warm_g, cave_params.rock_warm_b);
+    let ember = vec3<f32>(cave_params.rock_pale_r, cave_params.rock_pale_g, cave_params.rock_pale_b);
+    let ash_gray = mix(blue_glass, vec3<f32>(0.220, 0.205, 0.180), 0.45);
+    let hot_core = mix(ember, vec3<f32>(1.0, 0.760, 0.180), 0.55);
+
+    let center = vec3<f32>(
+        cave_params.world_center.x,
+        cave_params.world_center.y,
+        cave_params.world_center.z
+    );
+    let radial = normalize(world_pos - center + vec3<f32>(0.001, 0.002, 0.003));
+    let up = vec3<f32>(0.0, 1.0, 0.0);
+    var flow_axis = cross(up, radial);
+    if (dot(flow_axis, flow_axis) < 0.001) {
+        flow_axis = cross(vec3<f32>(1.0, 0.0, 0.0), radial);
+    }
+    flow_axis = normalize(flow_axis);
+    let cross_axis = normalize(cross(radial, flow_axis));
+
+    let flow_pitch = max(cave_params.rock_layer_scale, 0.005) * 1.6;
+    let flow_warp = cave_params.rock_warp_strength + cave_params.rock_fine_noise_strength * 0.25;
+    let flow_coord = dot(world_pos, flow_axis) * flow_pitch
+                   + noise(world_pos.xz * cave_params.rock_fine_noise_scale + vec2<f32>(23.0, 7.0)) * flow_warp
+                   + noise(world_pos.yz * cave_params.rock_seam_noise_scale + vec2<f32>(3.0, 41.0)) * flow_warp * 0.55;
+    let sag_coord = dot(world_pos, cross_axis) * max(cave_params.rock_layer_scale, 0.005)
+                  + noise(world_pos.xy * cave_params.rock_fine_noise_scale + vec2<f32>(13.0, 29.0)) * flow_warp * 0.75;
+
+    // Ropey pahoehoe ridges: directional, raised arcs rather than sediment layers.
+    let rope_wave = sin(flow_coord * cave_params.rock_coarse_frequency + sin(sag_coord * cave_params.rock_fine_frequency * 0.35) * 2.2);
+    let rope_low = clamp(cave_params.rock_coarse_band_low * 0.5 + 0.5, 0.0, 0.98);
+    let rope_high = max(rope_low + 0.02, clamp(cave_params.rock_coarse_band_high * 0.5 + 0.5, 0.02, 1.0));
+    let rope_ridge = smoothstep(rope_low, rope_high, rope_wave);
+    let rib_shadow = smoothstep(-0.96, -0.45, rope_wave);
+
+    let glass_noise = noise(world_pos.xy * max(cave_params.rock_texture_scale, 0.005) + vec2<f32>(5.0, 37.0));
+    let blister_noise = noise(vec2<f32>(flow_coord, sag_coord) * 2.1 + vec2<f32>(19.0, 11.0));
+    let blister_low = clamp(cave_params.rock_fine_band_low * 0.5 + 0.5, 0.0, 0.98);
+    let blister_high = max(blister_low + 0.02, clamp(cave_params.rock_fine_band_high * 0.5 + 0.5, 0.02, 1.0));
+    let blister = smoothstep(blister_low, blister_high, blister_noise) * smoothstep(0.25, 0.95, glass_noise) * cave_params.rock_cool_mottle_strength;
+
+    let fissure_density = cave_params.rock_seam_frequency * 0.004;
+    let fissure_a = abs(sin(dot(world_pos, vec3<f32>(1.25, 0.36, 0.98) * fissure_density) + noise(world_pos.xz * cave_params.rock_seam_noise_scale) * cave_params.rock_seam_noise_strength));
+    let fissure_b = abs(sin(dot(world_pos, vec3<f32>(-0.59, 1.34, 0.83) * fissure_density) + noise(world_pos.yz * cave_params.rock_seam_noise_scale + vec2<f32>(8.0, 2.0)) * cave_params.rock_seam_noise_strength));
+    let fissure = max(
+        1.0 - smoothstep(cave_params.rock_seam_low * 0.10, cave_params.rock_seam_high * 0.14 + 0.01, fissure_a),
+        (1.0 - smoothstep(cave_params.rock_seam_low * 0.08, cave_params.rock_seam_high * 0.11 + 0.01, fissure_b)) * 0.55
+    ) * cave_params.rock_seam_darkening;
+
+    let floor_heat = 1.0 - smoothstep(-0.95, -0.25, normal.y);
+    let heat_pulse = smoothstep(0.55, 0.98, noise(world_pos.xz * max(cave_params.rock_seam_noise_scale, 0.005) + vec2<f32>(71.0, 17.0)));
+
+    var color = mix(basalt_black, blue_glass, texture_value * 0.55 + glass_noise * cave_params.rock_grain_strength);
+    color = mix(color, ash_gray, rope_ridge * cave_params.rock_fine_band_strength);
+    color = mix(color, iron_skin, blister * 0.45);
+    color *= mix(0.68, 1.18, rope_ridge);
+    color *= mix(1.0, 1.0 - cave_params.rock_wall_line_strength * 0.46, rib_shadow);
+    color += ember * floor_heat * heat_pulse * cave_params.rock_patch_contrast;
+    color = mix(color, ember, fissure * 0.68);
+    color += hot_core * fissure * fissure * 0.42;
+
+    return clamp(color, vec3<f32>(cave_params.rock_min_color), vec3<f32>(cave_params.rock_max_color * 1.8));
+}
+
+fn rock_relief_normal(world_pos: vec3<f32>, normal: vec3<f32>, relief_depth: f32) -> vec3<f32> {
+    if (relief_depth <= 0.001) {
+        return normal;
+    }
+
+    let helper = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(normal.y) < 0.9);
+    let tangent = normalize(cross(helper, normal));
+    let bitangent = normalize(cross(normal, tangent));
+    let eps = max(0.5, 0.03 / max(cave_params.rock_texture_scale, 0.001));
+
+    let h_l = sample_triplanar_texture(world_pos - tangent * eps, normal);
+    let h_r = sample_triplanar_texture(world_pos + tangent * eps, normal);
+    let h_d = sample_triplanar_texture(world_pos - bitangent * eps, normal);
+    let h_u = sample_triplanar_texture(world_pos + bitangent * eps, normal);
+    let relief = clamp(relief_depth * cave_params.rock_texture_scale * 0.75, 0.0, 1.5);
+    let gradient = tangent * (h_r - h_l) + bitangent * (h_u - h_d);
+
+    return normalize(normal - gradient * relief);
+}
+
 // Moss density sampling - trilinear interpolation from 128^3 grid.
 fn sample_moss_density(world_pos: vec3<f32>) -> f32 {
     let res = shadow_params.grid_resolution;
@@ -563,25 +650,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // View direction
     let V = normalize(camera.camera_pos - in.world_position);
     
-    // Triplanar texture sampling prevents stretching. Rock parallax offsets
-    // the procedural pattern in view-tangent space for apparent surface depth.
-    var rock_world_position = in.world_position;
-    var texture_value = sample_triplanar_texture(rock_world_position, N);
-    let rock_parallax_depth = cave_params.rock_parallax_depth;
-    if (rock_parallax_depth > 0.001) {
-        let view_tangent = V - dot(V, N) * N;
-        let tangent_len = length(view_tangent);
-        if (tangent_len > 0.0001) {
-            let tangent_dir = view_tangent / tangent_len;
-            rock_world_position = rock_world_position + tangent_dir * rock_parallax_depth * (1.0 - texture_value);
-            texture_value = sample_triplanar_texture(rock_world_position, N);
-        }
-    }
+    // Triplanar texture sampling prevents stretching. Rock depth is expressed
+    // as stable relief-normal perturbation, not a view-space world-position
+    // offset; that avoids screen-center warping as the camera moves.
+    let texture_value = sample_triplanar_texture(in.world_position, N);
+    N = rock_relief_normal(in.world_position, N, cave_params.rock_parallax_depth);
     
     // Ambient occlusion approximation
     var ao = 0.5 + 0.5 * texture_value;
     
-    var final_base_color = layered_rock_color(rock_world_position, N, texture_value);
+    var final_base_color: vec3<f32>;
+    if (cave_params.appearance == 1u) {
+        final_base_color = lava_tube_color(in.world_position, N, texture_value);
+    } else {
+        final_base_color = layered_rock_color(in.world_position, N, texture_value);
+    }
 
     // -- Moss rendering with parallax and normal perturbation --------------
     let moss_sample_pos = in.world_position + N * shadow_params.cell_size * 0.5;

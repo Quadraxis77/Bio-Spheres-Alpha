@@ -3659,6 +3659,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut isolated_chunk_cull_volume = params.isolated_chunk_cull_volume;
             let mut mesh_smoothing_iterations = params.mesh_smoothing_iterations as i32;
             let mut mesh_smoothing_factor = params.mesh_smoothing_factor;
+            let mut mesh_smooth_normals = params.mesh_smooth_normals != 0;
             let mut geothermal_enabled = params.geothermal_enabled != 0;
             let mut geothermal_count = params.geothermal_count as i32;
             let mut geothermal_placement_mode = params.geothermal_placement_mode;
@@ -3773,6 +3774,14 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 params_changed |= ui
                     .add(egui::Slider::new(&mut mesh_smoothing_factor, 0.0..=1.0))
                     .changed();
+
+                ui.add_space(4.0);
+                params_changed |= ui
+                    .checkbox(&mut mesh_smooth_normals, "Smooth Normals")
+                    .on_hover_text(
+                        "Average normals across shared cave vertices. Softens faceted lighting without moving the cave mesh.",
+                    )
+                    .changed();
             }
 
             ui.add_space(4.0);
@@ -3814,102 +3823,266 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             ui.label("Preset:")
                 .on_hover_text("Named cave appearance preset. More appearances can be added here without changing the rest of the panel");
+            let previous_cave_appearance = cave_appearance;
             egui::ComboBox::from_id_salt("cave_appearance")
                 .selected_text(match cave_appearance {
+                    1 => "Lava Tubes",
                     _ => "Layered Shale",
                 })
                 .show_ui(ui, |ui| {
                     params_changed |= ui
                         .selectable_value(&mut cave_appearance, 0, "Layered Shale")
                         .changed();
+                    params_changed |= ui
+                        .selectable_value(&mut cave_appearance, 1, "Lava Tubes")
+                        .changed();
                 });
+            if cave_appearance != previous_cave_appearance {
+                if cave_appearance == 1 {
+                    cave_rock_dark_color = [0.014, 0.013, 0.012];
+                    cave_rock_cool_color = [0.045, 0.062, 0.070];
+                    cave_rock_warm_color = [0.210, 0.078, 0.030];
+                    cave_rock_pale_color = [1.000, 0.285, 0.035];
+                    cave_rock_layer_scale = 0.080;
+                    cave_rock_warp_strength = 2.35;
+                    cave_rock_fine_band_strength = 0.34;
+                    cave_rock_cool_mottle_strength = 0.58;
+                    cave_rock_grain_strength = 0.13;
+                    cave_rock_patch_contrast = 0.12;
+                    cave_rock_seam_darkening = 0.62;
+                    cave_rock_wall_line_strength = 0.72;
+                    cave_rock_min_color = 0.0;
+                    cave_rock_max_color = 0.72;
+                    cave_rock_ambient_strength = 0.06;
+                    cave_rock_diffuse_strength = 0.82;
+                    cave_rock_specular_strength = 0.48;
+                    cave_rock_specular_power = 48.0;
+                    cave_rock_texture_scale = 0.070;
+                    cave_rock_coarse_frequency = 18.0;
+                    cave_rock_fine_frequency = 14.0;
+                    cave_rock_seam_frequency = 20.0;
+                    cave_rock_fine_noise_scale = 0.050;
+                    cave_rock_fine_noise_strength = 4.6;
+                    cave_rock_seam_noise_scale = 0.042;
+                    cave_rock_seam_noise_strength = 5.4;
+                    cave_rock_coarse_band_low = 0.16;
+                    cave_rock_coarse_band_high = 0.78;
+                    cave_rock_fine_band_low = 0.24;
+                    cave_rock_fine_band_high = 0.88;
+                    cave_rock_seam_low = 0.16;
+                    cave_rock_seam_high = 0.48;
+                    cave_rock_geometry_conform = 0.0;
+                    cave_rock_parallax_depth = 1.8;
+                } else {
+                    cave_rock_dark_color = [0.105, 0.100, 0.092];
+                    cave_rock_cool_color = [0.150, 0.165, 0.160];
+                    cave_rock_warm_color = [0.235, 0.205, 0.155];
+                    cave_rock_pale_color = [0.330, 0.300, 0.225];
+                    cave_rock_layer_scale = 0.075;
+                    cave_rock_warp_strength = 1.85;
+                    cave_rock_fine_band_strength = 0.28;
+                    cave_rock_cool_mottle_strength = 0.22;
+                    cave_rock_grain_strength = 0.09;
+                    cave_rock_patch_contrast = 0.17;
+                    cave_rock_seam_darkening = 0.28;
+                    cave_rock_wall_line_strength = 0.65;
+                    cave_rock_min_color = 0.045;
+                    cave_rock_max_color = 0.48;
+                    cave_rock_ambient_strength = 0.08;
+                    cave_rock_diffuse_strength = 0.7;
+                    cave_rock_specular_strength = 0.3;
+                    cave_rock_specular_power = 32.0;
+                    cave_rock_texture_scale = 0.05;
+                    cave_rock_coarse_frequency = std::f32::consts::TAU;
+                    cave_rock_fine_frequency = 22.0;
+                    cave_rock_seam_frequency = 13.0;
+                    cave_rock_fine_noise_scale = 0.045;
+                    cave_rock_fine_noise_strength = 4.0;
+                    cave_rock_seam_noise_scale = 0.035;
+                    cave_rock_seam_noise_strength = 2.5;
+                    cave_rock_coarse_band_low = -0.35;
+                    cave_rock_coarse_band_high = 0.55;
+                    cave_rock_fine_band_low = 0.35;
+                    cave_rock_fine_band_high = 0.92;
+                    cave_rock_seam_low = 0.82;
+                    cave_rock_seam_high = 0.98;
+                    cave_rock_geometry_conform = 0.0;
+                    cave_rock_parallax_depth = 0.0;
+                }
+                params_changed = true;
+            }
 
             ui.add_space(4.0);
-            ui.label("Rock Colors");
+            let lava_tubes_selected = cave_appearance == 1;
+            ui.label(if lava_tubes_selected {
+                "Lava Tube Colors"
+            } else {
+                "Rock Colors"
+            });
             ui.horizontal(|ui| {
-                ui.label("Dark:");
+                ui.label(if lava_tubes_selected { "Basalt:" } else { "Dark:" });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_dark_color)
-                    .on_hover_text("Dark base rock tone")
+                    .on_hover_text(if lava_tubes_selected {
+                        "Glassy black basalt base color"
+                    } else {
+                        "Dark base rock tone"
+                    })
                     .changed();
             });
             ui.horizontal(|ui| {
-                ui.label("Cool:");
+                ui.label(if lava_tubes_selected { "Glass:" } else { "Cool:" });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_cool_color)
-                    .on_hover_text("Cool mottled slate tone blended through the wall texture")
+                    .on_hover_text(if lava_tubes_selected {
+                        "Blue-black cooled glass tone blended through the lava skin"
+                    } else {
+                        "Cool mottled slate tone blended through the wall texture"
+                    })
                     .changed();
             });
             ui.horizontal(|ui| {
-                ui.label("Warm:");
+                ui.label(if lava_tubes_selected { "Iron:" } else { "Warm:" });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_warm_color)
-                    .on_hover_text("Warm shale tone used by the broad sediment layers")
+                    .on_hover_text(if lava_tubes_selected {
+                        "Oxidized iron tone for blistered patches"
+                    } else {
+                        "Warm shale tone used by the broad sediment layers"
+                    })
                     .changed();
             });
             ui.horizontal(|ui| {
-                ui.label("Pale:");
+                ui.label(if lava_tubes_selected { "Ember:" } else { "Pale:" });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_pale_color)
-                    .on_hover_text("Light silt tone used by fine strata highlights")
+                    .on_hover_text(if lava_tubes_selected {
+                        "Hot ember color used by glowing cracks and floor heat"
+                    } else {
+                        "Light silt tone used by fine strata highlights"
+                    })
                     .changed();
             });
 
             if state.show_advanced_options {
                 ui.add_space(4.0);
-                ui.label("Layering");
-                ui.label("Layer Scale:")
-                    .on_hover_text("Vertical frequency of the sediment layer pattern");
+                ui.label(if lava_tubes_selected {
+                    "Lava Flow"
+                } else {
+                    "Layering"
+                });
+                ui.label(if lava_tubes_selected {
+                    "Flow Scale:"
+                } else {
+                    "Layer Scale:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "World-space scale of the directional lava-flow coordinate"
+                } else {
+                    "Vertical frequency of the sediment layer pattern"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(&mut cave_rock_layer_scale, 0.0..=0.2))
                     .changed();
                 ui.label("Warp:")
-                    .on_hover_text("How much procedural noise bends the sediment bands");
+                    .on_hover_text(if lava_tubes_selected {
+                        "How much procedural noise bends and sags the lava flow"
+                    } else {
+                        "How much procedural noise bends the sediment bands"
+                    });
                 params_changed |= ui
                     .add(egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
                     .changed();
-                ui.label("Fine Bands:")
-                    .on_hover_text("Strength of the pale fine-layer highlights");
+                ui.label(if lava_tubes_selected {
+                    "Rope Highlights:"
+                } else {
+                    "Fine Bands:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Strength of ash-gray highlights on raised ropey lava ridges"
+                } else {
+                    "Strength of the pale fine-layer highlights"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_fine_band_strength,
                         0.0..=1.0,
                     ))
                     .changed();
-                ui.label("Cool Mottle:")
-                    .on_hover_text("Amount of cool slate color variation");
+                ui.label(if lava_tubes_selected {
+                    "Blistering:"
+                } else {
+                    "Cool Mottle:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Coverage of oxidized blister patches in the cooled lava skin"
+                } else {
+                    "Amount of cool slate color variation"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_cool_mottle_strength,
                         0.0..=1.0,
                     ))
                     .changed();
-                ui.label("Grain:")
-                    .on_hover_text("Brightness variation from the triplanar rock grain");
+                ui.label(if lava_tubes_selected {
+                    "Glass Grain:"
+                } else {
+                    "Grain:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Brightness variation in the glassy basalt surface"
+                } else {
+                    "Brightness variation from the triplanar rock grain"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_grain_strength,
                         0.0..=0.25,
                     ))
                     .changed();
-                ui.label("Patch Contrast:")
-                    .on_hover_text("Large mottled light and dark patch contrast");
+                ui.label(if lava_tubes_selected {
+                    "Floor Heat:"
+                } else {
+                    "Patch Contrast:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Subtle ember glow on downward-facing lava tube surfaces"
+                } else {
+                    "Large mottled light and dark patch contrast"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_patch_contrast,
                         0.0..=0.5,
                     ))
                     .changed();
-                ui.label("Seam Darkening:")
-                    .on_hover_text("Darkness of narrow sediment seams");
+                ui.label(if lava_tubes_selected {
+                    "Fissure Glow:"
+                } else {
+                    "Seam Darkening:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Brightness and coverage of thin hot cracks"
+                } else {
+                    "Darkness of narrow sediment seams"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_seam_darkening,
                         0.0..=1.0,
                     ))
                     .changed();
-                ui.label("Wall Lines:")
-                    .on_hover_text("How strongly steep walls keep crisp sediment lines");
+                ui.label(if lava_tubes_selected {
+                    "Ridge Shadow:"
+                } else {
+                    "Wall Lines:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Dark trough shading between ropey lava ridges"
+                } else {
+                    "How strongly steep walls keep crisp sediment lines"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_wall_line_strength,
@@ -3918,9 +4091,17 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .changed();
 
                 ui.add_space(4.0);
-                ui.label("Pattern Layout");
+                ui.label(if lava_tubes_selected {
+                    "Tube Pattern"
+                } else {
+                    "Pattern Layout"
+                });
                 ui.label("Texture Scale:")
-                    .on_hover_text("Scale of the triplanar rock grain. Higher values create finer, denser surface texture");
+                    .on_hover_text(if lava_tubes_selected {
+                        "Scale of the glassy surface noise. Higher values create finer cooled-lava grain"
+                    } else {
+                        "Scale of the triplanar rock grain. Higher values create finer, denser surface texture"
+                    });
                 params_changed |= ui
                     .add(
                         egui::Slider::new(&mut cave_rock_texture_scale, 0.005..=0.2)
@@ -3928,116 +4109,228 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     )
                     .changed();
                 ui.label("Conform:")
-                    .on_hover_text("Blends strata from world-horizontal height lines toward lines that follow the local cave surface normal");
+                    .on_hover_text(if lava_tubes_selected {
+                        "Used by other rock presets; Lava Tubes derives flow from the tube radius and surface direction"
+                    } else {
+                        "Blends strata from world-horizontal height lines toward lines that follow the local cave surface normal"
+                    });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_geometry_conform,
                         0.0..=1.0,
                     ))
                     .changed();
-                ui.label("Parallax:")
-                    .on_hover_text("View-angle offset for the rock pattern, giving strata and grain apparent depth");
+                ui.label("Relief:")
+                    .on_hover_text(if lava_tubes_selected {
+                        "Stable shading depth for the cooled lava grain and rope ridges"
+                    } else {
+                        "Stable shading depth for the rock grain and strata. This adds surface relief without sliding the pattern toward the camera"
+                    });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_parallax_depth,
-                        0.0..=8.0,
+                        0.0..=4.0,
                     ))
                     .changed();
-                ui.label("Major Lines:")
-                    .on_hover_text("Density of broad sediment bands");
+                ui.label(if lava_tubes_selected {
+                    "Rope Spacing:"
+                } else {
+                    "Major Lines:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Density of raised ropey pahoehoe ridges"
+                } else {
+                    "Density of broad sediment bands"
+                });
                 params_changed |= ui
                     .add(
                         egui::Slider::new(&mut cave_rock_coarse_frequency, 0.5..=32.0)
                             .logarithmic(true),
                     )
                     .changed();
-                ui.label("Fine Lines:")
-                    .on_hover_text("Density of thin pale sediment lines");
+                ui.label(if lava_tubes_selected {
+                    "Sag Ripple:"
+                } else {
+                    "Fine Lines:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Frequency of cross-flow ripple bends in the rope pattern"
+                } else {
+                    "Density of thin pale sediment lines"
+                });
                 params_changed |= ui
                     .add(
                         egui::Slider::new(&mut cave_rock_fine_frequency, 1.0..=96.0)
                             .logarithmic(true),
                     )
                     .changed();
-                ui.label("Seam Lines:")
-                    .on_hover_text("Density of dark seam lines");
+                ui.label(if lava_tubes_selected {
+                    "Crack Density:"
+                } else {
+                    "Seam Lines:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Density of glowing fissure lines"
+                } else {
+                    "Density of dark seam lines"
+                });
                 params_changed |= ui
                     .add(
                         egui::Slider::new(&mut cave_rock_seam_frequency, 1.0..=64.0)
                             .logarithmic(true),
                     )
                     .changed();
-                ui.label("Fine Warp Scale:")
-                    .on_hover_text("Spatial scale of distortion on fine lines");
+                ui.label(if lava_tubes_selected {
+                    "Flow Noise Scale:"
+                } else {
+                    "Fine Warp Scale:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Spatial scale of lava-flow distortion and glass grain"
+                } else {
+                    "Spatial scale of distortion on fine lines"
+                });
                 params_changed |= ui
                     .add(
                         egui::Slider::new(&mut cave_rock_fine_noise_scale, 0.005..=0.2)
                             .logarithmic(true),
                     )
                     .changed();
-                ui.label("Fine Warp:")
-                    .on_hover_text("How strongly fine lines bend and ripple");
+                ui.label(if lava_tubes_selected {
+                    "Flow Warp:"
+                } else {
+                    "Fine Warp:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "How strongly the cooled lava flow bends and swirls"
+                } else {
+                    "How strongly fine lines bend and ripple"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_fine_noise_strength,
                         0.0..=12.0,
                     ))
                     .changed();
-                ui.label("Seam Warp Scale:")
-                    .on_hover_text("Spatial scale of distortion on dark seams");
+                ui.label(if lava_tubes_selected {
+                    "Crack Noise Scale:"
+                } else {
+                    "Seam Warp Scale:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Spatial scale of distortion on glowing cracks"
+                } else {
+                    "Spatial scale of distortion on dark seams"
+                });
                 params_changed |= ui
                     .add(
                         egui::Slider::new(&mut cave_rock_seam_noise_scale, 0.005..=0.2)
                             .logarithmic(true),
                     )
                     .changed();
-                ui.label("Seam Warp:")
-                    .on_hover_text("How strongly seam lines bend and break");
+                ui.label(if lava_tubes_selected {
+                    "Crack Warp:"
+                } else {
+                    "Seam Warp:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "How strongly glowing fissures bend and break"
+                } else {
+                    "How strongly seam lines bend and break"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_seam_noise_strength,
                         0.0..=12.0,
                     ))
                     .changed();
-                ui.label("Major Low:")
-                    .on_hover_text("Lower smoothstep edge for broad sediment bands");
+                ui.label(if lava_tubes_selected {
+                    "Rope Low:"
+                } else {
+                    "Major Low:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Lower smoothstep edge for raised rope ridge coverage"
+                } else {
+                    "Lower smoothstep edge for broad sediment bands"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_coarse_band_low,
                         -1.0..=1.0,
                     ))
                     .changed();
-                ui.label("Major High:")
-                    .on_hover_text("Upper smoothstep edge for broad sediment bands");
+                ui.label(if lava_tubes_selected {
+                    "Rope High:"
+                } else {
+                    "Major High:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Upper smoothstep edge for raised rope ridge coverage"
+                } else {
+                    "Upper smoothstep edge for broad sediment bands"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_coarse_band_high,
                         -1.0..=1.0,
                     ))
                     .changed();
-                ui.label("Fine Low:")
-                    .on_hover_text("Lower smoothstep edge for pale fine-line coverage");
+                ui.label(if lava_tubes_selected {
+                    "Blister Low:"
+                } else {
+                    "Fine Low:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Lower smoothstep edge for oxidized blister coverage"
+                } else {
+                    "Lower smoothstep edge for pale fine-line coverage"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_fine_band_low,
                         -1.0..=1.0,
                     ))
                     .changed();
-                ui.label("Fine High:")
-                    .on_hover_text("Upper smoothstep edge for pale fine-line coverage");
+                ui.label(if lava_tubes_selected {
+                    "Blister High:"
+                } else {
+                    "Fine High:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Upper smoothstep edge for oxidized blister coverage"
+                } else {
+                    "Upper smoothstep edge for pale fine-line coverage"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(
                         &mut cave_rock_fine_band_high,
                         -1.0..=1.0,
                     ))
                     .changed();
-                ui.label("Seam Low:")
-                    .on_hover_text("Lower edge for dark seam thickness");
+                ui.label(if lava_tubes_selected {
+                    "Crack Thin:"
+                } else {
+                    "Seam Low:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Lower edge for glowing crack thickness"
+                } else {
+                    "Lower edge for dark seam thickness"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(&mut cave_rock_seam_low, 0.0..=1.0))
                     .changed();
-                ui.label("Seam High:")
-                    .on_hover_text("Upper edge for dark seam thickness");
+                ui.label(if lava_tubes_selected {
+                    "Crack Thick:"
+                } else {
+                    "Seam High:"
+                })
+                .on_hover_text(if lava_tubes_selected {
+                    "Upper edge for glowing crack thickness"
+                } else {
+                    "Upper edge for dark seam thickness"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(&mut cave_rock_seam_high, 0.0..=1.0))
                     .changed();
@@ -4229,6 +4522,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.cave_mesh_smoothing_iterations =
                     mesh_smoothing_iterations.max(0) as u32;
                 context.editor_state.cave_mesh_smoothing_factor = mesh_smoothing_factor;
+                context.editor_state.cave_mesh_smooth_normals = mesh_smooth_normals;
                 context.editor_state.geothermal_enabled = geothermal_enabled;
                 context.editor_state.geothermal_count = geothermal_count.max(0) as u32;
                 context.editor_state.geothermal_placement_mode = geothermal_placement_mode.min(1);
