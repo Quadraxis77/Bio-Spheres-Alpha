@@ -11,4 +11,8 @@
     condensation_probability: 0.004,
     vaporization_probability: 0.004,
     nutrient_density: 0.35,
+    nutrient_epoch_duration: 10.0,
+    nutrient_epoch_spacing: 7.0,
+    nutrient_spawn_end: 0.4,
+    nutrient_despawn_start: 0.6,
 )

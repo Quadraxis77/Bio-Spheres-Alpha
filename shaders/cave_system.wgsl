@@ -23,54 +23,68 @@ struct CaveParams {
     collision_stiffness: f32,
     collision_damping: f32,
     substeps: u32,
-    _padding: f32,
-    // Total: 17 * 4 = 68 bytes, need padding to 256 bytes
-    _padding2: vec4<f32>,
-    _padding3: vec4<f32>,
-    _padding4: vec4<f32>,
-    _padding5: vec4<f32>,
-    _padding6: vec4<f32>,
-    _padding7: vec4<f32>,
-    _padding8: vec4<f32>,
-    _padding9: vec4<f32>,
-    _padding10: vec4<f32>,
-    _padding11: vec4<f32>,
-    _padding12: vec4<f32>,
-    _padding13: vec4<f32>,
-    _padding14: vec4<f32>,
-    _padding15: vec4<f32>,
-    _padding16: vec4<f32>,
-    _padding17: vec4<f32>,
-    _padding18: vec4<f32>,
-    _padding19: vec4<f32>,
-    _padding20: vec4<f32>,
-    _padding21: vec4<f32>,
-    _padding22: vec4<f32>,
-    _padding23: vec4<f32>,
-    _padding24: vec4<f32>,
-    _padding25: vec4<f32>,
-    _padding26: vec4<f32>,
-    _padding27: vec4<f32>,
-    _padding28: vec4<f32>,
-    _padding29: vec4<f32>,
-    _padding30: vec4<f32>,
-    _padding31: vec4<f32>,
-    _padding32: vec4<f32>,
-    _padding33: vec4<f32>,
-    _padding34: vec4<f32>,
-    _padding35: vec4<f32>,
-    _padding36: vec4<f32>,
-    _padding37: vec4<f32>,
-    _padding38: vec4<f32>,
-    _padding39: vec4<f32>,
-    _padding40: vec4<f32>,
-    _padding41: vec4<f32>,
-    _padding42: vec4<f32>,
-    _padding43: vec4<f32>,
-    _padding44: vec4<f32>,
-    _padding45: vec4<f32>,
-    _padding46: vec4<f32>,
-    _padding47: vec4<f32>,
+    geothermal_enabled: u32,
+    geothermal_count: u32,
+    geothermal_placement_mode: u32,
+    geothermal_lower_hemisphere: u32,
+    geothermal_gravity_mode: u32,
+    geothermal_gravity: f32,
+    geothermal_length: f32,
+    geothermal_width: f32,
+    geothermal_depth: f32,
+    geothermal_back_margin: f32,
+    geothermal_top_margin: f32,
+    geothermal_heat_output: f32,
+    geothermal_heat_radius: f32,
+    geothermal_glow_strength: f32,
+    geothermal_glow_radius: f32,
+    geothermal_glow_color: vec3<f32>,
+    isolated_chunk_cull_volume: f32,
+    mesh_smoothing_iterations: u32,
+    mesh_smoothing_factor: f32,
+    appearance: u32,
+    rock_dark_r: f32,
+    rock_dark_g: f32,
+    rock_dark_b: f32,
+    rock_layer_scale: f32,
+    rock_cool_r: f32,
+    rock_cool_g: f32,
+    rock_cool_b: f32,
+    rock_warp_strength: f32,
+    rock_warm_r: f32,
+    rock_warm_g: f32,
+    rock_warm_b: f32,
+    rock_fine_band_strength: f32,
+    rock_pale_r: f32,
+    rock_pale_g: f32,
+    rock_pale_b: f32,
+    rock_cool_mottle_strength: f32,
+    rock_grain_strength: f32,
+    rock_patch_contrast: f32,
+    rock_seam_darkening: f32,
+    rock_wall_line_strength: f32,
+    rock_min_color: f32,
+    rock_max_color: f32,
+    rock_ambient_strength: f32,
+    rock_diffuse_strength: f32,
+    rock_specular_strength: f32,
+    rock_specular_power: f32,
+    rock_texture_scale: f32,
+    rock_coarse_frequency: f32,
+    rock_fine_frequency: f32,
+    rock_seam_frequency: f32,
+    rock_fine_noise_scale: f32,
+    rock_fine_noise_strength: f32,
+    rock_seam_noise_scale: f32,
+    rock_seam_noise_strength: f32,
+    rock_coarse_band_low: f32,
+    rock_coarse_band_high: f32,
+    rock_fine_band_low: f32,
+    rock_fine_band_high: f32,
+    rock_seam_low: f32,
+    rock_seam_high: f32,
+    rock_geometry_conform: f32,
+    rock_parallax_depth: f32,
 }
 
 struct VertexInput {
@@ -325,9 +339,10 @@ fn sample_triplanar_texture(world_pos: vec3<f32>, normal: vec3<f32>) -> f32 {
     let normalized_weights = raw_weights / total_weight;
     
     // Sample from three planes
-    let uv_xz = world_pos.xz * 0.05;  // Scale for texture density
-    let uv_xy = world_pos.xy * 0.05;
-    let uv_yz = world_pos.yz * 0.05;
+    let texture_scale = cave_params.rock_texture_scale;
+    let uv_xz = world_pos.xz * texture_scale;
+    let uv_xy = world_pos.xy * texture_scale;
+    let uv_yz = world_pos.yz * texture_scale;
     
     // Generate texture for each plane
     let tex_xz = noise(uv_xz);
@@ -344,37 +359,58 @@ fn layered_rock_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f3
     let broad_warp = noise(world_pos.xz * 0.018)
                    + noise(world_pos.yz * 0.014 + vec2<f32>(17.0, 5.0)) * 0.7
                    + noise(world_pos.xy * 0.011 + vec2<f32>(4.0, 23.0)) * 0.45;
-    let layer_coord = world_pos.y * 0.075 + broad_warp * 1.85;
+    let conform_axis = normalize(mix(vec3<f32>(0.0, 1.0, 0.0), abs(normal), cave_params.rock_geometry_conform));
+    let conform_height = dot(world_pos, conform_axis);
+    let layer_coord = conform_height * cave_params.rock_layer_scale
+                    + broad_warp * cave_params.rock_warp_strength;
 
-    let coarse_wave = sin(layer_coord * 6.28318);
-    let fine_wave = sin(layer_coord * 22.0 + noise(world_pos.xz * 0.045) * 4.0);
-    let seam_wave = sin(layer_coord * 13.0 + noise(world_pos.yz * 0.035) * 2.5);
+    let coarse_wave = sin(layer_coord * cave_params.rock_coarse_frequency);
+    let fine_wave = sin(
+        layer_coord * cave_params.rock_fine_frequency
+        + noise(world_pos.xz * cave_params.rock_fine_noise_scale) * cave_params.rock_fine_noise_strength
+    );
+    let seam_wave = sin(
+        layer_coord * cave_params.rock_seam_frequency
+        + noise(world_pos.yz * cave_params.rock_seam_noise_scale) * cave_params.rock_seam_noise_strength
+    );
 
-    let coarse_band = smoothstep(-0.35, 0.55, coarse_wave);
-    let fine_band = smoothstep(0.35, 0.92, fine_wave);
-    let dark_seam = smoothstep(0.82, 0.98, abs(seam_wave));
+    let coarse_band = smoothstep(cave_params.rock_coarse_band_low, cave_params.rock_coarse_band_high, coarse_wave);
+    let fine_band = smoothstep(cave_params.rock_fine_band_low, cave_params.rock_fine_band_high, fine_wave);
+    let dark_seam = smoothstep(cave_params.rock_seam_low, cave_params.rock_seam_high, abs(seam_wave));
 
-    let dark_rock = vec3<f32>(0.105, 0.100, 0.092);
-    let cool_slate = vec3<f32>(0.150, 0.165, 0.160);
-    let warm_shale = vec3<f32>(0.235, 0.205, 0.155);
-    let pale_silt = vec3<f32>(0.330, 0.300, 0.225);
+    let dark_rock = vec3<f32>(cave_params.rock_dark_r, cave_params.rock_dark_g, cave_params.rock_dark_b);
+    let cool_slate = vec3<f32>(cave_params.rock_cool_r, cave_params.rock_cool_g, cave_params.rock_cool_b);
+    let warm_shale = vec3<f32>(cave_params.rock_warm_r, cave_params.rock_warm_g, cave_params.rock_warm_b);
+    let pale_silt = vec3<f32>(cave_params.rock_pale_r, cave_params.rock_pale_g, cave_params.rock_pale_b);
 
     var color = mix(dark_rock, warm_shale, coarse_band);
-    color = mix(color, pale_silt, fine_band * 0.28);
-    color = mix(color, cool_slate, noise(world_pos.xy * 0.025 + vec2<f32>(11.0, 31.0)) * 0.22);
+    color = mix(color, pale_silt, fine_band * cave_params.rock_fine_band_strength);
+    color = mix(
+        color,
+        cool_slate,
+        noise(world_pos.xy * 0.025 + vec2<f32>(11.0, 31.0)) * cave_params.rock_cool_mottle_strength
+    );
 
     let grain = texture_value - 0.5;
     let patch_noise = noise(world_pos.xz * 0.032 + vec2<f32>(19.0, 7.0));
-    color += vec3<f32>(grain * 0.09);
-    color *= mix(0.82, 1.16, patch_noise);
-    color *= 1.0 - dark_seam * 0.28;
+    color += vec3<f32>(grain * cave_params.rock_grain_strength);
+    color *= mix(
+        1.0 - cave_params.rock_patch_contrast,
+        1.0 + cave_params.rock_patch_contrast,
+        patch_noise
+    );
+    color *= 1.0 - dark_seam * cave_params.rock_seam_darkening;
 
     // Steeper walls show crisper sediment lines; flatter caps keep a subtler,
     // more scuffed look so the pattern does not become overly graphic.
     let wall_factor = 1.0 - abs(normal.y);
-    color = mix(color * 0.92 + vec3<f32>(0.025), color, wall_factor * 0.65 + 0.35);
+    color = mix(
+        color * 0.92 + vec3<f32>(0.025),
+        color,
+        wall_factor * cave_params.rock_wall_line_strength + 0.35
+    );
 
-    return clamp(color, vec3<f32>(0.045), vec3<f32>(0.48));
+    return clamp(color, vec3<f32>(cave_params.rock_min_color), vec3<f32>(cave_params.rock_max_color));
 }
 
 // Moss density sampling - trilinear interpolation from 128^3 grid.
@@ -527,13 +563,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // View direction
     let V = normalize(camera.camera_pos - in.world_position);
     
-    // Triplanar texture sampling prevents stretching
-    let texture_value = sample_triplanar_texture(in.world_position, N);
+    // Triplanar texture sampling prevents stretching. Rock parallax offsets
+    // the procedural pattern in view-tangent space for apparent surface depth.
+    var rock_world_position = in.world_position;
+    var texture_value = sample_triplanar_texture(rock_world_position, N);
+    let rock_parallax_depth = cave_params.rock_parallax_depth;
+    if (rock_parallax_depth > 0.001) {
+        let view_tangent = V - dot(V, N) * N;
+        let tangent_len = length(view_tangent);
+        if (tangent_len > 0.0001) {
+            let tangent_dir = view_tangent / tangent_len;
+            rock_world_position = rock_world_position + tangent_dir * rock_parallax_depth * (1.0 - texture_value);
+            texture_value = sample_triplanar_texture(rock_world_position, N);
+        }
+    }
     
     // Ambient occlusion approximation
     var ao = 0.5 + 0.5 * texture_value;
     
-    var final_base_color = layered_rock_color(in.world_position, N, texture_value);
+    var final_base_color = layered_rock_color(rock_world_position, N, texture_value);
 
     // -- Moss rendering with parallax and normal perturbation --------------
     let moss_sample_pos = in.world_position + N * shadow_params.cell_size * 0.5;
@@ -611,7 +659,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Specular lighting (Blinn-Phong, reduced on mossy surfaces)
     let H = normalize(light_dir + V);
-    let specular = pow(max(dot(N, H), 0.0), 32.0) * specular_strength;
+    let specular = pow(max(dot(N, H), 0.0), cave_params.rock_specular_power) * specular_strength;
     
     // Combine lighting
     let offset_distance = mix(3.0, 6.0, shadow_params.shadow_quality) * shadow_params.cell_size;
@@ -633,8 +681,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         sun_color = sample_light_color_field(clamped_pos);
     }
     // Ambient scales with sun_color so cave walls go pitch black when sun is off.
-    let ambient = sun_color * 0.08 * ao;
-    var final_color = final_base_color * (ambient + sun_color * diffuse * 0.7 * shadow) + sun_color * vec3<f32>(specular * 0.3 * shadow);
+    let ambient = sun_color * cave_params.rock_ambient_strength * ao;
+    var final_color = final_base_color * (ambient + sun_color * diffuse * cave_params.rock_diffuse_strength * shadow)
+        + sun_color * vec3<f32>(specular * cave_params.rock_specular_strength * shadow);
     
     // Apply underwater caustics on lit surfaces
     let water_check_pos = in.world_position + N * shadow_params.cell_size * 1.5;

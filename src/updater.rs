@@ -107,11 +107,27 @@ pub fn migrate_config_files() {
             continue;
         }
 
+        let legacy_fluid_schema = if *filename == "fluid_settings.ron" {
+            std::fs::read_to_string(&path)
+                .map(|text| !text.contains("nutrient_epoch_duration"))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
         // File exists - merge missing keys.
         match merge_ron_keys(&path, default_content) {
             Ok(true) => log::info!("Config migration: added new keys to {}", filename),
             Ok(false) => {} // nothing to do
             Err(e) => log::warn!("Config migration failed for {}: {}", filename, e),
+        }
+
+        if legacy_fluid_schema {
+            match migrate_legacy_fluid_nutrient_density(&path) {
+                Ok(true) => log::info!("Config migration: updated legacy nutrient density default"),
+                Ok(false) => {}
+                Err(e) => log::warn!("Config migration failed for fluid nutrient density: {}", e),
+            }
         }
     }
 }
@@ -265,5 +281,17 @@ fn merge_ron_keys(path: &Path, default_content: &str) -> Result<bool, String> {
 
     std::fs::write(path, new_text).map_err(|e| format!("write error: {}", e))?;
 
+    Ok(true)
+}
+
+fn migrate_legacy_fluid_nutrient_density(path: &Path) -> Result<bool, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
+
+    if !text.contains("nutrient_density: 0.2") {
+        return Ok(false);
+    }
+
+    let updated = text.replacen("nutrient_density: 0.2", "nutrient_density: 0.35", 1);
+    std::fs::write(path, updated).map_err(|e| format!("write error: {}", e))?;
     Ok(true)
 }

@@ -3673,6 +3673,41 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut geothermal_glow_strength = params.geothermal_glow_strength;
             let mut geothermal_glow_radius = params.geothermal_glow_radius;
             let mut geothermal_glow_color = params.geothermal_glow_color;
+            let mut cave_appearance = params.appearance;
+            let mut cave_rock_dark_color = params.rock_dark_color;
+            let mut cave_rock_cool_color = params.rock_cool_color;
+            let mut cave_rock_warm_color = params.rock_warm_color;
+            let mut cave_rock_pale_color = params.rock_pale_color;
+            let mut cave_rock_layer_scale = params.rock_layer_scale;
+            let mut cave_rock_warp_strength = params.rock_warp_strength;
+            let mut cave_rock_fine_band_strength = params.rock_fine_band_strength;
+            let mut cave_rock_cool_mottle_strength = params.rock_cool_mottle_strength;
+            let mut cave_rock_grain_strength = params.rock_grain_strength;
+            let mut cave_rock_patch_contrast = params.rock_patch_contrast;
+            let mut cave_rock_seam_darkening = params.rock_seam_darkening;
+            let mut cave_rock_wall_line_strength = params.rock_wall_line_strength;
+            let mut cave_rock_min_color = params.rock_min_color;
+            let mut cave_rock_max_color = params.rock_max_color;
+            let mut cave_rock_ambient_strength = params.rock_ambient_strength;
+            let mut cave_rock_diffuse_strength = params.rock_diffuse_strength;
+            let mut cave_rock_specular_strength = params.rock_specular_strength;
+            let mut cave_rock_specular_power = params.rock_specular_power;
+            let mut cave_rock_texture_scale = params.rock_texture_scale;
+            let mut cave_rock_coarse_frequency = params.rock_coarse_frequency;
+            let mut cave_rock_fine_frequency = params.rock_fine_frequency;
+            let mut cave_rock_seam_frequency = params.rock_seam_frequency;
+            let mut cave_rock_fine_noise_scale = params.rock_fine_noise_scale;
+            let mut cave_rock_fine_noise_strength = params.rock_fine_noise_strength;
+            let mut cave_rock_seam_noise_scale = params.rock_seam_noise_scale;
+            let mut cave_rock_seam_noise_strength = params.rock_seam_noise_strength;
+            let mut cave_rock_coarse_band_low = params.rock_coarse_band_low;
+            let mut cave_rock_coarse_band_high = params.rock_coarse_band_high;
+            let mut cave_rock_fine_band_low = params.rock_fine_band_low;
+            let mut cave_rock_fine_band_high = params.rock_fine_band_high;
+            let mut cave_rock_seam_low = params.rock_seam_low;
+            let mut cave_rock_seam_high = params.rock_seam_high;
+            let mut cave_rock_geometry_conform = params.rock_geometry_conform;
+            let mut cave_rock_parallax_depth = params.rock_parallax_depth;
 
             let mut params_changed = false;
 
@@ -3774,6 +3809,281 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             ui.add_space(10.0);
             ui.separator();
+            ui.heading("Appearance");
+            ui.add_space(5.0);
+
+            ui.label("Preset:")
+                .on_hover_text("Named cave appearance preset. More appearances can be added here without changing the rest of the panel");
+            egui::ComboBox::from_id_salt("cave_appearance")
+                .selected_text(match cave_appearance {
+                    _ => "Layered Shale",
+                })
+                .show_ui(ui, |ui| {
+                    params_changed |= ui
+                        .selectable_value(&mut cave_appearance, 0, "Layered Shale")
+                        .changed();
+                });
+
+            ui.add_space(4.0);
+            ui.label("Rock Colors");
+            ui.horizontal(|ui| {
+                ui.label("Dark:");
+                params_changed |= ui
+                    .color_edit_button_rgb(&mut cave_rock_dark_color)
+                    .on_hover_text("Dark base rock tone")
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Cool:");
+                params_changed |= ui
+                    .color_edit_button_rgb(&mut cave_rock_cool_color)
+                    .on_hover_text("Cool mottled slate tone blended through the wall texture")
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Warm:");
+                params_changed |= ui
+                    .color_edit_button_rgb(&mut cave_rock_warm_color)
+                    .on_hover_text("Warm shale tone used by the broad sediment layers")
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                ui.label("Pale:");
+                params_changed |= ui
+                    .color_edit_button_rgb(&mut cave_rock_pale_color)
+                    .on_hover_text("Light silt tone used by fine strata highlights")
+                    .changed();
+            });
+
+            if state.show_advanced_options {
+                ui.add_space(4.0);
+                ui.label("Layering");
+                ui.label("Layer Scale:")
+                    .on_hover_text("Vertical frequency of the sediment layer pattern");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut cave_rock_layer_scale, 0.0..=0.2))
+                    .changed();
+                ui.label("Warp:")
+                    .on_hover_text("How much procedural noise bends the sediment bands");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
+                    .changed();
+                ui.label("Fine Bands:")
+                    .on_hover_text("Strength of the pale fine-layer highlights");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_fine_band_strength,
+                        0.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Cool Mottle:")
+                    .on_hover_text("Amount of cool slate color variation");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_cool_mottle_strength,
+                        0.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Grain:")
+                    .on_hover_text("Brightness variation from the triplanar rock grain");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_grain_strength,
+                        0.0..=0.25,
+                    ))
+                    .changed();
+                ui.label("Patch Contrast:")
+                    .on_hover_text("Large mottled light and dark patch contrast");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_patch_contrast,
+                        0.0..=0.5,
+                    ))
+                    .changed();
+                ui.label("Seam Darkening:")
+                    .on_hover_text("Darkness of narrow sediment seams");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_seam_darkening,
+                        0.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Wall Lines:")
+                    .on_hover_text("How strongly steep walls keep crisp sediment lines");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_wall_line_strength,
+                        0.0..=1.0,
+                    ))
+                    .changed();
+
+                ui.add_space(4.0);
+                ui.label("Pattern Layout");
+                ui.label("Texture Scale:")
+                    .on_hover_text("Scale of the triplanar rock grain. Higher values create finer, denser surface texture");
+                params_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut cave_rock_texture_scale, 0.005..=0.2)
+                            .logarithmic(true),
+                    )
+                    .changed();
+                ui.label("Conform:")
+                    .on_hover_text("Blends strata from world-horizontal height lines toward lines that follow the local cave surface normal");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_geometry_conform,
+                        0.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Parallax:")
+                    .on_hover_text("View-angle offset for the rock pattern, giving strata and grain apparent depth");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_parallax_depth,
+                        0.0..=8.0,
+                    ))
+                    .changed();
+                ui.label("Major Lines:")
+                    .on_hover_text("Density of broad sediment bands");
+                params_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut cave_rock_coarse_frequency, 0.5..=32.0)
+                            .logarithmic(true),
+                    )
+                    .changed();
+                ui.label("Fine Lines:")
+                    .on_hover_text("Density of thin pale sediment lines");
+                params_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut cave_rock_fine_frequency, 1.0..=96.0)
+                            .logarithmic(true),
+                    )
+                    .changed();
+                ui.label("Seam Lines:")
+                    .on_hover_text("Density of dark seam lines");
+                params_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut cave_rock_seam_frequency, 1.0..=64.0)
+                            .logarithmic(true),
+                    )
+                    .changed();
+                ui.label("Fine Warp Scale:")
+                    .on_hover_text("Spatial scale of distortion on fine lines");
+                params_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut cave_rock_fine_noise_scale, 0.005..=0.2)
+                            .logarithmic(true),
+                    )
+                    .changed();
+                ui.label("Fine Warp:")
+                    .on_hover_text("How strongly fine lines bend and ripple");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_fine_noise_strength,
+                        0.0..=12.0,
+                    ))
+                    .changed();
+                ui.label("Seam Warp Scale:")
+                    .on_hover_text("Spatial scale of distortion on dark seams");
+                params_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut cave_rock_seam_noise_scale, 0.005..=0.2)
+                            .logarithmic(true),
+                    )
+                    .changed();
+                ui.label("Seam Warp:")
+                    .on_hover_text("How strongly seam lines bend and break");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_seam_noise_strength,
+                        0.0..=12.0,
+                    ))
+                    .changed();
+                ui.label("Major Low:")
+                    .on_hover_text("Lower smoothstep edge for broad sediment bands");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_coarse_band_low,
+                        -1.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Major High:")
+                    .on_hover_text("Upper smoothstep edge for broad sediment bands");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_coarse_band_high,
+                        -1.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Fine Low:")
+                    .on_hover_text("Lower smoothstep edge for pale fine-line coverage");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_fine_band_low,
+                        -1.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Fine High:")
+                    .on_hover_text("Upper smoothstep edge for pale fine-line coverage");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_fine_band_high,
+                        -1.0..=1.0,
+                    ))
+                    .changed();
+                ui.label("Seam Low:")
+                    .on_hover_text("Lower edge for dark seam thickness");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut cave_rock_seam_low, 0.0..=1.0))
+                    .changed();
+                ui.label("Seam High:")
+                    .on_hover_text("Upper edge for dark seam thickness");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut cave_rock_seam_high, 0.0..=1.0))
+                    .changed();
+
+                ui.add_space(4.0);
+                ui.label("Lighting");
+                ui.label("Ambient:");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_ambient_strength,
+                        0.0..=0.5,
+                    ))
+                    .changed();
+                ui.label("Diffuse:");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_diffuse_strength,
+                        0.0..=2.0,
+                    ))
+                    .changed();
+                ui.label("Specular:");
+                params_changed |= ui
+                    .add(egui::Slider::new(
+                        &mut cave_rock_specular_strength,
+                        0.0..=2.0,
+                    ))
+                    .changed();
+                ui.label("Spec Power:");
+                params_changed |= ui
+                    .add(
+                        egui::Slider::new(&mut cave_rock_specular_power, 1.0..=128.0)
+                            .logarithmic(true),
+                    )
+                    .changed();
+                ui.label("Min Tone:");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut cave_rock_min_color, 0.0..=0.25))
+                    .changed();
+                ui.label("Max Tone:");
+                params_changed |= ui
+                    .add(egui::Slider::new(&mut cave_rock_max_color, 0.25..=1.0))
+                    .changed();
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
             ui.heading("Thermal Smoke Stacks");
             ui.add_space(5.0);
 
@@ -3857,15 +4167,15 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Heat");
                 ui.add_space(2.0);
 
-                ui.label("Heat Output:")
-                    .on_hover_text("Directional heat injected inward from the vent plume, in degrees Celsius");
+                ui.label("Heat Output:").on_hover_text(
+                    "Directional heat injected inward from the vent plume, in degrees Celsius",
+                );
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0).suffix(" C"))
                     .changed();
 
-                ui.label("Heat Radius:").on_hover_text(
-                    "Distance and spread of the baked inward heat plume, in voxels",
-                );
+                ui.label("Heat Radius:")
+                    .on_hover_text("Distance and spread of the baked inward heat plume, in voxels");
                 params_changed |= ui
                     .add(egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
                     .changed();
@@ -3933,6 +4243,42 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.geothermal_glow_strength = geothermal_glow_strength;
                 context.editor_state.geothermal_glow_radius = geothermal_glow_radius;
                 context.editor_state.geothermal_glow_color = geothermal_glow_color;
+                context.editor_state.cave_appearance = cave_appearance;
+                context.editor_state.cave_rock_dark_color = cave_rock_dark_color;
+                context.editor_state.cave_rock_cool_color = cave_rock_cool_color;
+                context.editor_state.cave_rock_warm_color = cave_rock_warm_color;
+                context.editor_state.cave_rock_pale_color = cave_rock_pale_color;
+                context.editor_state.cave_rock_layer_scale = cave_rock_layer_scale;
+                context.editor_state.cave_rock_warp_strength = cave_rock_warp_strength;
+                context.editor_state.cave_rock_fine_band_strength = cave_rock_fine_band_strength;
+                context.editor_state.cave_rock_cool_mottle_strength =
+                    cave_rock_cool_mottle_strength;
+                context.editor_state.cave_rock_grain_strength = cave_rock_grain_strength;
+                context.editor_state.cave_rock_patch_contrast = cave_rock_patch_contrast;
+                context.editor_state.cave_rock_seam_darkening = cave_rock_seam_darkening;
+                context.editor_state.cave_rock_wall_line_strength = cave_rock_wall_line_strength;
+                context.editor_state.cave_rock_min_color = cave_rock_min_color;
+                context.editor_state.cave_rock_max_color = cave_rock_max_color;
+                context.editor_state.cave_rock_ambient_strength = cave_rock_ambient_strength;
+                context.editor_state.cave_rock_diffuse_strength = cave_rock_diffuse_strength;
+                context.editor_state.cave_rock_specular_strength = cave_rock_specular_strength;
+                context.editor_state.cave_rock_specular_power = cave_rock_specular_power;
+                context.editor_state.cave_rock_texture_scale = cave_rock_texture_scale;
+                context.editor_state.cave_rock_coarse_frequency = cave_rock_coarse_frequency;
+                context.editor_state.cave_rock_fine_frequency = cave_rock_fine_frequency;
+                context.editor_state.cave_rock_seam_frequency = cave_rock_seam_frequency;
+                context.editor_state.cave_rock_fine_noise_scale = cave_rock_fine_noise_scale;
+                context.editor_state.cave_rock_fine_noise_strength = cave_rock_fine_noise_strength;
+                context.editor_state.cave_rock_seam_noise_scale = cave_rock_seam_noise_scale;
+                context.editor_state.cave_rock_seam_noise_strength = cave_rock_seam_noise_strength;
+                context.editor_state.cave_rock_coarse_band_low = cave_rock_coarse_band_low;
+                context.editor_state.cave_rock_coarse_band_high = cave_rock_coarse_band_high;
+                context.editor_state.cave_rock_fine_band_low = cave_rock_fine_band_low;
+                context.editor_state.cave_rock_fine_band_high = cave_rock_fine_band_high;
+                context.editor_state.cave_rock_seam_low = cave_rock_seam_low;
+                context.editor_state.cave_rock_seam_high = cave_rock_seam_high;
+                context.editor_state.cave_rock_geometry_conform = cave_rock_geometry_conform;
+                context.editor_state.cave_rock_parallax_depth = cave_rock_parallax_depth;
                 context.editor_state.cave_params_dirty = true;
 
                 // Save settings to disk
@@ -4564,6 +4910,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.nutrient_epoch_duration = context.editor_state.nutrient_epoch_duration;
         }
+        context.editor_state.save_fluid_settings();
     }
 
     ui.label("Epoch Spacing:")
@@ -4585,6 +4932,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing;
         }
+        context.editor_state.save_fluid_settings();
     }
 
     if state.show_advanced_options {
@@ -4609,6 +4957,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                 gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
                 gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
             }
+            context.editor_state.save_fluid_settings();
         }
 
         ui.label("Despawn Ramp:")
@@ -4632,6 +4981,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                 gpu_scene.nutrient_spawn_end = context.editor_state.nutrient_spawn_end;
                 gpu_scene.nutrient_despawn_start = context.editor_state.nutrient_despawn_start;
             }
+            context.editor_state.save_fluid_settings();
         }
     } // end advanced nutrient ramps
 
@@ -6161,14 +6511,15 @@ fn render_light_settings_organized(
                 ui.label("Contrast").on_hover_text(
                     "Midpoint contrast. Values above 1 separate lights and darks; 1 is neutral.",
                 );
-                if ui
+                let contrast_changed = ui
                     .add(
                         egui::Slider::new(&mut context.editor_state.pp_contrast, 0.25..=4.0)
                             .step_by(0.05)
                             .fixed_decimals(2),
                     )
-                    .changed()
-                {
+                    .changed();
+                if contrast_changed {
+                    changed = true;
                     if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                         if let Some(pp) = gpu_scene.post_process.as_mut() {
                             pp.contrast = context.editor_state.pp_contrast;
@@ -6176,13 +6527,14 @@ fn render_light_settings_organized(
                     }
                 }
 
-                if ui
+                let adapt_enabled_changed = ui
                     .checkbox(&mut context.editor_state.pp_adapt_enabled, "Eye Adaptation")
                     .on_hover_text(
                         "Camera gradually adjusts exposure between bright and dark areas.",
                     )
-                    .changed()
-                {
+                    .changed();
+                if adapt_enabled_changed {
+                    changed = true;
                     if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                         if let Some(pp) = gpu_scene.post_process.as_mut() {
                             pp.adapt_enabled = context.editor_state.pp_adapt_enabled;
@@ -6193,15 +6545,16 @@ fn render_light_settings_organized(
                 if context.editor_state.pp_adapt_enabled {
                     ui.add_space(4.0);
                     ui.label("Adapt Speed");
-                    if ui
+                    let adapt_speed_changed = ui
                         .add(
                             egui::Slider::new(&mut context.editor_state.pp_adapt_speed, 0.01..=0.4)
                                 .text("Adapt Speed")
                                 .step_by(0.01)
                                 .fixed_decimals(2),
                         )
-                        .changed()
-                    {
+                        .changed();
+                    if adapt_speed_changed {
+                        changed = true;
                         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                             if let Some(pp) = gpu_scene.post_process.as_mut() {
                                 pp.adapt_speed = context.editor_state.pp_adapt_speed;
@@ -6209,15 +6562,16 @@ fn render_light_settings_organized(
                         }
                     }
                     ui.label("Min Exposure");
-                    if ui
+                    let adapt_min_changed = ui
                         .add(
                             egui::Slider::new(&mut context.editor_state.pp_adapt_min, 0.05..=2.0)
                                 .text("Min Exposure")
                                 .step_by(0.05)
                                 .fixed_decimals(2),
                         )
-                        .changed()
-                    {
+                        .changed();
+                    if adapt_min_changed {
+                        changed = true;
                         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                             if let Some(pp) = gpu_scene.post_process.as_mut() {
                                 pp.adapt_min = context.editor_state.pp_adapt_min;
@@ -6225,15 +6579,16 @@ fn render_light_settings_organized(
                         }
                     }
                     ui.label("Max Exposure");
-                    if ui
+                    let adapt_max_changed = ui
                         .add(
                             egui::Slider::new(&mut context.editor_state.pp_adapt_max, 1.0..=20.0)
                                 .text("Max Exposure")
                                 .step_by(0.5)
                                 .fixed_decimals(1),
                         )
-                        .changed()
-                    {
+                        .changed();
+                    if adapt_max_changed {
+                        changed = true;
                         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                             if let Some(pp) = gpu_scene.post_process.as_mut() {
                                 pp.adapt_max = context.editor_state.pp_adapt_max;
@@ -6813,14 +7168,15 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         ui.label("Contrast:").on_hover_text(
             "Midpoint contrast. Values above 1 separate lights and darks; 1.0 = neutral.",
         );
-        if ui
+        let contrast_changed = ui
             .add(
                 egui::Slider::new(&mut context.editor_state.pp_contrast, 0.25..=4.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
             )
-            .changed()
-        {
+            .changed();
+        if contrast_changed {
+            changed = true;
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 if let Some(pp) = gpu_scene.post_process.as_mut() {
                     pp.contrast = context.editor_state.pp_contrast;
@@ -6829,10 +7185,11 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         }
 
         // Eye adaptation toggle.
-        if ui.checkbox(&mut context.editor_state.pp_adapt_enabled, "Eye Adaptation")
+        let adapt_enabled_changed = ui.checkbox(&mut context.editor_state.pp_adapt_enabled, "Eye Adaptation")
             .on_hover_text("Camera gradually adjusts exposure when moving between bright and dark areas, like the human eye.")
-            .changed()
-        {
+            .changed();
+        if adapt_enabled_changed {
+            changed = true;
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 if let Some(pp) = gpu_scene.post_process.as_mut() {
                     pp.adapt_enabled = context.editor_state.pp_adapt_enabled;
@@ -6845,14 +7202,15 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             ui.label("Adaptation Speed:").on_hover_text(
                 "How quickly the eye adjusts. 0.01 = very slow (cinematic), 0.3 = fast (arcade).",
             );
-            if ui
+            let adapt_speed_changed = ui
                 .add(
                     egui::Slider::new(&mut context.editor_state.pp_adapt_speed, 0.01..=0.4)
                         .step_by(0.01)
                         .fixed_decimals(2),
                 )
-                .changed()
-            {
+                .changed();
+            if adapt_speed_changed {
+                changed = true;
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                     if let Some(pp) = gpu_scene.post_process.as_mut() {
                         pp.adapt_speed = context.editor_state.pp_adapt_speed;
@@ -6862,14 +7220,15 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             ui.label("Min Exposure:").on_hover_text(
                 "Darkest the camera can get (e.g. 0.1 = very dark in full sunlight).",
             );
-            if ui
+            let adapt_min_changed = ui
                 .add(
                     egui::Slider::new(&mut context.editor_state.pp_adapt_min, 0.05..=2.0)
                         .step_by(0.05)
                         .fixed_decimals(2),
                 )
-                .changed()
-            {
+                .changed();
+            if adapt_min_changed {
+                changed = true;
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                     if let Some(pp) = gpu_scene.post_process.as_mut() {
                         pp.adapt_min = context.editor_state.pp_adapt_min;
@@ -6879,14 +7238,15 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
             ui.label("Max Exposure:").on_hover_text(
                 "Brightest the camera can get (e.g. 6.0 = very bright in a dark cave).",
             );
-            if ui
+            let adapt_max_changed = ui
                 .add(
                     egui::Slider::new(&mut context.editor_state.pp_adapt_max, 1.0..=20.0)
                         .step_by(0.5)
                         .fixed_decimals(1),
                 )
-                .changed()
-            {
+                .changed();
+            if adapt_max_changed {
+                changed = true;
                 if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                     if let Some(pp) = gpu_scene.post_process.as_mut() {
                         pp.adapt_max = context.editor_state.pp_adapt_max;

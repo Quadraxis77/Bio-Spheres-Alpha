@@ -7332,6 +7332,41 @@ impl GpuScene {
             params.geothermal_glow_strength = editor_state.geothermal_glow_strength;
             params.geothermal_glow_radius = editor_state.geothermal_glow_radius;
             params.geothermal_glow_color = editor_state.geothermal_glow_color;
+            params.appearance = editor_state.cave_appearance;
+            params.rock_dark_color = editor_state.cave_rock_dark_color;
+            params.rock_cool_color = editor_state.cave_rock_cool_color;
+            params.rock_warm_color = editor_state.cave_rock_warm_color;
+            params.rock_pale_color = editor_state.cave_rock_pale_color;
+            params.rock_layer_scale = editor_state.cave_rock_layer_scale;
+            params.rock_warp_strength = editor_state.cave_rock_warp_strength;
+            params.rock_fine_band_strength = editor_state.cave_rock_fine_band_strength;
+            params.rock_cool_mottle_strength = editor_state.cave_rock_cool_mottle_strength;
+            params.rock_grain_strength = editor_state.cave_rock_grain_strength;
+            params.rock_patch_contrast = editor_state.cave_rock_patch_contrast;
+            params.rock_seam_darkening = editor_state.cave_rock_seam_darkening;
+            params.rock_wall_line_strength = editor_state.cave_rock_wall_line_strength;
+            params.rock_min_color = editor_state.cave_rock_min_color;
+            params.rock_max_color = editor_state.cave_rock_max_color;
+            params.rock_ambient_strength = editor_state.cave_rock_ambient_strength;
+            params.rock_diffuse_strength = editor_state.cave_rock_diffuse_strength;
+            params.rock_specular_strength = editor_state.cave_rock_specular_strength;
+            params.rock_specular_power = editor_state.cave_rock_specular_power;
+            params.rock_texture_scale = editor_state.cave_rock_texture_scale;
+            params.rock_coarse_frequency = editor_state.cave_rock_coarse_frequency;
+            params.rock_fine_frequency = editor_state.cave_rock_fine_frequency;
+            params.rock_seam_frequency = editor_state.cave_rock_seam_frequency;
+            params.rock_fine_noise_scale = editor_state.cave_rock_fine_noise_scale;
+            params.rock_fine_noise_strength = editor_state.cave_rock_fine_noise_strength;
+            params.rock_seam_noise_scale = editor_state.cave_rock_seam_noise_scale;
+            params.rock_seam_noise_strength = editor_state.cave_rock_seam_noise_strength;
+            params.rock_coarse_band_low = editor_state.cave_rock_coarse_band_low;
+            params.rock_coarse_band_high = editor_state.cave_rock_coarse_band_high;
+            params.rock_fine_band_low = editor_state.cave_rock_fine_band_low;
+            params.rock_fine_band_high = editor_state.cave_rock_fine_band_high;
+            params.rock_seam_low = editor_state.cave_rock_seam_low;
+            params.rock_seam_high = editor_state.cave_rock_seam_high;
+            params.rock_geometry_conform = editor_state.cave_rock_geometry_conform;
+            params.rock_parallax_depth = editor_state.cave_rock_parallax_depth;
 
             // Ensure world dimensions match the physics world
             params.world_center = [0.0, 0.0, 0.0];
@@ -8478,7 +8513,8 @@ impl Scene for GpuScene {
                     scene_target,
                     &self.renderer.depth_view,
                     self.instance_builder.get_siphon_instance_buffer(),
-                    self.instance_builder.get_indirect_buffer_for_type(crate::cell::CellType::Siphonocyte),
+                    self.instance_builder
+                        .get_indirect_buffer_for_type(crate::cell::CellType::Siphonocyte),
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
@@ -8495,7 +8531,8 @@ impl Scene for GpuScene {
                     self.instance_builder.get_siphon_instance_buffer(),
                     self.instance_builder.get_siphon_instance_velocity_buffer(),
                     self.instance_builder.get_counters_buffer(),
-                    self.instance_builder.get_indirect_buffer_for_type(crate::cell::CellType::Siphonocyte),
+                    self.instance_builder
+                        .get_indirect_buffer_for_type(crate::cell::CellType::Siphonocyte),
                     self.instance_builder.cell_capacity(),
                     self.camera.position(),
                     camera_view_rotation,

@@ -213,6 +213,41 @@ pub struct GenomeEditorState {
     pub geothermal_glow_strength: f32,
     pub geothermal_glow_radius: f32,
     pub geothermal_glow_color: [f32; 3],
+    pub cave_appearance: u32,
+    pub cave_rock_dark_color: [f32; 3],
+    pub cave_rock_cool_color: [f32; 3],
+    pub cave_rock_warm_color: [f32; 3],
+    pub cave_rock_pale_color: [f32; 3],
+    pub cave_rock_layer_scale: f32,
+    pub cave_rock_warp_strength: f32,
+    pub cave_rock_fine_band_strength: f32,
+    pub cave_rock_cool_mottle_strength: f32,
+    pub cave_rock_grain_strength: f32,
+    pub cave_rock_patch_contrast: f32,
+    pub cave_rock_seam_darkening: f32,
+    pub cave_rock_wall_line_strength: f32,
+    pub cave_rock_min_color: f32,
+    pub cave_rock_max_color: f32,
+    pub cave_rock_ambient_strength: f32,
+    pub cave_rock_diffuse_strength: f32,
+    pub cave_rock_specular_strength: f32,
+    pub cave_rock_specular_power: f32,
+    pub cave_rock_texture_scale: f32,
+    pub cave_rock_coarse_frequency: f32,
+    pub cave_rock_fine_frequency: f32,
+    pub cave_rock_seam_frequency: f32,
+    pub cave_rock_fine_noise_scale: f32,
+    pub cave_rock_fine_noise_strength: f32,
+    pub cave_rock_seam_noise_scale: f32,
+    pub cave_rock_seam_noise_strength: f32,
+    pub cave_rock_coarse_band_low: f32,
+    pub cave_rock_coarse_band_high: f32,
+    pub cave_rock_fine_band_low: f32,
+    pub cave_rock_fine_band_high: f32,
+    pub cave_rock_seam_low: f32,
+    pub cave_rock_seam_high: f32,
+    pub cave_rock_geometry_conform: f32,
+    pub cave_rock_parallax_depth: f32,
     pub cave_params_dirty: bool,
 
     // Fluid simulation parameters
@@ -723,6 +758,41 @@ impl GenomeEditorState {
             geothermal_glow_strength,
             geothermal_glow_radius,
             geothermal_glow_color,
+            cave_appearance,
+            cave_rock_dark_color,
+            cave_rock_cool_color,
+            cave_rock_warm_color,
+            cave_rock_pale_color,
+            cave_rock_layer_scale,
+            cave_rock_warp_strength,
+            cave_rock_fine_band_strength,
+            cave_rock_cool_mottle_strength,
+            cave_rock_grain_strength,
+            cave_rock_patch_contrast,
+            cave_rock_seam_darkening,
+            cave_rock_wall_line_strength,
+            cave_rock_min_color,
+            cave_rock_max_color,
+            cave_rock_ambient_strength,
+            cave_rock_diffuse_strength,
+            cave_rock_specular_strength,
+            cave_rock_specular_power,
+            cave_rock_texture_scale,
+            cave_rock_coarse_frequency,
+            cave_rock_fine_frequency,
+            cave_rock_seam_frequency,
+            cave_rock_fine_noise_scale,
+            cave_rock_fine_noise_strength,
+            cave_rock_seam_noise_scale,
+            cave_rock_seam_noise_strength,
+            cave_rock_coarse_band_low,
+            cave_rock_coarse_band_high,
+            cave_rock_fine_band_low,
+            cave_rock_fine_band_high,
+            cave_rock_seam_low,
+            cave_rock_seam_high,
+            cave_rock_geometry_conform,
+            cave_rock_parallax_depth,
             show_moss,
             moss_growth_rate,
             moss_erosion_rate,
@@ -766,6 +836,10 @@ impl GenomeEditorState {
             _fluid_continuous_spawn,
             selected_fluid_type,
             nutrient_density,
+            nutrient_epoch_duration,
+            nutrient_epoch_spacing,
+            nutrient_spawn_end,
+            nutrient_despawn_start,
         ) = Self::load_fluid_settings();
 
         let (
@@ -808,6 +882,20 @@ impl GenomeEditorState {
             photocyte_min_light_threshold,
             luminocyte_bloom_enabled,
             luminocyte_bloom_radius,
+            fog_water_wave_strength,
+            fog_water_wave_scale,
+            fog_smooth_light_field,
+            fog_composite_blur,
+            show_dof,
+            dof_focal_distance,
+            dof_focal_range,
+            dof_max_blur_radius,
+            dof_blur_strength,
+            pp_contrast,
+            pp_adapt_enabled,
+            pp_adapt_speed,
+            pp_adapt_min,
+            pp_adapt_max,
         ) = Self::load_light_settings();
 
         let (
@@ -915,6 +1003,41 @@ impl GenomeEditorState {
             geothermal_glow_strength,
             geothermal_glow_radius,
             geothermal_glow_color,
+            cave_appearance,
+            cave_rock_dark_color,
+            cave_rock_cool_color,
+            cave_rock_warm_color,
+            cave_rock_pale_color,
+            cave_rock_layer_scale,
+            cave_rock_warp_strength,
+            cave_rock_fine_band_strength,
+            cave_rock_cool_mottle_strength,
+            cave_rock_grain_strength,
+            cave_rock_patch_contrast,
+            cave_rock_seam_darkening,
+            cave_rock_wall_line_strength,
+            cave_rock_min_color,
+            cave_rock_max_color,
+            cave_rock_ambient_strength,
+            cave_rock_diffuse_strength,
+            cave_rock_specular_strength,
+            cave_rock_specular_power,
+            cave_rock_texture_scale,
+            cave_rock_coarse_frequency,
+            cave_rock_fine_frequency,
+            cave_rock_seam_frequency,
+            cave_rock_fine_noise_scale,
+            cave_rock_fine_noise_strength,
+            cave_rock_seam_noise_scale,
+            cave_rock_seam_noise_strength,
+            cave_rock_coarse_band_low,
+            cave_rock_coarse_band_high,
+            cave_rock_fine_band_low,
+            cave_rock_fine_band_high,
+            cave_rock_seam_low,
+            cave_rock_seam_high,
+            cave_rock_geometry_conform,
+            cave_rock_parallax_depth,
             cave_params_dirty: false,
             fluid_gravity,
             fluid_gravity_x,
@@ -924,10 +1047,10 @@ impl GenomeEditorState {
             fluid_pressure_iterations,
             fluid_lateral_flow_probabilities,
             nutrient_density,
-            nutrient_epoch_duration: 10.0,
-            nutrient_epoch_spacing: 7.0,
-            nutrient_spawn_end: 0.4,
-            nutrient_despawn_start: 0.6,
+            nutrient_epoch_duration,
+            nutrient_epoch_spacing,
+            nutrient_spawn_end,
+            nutrient_despawn_start,
             fluid_show_voxel_grid: true,
             fluid_show_solid_only: false,
             fluid_show_wireframe: false,
@@ -980,10 +1103,10 @@ impl GenomeEditorState {
             fog_absorption,
             fog_height_density,
             fog_height_falloff,
-            fog_water_wave_strength: 0.4,
-            fog_water_wave_scale: 0.15,
-            fog_smooth_light_field: true,
-            fog_composite_blur: 1.5,
+            fog_water_wave_strength,
+            fog_water_wave_scale,
+            fog_smooth_light_field,
+            fog_composite_blur,
             light_field_max_steps,
             light_field_step_size,
             light_field_absorption_solid,
@@ -994,16 +1117,16 @@ impl GenomeEditorState {
             light_params_dirty: true,
             luminocyte_bloom_enabled,
             luminocyte_bloom_radius,
-            show_dof: false,
-            dof_focal_distance: 50.0,
-            dof_focal_range: 30.0,
-            dof_max_blur_radius: 8.0,
-            dof_blur_strength: 1.0,
-            pp_contrast: 1.0,
-            pp_adapt_enabled: false,
-            pp_adapt_speed: 0.05,
-            pp_adapt_min: 0.1,
-            pp_adapt_max: 8.0,
+            show_dof,
+            dof_focal_distance,
+            dof_focal_range,
+            dof_max_blur_radius,
+            dof_blur_strength,
+            pp_contrast,
+            pp_adapt_enabled,
+            pp_adapt_speed,
+            pp_adapt_min,
+            pp_adapt_max,
             show_sun,
             sun_color,
             sun_angular_radius,
@@ -1154,6 +1277,41 @@ impl GenomeEditorState {
             self.geothermal_glow_strength,
             self.geothermal_glow_radius,
             self.geothermal_glow_color,
+            self.cave_appearance,
+            self.cave_rock_dark_color,
+            self.cave_rock_cool_color,
+            self.cave_rock_warm_color,
+            self.cave_rock_pale_color,
+            self.cave_rock_layer_scale,
+            self.cave_rock_warp_strength,
+            self.cave_rock_fine_band_strength,
+            self.cave_rock_cool_mottle_strength,
+            self.cave_rock_grain_strength,
+            self.cave_rock_patch_contrast,
+            self.cave_rock_seam_darkening,
+            self.cave_rock_wall_line_strength,
+            self.cave_rock_min_color,
+            self.cave_rock_max_color,
+            self.cave_rock_ambient_strength,
+            self.cave_rock_diffuse_strength,
+            self.cave_rock_specular_strength,
+            self.cave_rock_specular_power,
+            self.cave_rock_texture_scale,
+            self.cave_rock_coarse_frequency,
+            self.cave_rock_fine_frequency,
+            self.cave_rock_seam_frequency,
+            self.cave_rock_fine_noise_scale,
+            self.cave_rock_fine_noise_strength,
+            self.cave_rock_seam_noise_scale,
+            self.cave_rock_seam_noise_strength,
+            self.cave_rock_coarse_band_low,
+            self.cave_rock_coarse_band_high,
+            self.cave_rock_fine_band_low,
+            self.cave_rock_fine_band_high,
+            self.cave_rock_seam_low,
+            self.cave_rock_seam_high,
+            self.cave_rock_geometry_conform,
+            self.cave_rock_parallax_depth,
             self.show_moss,
             self.moss_growth_rate,
             self.moss_erosion_rate,
@@ -1202,6 +1360,10 @@ impl GenomeEditorState {
             self.fluid_continuous_spawn,
             self.selected_fluid_type,
             self.nutrient_density,
+            self.nutrient_epoch_duration,
+            self.nutrient_epoch_spacing,
+            self.nutrient_spawn_end,
+            self.nutrient_despawn_start,
         ) {
             log::error!("Failed to save fluid settings: {}", e);
         }
@@ -1233,6 +1395,41 @@ impl GenomeEditorState {
         geothermal_glow_strength: f32,
         geothermal_glow_radius: f32,
         geothermal_glow_color: [f32; 3],
+        cave_appearance: u32,
+        cave_rock_dark_color: [f32; 3],
+        cave_rock_cool_color: [f32; 3],
+        cave_rock_warm_color: [f32; 3],
+        cave_rock_pale_color: [f32; 3],
+        cave_rock_layer_scale: f32,
+        cave_rock_warp_strength: f32,
+        cave_rock_fine_band_strength: f32,
+        cave_rock_cool_mottle_strength: f32,
+        cave_rock_grain_strength: f32,
+        cave_rock_patch_contrast: f32,
+        cave_rock_seam_darkening: f32,
+        cave_rock_wall_line_strength: f32,
+        cave_rock_min_color: f32,
+        cave_rock_max_color: f32,
+        cave_rock_ambient_strength: f32,
+        cave_rock_diffuse_strength: f32,
+        cave_rock_specular_strength: f32,
+        cave_rock_specular_power: f32,
+        cave_rock_texture_scale: f32,
+        cave_rock_coarse_frequency: f32,
+        cave_rock_fine_frequency: f32,
+        cave_rock_seam_frequency: f32,
+        cave_rock_fine_noise_scale: f32,
+        cave_rock_fine_noise_strength: f32,
+        cave_rock_seam_noise_scale: f32,
+        cave_rock_seam_noise_strength: f32,
+        cave_rock_coarse_band_low: f32,
+        cave_rock_coarse_band_high: f32,
+        cave_rock_fine_band_low: f32,
+        cave_rock_fine_band_high: f32,
+        cave_rock_seam_low: f32,
+        cave_rock_seam_high: f32,
+        cave_rock_geometry_conform: f32,
+        cave_rock_parallax_depth: f32,
         show_moss: bool,
         moss_growth_rate: f32,
         moss_erosion_rate: f32,
@@ -1291,6 +1488,41 @@ impl GenomeEditorState {
             geothermal_glow_strength: f32,
             geothermal_glow_radius: f32,
             geothermal_glow_color: [f32; 3],
+            cave_appearance: u32,
+            cave_rock_dark_color: [f32; 3],
+            cave_rock_cool_color: [f32; 3],
+            cave_rock_warm_color: [f32; 3],
+            cave_rock_pale_color: [f32; 3],
+            cave_rock_layer_scale: f32,
+            cave_rock_warp_strength: f32,
+            cave_rock_fine_band_strength: f32,
+            cave_rock_cool_mottle_strength: f32,
+            cave_rock_grain_strength: f32,
+            cave_rock_patch_contrast: f32,
+            cave_rock_seam_darkening: f32,
+            cave_rock_wall_line_strength: f32,
+            cave_rock_min_color: f32,
+            cave_rock_max_color: f32,
+            cave_rock_ambient_strength: f32,
+            cave_rock_diffuse_strength: f32,
+            cave_rock_specular_strength: f32,
+            cave_rock_specular_power: f32,
+            cave_rock_texture_scale: f32,
+            cave_rock_coarse_frequency: f32,
+            cave_rock_fine_frequency: f32,
+            cave_rock_seam_frequency: f32,
+            cave_rock_fine_noise_scale: f32,
+            cave_rock_fine_noise_strength: f32,
+            cave_rock_seam_noise_scale: f32,
+            cave_rock_seam_noise_strength: f32,
+            cave_rock_coarse_band_low: f32,
+            cave_rock_coarse_band_high: f32,
+            cave_rock_fine_band_low: f32,
+            cave_rock_fine_band_high: f32,
+            cave_rock_seam_low: f32,
+            cave_rock_seam_high: f32,
+            cave_rock_geometry_conform: f32,
+            cave_rock_parallax_depth: f32,
             show_moss: bool,
             moss_growth_rate: f32,
             moss_erosion_rate: f32,
@@ -1349,6 +1581,41 @@ impl GenomeEditorState {
             geothermal_glow_strength,
             geothermal_glow_radius,
             geothermal_glow_color,
+            cave_appearance,
+            cave_rock_dark_color,
+            cave_rock_cool_color,
+            cave_rock_warm_color,
+            cave_rock_pale_color,
+            cave_rock_layer_scale,
+            cave_rock_warp_strength,
+            cave_rock_fine_band_strength,
+            cave_rock_cool_mottle_strength,
+            cave_rock_grain_strength,
+            cave_rock_patch_contrast,
+            cave_rock_seam_darkening,
+            cave_rock_wall_line_strength,
+            cave_rock_min_color,
+            cave_rock_max_color,
+            cave_rock_ambient_strength,
+            cave_rock_diffuse_strength,
+            cave_rock_specular_strength,
+            cave_rock_specular_power,
+            cave_rock_texture_scale,
+            cave_rock_coarse_frequency,
+            cave_rock_fine_frequency,
+            cave_rock_seam_frequency,
+            cave_rock_fine_noise_scale,
+            cave_rock_fine_noise_strength,
+            cave_rock_seam_noise_scale,
+            cave_rock_seam_noise_strength,
+            cave_rock_coarse_band_low,
+            cave_rock_coarse_band_high,
+            cave_rock_fine_band_low,
+            cave_rock_fine_band_high,
+            cave_rock_seam_low,
+            cave_rock_seam_high,
+            cave_rock_geometry_conform,
+            cave_rock_parallax_depth,
             show_moss,
             moss_growth_rate,
             moss_erosion_rate,
@@ -1398,6 +1665,10 @@ impl GenomeEditorState {
         continuous_spawn: bool,
         selected_fluid_type: u32,
         nutrient_density: f32,
+        nutrient_epoch_duration: f32,
+        nutrient_epoch_spacing: f32,
+        nutrient_spawn_end: f32,
+        nutrient_despawn_start: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct FluidSettings {
@@ -1411,6 +1682,10 @@ impl GenomeEditorState {
             continuous_spawn: bool,
             selected_fluid_type: u32,
             nutrient_density: f32,
+            nutrient_epoch_duration: f32,
+            nutrient_epoch_spacing: f32,
+            nutrient_spawn_end: f32,
+            nutrient_despawn_start: f32,
         }
 
         let settings = FluidSettings {
@@ -1424,6 +1699,10 @@ impl GenomeEditorState {
             continuous_spawn,
             selected_fluid_type,
             nutrient_density,
+            nutrient_epoch_duration,
+            nutrient_epoch_spacing,
+            nutrient_spawn_end,
+            nutrient_despawn_start,
         };
 
         let path = crate::app_dirs::config_file("fluid_settings.ron");
@@ -1460,6 +1739,41 @@ impl GenomeEditorState {
         f32,
         f32,
         [f32; 3],
+        u32,
+        [f32; 3],
+        [f32; 3],
+        [f32; 3],
+        [f32; 3],
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
         bool,
         f32,
         f32,
@@ -1536,6 +1850,76 @@ impl GenomeEditorState {
             geothermal_glow_radius: f32,
             #[serde(default = "default_geothermal_glow_color")]
             geothermal_glow_color: [f32; 3],
+            #[serde(default = "default_cave_appearance")]
+            cave_appearance: u32,
+            #[serde(default = "default_cave_rock_dark_color")]
+            cave_rock_dark_color: [f32; 3],
+            #[serde(default = "default_cave_rock_cool_color")]
+            cave_rock_cool_color: [f32; 3],
+            #[serde(default = "default_cave_rock_warm_color")]
+            cave_rock_warm_color: [f32; 3],
+            #[serde(default = "default_cave_rock_pale_color")]
+            cave_rock_pale_color: [f32; 3],
+            #[serde(default = "default_cave_rock_layer_scale")]
+            cave_rock_layer_scale: f32,
+            #[serde(default = "default_cave_rock_warp_strength")]
+            cave_rock_warp_strength: f32,
+            #[serde(default = "default_cave_rock_fine_band_strength")]
+            cave_rock_fine_band_strength: f32,
+            #[serde(default = "default_cave_rock_cool_mottle_strength")]
+            cave_rock_cool_mottle_strength: f32,
+            #[serde(default = "default_cave_rock_grain_strength")]
+            cave_rock_grain_strength: f32,
+            #[serde(default = "default_cave_rock_patch_contrast")]
+            cave_rock_patch_contrast: f32,
+            #[serde(default = "default_cave_rock_seam_darkening")]
+            cave_rock_seam_darkening: f32,
+            #[serde(default = "default_cave_rock_wall_line_strength")]
+            cave_rock_wall_line_strength: f32,
+            #[serde(default = "default_cave_rock_min_color")]
+            cave_rock_min_color: f32,
+            #[serde(default = "default_cave_rock_max_color")]
+            cave_rock_max_color: f32,
+            #[serde(default = "default_cave_rock_ambient_strength")]
+            cave_rock_ambient_strength: f32,
+            #[serde(default = "default_cave_rock_diffuse_strength")]
+            cave_rock_diffuse_strength: f32,
+            #[serde(default = "default_cave_rock_specular_strength")]
+            cave_rock_specular_strength: f32,
+            #[serde(default = "default_cave_rock_specular_power")]
+            cave_rock_specular_power: f32,
+            #[serde(default = "default_cave_rock_texture_scale")]
+            cave_rock_texture_scale: f32,
+            #[serde(default = "default_cave_rock_coarse_frequency")]
+            cave_rock_coarse_frequency: f32,
+            #[serde(default = "default_cave_rock_fine_frequency")]
+            cave_rock_fine_frequency: f32,
+            #[serde(default = "default_cave_rock_seam_frequency")]
+            cave_rock_seam_frequency: f32,
+            #[serde(default = "default_cave_rock_fine_noise_scale")]
+            cave_rock_fine_noise_scale: f32,
+            #[serde(default = "default_cave_rock_fine_noise_strength")]
+            cave_rock_fine_noise_strength: f32,
+            #[serde(default = "default_cave_rock_seam_noise_scale")]
+            cave_rock_seam_noise_scale: f32,
+            #[serde(default = "default_cave_rock_seam_noise_strength")]
+            cave_rock_seam_noise_strength: f32,
+            #[serde(default = "default_cave_rock_coarse_band_low")]
+            cave_rock_coarse_band_low: f32,
+            #[serde(default = "default_cave_rock_coarse_band_high")]
+            cave_rock_coarse_band_high: f32,
+            #[serde(default = "default_cave_rock_fine_band_low")]
+            cave_rock_fine_band_low: f32,
+            #[serde(default = "default_cave_rock_fine_band_high")]
+            cave_rock_fine_band_high: f32,
+            #[serde(default = "default_cave_rock_seam_low")]
+            cave_rock_seam_low: f32,
+            #[serde(default = "default_cave_rock_seam_high")]
+            cave_rock_seam_high: f32,
+            #[serde(default = "default_cave_rock_geometry_conform")]
+            cave_rock_geometry_conform: f32,
+            #[serde(default = "default_cave_rock_parallax_depth")]
+            cave_rock_parallax_depth: f32,
             #[serde(default = "default_show_moss")]
             show_moss: bool,
             #[serde(default = "default_moss_growth_rate")]
@@ -1651,6 +2035,111 @@ impl GenomeEditorState {
         }
         fn default_geothermal_glow_color() -> [f32; 3] {
             [1.0, 0.32, 0.055]
+        }
+        fn default_cave_appearance() -> u32 {
+            0
+        }
+        fn default_cave_rock_dark_color() -> [f32; 3] {
+            [0.105, 0.100, 0.092]
+        }
+        fn default_cave_rock_cool_color() -> [f32; 3] {
+            [0.150, 0.165, 0.160]
+        }
+        fn default_cave_rock_warm_color() -> [f32; 3] {
+            [0.235, 0.205, 0.155]
+        }
+        fn default_cave_rock_pale_color() -> [f32; 3] {
+            [0.330, 0.300, 0.225]
+        }
+        fn default_cave_rock_layer_scale() -> f32 {
+            0.075
+        }
+        fn default_cave_rock_warp_strength() -> f32 {
+            1.85
+        }
+        fn default_cave_rock_fine_band_strength() -> f32 {
+            0.28
+        }
+        fn default_cave_rock_cool_mottle_strength() -> f32 {
+            0.22
+        }
+        fn default_cave_rock_grain_strength() -> f32 {
+            0.09
+        }
+        fn default_cave_rock_patch_contrast() -> f32 {
+            0.17
+        }
+        fn default_cave_rock_seam_darkening() -> f32 {
+            0.28
+        }
+        fn default_cave_rock_wall_line_strength() -> f32 {
+            0.65
+        }
+        fn default_cave_rock_min_color() -> f32 {
+            0.045
+        }
+        fn default_cave_rock_max_color() -> f32 {
+            0.48
+        }
+        fn default_cave_rock_ambient_strength() -> f32 {
+            0.08
+        }
+        fn default_cave_rock_diffuse_strength() -> f32 {
+            0.7
+        }
+        fn default_cave_rock_specular_strength() -> f32 {
+            0.3
+        }
+        fn default_cave_rock_specular_power() -> f32 {
+            32.0
+        }
+        fn default_cave_rock_texture_scale() -> f32 {
+            0.05
+        }
+        fn default_cave_rock_coarse_frequency() -> f32 {
+            std::f32::consts::TAU
+        }
+        fn default_cave_rock_fine_frequency() -> f32 {
+            22.0
+        }
+        fn default_cave_rock_seam_frequency() -> f32 {
+            13.0
+        }
+        fn default_cave_rock_fine_noise_scale() -> f32 {
+            0.045
+        }
+        fn default_cave_rock_fine_noise_strength() -> f32 {
+            4.0
+        }
+        fn default_cave_rock_seam_noise_scale() -> f32 {
+            0.035
+        }
+        fn default_cave_rock_seam_noise_strength() -> f32 {
+            2.5
+        }
+        fn default_cave_rock_coarse_band_low() -> f32 {
+            -0.35
+        }
+        fn default_cave_rock_coarse_band_high() -> f32 {
+            0.55
+        }
+        fn default_cave_rock_fine_band_low() -> f32 {
+            0.35
+        }
+        fn default_cave_rock_fine_band_high() -> f32 {
+            0.92
+        }
+        fn default_cave_rock_seam_low() -> f32 {
+            0.82
+        }
+        fn default_cave_rock_seam_high() -> f32 {
+            0.98
+        }
+        fn default_cave_rock_geometry_conform() -> f32 {
+            0.0
+        }
+        fn default_cave_rock_parallax_depth() -> f32 {
+            0.0
         }
         fn default_show_moss() -> bool {
             true
@@ -1775,6 +2264,41 @@ impl GenomeEditorState {
                             settings.geothermal_glow_strength,
                             settings.geothermal_glow_radius,
                             settings.geothermal_glow_color,
+                            settings.cave_appearance,
+                            settings.cave_rock_dark_color,
+                            settings.cave_rock_cool_color,
+                            settings.cave_rock_warm_color,
+                            settings.cave_rock_pale_color,
+                            settings.cave_rock_layer_scale,
+                            settings.cave_rock_warp_strength,
+                            settings.cave_rock_fine_band_strength,
+                            settings.cave_rock_cool_mottle_strength,
+                            settings.cave_rock_grain_strength,
+                            settings.cave_rock_patch_contrast,
+                            settings.cave_rock_seam_darkening,
+                            settings.cave_rock_wall_line_strength,
+                            settings.cave_rock_min_color,
+                            settings.cave_rock_max_color,
+                            settings.cave_rock_ambient_strength,
+                            settings.cave_rock_diffuse_strength,
+                            settings.cave_rock_specular_strength,
+                            settings.cave_rock_specular_power,
+                            settings.cave_rock_texture_scale,
+                            settings.cave_rock_coarse_frequency,
+                            settings.cave_rock_fine_frequency,
+                            settings.cave_rock_seam_frequency,
+                            settings.cave_rock_fine_noise_scale,
+                            settings.cave_rock_fine_noise_strength,
+                            settings.cave_rock_seam_noise_scale,
+                            settings.cave_rock_seam_noise_strength,
+                            settings.cave_rock_coarse_band_low,
+                            settings.cave_rock_coarse_band_high,
+                            settings.cave_rock_fine_band_low,
+                            settings.cave_rock_fine_band_high,
+                            settings.cave_rock_seam_low,
+                            settings.cave_rock_seam_high,
+                            settings.cave_rock_geometry_conform,
+                            settings.cave_rock_parallax_depth,
                             settings.show_moss,
                             settings.moss_growth_rate,
                             settings.moss_erosion_rate,
@@ -1844,6 +2368,41 @@ impl GenomeEditorState {
             2.8,
             10.0,
             [1.0, 0.32, 0.055],
+            0,
+            [0.105, 0.100, 0.092],
+            [0.150, 0.165, 0.160],
+            [0.235, 0.205, 0.155],
+            [0.330, 0.300, 0.225],
+            0.075,
+            1.85,
+            0.28,
+            0.22,
+            0.09,
+            0.17,
+            0.28,
+            0.65,
+            0.045,
+            0.48,
+            0.08,
+            0.7,
+            0.3,
+            32.0,
+            0.05,
+            std::f32::consts::TAU,
+            22.0,
+            13.0,
+            0.045,
+            4.0,
+            0.035,
+            2.5,
+            -0.35,
+            0.55,
+            0.35,
+            0.92,
+            0.82,
+            0.98,
+            0.0,
+            0.0,
             true,
             0.15,
             0.3,
@@ -1924,6 +2483,20 @@ impl GenomeEditorState {
             // Luminocyte bloom
             self.luminocyte_bloom_enabled,
             self.luminocyte_bloom_radius,
+            self.fog_water_wave_strength,
+            self.fog_water_wave_scale,
+            self.fog_smooth_light_field,
+            self.fog_composite_blur,
+            self.show_dof,
+            self.dof_focal_distance,
+            self.dof_focal_range,
+            self.dof_max_blur_radius,
+            self.dof_blur_strength,
+            self.pp_contrast,
+            self.pp_adapt_enabled,
+            self.pp_adapt_speed,
+            self.pp_adapt_min,
+            self.pp_adapt_max,
         ) {
             log::warn!("Failed to save light settings: {}", e);
         }
@@ -1974,6 +2547,20 @@ impl GenomeEditorState {
         // Luminocyte bloom
         luminocyte_bloom_enabled: bool,
         luminocyte_bloom_radius: f32,
+        fog_water_wave_strength: f32,
+        fog_water_wave_scale: f32,
+        fog_smooth_light_field: bool,
+        fog_composite_blur: f32,
+        show_dof: bool,
+        dof_focal_distance: f32,
+        dof_focal_range: f32,
+        dof_max_blur_radius: f32,
+        dof_blur_strength: f32,
+        pp_contrast: f32,
+        pp_adapt_enabled: bool,
+        pp_adapt_speed: f32,
+        pp_adapt_min: f32,
+        pp_adapt_max: f32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct LightSettings {
@@ -2020,6 +2607,20 @@ impl GenomeEditorState {
             // Luminocyte bloom
             luminocyte_bloom_enabled: bool,
             luminocyte_bloom_radius: f32,
+            fog_water_wave_strength: f32,
+            fog_water_wave_scale: f32,
+            fog_smooth_light_field: bool,
+            fog_composite_blur: f32,
+            show_dof: bool,
+            dof_focal_distance: f32,
+            dof_focal_range: f32,
+            dof_max_blur_radius: f32,
+            dof_blur_strength: f32,
+            pp_contrast: f32,
+            pp_adapt_enabled: bool,
+            pp_adapt_speed: f32,
+            pp_adapt_min: f32,
+            pp_adapt_max: f32,
         }
 
         let settings = LightSettings {
@@ -2067,6 +2668,20 @@ impl GenomeEditorState {
             // Luminocyte bloom
             luminocyte_bloom_enabled,
             luminocyte_bloom_radius,
+            fog_water_wave_strength,
+            fog_water_wave_scale,
+            fog_smooth_light_field,
+            fog_composite_blur,
+            show_dof,
+            dof_focal_distance,
+            dof_focal_range,
+            dof_max_blur_radius,
+            dof_blur_strength,
+            pp_contrast,
+            pp_adapt_enabled,
+            pp_adapt_speed,
+            pp_adapt_min,
+            pp_adapt_max,
         };
 
         let path = crate::app_dirs::config_file("light_settings.ron");
@@ -2117,6 +2732,20 @@ impl GenomeEditorState {
         f32, // photocyte_mass, photocyte_threshold
         bool,
         f32, // luminocyte_bloom_enabled, luminocyte_bloom_radius
+        f32,
+        f32,
+        bool,
+        f32, // fog water strength, scale, smooth light field, composite blur
+        bool,
+        f32,
+        f32,
+        f32,
+        f32, // dof enabled, focal distance/range, max blur, blur strength
+        f32,
+        bool,
+        f32,
+        f32,
+        f32, // contrast, adaptation enabled/speed/min/max
     ) {
         #[derive(serde::Deserialize)]
         struct LightSettings {
@@ -2184,6 +2813,34 @@ impl GenomeEditorState {
             luminocyte_bloom_enabled: bool,
             #[serde(default = "default_bloom_radius")]
             luminocyte_bloom_radius: f32,
+            #[serde(default = "default_fog_water_wave_strength")]
+            fog_water_wave_strength: f32,
+            #[serde(default = "default_fog_water_wave_scale")]
+            fog_water_wave_scale: f32,
+            #[serde(default = "default_fog_smooth_light_field")]
+            fog_smooth_light_field: bool,
+            #[serde(default = "default_fog_composite_blur")]
+            fog_composite_blur: f32,
+            #[serde(default)]
+            show_dof: bool,
+            #[serde(default = "default_dof_focal_distance")]
+            dof_focal_distance: f32,
+            #[serde(default = "default_dof_focal_range")]
+            dof_focal_range: f32,
+            #[serde(default = "default_dof_max_blur_radius")]
+            dof_max_blur_radius: f32,
+            #[serde(default = "default_dof_blur_strength")]
+            dof_blur_strength: f32,
+            #[serde(default = "default_pp_contrast")]
+            pp_contrast: f32,
+            #[serde(default)]
+            pp_adapt_enabled: bool,
+            #[serde(default = "default_pp_adapt_speed")]
+            pp_adapt_speed: f32,
+            #[serde(default = "default_pp_adapt_min")]
+            pp_adapt_min: f32,
+            #[serde(default = "default_pp_adapt_max")]
+            pp_adapt_max: f32,
         }
         fn default_shadow_enabled() -> bool {
             true
@@ -2226,6 +2883,42 @@ impl GenomeEditorState {
         }
         fn default_bloom_radius() -> f32 {
             0.02
+        }
+        fn default_fog_water_wave_strength() -> f32 {
+            0.4
+        }
+        fn default_fog_water_wave_scale() -> f32 {
+            0.15
+        }
+        fn default_fog_smooth_light_field() -> bool {
+            true
+        }
+        fn default_fog_composite_blur() -> f32 {
+            1.5
+        }
+        fn default_dof_focal_distance() -> f32 {
+            50.0
+        }
+        fn default_dof_focal_range() -> f32 {
+            30.0
+        }
+        fn default_dof_max_blur_radius() -> f32 {
+            8.0
+        }
+        fn default_dof_blur_strength() -> f32 {
+            1.0
+        }
+        fn default_pp_contrast() -> f32 {
+            1.0
+        }
+        fn default_pp_adapt_speed() -> f32 {
+            0.05
+        }
+        fn default_pp_adapt_min() -> f32 {
+            0.1
+        }
+        fn default_pp_adapt_max() -> f32 {
+            8.0
         }
 
         let path = crate::app_dirs::config_file("light_settings.ron");
@@ -2280,6 +2973,20 @@ impl GenomeEditorState {
                                 // Luminocyte bloom
                                 s.luminocyte_bloom_enabled,
                                 s.luminocyte_bloom_radius,
+                                s.fog_water_wave_strength,
+                                s.fog_water_wave_scale,
+                                s.fog_smooth_light_field,
+                                s.fog_composite_blur,
+                                s.show_dof,
+                                s.dof_focal_distance,
+                                s.dof_focal_range,
+                                s.dof_max_blur_radius,
+                                s.dof_blur_strength,
+                                s.pp_contrast,
+                                s.pp_adapt_enabled,
+                                s.pp_adapt_speed,
+                                s.pp_adapt_min,
+                                s.pp_adapt_max,
                             );
                         }
                         Err(e) => {
@@ -2339,11 +3046,40 @@ impl GenomeEditorState {
             // Luminocyte bloom
             true, // luminocyte_bloom_enabled
             0.02, // luminocyte_bloom_radius
+            0.4,   // fog_water_wave_strength
+            0.15,  // fog_water_wave_scale
+            true,  // fog_smooth_light_field
+            1.5,   // fog_composite_blur
+            false, // show_dof
+            50.0,  // dof_focal_distance
+            30.0,  // dof_focal_range
+            8.0,   // dof_max_blur_radius
+            1.0,   // dof_blur_strength
+            1.0,   // pp_contrast
+            false, // pp_adapt_enabled
+            0.05,  // pp_adapt_speed
+            0.1,   // pp_adapt_min
+            8.0,   // pp_adapt_max
         )
     }
 
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_settings() -> (f32, bool, bool, bool, f32, u32, [f32; 4], bool, u32, f32) {
+    pub fn load_fluid_settings() -> (
+        f32,
+        bool,
+        bool,
+        bool,
+        f32,
+        u32,
+        [f32; 4],
+        bool,
+        u32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+    ) {
         #[derive(serde::Deserialize)]
         struct FluidSettings {
             gravity: f32,
@@ -2361,7 +3097,32 @@ impl GenomeEditorState {
             #[serde(default)]
             #[allow(dead_code)]
             vaporization_probability: f32,
+            #[serde(default = "default_nutrient_density")]
             nutrient_density: f32,
+            #[serde(default = "default_nutrient_epoch_duration")]
+            nutrient_epoch_duration: f32,
+            #[serde(default = "default_nutrient_epoch_spacing")]
+            nutrient_epoch_spacing: f32,
+            #[serde(default = "default_nutrient_spawn_end")]
+            nutrient_spawn_end: f32,
+            #[serde(default = "default_nutrient_despawn_start")]
+            nutrient_despawn_start: f32,
+        }
+
+        fn default_nutrient_density() -> f32 {
+            0.35
+        }
+        fn default_nutrient_epoch_duration() -> f32 {
+            10.0
+        }
+        fn default_nutrient_epoch_spacing() -> f32 {
+            7.0
+        }
+        fn default_nutrient_spawn_end() -> f32 {
+            0.4
+        }
+        fn default_nutrient_despawn_start() -> f32 {
+            0.6
         }
 
         let path = crate::app_dirs::config_file("fluid_settings.ron");
@@ -2381,6 +3142,10 @@ impl GenomeEditorState {
                             settings.continuous_spawn,
                             settings.selected_fluid_type,
                             settings.nutrient_density,
+                            settings.nutrient_epoch_duration,
+                            settings.nutrient_epoch_spacing,
+                            settings.nutrient_spawn_end,
+                            settings.nutrient_despawn_start,
                         );
                     }
                     Err(e) => {
@@ -2404,7 +3169,11 @@ impl GenomeEditorState {
             [1.0, 0.8, 0.6, 0.9],
             false,
             1,
-            0.2,
+            default_nutrient_density(),
+            default_nutrient_epoch_duration(),
+            default_nutrient_epoch_spacing(),
+            default_nutrient_spawn_end(),
+            default_nutrient_despawn_start(),
         )
     }
 
