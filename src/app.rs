@@ -2486,19 +2486,17 @@ impl App {
                 }
 
                 self.editor_state.update_orbit_ring_opacity(dt);
-                if !gpu_scene.paused
-                    && self.editor_state.update_sun_rotation(
-                        gpu_scene.config.fixed_timestep * gpu_scene.last_physics_steps as f32,
-                    )
-                {
+                if !gpu_scene.paused && self.editor_state.update_sun_rotation(dt) {
+                    self.editor_state.light_params_dirty = true;
+                }
+                if self.editor_state.sun_rotation_enabled {
                     gpu_scene.sun_light_dir = self.editor_state.light_dir;
-                    gpu_scene.sun_rotating = self.editor_state.sun_rotation_enabled
-                        && self.editor_state.sun_rotation_speed != 0.0;
+                    gpu_scene.sun_rotating = self.editor_state.sun_rotation_speed != 0.0;
                     if let Some(ref mut sun) = gpu_scene.sun_renderer {
                         sun.orbit_axis = self.editor_state.sun_rotation_axis;
                         sun.orbit_ring_opacity = self.editor_state.orbit_ring_opacity;
+                        sun.mark_params_dirty();
                     }
-                    self.editor_state.light_params_dirty = true;
                 }
                 if !gpu_scene.paused
                     && (self.editor_state.sun_cycle_enabled

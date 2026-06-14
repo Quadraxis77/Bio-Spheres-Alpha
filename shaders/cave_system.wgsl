@@ -414,13 +414,49 @@ fn layered_rock_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f3
     return clamp(color, vec3<f32>(cave_params.rock_min_color), vec3<f32>(cave_params.rock_max_color));
 }
 
+fn lava_surface_uv(world_pos: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
+    let abs_n = abs(normal);
+    if (abs_n.y > abs_n.x && abs_n.y > abs_n.z) {
+        return world_pos.xz;
+    } else if (abs_n.x > abs_n.z) {
+        return world_pos.zy;
+    }
+    return world_pos.xy;
+}
+
+fn lava_plate_edge(uv: vec2<f32>) -> f32 {
+    let cell = floor(uv);
+    let local = fract(uv);
+    var nearest = 10.0;
+    var second = 10.0;
+
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let offset = vec2<f32>(f32(x), f32(y));
+            let c = cell + offset;
+            let p = vec2<f32>(
+                hash(c + vec2<f32>(17.0, 41.0)),
+                hash(c + vec2<f32>(73.0, 19.0))
+            ) * 0.68 + vec2<f32>(0.16);
+            let d = length(offset + p - local);
+            if (d < nearest) {
+                second = nearest;
+                nearest = d;
+            } else if (d < second) {
+                second = d;
+            }
+        }
+    }
+
+    return second - nearest;
+}
+
 fn lava_tube_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f32) -> vec3<f32> {
     let basalt_black = vec3<f32>(cave_params.rock_dark_r, cave_params.rock_dark_g, cave_params.rock_dark_b);
     let blue_glass = vec3<f32>(cave_params.rock_cool_r, cave_params.rock_cool_g, cave_params.rock_cool_b);
     let iron_skin = vec3<f32>(cave_params.rock_warm_r, cave_params.rock_warm_g, cave_params.rock_warm_b);
-    let ember = vec3<f32>(cave_params.rock_pale_r, cave_params.rock_pale_g, cave_params.rock_pale_b);
-    let ash_gray = mix(blue_glass, vec3<f32>(0.220, 0.205, 0.180), 0.45);
-    let hot_core = mix(ember, vec3<f32>(1.0, 0.760, 0.180), 0.55);
+    let ash_dust = vec3<f32>(cave_params.rock_pale_r, cave_params.rock_pale_g, cave_params.rock_pale_b);
+    let ash_gray = mix(blue_glass, vec3<f32>(0.190, 0.175, 0.150), 0.38);
 
     let center = vec3<f32>(
         cave_params.world_center.x,
@@ -434,48 +470,52 @@ fn lava_tube_color(world_pos: vec3<f32>, normal: vec3<f32>, texture_value: f32) 
         flow_axis = cross(vec3<f32>(1.0, 0.0, 0.0), radial);
     }
     flow_axis = normalize(flow_axis);
-    let cross_axis = normalize(cross(radial, flow_axis));
+    let axial = dot(world_pos, flow_axis);
+    let surface_uv = lava_surface_uv(world_pos, normal);
+    let plate_scale = max(cave_params.rock_coarse_frequency * 0.018, 0.08);
+    let warped_uv = surface_uv * plate_scale
+                  + vec2<f32>(
+                      noise(surface_uv * cave_params.rock_fine_noise_scale + vec2<f32>(11.0, 29.0)),
+                      noise(surface_uv.yx * cave_params.rock_fine_noise_scale + vec2<f32>(53.0, 7.0))
+                    ) * cave_params.rock_warp_strength * 0.12;
 
-    let flow_pitch = max(cave_params.rock_layer_scale, 0.005) * 1.6;
-    let flow_warp = cave_params.rock_warp_strength + cave_params.rock_fine_noise_strength * 0.25;
-    let flow_coord = dot(world_pos, flow_axis) * flow_pitch
-                   + noise(world_pos.xz * cave_params.rock_fine_noise_scale + vec2<f32>(23.0, 7.0)) * flow_warp
-                   + noise(world_pos.yz * cave_params.rock_seam_noise_scale + vec2<f32>(3.0, 41.0)) * flow_warp * 0.55;
-    let sag_coord = dot(world_pos, cross_axis) * max(cave_params.rock_layer_scale, 0.005)
-                  + noise(world_pos.xy * cave_params.rock_fine_noise_scale + vec2<f32>(13.0, 29.0)) * flow_warp * 0.75;
+    let plate_gap = lava_plate_edge(warped_uv);
+    let crack_thin = cave_params.rock_seam_low * 0.080 + 0.006;
+    let crack_thick = max(crack_thin + 0.008, cave_params.rock_seam_high * 0.120 + 0.012);
+    let plate_crack = 1.0 - smoothstep(crack_thin, crack_thick, plate_gap);
+    let dark_joint = plate_crack * cave_params.rock_seam_darkening;
 
-    // Ropey pahoehoe ridges: directional, raised arcs rather than sediment layers.
-    let rope_wave = sin(flow_coord * cave_params.rock_coarse_frequency + sin(sag_coord * cave_params.rock_fine_frequency * 0.35) * 2.2);
-    let rope_low = clamp(cave_params.rock_coarse_band_low * 0.5 + 0.5, 0.0, 0.98);
-    let rope_high = max(rope_low + 0.02, clamp(cave_params.rock_coarse_band_high * 0.5 + 0.5, 0.02, 1.0));
-    let rope_ridge = smoothstep(rope_low, rope_high, rope_wave);
-    let rib_shadow = smoothstep(-0.96, -0.45, rope_wave);
+    let plate_id = floor(warped_uv);
+    let plate_tone = noise(plate_id * 0.71 + vec2<f32>(3.0, 37.0));
+    let scuff = noise(surface_uv * max(cave_params.rock_texture_scale, 0.005) + vec2<f32>(5.0, 37.0));
+    let glass_sheen = smoothstep(0.52, 0.94, scuff) * cave_params.rock_grain_strength;
 
-    let glass_noise = noise(world_pos.xy * max(cave_params.rock_texture_scale, 0.005) + vec2<f32>(5.0, 37.0));
-    let blister_noise = noise(vec2<f32>(flow_coord, sag_coord) * 2.1 + vec2<f32>(19.0, 11.0));
+    let blister_noise = noise(plate_id * 1.37 + vec2<f32>(19.0, 11.0));
     let blister_low = clamp(cave_params.rock_fine_band_low * 0.5 + 0.5, 0.0, 0.98);
     let blister_high = max(blister_low + 0.02, clamp(cave_params.rock_fine_band_high * 0.5 + 0.5, 0.02, 1.0));
-    let blister = smoothstep(blister_low, blister_high, blister_noise) * smoothstep(0.25, 0.95, glass_noise) * cave_params.rock_cool_mottle_strength;
+    let blister = smoothstep(blister_low, blister_high, blister_noise)
+                * smoothstep(0.35, 0.90, scuff)
+                * cave_params.rock_cool_mottle_strength;
 
-    let fissure_density = cave_params.rock_seam_frequency * 0.004;
-    let fissure_a = abs(sin(dot(world_pos, vec3<f32>(1.25, 0.36, 0.98) * fissure_density) + noise(world_pos.xz * cave_params.rock_seam_noise_scale) * cave_params.rock_seam_noise_strength));
-    let fissure_b = abs(sin(dot(world_pos, vec3<f32>(-0.59, 1.34, 0.83) * fissure_density) + noise(world_pos.yz * cave_params.rock_seam_noise_scale + vec2<f32>(8.0, 2.0)) * cave_params.rock_seam_noise_strength));
-    let fissure = max(
-        1.0 - smoothstep(cave_params.rock_seam_low * 0.10, cave_params.rock_seam_high * 0.14 + 0.01, fissure_a),
-        (1.0 - smoothstep(cave_params.rock_seam_low * 0.08, cave_params.rock_seam_high * 0.11 + 0.01, fissure_b)) * 0.55
-    ) * cave_params.rock_seam_darkening;
+    let wall = 1.0 - abs(normal.y);
+    let ceiling = smoothstep(0.35, 0.95, normal.y);
+    let floor = smoothstep(0.35, 0.95, -normal.y);
+    let tube_vignette = wall * 0.12 + ceiling * 0.08 - floor * 0.04;
+    let axial_polish = smoothstep(0.25, 0.85, noise(vec2<f32>(axial * 0.035, dot(world_pos, radial) * 0.025) + vec2<f32>(43.0, 17.0)));
+    let cooled_drip = ceiling * smoothstep(0.72, 0.96, noise(surface_uv * 0.030 + vec2<f32>(83.0, 12.0))) * 0.20;
+    let ash_deposit = floor
+                    * smoothstep(0.45, 0.88, noise(surface_uv * 0.045 + vec2<f32>(101.0, 23.0)))
+                    * cave_params.rock_patch_contrast;
+    let shelf_scuff = wall
+                    * smoothstep(0.60, 0.93, noise(vec2<f32>(axial * 0.055, world_pos.y * 0.038) + vec2<f32>(9.0, 67.0)))
+                    * cave_params.rock_wall_line_strength;
 
-    let floor_heat = 1.0 - smoothstep(-0.95, -0.25, normal.y);
-    let heat_pulse = smoothstep(0.55, 0.98, noise(world_pos.xz * max(cave_params.rock_seam_noise_scale, 0.005) + vec2<f32>(71.0, 17.0)));
-
-    var color = mix(basalt_black, blue_glass, texture_value * 0.55 + glass_noise * cave_params.rock_grain_strength);
-    color = mix(color, ash_gray, rope_ridge * cave_params.rock_fine_band_strength);
-    color = mix(color, iron_skin, blister * 0.45);
-    color *= mix(0.68, 1.18, rope_ridge);
-    color *= mix(1.0, 1.0 - cave_params.rock_wall_line_strength * 0.46, rib_shadow);
-    color += ember * floor_heat * heat_pulse * cave_params.rock_patch_contrast;
-    color = mix(color, ember, fissure * 0.68);
-    color += hot_core * fissure * fissure * 0.42;
+    var color = mix(basalt_black, blue_glass, texture_value * 0.28 + glass_sheen + axial_polish * 0.08);
+    color = mix(color, ash_gray, plate_tone * cave_params.rock_fine_band_strength * 0.45);
+    color = mix(color, iron_skin, blister * 0.38);
+    color *= 1.0 - dark_joint * 0.58;
+    color += vec3<f32>(tube_vignette + cooled_drip);
+    color = mix(color, ash_dust, ash_deposit * 0.32 + shelf_scuff * 0.18 + cooled_drip * 0.14);
 
     return clamp(color, vec3<f32>(cave_params.rock_min_color), vec3<f32>(cave_params.rock_max_color * 1.8));
 }

@@ -446,12 +446,6 @@ pub struct GpuScene {
     pub sun_light_dir: [f32; 3],
     /// Whether the sun is currently orbiting — prevents light field early-return skip.
     pub sun_rotating: bool,
-    /// Cached sky rotation quaternion; recomputed only when sun_light_dir or orbit_axis changes.
-    cached_sky_rotation: glam::Quat,
-    /// Last sun_light_dir used to compute cached_sky_rotation.
-    cached_sky_sun_dir: [f32; 3],
-    /// Last orbit_axis used to compute cached_sky_rotation.
-    cached_sky_orbit_axis: [f32; 3],
     /// Procedural space skybox renderer
     pub skybox_renderer: Option<SkyboxRenderer>,
     /// Whether to show the procedural skybox
@@ -916,9 +910,6 @@ impl GpuScene {
             sun_intensity: 3.0,
             sun_light_dir: [0.0, 1.0, 0.0],
             sun_rotating: false,
-            cached_sky_rotation: glam::Quat::IDENTITY,
-            cached_sky_sun_dir: [f32::NAN; 3],
-            cached_sky_orbit_axis: [f32::NAN; 3],
             skybox_renderer: None,
             show_skybox: true,
             dragged_cell_index: u32::MAX,
@@ -8351,29 +8342,21 @@ impl Scene for GpuScene {
                 // rotation axis shifts, causing stars to spin off-axis. Instead we
                 // project sun_dir onto the orbital plane and use the azimuthal angle
                 // for a pure from_axis_angle rotation — no roll, just orbit.
-                let orbit_axis_arr = orbit_axis.to_array();
-                if self.sun_light_dir != self.cached_sky_sun_dir
-                    || orbit_axis_arr != self.cached_sky_orbit_axis
-                {
-                    let sun_flat = sun_dir - orbit_axis * orbit_axis.dot(sun_dir);
-                    self.cached_sky_rotation = if sun_flat.length_squared() > 1e-6 {
-                        let sun_flat = sun_flat.normalize();
-                        let world_ref = if orbit_axis.dot(glam::Vec3::X).abs() < 0.9 {
-                            glam::Vec3::X
-                        } else {
-                            glam::Vec3::Z
-                        };
-                        let ref_dir = orbit_axis.cross(world_ref).normalize();
-                        let tangent = orbit_axis.cross(ref_dir);
-                        let angle = f32::atan2(tangent.dot(sun_flat), ref_dir.dot(sun_flat));
-                        glam::Quat::from_axis_angle(orbit_axis, angle)
+                let sun_flat = sun_dir - orbit_axis * orbit_axis.dot(sun_dir);
+                let sky_rotation = if sun_flat.length_squared() > 1e-6 {
+                    let sun_flat = sun_flat.normalize();
+                    let world_ref = if orbit_axis.dot(glam::Vec3::X).abs() < 0.9 {
+                        glam::Vec3::X
                     } else {
-                        glam::Quat::IDENTITY
+                        glam::Vec3::Z
                     };
-                    self.cached_sky_sun_dir = self.sun_light_dir;
-                    self.cached_sky_orbit_axis = orbit_axis_arr;
-                }
-                let sky_rotation = self.cached_sky_rotation;
+                    let ref_dir = orbit_axis.cross(world_ref).normalize();
+                    let tangent = orbit_axis.cross(ref_dir);
+                    let angle = f32::atan2(tangent.dot(sun_flat), ref_dir.dot(sun_flat));
+                    glam::Quat::from_axis_angle(orbit_axis, angle)
+                } else {
+                    glam::Quat::IDENTITY
+                };
                 skybox_renderer.render(
                     &mut encoder,
                     queue,
@@ -8555,6 +8538,7 @@ impl Scene for GpuScene {
         // so caves occlude the sun but the translucent world sphere doesn't)
         if self.show_sun {
             if let Some(mut sun_renderer) = self.sun_renderer.take() {
+                sun_renderer.orbit_world_radius = world_diameter * 0.5;
                 sun_renderer.render(
                     &mut encoder,
                     queue,

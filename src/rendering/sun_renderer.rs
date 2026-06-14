@@ -73,6 +73,10 @@ pub struct SunParams {
     pub orbit_axis_y: f32,
     pub orbit_axis_z: f32,
     pub orbit_ring_opacity: f32,
+    pub orbit_world_radius: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
+    pub _pad2: f32,
 }
 
 impl Default for SunParams {
@@ -115,6 +119,10 @@ impl Default for SunParams {
             orbit_axis_y: 1.0,
             orbit_axis_z: 0.0,
             orbit_ring_opacity: 0.0,
+            orbit_world_radius: 200.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         }
     }
 }
@@ -137,6 +145,7 @@ pub struct SunRenderer {
     // Orbit ring gizmo
     pub orbit_axis: [f32; 3],
     pub orbit_ring_opacity: f32,
+    pub orbit_world_radius: f32,
 
     // Screen dimensions
     width: u32,
@@ -311,6 +320,7 @@ impl SunRenderer {
             enabled: true,
             orbit_axis: [0.0, 1.0, 0.0],
             orbit_ring_opacity: 0.0,
+            orbit_world_radius: 200.0,
             width: 1280,
             height: 720,
             cached_sun_params: SunParams::default(),
@@ -323,6 +333,10 @@ impl SunRenderer {
         self.width = width;
         self.height = height;
         self.sun_data_bg_dirty = true;
+        self.sun_params_dirty = true;
+    }
+
+    pub fn mark_params_dirty(&mut self) {
         self.sun_params_dirty = true;
     }
 
@@ -392,6 +406,10 @@ impl SunRenderer {
             orbit_axis_y: self.orbit_axis[1],
             orbit_axis_z: self.orbit_axis[2],
             orbit_ring_opacity: self.orbit_ring_opacity,
+            orbit_world_radius: self.orbit_world_radius,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         let params_bytes = bytemuck::bytes_of(&params);
         if self.sun_params_dirty || params_bytes != bytemuck::bytes_of(&self.cached_sun_params) {

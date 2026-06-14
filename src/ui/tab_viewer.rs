@@ -8,7 +8,9 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 
 use crate::ui::panel::Panel;
-use crate::ui::panel_context::{PanelContext, SceneModeRequest};
+use crate::ui::panel_context::{
+    CaveAppearanceVisualSettings, PanelContext, SceneModeRequest,
+};
 use crate::ui::types::GlobalUiState;
 use crate::ui::types::SimulationMode;
 use crate::ui::ui_system::{
@@ -3647,68 +3649,69 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
     if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
         if let Some(cave_renderer) = &gpu_scene.cave_renderer {
             let params = cave_renderer.params();
+            let editor = &context.editor_state;
 
             // Create local copies for editing
             // Invert density for UI display so that 1.0 = higher density (lower actual value)
-            let mut density = 1.0 - params.density;
-            let mut scale = params.scale; // Use actual scale directly
-            let mut octaves = params.octaves as i32;
-            let mut smoothness = params.smoothness;
-            let mut seed = params.seed as i32;
-            let mut resolution = params.grid_resolution as i32;
-            let mut isolated_chunk_cull_volume = params.isolated_chunk_cull_volume;
-            let mut mesh_smoothing_iterations = params.mesh_smoothing_iterations as i32;
-            let mut mesh_smoothing_factor = params.mesh_smoothing_factor;
-            let mut mesh_smooth_normals = params.mesh_smooth_normals != 0;
-            let mut geothermal_enabled = params.geothermal_enabled != 0;
-            let mut geothermal_count = params.geothermal_count as i32;
-            let mut geothermal_placement_mode = params.geothermal_placement_mode;
-            let mut geothermal_lower_hemisphere = params.geothermal_lower_hemisphere != 0;
-            let mut geothermal_length = params.geothermal_length;
-            let mut geothermal_width = params.geothermal_width;
-            let mut geothermal_depth = params.geothermal_depth;
-            let mut geothermal_back_margin = params.geothermal_back_margin;
-            let mut geothermal_top_margin = params.geothermal_top_margin;
-            let mut geothermal_heat_output = params.geothermal_heat_output;
-            let mut geothermal_heat_radius = params.geothermal_heat_radius;
-            let mut geothermal_glow_strength = params.geothermal_glow_strength;
-            let mut geothermal_glow_radius = params.geothermal_glow_radius;
-            let mut geothermal_glow_color = params.geothermal_glow_color;
-            let mut cave_appearance = params.appearance;
-            let mut cave_rock_dark_color = params.rock_dark_color;
-            let mut cave_rock_cool_color = params.rock_cool_color;
-            let mut cave_rock_warm_color = params.rock_warm_color;
-            let mut cave_rock_pale_color = params.rock_pale_color;
-            let mut cave_rock_layer_scale = params.rock_layer_scale;
-            let mut cave_rock_warp_strength = params.rock_warp_strength;
-            let mut cave_rock_fine_band_strength = params.rock_fine_band_strength;
-            let mut cave_rock_cool_mottle_strength = params.rock_cool_mottle_strength;
-            let mut cave_rock_grain_strength = params.rock_grain_strength;
-            let mut cave_rock_patch_contrast = params.rock_patch_contrast;
-            let mut cave_rock_seam_darkening = params.rock_seam_darkening;
-            let mut cave_rock_wall_line_strength = params.rock_wall_line_strength;
-            let mut cave_rock_min_color = params.rock_min_color;
-            let mut cave_rock_max_color = params.rock_max_color;
-            let mut cave_rock_ambient_strength = params.rock_ambient_strength;
-            let mut cave_rock_diffuse_strength = params.rock_diffuse_strength;
-            let mut cave_rock_specular_strength = params.rock_specular_strength;
-            let mut cave_rock_specular_power = params.rock_specular_power;
-            let mut cave_rock_texture_scale = params.rock_texture_scale;
-            let mut cave_rock_coarse_frequency = params.rock_coarse_frequency;
-            let mut cave_rock_fine_frequency = params.rock_fine_frequency;
-            let mut cave_rock_seam_frequency = params.rock_seam_frequency;
-            let mut cave_rock_fine_noise_scale = params.rock_fine_noise_scale;
-            let mut cave_rock_fine_noise_strength = params.rock_fine_noise_strength;
-            let mut cave_rock_seam_noise_scale = params.rock_seam_noise_scale;
-            let mut cave_rock_seam_noise_strength = params.rock_seam_noise_strength;
-            let mut cave_rock_coarse_band_low = params.rock_coarse_band_low;
-            let mut cave_rock_coarse_band_high = params.rock_coarse_band_high;
-            let mut cave_rock_fine_band_low = params.rock_fine_band_low;
-            let mut cave_rock_fine_band_high = params.rock_fine_band_high;
-            let mut cave_rock_seam_low = params.rock_seam_low;
-            let mut cave_rock_seam_high = params.rock_seam_high;
-            let mut cave_rock_geometry_conform = params.rock_geometry_conform;
-            let mut cave_rock_parallax_depth = params.rock_parallax_depth;
+            let mut density = 1.0 - editor.cave_density;
+            let mut scale = editor.cave_scale;
+            let mut octaves = editor.cave_octaves as i32;
+            let mut smoothness = editor.cave_smoothness;
+            let mut seed = editor.cave_seed as i32;
+            let mut resolution = editor.cave_resolution as i32;
+            let mut isolated_chunk_cull_volume = editor.cave_isolated_chunk_cull_volume;
+            let mut mesh_smoothing_iterations = editor.cave_mesh_smoothing_iterations as i32;
+            let mut mesh_smoothing_factor = editor.cave_mesh_smoothing_factor;
+            let mut mesh_smooth_normals = editor.cave_mesh_smooth_normals;
+            let mut geothermal_enabled = editor.geothermal_enabled;
+            let mut geothermal_count = editor.geothermal_count as i32;
+            let mut geothermal_placement_mode = editor.geothermal_placement_mode;
+            let mut geothermal_lower_hemisphere = editor.geothermal_lower_hemisphere;
+            let mut geothermal_length = editor.geothermal_length;
+            let mut geothermal_width = editor.geothermal_width;
+            let mut geothermal_depth = editor.geothermal_depth;
+            let mut geothermal_back_margin = editor.geothermal_back_margin;
+            let mut geothermal_top_margin = editor.geothermal_top_margin;
+            let mut geothermal_heat_output = editor.geothermal_heat_output;
+            let mut geothermal_heat_radius = editor.geothermal_heat_radius;
+            let mut geothermal_glow_strength = editor.geothermal_glow_strength;
+            let mut geothermal_glow_radius = editor.geothermal_glow_radius;
+            let mut geothermal_glow_color = editor.geothermal_glow_color;
+            let mut cave_appearance = editor.cave_appearance;
+            let mut cave_rock_dark_color = editor.cave_rock_dark_color;
+            let mut cave_rock_cool_color = editor.cave_rock_cool_color;
+            let mut cave_rock_warm_color = editor.cave_rock_warm_color;
+            let mut cave_rock_pale_color = editor.cave_rock_pale_color;
+            let mut cave_rock_layer_scale = editor.cave_rock_layer_scale;
+            let mut cave_rock_warp_strength = editor.cave_rock_warp_strength;
+            let mut cave_rock_fine_band_strength = editor.cave_rock_fine_band_strength;
+            let mut cave_rock_cool_mottle_strength = editor.cave_rock_cool_mottle_strength;
+            let mut cave_rock_grain_strength = editor.cave_rock_grain_strength;
+            let mut cave_rock_patch_contrast = editor.cave_rock_patch_contrast;
+            let mut cave_rock_seam_darkening = editor.cave_rock_seam_darkening;
+            let mut cave_rock_wall_line_strength = editor.cave_rock_wall_line_strength;
+            let mut cave_rock_min_color = editor.cave_rock_min_color;
+            let mut cave_rock_max_color = editor.cave_rock_max_color;
+            let mut cave_rock_ambient_strength = editor.cave_rock_ambient_strength;
+            let mut cave_rock_diffuse_strength = editor.cave_rock_diffuse_strength;
+            let mut cave_rock_specular_strength = editor.cave_rock_specular_strength;
+            let mut cave_rock_specular_power = editor.cave_rock_specular_power;
+            let mut cave_rock_texture_scale = editor.cave_rock_texture_scale;
+            let mut cave_rock_coarse_frequency = editor.cave_rock_coarse_frequency;
+            let mut cave_rock_fine_frequency = editor.cave_rock_fine_frequency;
+            let mut cave_rock_seam_frequency = editor.cave_rock_seam_frequency;
+            let mut cave_rock_fine_noise_scale = editor.cave_rock_fine_noise_scale;
+            let mut cave_rock_fine_noise_strength = editor.cave_rock_fine_noise_strength;
+            let mut cave_rock_seam_noise_scale = editor.cave_rock_seam_noise_scale;
+            let mut cave_rock_seam_noise_strength = editor.cave_rock_seam_noise_strength;
+            let mut cave_rock_coarse_band_low = editor.cave_rock_coarse_band_low;
+            let mut cave_rock_coarse_band_high = editor.cave_rock_coarse_band_high;
+            let mut cave_rock_fine_band_low = editor.cave_rock_fine_band_low;
+            let mut cave_rock_fine_band_high = editor.cave_rock_fine_band_high;
+            let mut cave_rock_seam_low = editor.cave_rock_seam_low;
+            let mut cave_rock_seam_high = editor.cave_rock_seam_high;
+            let mut cave_rock_geometry_conform = editor.cave_rock_geometry_conform;
+            let mut cave_rock_parallax_depth = editor.cave_rock_parallax_depth;
 
             let mut params_changed = false;
 
@@ -3838,77 +3841,87 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                         .changed();
                 });
             if cave_appearance != previous_cave_appearance {
-                if cave_appearance == 1 {
-                    cave_rock_dark_color = [0.014, 0.013, 0.012];
-                    cave_rock_cool_color = [0.045, 0.062, 0.070];
-                    cave_rock_warm_color = [0.210, 0.078, 0.030];
-                    cave_rock_pale_color = [1.000, 0.285, 0.035];
-                    cave_rock_layer_scale = 0.080;
-                    cave_rock_warp_strength = 2.35;
-                    cave_rock_fine_band_strength = 0.34;
-                    cave_rock_cool_mottle_strength = 0.58;
-                    cave_rock_grain_strength = 0.13;
-                    cave_rock_patch_contrast = 0.12;
-                    cave_rock_seam_darkening = 0.62;
-                    cave_rock_wall_line_strength = 0.72;
-                    cave_rock_min_color = 0.0;
-                    cave_rock_max_color = 0.72;
-                    cave_rock_ambient_strength = 0.06;
-                    cave_rock_diffuse_strength = 0.82;
-                    cave_rock_specular_strength = 0.48;
-                    cave_rock_specular_power = 48.0;
-                    cave_rock_texture_scale = 0.070;
-                    cave_rock_coarse_frequency = 18.0;
-                    cave_rock_fine_frequency = 14.0;
-                    cave_rock_seam_frequency = 20.0;
-                    cave_rock_fine_noise_scale = 0.050;
-                    cave_rock_fine_noise_strength = 4.6;
-                    cave_rock_seam_noise_scale = 0.042;
-                    cave_rock_seam_noise_strength = 5.4;
-                    cave_rock_coarse_band_low = 0.16;
-                    cave_rock_coarse_band_high = 0.78;
-                    cave_rock_fine_band_low = 0.24;
-                    cave_rock_fine_band_high = 0.88;
-                    cave_rock_seam_low = 0.16;
-                    cave_rock_seam_high = 0.48;
-                    cave_rock_geometry_conform = 0.0;
-                    cave_rock_parallax_depth = 1.8;
+                let previous_visuals = CaveAppearanceVisualSettings {
+                    dark_color: cave_rock_dark_color,
+                    cool_color: cave_rock_cool_color,
+                    warm_color: cave_rock_warm_color,
+                    pale_color: cave_rock_pale_color,
+                    layer_scale: cave_rock_layer_scale,
+                    warp_strength: cave_rock_warp_strength,
+                    fine_band_strength: cave_rock_fine_band_strength,
+                    cool_mottle_strength: cave_rock_cool_mottle_strength,
+                    grain_strength: cave_rock_grain_strength,
+                    patch_contrast: cave_rock_patch_contrast,
+                    seam_darkening: cave_rock_seam_darkening,
+                    wall_line_strength: cave_rock_wall_line_strength,
+                    min_color: cave_rock_min_color,
+                    max_color: cave_rock_max_color,
+                    ambient_strength: cave_rock_ambient_strength,
+                    diffuse_strength: cave_rock_diffuse_strength,
+                    specular_strength: cave_rock_specular_strength,
+                    specular_power: cave_rock_specular_power,
+                    texture_scale: cave_rock_texture_scale,
+                    coarse_frequency: cave_rock_coarse_frequency,
+                    fine_frequency: cave_rock_fine_frequency,
+                    seam_frequency: cave_rock_seam_frequency,
+                    fine_noise_scale: cave_rock_fine_noise_scale,
+                    fine_noise_strength: cave_rock_fine_noise_strength,
+                    seam_noise_scale: cave_rock_seam_noise_scale,
+                    seam_noise_strength: cave_rock_seam_noise_strength,
+                    coarse_band_low: cave_rock_coarse_band_low,
+                    coarse_band_high: cave_rock_coarse_band_high,
+                    fine_band_low: cave_rock_fine_band_low,
+                    fine_band_high: cave_rock_fine_band_high,
+                    seam_low: cave_rock_seam_low,
+                    seam_high: cave_rock_seam_high,
+                    geometry_conform: cave_rock_geometry_conform,
+                    parallax_depth: cave_rock_parallax_depth,
+                };
+                if previous_cave_appearance == 1 {
+                    context.editor_state.cave_lava_tube_visuals = previous_visuals;
                 } else {
-                    cave_rock_dark_color = [0.105, 0.100, 0.092];
-                    cave_rock_cool_color = [0.150, 0.165, 0.160];
-                    cave_rock_warm_color = [0.235, 0.205, 0.155];
-                    cave_rock_pale_color = [0.330, 0.300, 0.225];
-                    cave_rock_layer_scale = 0.075;
-                    cave_rock_warp_strength = 1.85;
-                    cave_rock_fine_band_strength = 0.28;
-                    cave_rock_cool_mottle_strength = 0.22;
-                    cave_rock_grain_strength = 0.09;
-                    cave_rock_patch_contrast = 0.17;
-                    cave_rock_seam_darkening = 0.28;
-                    cave_rock_wall_line_strength = 0.65;
-                    cave_rock_min_color = 0.045;
-                    cave_rock_max_color = 0.48;
-                    cave_rock_ambient_strength = 0.08;
-                    cave_rock_diffuse_strength = 0.7;
-                    cave_rock_specular_strength = 0.3;
-                    cave_rock_specular_power = 32.0;
-                    cave_rock_texture_scale = 0.05;
-                    cave_rock_coarse_frequency = std::f32::consts::TAU;
-                    cave_rock_fine_frequency = 22.0;
-                    cave_rock_seam_frequency = 13.0;
-                    cave_rock_fine_noise_scale = 0.045;
-                    cave_rock_fine_noise_strength = 4.0;
-                    cave_rock_seam_noise_scale = 0.035;
-                    cave_rock_seam_noise_strength = 2.5;
-                    cave_rock_coarse_band_low = -0.35;
-                    cave_rock_coarse_band_high = 0.55;
-                    cave_rock_fine_band_low = 0.35;
-                    cave_rock_fine_band_high = 0.92;
-                    cave_rock_seam_low = 0.82;
-                    cave_rock_seam_high = 0.98;
-                    cave_rock_geometry_conform = 0.0;
-                    cave_rock_parallax_depth = 0.0;
+                    context.editor_state.cave_layered_shale_visuals = previous_visuals;
                 }
+
+                let selected_visuals = if cave_appearance == 1 {
+                    context.editor_state.cave_lava_tube_visuals
+                } else {
+                    context.editor_state.cave_layered_shale_visuals
+                };
+                cave_rock_dark_color = selected_visuals.dark_color;
+                cave_rock_cool_color = selected_visuals.cool_color;
+                cave_rock_warm_color = selected_visuals.warm_color;
+                cave_rock_pale_color = selected_visuals.pale_color;
+                cave_rock_layer_scale = selected_visuals.layer_scale;
+                cave_rock_warp_strength = selected_visuals.warp_strength;
+                cave_rock_fine_band_strength = selected_visuals.fine_band_strength;
+                cave_rock_cool_mottle_strength = selected_visuals.cool_mottle_strength;
+                cave_rock_grain_strength = selected_visuals.grain_strength;
+                cave_rock_patch_contrast = selected_visuals.patch_contrast;
+                cave_rock_seam_darkening = selected_visuals.seam_darkening;
+                cave_rock_wall_line_strength = selected_visuals.wall_line_strength;
+                cave_rock_min_color = selected_visuals.min_color;
+                cave_rock_max_color = selected_visuals.max_color;
+                cave_rock_ambient_strength = selected_visuals.ambient_strength;
+                cave_rock_diffuse_strength = selected_visuals.diffuse_strength;
+                cave_rock_specular_strength = selected_visuals.specular_strength;
+                cave_rock_specular_power = selected_visuals.specular_power;
+                cave_rock_texture_scale = selected_visuals.texture_scale;
+                cave_rock_coarse_frequency = selected_visuals.coarse_frequency;
+                cave_rock_fine_frequency = selected_visuals.fine_frequency;
+                cave_rock_seam_frequency = selected_visuals.seam_frequency;
+                cave_rock_fine_noise_scale = selected_visuals.fine_noise_scale;
+                cave_rock_fine_noise_strength = selected_visuals.fine_noise_strength;
+                cave_rock_seam_noise_scale = selected_visuals.seam_noise_scale;
+                cave_rock_seam_noise_strength = selected_visuals.seam_noise_strength;
+                cave_rock_coarse_band_low = selected_visuals.coarse_band_low;
+                cave_rock_coarse_band_high = selected_visuals.coarse_band_high;
+                cave_rock_fine_band_low = selected_visuals.fine_band_low;
+                cave_rock_fine_band_high = selected_visuals.fine_band_high;
+                cave_rock_seam_low = selected_visuals.seam_low;
+                cave_rock_seam_high = selected_visuals.seam_high;
+                cave_rock_geometry_conform = selected_visuals.geometry_conform;
+                cave_rock_parallax_depth = selected_visuals.parallax_depth;
                 params_changed = true;
             }
 
@@ -3953,11 +3966,11 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .changed();
             });
             ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected { "Ember:" } else { "Pale:" });
+                ui.label(if lava_tubes_selected { "Ash:" } else { "Pale:" });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_pale_color)
                     .on_hover_text(if lava_tubes_selected {
-                        "Hot ember color used by glowing cracks and floor heat"
+                        "Dry ash and mineral dust color for deposits and worn shelves"
                     } else {
                         "Light silt tone used by fine strata highlights"
                     })
@@ -3994,12 +4007,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .add(egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Rope Highlights:"
+                    "Plate Variation:"
                 } else {
                     "Fine Bands:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Strength of ash-gray highlights on raised ropey lava ridges"
+                    "Strength of ash-gray variation across cooled basalt plates"
                 } else {
                     "Strength of the pale fine-layer highlights"
                 });
@@ -4042,12 +4055,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ))
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Floor Heat:"
+                    "Ash Deposits:"
                 } else {
                     "Patch Contrast:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Subtle ember glow on downward-facing lava tube surfaces"
+                    "Amount of pale ash and mineral dust collected on lower surfaces"
                 } else {
                     "Large mottled light and dark patch contrast"
                 });
@@ -4058,12 +4071,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ))
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Fissure Glow:"
+                    "Seam Darkness:"
                 } else {
                     "Seam Darkening:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Brightness and coverage of thin hot cracks"
+                    "Darkness of cooled contraction cracks between basalt plates"
                 } else {
                     "Darkness of narrow sediment seams"
                 });
@@ -4074,12 +4087,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ))
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Ridge Shadow:"
+                    "Shelf Scuffs:"
                 } else {
                     "Wall Lines:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Dark trough shading between ropey lava ridges"
+                    "Strength of pale abrasion marks along tube-wall shelves and rub zones"
                 } else {
                     "How strongly steep walls keep crisp sediment lines"
                 });
@@ -4133,12 +4146,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ))
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Rope Spacing:"
+                    "Plate Size:"
                 } else {
                     "Major Lines:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Density of raised ropey pahoehoe ridges"
+                    "Density of polygonal cooling plates. Higher values create smaller basalt plates"
                 } else {
                     "Density of broad sediment bands"
                 });
@@ -4149,12 +4162,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     )
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Sag Ripple:"
+                    "Surface Breakup:"
                 } else {
                     "Fine Lines:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Frequency of cross-flow ripple bends in the rope pattern"
+                    "Secondary breakup used by subtle glass and plate variation"
                 } else {
                     "Density of thin pale sediment lines"
                 });
@@ -4170,7 +4183,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Seam Lines:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Density of glowing fissure lines"
+                    "Density of cooled contraction cracks between basalt plates"
                 } else {
                     "Density of dark seam lines"
                 });
@@ -4218,7 +4231,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Seam Warp Scale:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Spatial scale of distortion on glowing cracks"
+                    "Spatial scale of distortion on cooled contraction cracks"
                 } else {
                     "Spatial scale of distortion on dark seams"
                 });
@@ -4234,7 +4247,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Seam Warp:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "How strongly glowing fissures bend and break"
+                    "How strongly contraction cracks bend and break"
                 } else {
                     "How strongly seam lines bend and break"
                 });
@@ -4245,12 +4258,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ))
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Rope Low:"
+                    "Plate Low:"
                 } else {
                     "Major Low:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Lower smoothstep edge for raised rope ridge coverage"
+                    "Reserved for shale bands; Lava Tubes uses crack thickness controls below"
                 } else {
                     "Lower smoothstep edge for broad sediment bands"
                 });
@@ -4261,12 +4274,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ))
                     .changed();
                 ui.label(if lava_tubes_selected {
-                    "Rope High:"
+                    "Plate High:"
                 } else {
                     "Major High:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Upper smoothstep edge for raised rope ridge coverage"
+                    "Reserved for shale bands; Lava Tubes uses crack thickness controls below"
                 } else {
                     "Upper smoothstep edge for broad sediment bands"
                 });
@@ -4314,7 +4327,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Seam Low:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Lower edge for glowing crack thickness"
+                    "Lower edge for cooled contraction crack thickness"
                 } else {
                     "Lower edge for dark seam thickness"
                 });
@@ -4327,7 +4340,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Seam High:"
                 })
                 .on_hover_text(if lava_tubes_selected {
-                    "Upper edge for glowing crack thickness"
+                    "Upper edge for cooled contraction crack thickness"
                 } else {
                     "Upper edge for dark seam thickness"
                 });
@@ -4573,6 +4586,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 context.editor_state.cave_rock_seam_high = cave_rock_seam_high;
                 context.editor_state.cave_rock_geometry_conform = cave_rock_geometry_conform;
                 context.editor_state.cave_rock_parallax_depth = cave_rock_parallax_depth;
+                let active_visuals =
+                    CaveAppearanceVisualSettings::from_editor_state(context.editor_state);
+                if cave_appearance == 1 {
+                    context.editor_state.cave_lava_tube_visuals = active_visuals;
+                } else {
+                    context.editor_state.cave_layered_shale_visuals = active_visuals;
+                }
                 context.editor_state.cave_params_dirty = true;
 
                 // Save settings to disk
@@ -6302,7 +6322,7 @@ fn render_light_settings_organized(
             if context.editor_state.sun_rotation_enabled {
                 let mut orbit_angle = context.editor_state.sun_orbit_angle;
                 ui.label("Position");
-                if ui
+                let position_response = ui
                     .add(
                         egui::Slider::new(&mut orbit_angle, 0.0..=360.0)
                             .text("Position")
@@ -6310,23 +6330,25 @@ fn render_light_settings_organized(
                             .step_by(0.1)
                             .fixed_decimals(1),
                     )
-                    .on_hover_text("Sun position along the visible orbit ring.")
-                    .changed()
+                    .on_hover_text("Sun position along the visible orbit ring.");
+                if position_response.changed()
+                    && (position_response.dragged() || position_response.has_focus())
                 {
                     context.editor_state.sun_orbit_angle = orbit_angle;
                     context.editor_state.apply_sun_orbit();
                     changed = true;
                 }
 
-                let mut speed_degrees = context.editor_state.sun_rotation_speed.to_degrees();
+                let mut speed_degrees = context.editor_state.sun_rotation_speed.to_degrees().max(0.0);
                 ui.label("Speed");
                 if ui
                     .add(
-                        egui::Slider::new(&mut speed_degrees, -30.0..=30.0)
+                        egui::Slider::new(&mut speed_degrees, 0.0..=30.0)
                             .text("Speed")
                             .suffix("°/s")
-                            .step_by(0.5)
-                            .fixed_decimals(1),
+                            .logarithmic(true)
+                            .smallest_positive(0.01)
+                            .fixed_decimals(2),
                     )
                     .on_hover_text("How fast the sun moves along the orbit. 0 keeps it parked.")
                     .changed()

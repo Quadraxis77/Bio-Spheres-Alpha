@@ -80,6 +80,206 @@ impl SceneModeRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct CaveAppearanceVisualSettings {
+    pub dark_color: [f32; 3],
+    pub cool_color: [f32; 3],
+    pub warm_color: [f32; 3],
+    pub pale_color: [f32; 3],
+    pub layer_scale: f32,
+    pub warp_strength: f32,
+    pub fine_band_strength: f32,
+    pub cool_mottle_strength: f32,
+    pub grain_strength: f32,
+    pub patch_contrast: f32,
+    pub seam_darkening: f32,
+    pub wall_line_strength: f32,
+    pub min_color: f32,
+    pub max_color: f32,
+    pub ambient_strength: f32,
+    pub diffuse_strength: f32,
+    pub specular_strength: f32,
+    pub specular_power: f32,
+    pub texture_scale: f32,
+    pub coarse_frequency: f32,
+    pub fine_frequency: f32,
+    pub seam_frequency: f32,
+    pub fine_noise_scale: f32,
+    pub fine_noise_strength: f32,
+    pub seam_noise_scale: f32,
+    pub seam_noise_strength: f32,
+    pub coarse_band_low: f32,
+    pub coarse_band_high: f32,
+    pub fine_band_low: f32,
+    pub fine_band_high: f32,
+    pub seam_low: f32,
+    pub seam_high: f32,
+    pub geometry_conform: f32,
+    pub parallax_depth: f32,
+}
+
+impl CaveAppearanceVisualSettings {
+    pub fn layered_shale() -> Self {
+        Self {
+            dark_color: [0.105, 0.100, 0.092],
+            cool_color: [0.150, 0.165, 0.160],
+            warm_color: [0.235, 0.205, 0.155],
+            pale_color: [0.330, 0.300, 0.225],
+            layer_scale: 0.075,
+            warp_strength: 1.85,
+            fine_band_strength: 0.28,
+            cool_mottle_strength: 0.22,
+            grain_strength: 0.09,
+            patch_contrast: 0.17,
+            seam_darkening: 0.28,
+            wall_line_strength: 0.65,
+            min_color: 0.045,
+            max_color: 0.48,
+            ambient_strength: 0.08,
+            diffuse_strength: 0.7,
+            specular_strength: 0.3,
+            specular_power: 32.0,
+            texture_scale: 0.05,
+            coarse_frequency: std::f32::consts::TAU,
+            fine_frequency: 22.0,
+            seam_frequency: 13.0,
+            fine_noise_scale: 0.045,
+            fine_noise_strength: 4.0,
+            seam_noise_scale: 0.035,
+            seam_noise_strength: 2.5,
+            coarse_band_low: -0.35,
+            coarse_band_high: 0.55,
+            fine_band_low: 0.35,
+            fine_band_high: 0.92,
+            seam_low: 0.82,
+            seam_high: 0.98,
+            geometry_conform: 0.0,
+            parallax_depth: 0.0,
+        }
+    }
+
+    pub fn lava_tubes() -> Self {
+        Self {
+            dark_color: [0.014, 0.013, 0.012],
+            cool_color: [0.045, 0.062, 0.070],
+            warm_color: [0.210, 0.078, 0.030],
+            pale_color: [0.260, 0.235, 0.195],
+            layer_scale: 0.080,
+            warp_strength: 2.35,
+            fine_band_strength: 0.22,
+            cool_mottle_strength: 0.58,
+            grain_strength: 0.13,
+            patch_contrast: 0.20,
+            seam_darkening: 0.78,
+            wall_line_strength: 0.78,
+            min_color: 0.0,
+            max_color: 0.72,
+            ambient_strength: 0.06,
+            diffuse_strength: 0.82,
+            specular_strength: 0.48,
+            specular_power: 48.0,
+            texture_scale: 0.070,
+            coarse_frequency: 15.0,
+            fine_frequency: 14.0,
+            seam_frequency: 20.0,
+            fine_noise_scale: 0.050,
+            fine_noise_strength: 4.6,
+            seam_noise_scale: 0.042,
+            seam_noise_strength: 5.4,
+            coarse_band_low: 0.16,
+            coarse_band_high: 0.78,
+            fine_band_low: 0.24,
+            fine_band_high: 0.88,
+            seam_low: 0.16,
+            seam_high: 0.48,
+            geometry_conform: 0.0,
+            parallax_depth: 1.8,
+        }
+    }
+
+    pub fn from_editor_state(state: &GenomeEditorState) -> Self {
+        Self {
+            dark_color: state.cave_rock_dark_color,
+            cool_color: state.cave_rock_cool_color,
+            warm_color: state.cave_rock_warm_color,
+            pale_color: state.cave_rock_pale_color,
+            layer_scale: state.cave_rock_layer_scale,
+            warp_strength: state.cave_rock_warp_strength,
+            fine_band_strength: state.cave_rock_fine_band_strength,
+            cool_mottle_strength: state.cave_rock_cool_mottle_strength,
+            grain_strength: state.cave_rock_grain_strength,
+            patch_contrast: state.cave_rock_patch_contrast,
+            seam_darkening: state.cave_rock_seam_darkening,
+            wall_line_strength: state.cave_rock_wall_line_strength,
+            min_color: state.cave_rock_min_color,
+            max_color: state.cave_rock_max_color,
+            ambient_strength: state.cave_rock_ambient_strength,
+            diffuse_strength: state.cave_rock_diffuse_strength,
+            specular_strength: state.cave_rock_specular_strength,
+            specular_power: state.cave_rock_specular_power,
+            texture_scale: state.cave_rock_texture_scale,
+            coarse_frequency: state.cave_rock_coarse_frequency,
+            fine_frequency: state.cave_rock_fine_frequency,
+            seam_frequency: state.cave_rock_seam_frequency,
+            fine_noise_scale: state.cave_rock_fine_noise_scale,
+            fine_noise_strength: state.cave_rock_fine_noise_strength,
+            seam_noise_scale: state.cave_rock_seam_noise_scale,
+            seam_noise_strength: state.cave_rock_seam_noise_strength,
+            coarse_band_low: state.cave_rock_coarse_band_low,
+            coarse_band_high: state.cave_rock_coarse_band_high,
+            fine_band_low: state.cave_rock_fine_band_low,
+            fine_band_high: state.cave_rock_fine_band_high,
+            seam_low: state.cave_rock_seam_low,
+            seam_high: state.cave_rock_seam_high,
+            geometry_conform: state.cave_rock_geometry_conform,
+            parallax_depth: state.cave_rock_parallax_depth,
+        }
+    }
+
+    pub fn apply_to_editor_state(self, state: &mut GenomeEditorState) {
+        state.cave_rock_dark_color = self.dark_color;
+        state.cave_rock_cool_color = self.cool_color;
+        state.cave_rock_warm_color = self.warm_color;
+        state.cave_rock_pale_color = self.pale_color;
+        state.cave_rock_layer_scale = self.layer_scale;
+        state.cave_rock_warp_strength = self.warp_strength;
+        state.cave_rock_fine_band_strength = self.fine_band_strength;
+        state.cave_rock_cool_mottle_strength = self.cool_mottle_strength;
+        state.cave_rock_grain_strength = self.grain_strength;
+        state.cave_rock_patch_contrast = self.patch_contrast;
+        state.cave_rock_seam_darkening = self.seam_darkening;
+        state.cave_rock_wall_line_strength = self.wall_line_strength;
+        state.cave_rock_min_color = self.min_color;
+        state.cave_rock_max_color = self.max_color;
+        state.cave_rock_ambient_strength = self.ambient_strength;
+        state.cave_rock_diffuse_strength = self.diffuse_strength;
+        state.cave_rock_specular_strength = self.specular_strength;
+        state.cave_rock_specular_power = self.specular_power;
+        state.cave_rock_texture_scale = self.texture_scale;
+        state.cave_rock_coarse_frequency = self.coarse_frequency;
+        state.cave_rock_fine_frequency = self.fine_frequency;
+        state.cave_rock_seam_frequency = self.seam_frequency;
+        state.cave_rock_fine_noise_scale = self.fine_noise_scale;
+        state.cave_rock_fine_noise_strength = self.fine_noise_strength;
+        state.cave_rock_seam_noise_scale = self.seam_noise_scale;
+        state.cave_rock_seam_noise_strength = self.seam_noise_strength;
+        state.cave_rock_coarse_band_low = self.coarse_band_low;
+        state.cave_rock_coarse_band_high = self.coarse_band_high;
+        state.cave_rock_fine_band_low = self.fine_band_low;
+        state.cave_rock_fine_band_high = self.fine_band_high;
+        state.cave_rock_seam_low = self.seam_low;
+        state.cave_rock_seam_high = self.seam_high;
+        state.cave_rock_geometry_conform = self.geometry_conform;
+        state.cave_rock_parallax_depth = self.parallax_depth;
+    }
+}
+
+impl Default for CaveAppearanceVisualSettings {
+    fn default() -> Self {
+        Self::layered_shale()
+    }
+}
+
 /// State for the genome editor UI.
 ///
 /// Contains transient UI state for genome editing panels like
@@ -249,6 +449,8 @@ pub struct GenomeEditorState {
     pub cave_rock_seam_high: f32,
     pub cave_rock_geometry_conform: f32,
     pub cave_rock_parallax_depth: f32,
+    pub cave_layered_shale_visuals: CaveAppearanceVisualSettings,
+    pub cave_lava_tube_visuals: CaveAppearanceVisualSettings,
     pub cave_params_dirty: bool,
 
     // Fluid simulation parameters
@@ -795,6 +997,8 @@ impl GenomeEditorState {
             cave_rock_seam_high,
             cave_rock_geometry_conform,
             cave_rock_parallax_depth,
+            cave_layered_shale_visuals,
+            cave_lava_tube_visuals,
             show_moss,
             moss_growth_rate,
             moss_erosion_rate,
@@ -1041,6 +1245,8 @@ impl GenomeEditorState {
             cave_rock_seam_high,
             cave_rock_geometry_conform,
             cave_rock_parallax_depth,
+            cave_layered_shale_visuals,
+            cave_lava_tube_visuals,
             cave_params_dirty: false,
             fluid_gravity,
             fluid_gravity_x,
@@ -1229,15 +1435,17 @@ impl GenomeEditorState {
     }
 
     /// Rotate the sun/light direction for animated day-cycle style lighting.
-    /// `sim_dt` is simulation time elapsed this frame (fixed_timestep * physics_steps).
-    pub fn update_sun_rotation(&mut self, sim_dt: f32) -> bool {
+    /// `wall_dt` is render-frame elapsed time, keeping the visible sun/skybox
+    /// smooth instead of quantized to physics-step batches.
+    pub fn update_sun_rotation(&mut self, wall_dt: f32) -> bool {
         if !self.sun_rotation_enabled || self.sun_rotation_speed == 0.0 {
             return false;
         }
 
-        self.sun_orbit_angle = Self::wrap_degrees(
-            self.sun_orbit_angle + self.sun_rotation_speed.to_degrees() * sim_dt,
-        );
+        let angle_radians =
+            (self.sun_orbit_angle.to_radians() + self.sun_rotation_speed * wall_dt)
+                .rem_euclid(std::f32::consts::TAU);
+        self.sun_orbit_angle = angle_radians.to_degrees();
         self.apply_sun_orbit();
         true
     }
@@ -1316,6 +1524,8 @@ impl GenomeEditorState {
             self.cave_rock_seam_high,
             self.cave_rock_geometry_conform,
             self.cave_rock_parallax_depth,
+            self.cave_layered_shale_visuals,
+            self.cave_lava_tube_visuals,
             self.show_moss,
             self.moss_growth_rate,
             self.moss_erosion_rate,
@@ -1435,6 +1645,8 @@ impl GenomeEditorState {
         cave_rock_seam_high: f32,
         cave_rock_geometry_conform: f32,
         cave_rock_parallax_depth: f32,
+        cave_layered_shale_visuals: CaveAppearanceVisualSettings,
+        cave_lava_tube_visuals: CaveAppearanceVisualSettings,
         show_moss: bool,
         moss_growth_rate: f32,
         moss_erosion_rate: f32,
@@ -1529,6 +1741,8 @@ impl GenomeEditorState {
             cave_rock_seam_high: f32,
             cave_rock_geometry_conform: f32,
             cave_rock_parallax_depth: f32,
+            cave_layered_shale_visuals: CaveAppearanceVisualSettings,
+            cave_lava_tube_visuals: CaveAppearanceVisualSettings,
             show_moss: bool,
             moss_growth_rate: f32,
             moss_erosion_rate: f32,
@@ -1623,6 +1837,8 @@ impl GenomeEditorState {
             cave_rock_seam_high,
             cave_rock_geometry_conform,
             cave_rock_parallax_depth,
+            cave_layered_shale_visuals,
+            cave_lava_tube_visuals,
             show_moss,
             moss_growth_rate,
             moss_erosion_rate,
@@ -1782,6 +1998,8 @@ impl GenomeEditorState {
         f32,
         f32,
         f32,
+        CaveAppearanceVisualSettings,
+        CaveAppearanceVisualSettings,
         bool,
         f32,
         f32,
@@ -1930,6 +2148,10 @@ impl GenomeEditorState {
             cave_rock_geometry_conform: f32,
             #[serde(default = "default_cave_rock_parallax_depth")]
             cave_rock_parallax_depth: f32,
+            #[serde(default = "default_layered_shale_visuals")]
+            cave_layered_shale_visuals: CaveAppearanceVisualSettings,
+            #[serde(default = "default_lava_tube_visuals")]
+            cave_lava_tube_visuals: CaveAppearanceVisualSettings,
             #[serde(default = "default_show_moss")]
             show_moss: bool,
             #[serde(default = "default_moss_growth_rate")]
@@ -2151,6 +2373,12 @@ impl GenomeEditorState {
         fn default_cave_rock_parallax_depth() -> f32 {
             0.0
         }
+        fn default_layered_shale_visuals() -> CaveAppearanceVisualSettings {
+            CaveAppearanceVisualSettings::layered_shale()
+        }
+        fn default_lava_tube_visuals() -> CaveAppearanceVisualSettings {
+            CaveAppearanceVisualSettings::lava_tubes()
+        }
         fn default_show_moss() -> bool {
             true
         }
@@ -2248,6 +2476,50 @@ impl GenomeEditorState {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => match ron::from_str::<CaveSettings>(&contents) {
                     Ok(settings) => {
+                        let current_visuals = CaveAppearanceVisualSettings {
+                            dark_color: settings.cave_rock_dark_color,
+                            cool_color: settings.cave_rock_cool_color,
+                            warm_color: settings.cave_rock_warm_color,
+                            pale_color: settings.cave_rock_pale_color,
+                            layer_scale: settings.cave_rock_layer_scale,
+                            warp_strength: settings.cave_rock_warp_strength,
+                            fine_band_strength: settings.cave_rock_fine_band_strength,
+                            cool_mottle_strength: settings.cave_rock_cool_mottle_strength,
+                            grain_strength: settings.cave_rock_grain_strength,
+                            patch_contrast: settings.cave_rock_patch_contrast,
+                            seam_darkening: settings.cave_rock_seam_darkening,
+                            wall_line_strength: settings.cave_rock_wall_line_strength,
+                            min_color: settings.cave_rock_min_color,
+                            max_color: settings.cave_rock_max_color,
+                            ambient_strength: settings.cave_rock_ambient_strength,
+                            diffuse_strength: settings.cave_rock_diffuse_strength,
+                            specular_strength: settings.cave_rock_specular_strength,
+                            specular_power: settings.cave_rock_specular_power,
+                            texture_scale: settings.cave_rock_texture_scale,
+                            coarse_frequency: settings.cave_rock_coarse_frequency,
+                            fine_frequency: settings.cave_rock_fine_frequency,
+                            seam_frequency: settings.cave_rock_seam_frequency,
+                            fine_noise_scale: settings.cave_rock_fine_noise_scale,
+                            fine_noise_strength: settings.cave_rock_fine_noise_strength,
+                            seam_noise_scale: settings.cave_rock_seam_noise_scale,
+                            seam_noise_strength: settings.cave_rock_seam_noise_strength,
+                            coarse_band_low: settings.cave_rock_coarse_band_low,
+                            coarse_band_high: settings.cave_rock_coarse_band_high,
+                            fine_band_low: settings.cave_rock_fine_band_low,
+                            fine_band_high: settings.cave_rock_fine_band_high,
+                            seam_low: settings.cave_rock_seam_low,
+                            seam_high: settings.cave_rock_seam_high,
+                            geometry_conform: settings.cave_rock_geometry_conform,
+                            parallax_depth: settings.cave_rock_parallax_depth,
+                        };
+                        let mut layered_shale_visuals = settings.cave_layered_shale_visuals;
+                        let mut lava_tube_visuals = settings.cave_lava_tube_visuals;
+                        if settings.cave_appearance == 1 {
+                            lava_tube_visuals = current_visuals;
+                        } else {
+                            layered_shale_visuals = current_visuals;
+                        }
+
                         return (
                             settings.density,
                             settings.scale,
@@ -2310,6 +2582,8 @@ impl GenomeEditorState {
                             settings.cave_rock_seam_high,
                             settings.cave_rock_geometry_conform,
                             settings.cave_rock_parallax_depth,
+                            layered_shale_visuals,
+                            lava_tube_visuals,
                             settings.show_moss,
                             settings.moss_growth_rate,
                             settings.moss_erosion_rate,
@@ -2415,6 +2689,8 @@ impl GenomeEditorState {
             0.98,
             0.0,
             0.0,
+            CaveAppearanceVisualSettings::layered_shale(),
+            CaveAppearanceVisualSettings::lava_tubes(),
             true,
             0.15,
             0.3,
@@ -3661,5 +3937,68 @@ mod tests {
         assert!(state.enable_snapping);
         assert_eq!(state.qball1_locked_axis, -1);
         assert_eq!(state.time_value, 0.0);
+    }
+
+    #[test]
+    fn sun_rotation_accepts_low_degrees_per_second() {
+        let mut state = GenomeEditorState::new();
+        state.sun_rotation_enabled = true;
+        state.sun_rotation_axis = [0.0, 1.0, 0.0];
+        state.sun_orbit_angle = 0.0;
+        state.light_dir = GenomeEditorState::orbit_direction(
+            state.sun_rotation_axis,
+            state.sun_orbit_angle,
+        );
+        state.sun_rotation_speed = 1.0_f32.to_radians();
+
+        let old_dir = state.light_dir;
+        assert!(state.update_sun_rotation(1.0 / 60.0));
+        assert!(state.sun_orbit_angle > 0.0);
+        assert_ne!(state.light_dir, old_dir);
+    }
+
+    #[test]
+    fn sun_rotation_accepts_fractional_degrees_per_second() {
+        let mut state = GenomeEditorState::new();
+        state.sun_rotation_enabled = true;
+        state.sun_rotation_axis = [0.0, 1.0, 0.0];
+        state.sun_orbit_angle = 0.0;
+        state.light_dir = GenomeEditorState::orbit_direction(
+            state.sun_rotation_axis,
+            state.sun_orbit_angle,
+        );
+        state.sun_rotation_speed = 0.1_f32.to_radians();
+
+        let old_dir = state.light_dir;
+        assert!(state.update_sun_rotation(1.0 / 60.0));
+        assert!(state.sun_orbit_angle > 0.0);
+        assert_ne!(state.light_dir, old_dir);
+    }
+
+    #[test]
+    fn sun_rotation_has_no_dead_zone_near_three_degrees_per_second() {
+        for speed_degrees in [-2.9_f32, -0.1, 0.1, 2.9] {
+            let mut state = GenomeEditorState::new();
+            state.sun_rotation_enabled = true;
+            state.sun_rotation_axis = [0.0, 1.0, 0.0];
+            state.sun_orbit_angle = 180.0;
+            state.light_dir = GenomeEditorState::orbit_direction(
+                state.sun_rotation_axis,
+                state.sun_orbit_angle,
+            );
+            state.sun_rotation_speed = speed_degrees.to_radians();
+
+            let old_angle = state.sun_orbit_angle;
+            let old_dir = state.light_dir;
+            assert!(state.update_sun_rotation(1.0 / 60.0));
+            assert_ne!(
+                state.sun_orbit_angle, old_angle,
+                "speed {speed_degrees} deg/s did not change orbit angle"
+            );
+            assert_ne!(
+                state.light_dir, old_dir,
+                "speed {speed_degrees} deg/s did not change light direction"
+            );
+        }
     }
 }

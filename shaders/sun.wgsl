@@ -614,37 +614,92 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     final_color *= eclipse;
     final_alpha *= eclipse;
 
-    // ── Orbit ring gizmo ──────────────────────────────────────────────────
-    // Render a neon great circle on the sky sphere showing the orbit plane.
-    // Only visible on sky pixels (no geometry), fades out over time.
-    if (sun_params.orbit_ring_opacity > 0.001 && !has_geometry) {
-        // Reconstruct world-space ray direction for this fragment.
-        let ndc_pos = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-        let clip = vec4<f32>(ndc_pos, 1.0, 1.0);
-        let world_h = camera.inv_view_proj * clip;
-        let ray_dir = normalize(world_h.xyz / world_h.w - camera.camera_pos);
+// ── Orbit ring gizmo ───────────────────────────────────────────────────────
+// Renders the sun's orbital path as a circle of radius R centered at
+// sun_plane * R in the orbit plane.  The circle passes through the world
+// origin (the world sphere's position on the orbit).
+//
+// Finite world-space intersection — not a skybox effect.
 
-        let orbit_axis = normalize(vec3<f32>(
-            sun_params.orbit_axis_x,
-            sun_params.orbit_axis_y,
-            sun_params.orbit_axis_z,
-        ));
+if (sun_params.orbit_ring_opacity > 0.001) {
+    // Reconstruct world-space ray direction for this fragment.
+    let ndc_pos = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let clip = vec4<f32>(ndc_pos, 1.0, 1.0);
+    let world_h = camera.inv_view_proj * clip;
+    let world_pos = world_h.xyz / world_h.w;
+    let ray_dir = normalize(world_pos - camera.camera_pos);
 
-        // Angular distance from the great circle (= |dot(ray, axis)|).
-        let perp = abs(dot(ray_dir, orbit_axis));
+    // Direction toward the sun.
+    let sun_dir = normalize(vec3<f32>(
+        sun_params.light_dir_x,
+        sun_params.light_dir_y,
+        sun_params.light_dir_z
+    ));
 
-        // Thin dashed-look ring with minimal glow.
-        let ring_half = 0.002;
-        let glow_half = 0.008;
-        let core  = smoothstep(ring_half, 0.0,       perp);
-        let glow  = smoothstep(glow_half, ring_half,  perp) * 0.15;
-        let ring  = (core + glow) * sun_params.orbit_ring_opacity;
+    // Orbit plane normal.
+    let orbit_axis = normalize(vec3<f32>(
+        sun_params.orbit_axis_x,
+        sun_params.orbit_axis_y,
+        sun_params.orbit_axis_z
+    ));
 
-        // Muted blue-white tint at lower brightness.
-        let ring_color = vec3<f32>(0.5, 0.75, 1.0) * ring * 0.6;
-        final_color += ring_color;
-        final_alpha = max(final_alpha, ring * sun_params.orbit_ring_opacity * 0.5);
+    // Project sun direction into the orbit plane.
+    var sun_plane = sun_dir - orbit_axis * dot(sun_dir, orbit_axis);
+
+    if (dot(sun_plane, sun_plane) < 0.000001) {
+        var fallback = vec3<f32>(1.0, 0.0, 0.0);
+
+        if (abs(dot(fallback, orbit_axis)) > 0.95) {
+            fallback = vec3<f32>(0.0, 0.0, 1.0);
+        }
+
+        sun_plane = fallback - orbit_axis * dot(fallback, orbit_axis);
     }
+
+    sun_plane = normalize(sun_plane);
+
+    // Arbitrary large visual orbit radius.
+    let orbit_radius = 100000.0;
+
+    // Circle center in world space.
+    let center = sun_plane * orbit_radius;
+
+    // Intersect view ray with the orbit plane through world origin.
+    let denom = dot(ray_dir, orbit_axis);
+    let numer = -dot(camera.camera_pos, orbit_axis);
+
+    if (abs(denom) > 0.000001) {
+        let t = numer / denom;
+
+        if (t > 0.0) {
+            let hit = camera.camera_pos + ray_dir * t;
+
+            // Discard pixels whose hit point falls outside the orbit circle.
+            let hit_dist = length(hit - center);
+            if (hit_dist <= orbit_radius) {
+                let dist_n = (hit_dist - orbit_radius) / orbit_radius;
+
+                // Analytical screen-space derivative: one pixel subtends
+                // t / screen_height world units at distance t, divided by
+                // abs(denom) to account for the oblique plane intersection.
+                // This is stable at any distance unlike fwidth.
+                let world_per_pixel = t / (sun_params.screen_height * max(abs(denom), 0.000001));
+                let pixel_width = world_per_pixel / orbit_radius;
+
+                let core_pixels = 1.75;
+                let glow_pixels = 5.0;
+
+                let core = smoothstep(core_pixels * pixel_width, 0.0, abs(dist_n));
+                let glow = smoothstep(glow_pixels * pixel_width, core_pixels * pixel_width, abs(dist_n)) * 0.25;
+
+                let ring = (core + glow) * sun_params.orbit_ring_opacity;
+
+                final_color += vec3<f32>(0.0, 0.8, 1.0) * ring * 5.0;
+                final_alpha = max(final_alpha, ring);
+            }
+        }
+    }
+}
 
     // Tone map to prevent harsh clipping
     final_color = final_color / (1.0 + final_color);
