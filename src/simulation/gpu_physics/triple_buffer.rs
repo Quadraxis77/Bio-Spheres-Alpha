@@ -2109,9 +2109,11 @@ impl GpuTripleBufferSystem {
         }
     }
 
-    /// Sync Embryocyte mode properties for the lifecycle shaders.
+    /// Sync Embryocyte and Stemocyte mode properties for the lifecycle shaders.
     /// v9:  [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
     /// v10: [use_signal as f32, signal_channel as f32, signal_value, 0.0]
+    /// Stemocyte v9:  [signal_channel, weak_first, outcome_0, outcome_1]
+    /// Stemocyte v10: [outcome_2, outcome_3, outcome_4, 0.0]
     pub fn sync_embryocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2120,25 +2122,51 @@ impl GpuTripleBufferSystem {
         let mut v9: Vec<[f32; 4]> = Vec::new();
         let mut v10: Vec<[f32; 4]> = Vec::new();
 
+        let mut global_start_index = 0usize;
         for genome in genomes {
             for mode in &genome.modes {
-                v9.push([
-                    if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
-                    mode.embryocyte_release_timer,
-                    if mode.embryocyte_use_threshold {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                    mode.embryocyte_threshold_value as f32,
-                ]);
-                v10.push([
-                    if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
-                    mode.embryocyte_signal_channel as f32,
-                    mode.embryocyte_signal_value,
-                    0.0,
-                ]);
+                if mode.cell_type == crate::cell::CellType::Stemocyte as i32 {
+                    let remap = |outcome: i32| -> f32 {
+                        if outcome < 0 {
+                            outcome as f32
+                        } else if outcome as usize >= genome.modes.len() {
+                            -1.0
+                        } else {
+                            (global_start_index + outcome as usize) as f32
+                        }
+                    };
+                    v9.push([
+                        mode.stemocyte_signal_channel.clamp(8, 15) as f32,
+                        if mode.stemocyte_weak_first { 1.0 } else { 0.0 },
+                        remap(mode.stemocyte_outcomes[0]),
+                        remap(mode.stemocyte_outcomes[1]),
+                    ]);
+                    v10.push([
+                        remap(mode.stemocyte_outcomes[2]),
+                        remap(mode.stemocyte_outcomes[3]),
+                        remap(mode.stemocyte_outcomes[4]),
+                        0.0,
+                    ]);
+                } else {
+                    v9.push([
+                        if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
+                        mode.embryocyte_release_timer,
+                        if mode.embryocyte_use_threshold {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                        mode.embryocyte_threshold_value as f32,
+                    ]);
+                    v10.push([
+                        if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
+                        mode.embryocyte_signal_channel as f32,
+                        mode.embryocyte_signal_value,
+                        0.0,
+                    ]);
+                }
             }
+            global_start_index += genome.modes.len();
         }
 
         if !v9.is_empty() {
@@ -2158,22 +2186,46 @@ impl GpuTripleBufferSystem {
         let mut v10: Vec<[f32; 4]> = Vec::new();
 
         for mode in &genome.modes {
-            v9.push([
-                if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
-                mode.embryocyte_release_timer,
-                if mode.embryocyte_use_threshold {
-                    1.0
-                } else {
-                    0.0
-                },
-                mode.embryocyte_threshold_value as f32,
-            ]);
-            v10.push([
-                if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
-                mode.embryocyte_signal_channel as f32,
-                mode.embryocyte_signal_value,
-                0.0,
-            ]);
+            if mode.cell_type == crate::cell::CellType::Stemocyte as i32 {
+                let remap = |outcome: i32| -> f32 {
+                    if outcome < 0 {
+                        outcome as f32
+                    } else if outcome as usize >= genome.modes.len() {
+                        -1.0
+                    } else {
+                        (global_start_index + outcome as usize) as f32
+                    }
+                };
+                v9.push([
+                    mode.stemocyte_signal_channel.clamp(8, 15) as f32,
+                    if mode.stemocyte_weak_first { 1.0 } else { 0.0 },
+                    remap(mode.stemocyte_outcomes[0]),
+                    remap(mode.stemocyte_outcomes[1]),
+                ]);
+                v10.push([
+                    remap(mode.stemocyte_outcomes[2]),
+                    remap(mode.stemocyte_outcomes[3]),
+                    remap(mode.stemocyte_outcomes[4]),
+                    0.0,
+                ]);
+            } else {
+                v9.push([
+                    if mode.embryocyte_use_timer { 1.0 } else { 0.0 },
+                    mode.embryocyte_release_timer,
+                    if mode.embryocyte_use_threshold {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    mode.embryocyte_threshold_value as f32,
+                ]);
+                v10.push([
+                    if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
+                    mode.embryocyte_signal_channel as f32,
+                    mode.embryocyte_signal_value,
+                    0.0,
+                ]);
+            }
         }
 
         if !v9.is_empty() {

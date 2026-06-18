@@ -438,6 +438,12 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plumocyte_exposure_mult: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stemocyte_signal_channel: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stemocyte_weak_first: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stemocyte_outcomes: Option<[i32; 5]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -1011,6 +1017,16 @@ fn mode_to_serializable(
             mode.plumocyte_exposure_mult,
             default.plumocyte_exposure_mult,
         ),
+        stemocyte_signal_channel: diff_i32(
+            mode.stemocyte_signal_channel,
+            default.stemocyte_signal_channel,
+        ),
+        stemocyte_weak_first: diff_bool(mode.stemocyte_weak_first, default.stemocyte_weak_first),
+        stemocyte_outcomes: if mode.stemocyte_outcomes != default.stemocyte_outcomes {
+            Some(mode.stemocyte_outcomes)
+        } else {
+            None
+        },
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(
@@ -1167,6 +1183,9 @@ impl SerializableModeSettings {
             || self.plumocyte_drag_mult.is_some()
             || self.plumocyte_flow_coupling.is_some()
             || self.plumocyte_exposure_mult.is_some()
+            || self.stemocyte_signal_channel.is_some()
+            || self.stemocyte_weak_first.is_some()
+            || self.stemocyte_outcomes.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -1548,6 +1567,15 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.plumocyte_exposure_mult {
         mode.plumocyte_exposure_mult = v;
     }
+    if let Some(v) = ser.stemocyte_signal_channel {
+        mode.stemocyte_signal_channel = v;
+    }
+    if let Some(v) = ser.stemocyte_weak_first {
+        mode.stemocyte_weak_first = v;
+    }
+    if let Some(v) = ser.stemocyte_outcomes {
+        mode.stemocyte_outcomes = v;
+    }
     if let Some(v) = ser.embryocyte_use_timer {
         mode.embryocyte_use_timer = v;
     }
@@ -1852,5 +1880,21 @@ modified_modes:
 
         assert_eq!(loaded.modes.len(), 5);
         assert_eq!(loaded.modes[1].name, "Changed");
+    }
+
+    #[test]
+    fn stemocyte_settings_round_trip() {
+        let mut genome = Genome::new_with_mode_count(3);
+        genome.modes[0].cell_type = crate::cell::CellType::Stemocyte as i32;
+        genome.modes[0].stemocyte_signal_channel = 12;
+        genome.modes[0].stemocyte_weak_first = true;
+        genome.modes[0].stemocyte_outcomes = [1, -1, -2, 2, 0];
+
+        let yaml = genome.to_yaml_string().unwrap();
+        let loaded = Genome::from_yaml_string(&yaml).unwrap();
+
+        assert_eq!(loaded.modes[0].stemocyte_signal_channel, 12);
+        assert!(loaded.modes[0].stemocyte_weak_first);
+        assert_eq!(loaded.modes[0].stemocyte_outcomes, [1, -1, -2, 2, 0]);
     }
 }

@@ -637,6 +637,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //   Siphonocyte (17):param_a/b/c/d -> [aperture_radius, aperture_darkness, rim_brightness, nozzle_height]
         //                   goldberg_ridge_strength -> visual_params.w nozzle_embed_depth
         //   Plumocyte (18):  param_a/b/c/d -> [feather_length, feather_width, feather_brightness, stroke_speed]
+        //   Stemocyte (19):  param_a/b/c/d -> [core_radius, bud_radius, branch_brightness, pulse_speed]
         //   Photocyte (3):   goldberg -> [subdivision, ridge_width, meander, ridge_strength]
         //   Glueocyte (6):   goldberg -> [voro_scale, border_width, meander, border_dark]
         //   Oculocyte (7):   goldberg -> [pupil_size, iris_freq, iris_texture, pupil_dark]
@@ -652,7 +653,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Embryocyte=10, Vasculocyte=12) use goldberg fields.
             let use_params = (cell_type == 0u || cell_type == 2u || cell_type == 4u
                            || cell_type == 5u || cell_type == 11u || cell_type == 16u
-                           || cell_type == 17u || cell_type == 18u);
+                           || cell_type == 17u || cell_type == 18u || cell_type == 19u);
             if (cell_type == 17u) {
                 instance.type_data_0 = vec4<f32>(
                     visuals.param_a,

@@ -27,6 +27,15 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
+const PHOTOCYTE_BASELINE_BRIGHTNESS: f32 = 2.5;
+const MAX_SUN_BRIGHTNESS: f32 = 5.0;
+
+/// Scale photocyte nutrient production across the sun's 0-5 brightness range.
+/// Brightness 2.5 preserves the configured baseline rate.
+fn photocyte_production_multiplier(brightness: f32) -> f32 {
+    brightness.clamp(0.0, MAX_SUN_BRIGHTNESS) / PHOTOCYTE_BASELINE_BRIGHTNESS
+}
+
 /// Camera uniform for voxel rendering
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -1558,6 +1567,9 @@ impl GpuScene {
                 plumocyte_drag_mult: 0.7,
                 plumocyte_flow_coupling: 0.5,
                 plumocyte_exposure_mult: 0.25,
+                stemocyte_signal_channel: 8,
+                stemocyte_weak_first: false,
+                stemocyte_outcomes: [-1; 5],
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -7183,7 +7195,8 @@ impl GpuScene {
             light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
             light_field.set_mass_per_second(
-                editor_state.photocyte_mass_per_second * effective_sun_intensity,
+                editor_state.photocyte_mass_per_second
+                    * photocyte_production_multiplier(effective_sun_intensity),
             );
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
@@ -9179,5 +9192,35 @@ impl Scene for GpuScene {
 
     fn cell_count(&self) -> usize {
         self.current_cell_count as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::photocyte_production_multiplier;
+
+    #[test]
+    fn photocyte_production_is_centered_on_brightness_2_5() {
+        assert_eq!(photocyte_production_multiplier(0.0), 0.0);
+        assert_eq!(photocyte_production_multiplier(1.25), 0.5);
+        assert_eq!(photocyte_production_multiplier(2.5), 1.0);
+        assert_eq!(photocyte_production_multiplier(3.75), 1.5);
+        assert_eq!(photocyte_production_multiplier(5.0), 2.0);
+
+        let configured_mass_rate = 0.2;
+        assert_eq!(
+            configured_mass_rate * photocyte_production_multiplier(2.5) * 100.0,
+            20.0
+        );
+        assert_eq!(
+            configured_mass_rate * photocyte_production_multiplier(5.0) * 100.0,
+            40.0
+        );
+    }
+
+    #[test]
+    fn photocyte_production_stays_within_the_brightness_range() {
+        assert_eq!(photocyte_production_multiplier(-1.0), 0.0);
+        assert_eq!(photocyte_production_multiplier(6.0), 2.0);
     }
 }

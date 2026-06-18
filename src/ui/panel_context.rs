@@ -3149,7 +3149,7 @@ impl GenomeEditorState {
             1.0
         }
         fn default_photocyte_mass() -> f32 {
-            0.012
+            0.2
         }
         fn default_photocyte_threshold() -> f32 {
             0.05
@@ -3329,7 +3329,7 @@ impl GenomeEditorState {
             8.0, // caustic_scale
             1.0, // caustic_speed
             // Photocyte settings
-            0.012, // photocyte_mass_per_second (scaled by sun_intensity at sync)
+            0.2,  // photocyte_mass_per_second (20 nutrients/sec at brightness 2.5)
             0.05,  // photocyte_min_light_threshold
             // Luminocyte bloom
             true, // luminocyte_bloom_enabled

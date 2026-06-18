@@ -810,6 +810,7 @@ impl CellRenderer {
                     | CellType::Buoyocyte
                     | CellType::Devorocyte
                     | CellType::Luminocyte
+                    | CellType::Stemocyte
             ) {
                 // Types with dedicated param_a/b/c/d slots
                 data.data[0] = visuals.param_a;

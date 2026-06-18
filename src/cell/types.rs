@@ -461,6 +461,21 @@ impl CellTypeVisuals {
                 v.nucleus_scale = 0.45;
                 v.membrane_noise_speed = 0.25;
             }
+            CellType::Stemocyte => {
+                // Pluripotent rosette: a large undifferentiated core connected to
+                // five orbiting daughter-bud nuclei, one for each gradient band.
+                v.param_a = 0.26; // central core radius
+                v.param_b = 0.13; // daughter-bud radius
+                v.param_c = 0.9; // branch/rosette brightness
+                v.param_d = 0.65; // slow developmental pulse speed
+                v.specular_strength = 0.65;
+                v.specular_power = 72.0;
+                v.fresnel_strength = 0.55;
+                v.nucleus_scale = 0.52;
+                v.membrane_noise_scale = 4.0;
+                v.membrane_noise_strength = 0.06;
+                v.membrane_noise_speed = 0.65;
+            }
         }
         v
     }
@@ -618,11 +633,12 @@ pub enum CellType {
     Luminocyte = 16,
     Siphonocyte = 17,
     Plumocyte = 18,
+    Stemocyte = 19,
 }
 
 impl CellType {
     /// Number of registered cell types. Update when adding new types.
-    pub const COUNT: usize = 19;
+    pub const COUNT: usize = 20;
 
     /// Maximum number of cell types supported by GPU buffers.
     pub const MAX_TYPES: usize = 30;
@@ -649,6 +665,7 @@ impl CellType {
             CellType::Luminocyte,
             CellType::Siphonocyte,
             CellType::Plumocyte,
+            CellType::Stemocyte,
         ]
     }
 
@@ -679,6 +696,7 @@ impl CellType {
             CellType::Luminocyte => "Luminocyte",
             CellType::Siphonocyte => "Siphonocyte",
             CellType::Plumocyte => "Plumocyte",
+            CellType::Stemocyte => "Stemocyte",
         }
     }
 
@@ -704,6 +722,7 @@ impl CellType {
             "Luminocyte",
             "Siphonocyte",
             "Plumocyte",
+            "Stemocyte",
         ]
     }
 
@@ -729,6 +748,7 @@ impl CellType {
             16 => Some(CellType::Luminocyte),
             17 => Some(CellType::Siphonocyte),
             18 => Some(CellType::Plumocyte),
+            19 => Some(CellType::Stemocyte),
             _ => None,
         }
     }
@@ -850,6 +870,11 @@ impl CellType {
                 "A feathery passive coupling cell. Increases drag and medium coupling \
                  so currents and falls affect the body more, without generating thrust \
                  in still air or water."
+            }
+            CellType::Stemocyte => {
+                "A developmental cell that reads one analog regulation gradient at the \
+                 end of its split timer. Five fixed signal bands can change mode in \
+                 place, trigger apoptosis, or leave the cell unchanged so it splits."
             }
         }
     }
@@ -1069,18 +1094,20 @@ impl CellType {
                 applies_muscle_contraction: 0,
                 _padding: [0; 7],
             },
-            CellType::Siphonocyte | CellType::Plumocyte => GpuCellTypeBehaviorFlags {
-                ignores_split_interval: 0,
-                applies_swim_force: 0,
-                uses_texture_atlas: 0,
-                has_procedural_tail: 0,
-                gains_mass_from_light: 0,
-                is_storage_cell: 0,
-                applies_buoyancy: 0,
-                applies_cilia_force: 0,
-                applies_muscle_contraction: 0,
-                _padding: [0; 7],
-            },
+            CellType::Siphonocyte | CellType::Plumocyte | CellType::Stemocyte => {
+                GpuCellTypeBehaviorFlags {
+                    ignores_split_interval: 0,
+                    applies_swim_force: 0,
+                    uses_texture_atlas: 0,
+                    has_procedural_tail: 0,
+                    gains_mass_from_light: 0,
+                    is_storage_cell: 0,
+                    applies_buoyancy: 0,
+                    applies_cilia_force: 0,
+                    applies_muscle_contraction: 0,
+                    _padding: [0; 7],
+                }
+            }
         }
     }
 
@@ -1216,6 +1243,15 @@ impl CellType {
                 mode.plumocyte_drag_mult = 0.7;
                 mode.plumocyte_flow_coupling = 0.5;
                 mode.plumocyte_exposure_mult = 0.25;
+            }
+            CellType::Stemocyte => {
+                mode.nutrient_priority = 1.0;
+                mode.max_cell_size = 1.8;
+                mode.split_mass = 1.5;
+                mode.color = glam::Vec3::new(0.52, 0.88, 0.78);
+                mode.stemocyte_signal_channel = 8;
+                mode.stemocyte_weak_first = false;
+                mode.stemocyte_outcomes = [-1; 5];
             }
             _ => {}
         }

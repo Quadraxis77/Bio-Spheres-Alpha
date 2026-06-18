@@ -8,9 +8,7 @@ use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 
 use crate::ui::panel::Panel;
-use crate::ui::panel_context::{
-    CaveAppearanceVisualSettings, PanelContext, SceneModeRequest,
-};
+use crate::ui::panel_context::{CaveAppearanceVisualSettings, PanelContext, SceneModeRequest};
 use crate::ui::types::GlobalUiState;
 use crate::ui::types::SimulationMode;
 use crate::ui::ui_system::{
@@ -3933,7 +3931,11 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 "Rock Colors"
             });
             ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected { "Basalt:" } else { "Dark:" });
+                ui.label(if lava_tubes_selected {
+                    "Basalt:"
+                } else {
+                    "Dark:"
+                });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_dark_color)
                     .on_hover_text(if lava_tubes_selected {
@@ -3944,7 +3946,11 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .changed();
             });
             ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected { "Glass:" } else { "Cool:" });
+                ui.label(if lava_tubes_selected {
+                    "Glass:"
+                } else {
+                    "Cool:"
+                });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_cool_color)
                     .on_hover_text(if lava_tubes_selected {
@@ -3955,7 +3961,11 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .changed();
             });
             ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected { "Iron:" } else { "Warm:" });
+                ui.label(if lava_tubes_selected {
+                    "Iron:"
+                } else {
+                    "Warm:"
+                });
                 params_changed |= ui
                     .color_edit_button_rgb(&mut cave_rock_warm_color)
                     .on_hover_text(if lava_tubes_selected {
@@ -3997,12 +4007,11 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 params_changed |= ui
                     .add(egui::Slider::new(&mut cave_rock_layer_scale, 0.0..=0.2))
                     .changed();
-                ui.label("Warp:")
-                    .on_hover_text(if lava_tubes_selected {
-                        "How much procedural noise bends and sags the lava flow"
-                    } else {
-                        "How much procedural noise bends the sediment bands"
-                    });
+                ui.label("Warp:").on_hover_text(if lava_tubes_selected {
+                    "How much procedural noise bends and sags the lava flow"
+                } else {
+                    "How much procedural noise bends the sediment bands"
+                });
                 params_changed |= ui
                     .add(egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
                     .changed();
@@ -4049,10 +4058,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Brightness variation from the triplanar rock grain"
                 });
                 params_changed |= ui
-                    .add(egui::Slider::new(
-                        &mut cave_rock_grain_strength,
-                        0.0..=0.25,
-                    ))
+                    .add(egui::Slider::new(&mut cave_rock_grain_strength, 0.0..=0.25))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Ash Deposits:"
@@ -4065,10 +4071,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Large mottled light and dark patch contrast"
                 });
                 params_changed |= ui
-                    .add(egui::Slider::new(
-                        &mut cave_rock_patch_contrast,
-                        0.0..=0.5,
-                    ))
+                    .add(egui::Slider::new(&mut cave_rock_patch_contrast, 0.0..=0.5))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Seam Darkness:"
@@ -4081,10 +4084,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Darkness of narrow sediment seams"
                 });
                 params_changed |= ui
-                    .add(egui::Slider::new(
-                        &mut cave_rock_seam_darkening,
-                        0.0..=1.0,
-                    ))
+                    .add(egui::Slider::new(&mut cave_rock_seam_darkening, 0.0..=1.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Shelf Scuffs:"
@@ -4140,10 +4140,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                         "Stable shading depth for the rock grain and strata. This adds surface relief without sliding the pattern toward the camera"
                     });
                 params_changed |= ui
-                    .add(egui::Slider::new(
-                        &mut cave_rock_parallax_depth,
-                        0.0..=4.0,
-                    ))
+                    .add(egui::Slider::new(&mut cave_rock_parallax_depth, 0.0..=4.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Plate Size:"
@@ -4300,10 +4297,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Lower smoothstep edge for pale fine-line coverage"
                 });
                 params_changed |= ui
-                    .add(egui::Slider::new(
-                        &mut cave_rock_fine_band_low,
-                        -1.0..=1.0,
-                    ))
+                    .add(egui::Slider::new(&mut cave_rock_fine_band_low, -1.0..=1.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Blister High:"
@@ -4316,10 +4310,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     "Upper smoothstep edge for pale fine-line coverage"
                 });
                 params_changed |= ui
-                    .add(egui::Slider::new(
-                        &mut cave_rock_fine_band_high,
-                        -1.0..=1.0,
-                    ))
+                    .add(egui::Slider::new(&mut cave_rock_fine_band_high, -1.0..=1.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Crack Thin:"
@@ -8383,6 +8374,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     plumocyte_drag_mult: 0.7,
                     plumocyte_flow_coupling: 0.5,
                     plumocyte_exposure_mult: 0.25,
+                    stemocyte_signal_channel: 8,
+                    stemocyte_weak_first: false,
+                    stemocyte_outcomes: [-1; 5],
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -8647,6 +8641,11 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     mode.signal_child_b_mode_below = remap(mode.signal_child_b_mode_below);
                     if mode.mode_switch_target >= 0 {
                         mode.mode_switch_target = remap(mode.mode_switch_target);
+                    }
+                    for outcome in &mut mode.stemocyte_outcomes {
+                        if *outcome >= 0 {
+                            *outcome = remap(*outcome);
+                        }
                     }
                 }
 
@@ -9270,6 +9269,89 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::Slider::new(&mut mode.plumocyte_exposure_mult, 0.0..=2.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.plumocyte_exposure_mult).speed(0.01).range(0.0..=2.0));
                     });
+                });
+            } else if mode.cell_type == 19 { // Stemocyte (cell_type == 19)
+                group_container(ui, "Stemocyte Differentiation", egui::Color32::from_rgb(170, 120, 220), |ui| {
+                    ui.label("At the end of the split timer, read one developmental gradient channel and apply exactly one fixed signal-band outcome.");
+                    ui.separator();
+
+                    ui.label("Developmental Channel:")
+                        .on_hover_text("Stemocytes listen to exactly one regulation/developmental channel (8-15).");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        mode.stemocyte_signal_channel = mode.stemocyte_signal_channel.clamp(8, 15);
+                        ui.add(egui::Slider::new(&mut mode.stemocyte_signal_channel, 8..=15).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.stemocyte_signal_channel).speed(0.1).range(8..=15));
+                    });
+
+                    egui::ComboBox::from_id_salt("stemocyte_gradient_direction")
+                        .selected_text(if mode.stemocyte_weak_first {
+                            "Weak Signal First"
+                        } else {
+                            "Strong Signal First"
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut mode.stemocyte_weak_first, false, "Strong Signal First");
+                            ui.selectable_value(&mut mode.stemocyte_weak_first, true, "Weak Signal First");
+                        });
+
+                    ui.separator();
+                    for band_index in 0..5 {
+                        let low = if mode.stemocyte_weak_first {
+                            band_index * 20
+                        } else {
+                            (4 - band_index) * 20
+                        };
+                        let high = low + 20;
+                        let outcome = &mut mode.stemocyte_outcomes[band_index];
+                        let selected = if *outcome == -2 {
+                            "Enter Apoptosis".to_string()
+                        } else if *outcome == -1 {
+                            "Remain Stemocyte".to_string()
+                        } else {
+                            mode_info_for_dropdowns
+                                .get(*outcome as usize)
+                                .map(|(name, _)| format!("Change to {name}"))
+                                .unwrap_or_else(|| "Remain Stemocyte".to_string())
+                        };
+
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{low}-{high}%"));
+                            egui::ComboBox::from_id_salt(("stemocyte_outcome", band_index))
+                                .selected_text(selected)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(outcome, -1, "Remain Stemocyte");
+                                    ui.selectable_value(outcome, -2, "Enter Apoptosis");
+                                    ui.separator();
+                                    for (target_index, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
+                                        ui.horizontal(|ui| {
+                                            let (rect, _) = ui.allocate_exact_size(
+                                                egui::vec2(10.0, 10.0),
+                                                egui::Sense::hover(),
+                                            );
+                                            ui.painter().circle_filled(
+                                                rect.center(),
+                                                5.0,
+                                                egui::Color32::from_rgb(
+                                                    (color.x * 255.0) as u8,
+                                                    (color.y * 255.0) as u8,
+                                                    (color.z * 255.0) as u8,
+                                                ),
+                                            );
+                                            ui.selectable_value(
+                                                outcome,
+                                                target_index as i32,
+                                                format!("Change to {name}"),
+                                            );
+                                        });
+                                    }
+                                });
+                        });
+                    }
+
+                    ui.small("Signal strength is interpreted as 0-2047 internally and normalized to 0-100% for these bands.");
                 });
             } else if mode.cell_type == 4 { // Lipocyte (cell_type == 4)
                 group_container(ui, "Lipocyte Functions", egui::Color32::from_rgb(220, 180, 100), |ui| {
@@ -11289,6 +11371,15 @@ fn sync_mode_changes_to_others(
         if updated.mode_switch_target != snapshot.mode_switch_target {
             other.mode_switch_target = updated.mode_switch_target;
         }
+        if updated.stemocyte_signal_channel != snapshot.stemocyte_signal_channel {
+            other.stemocyte_signal_channel = updated.stemocyte_signal_channel;
+        }
+        if updated.stemocyte_weak_first != snapshot.stemocyte_weak_first {
+            other.stemocyte_weak_first = updated.stemocyte_weak_first;
+        }
+        if updated.stemocyte_outcomes != snapshot.stemocyte_outcomes {
+            other.stemocyte_outcomes = updated.stemocyte_outcomes;
+        }
         if updated.mode_switch_invert != snapshot.mode_switch_invert {
             other.mode_switch_invert = updated.mode_switch_invert;
         }
@@ -12873,6 +12964,56 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                     ui.style_mut().spacing.slider_width = slider_width;
                     ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=8.0).show_value(false));
                     ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.05).range(0.0..=8.0));
+                });
+            }
+
+            // Stemocyte: fivefold pluripotent rosette
+            if cell_types.get(selected_idx) == Some(&CellType::Stemocyte) {
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Pluripotent Rosette").strong());
+                ui.label("A central undifferentiated core branches toward five daughter buds, visually echoing the five gradient outcomes.");
+                ui.add_space(4.0);
+
+                ui.label("Core Radius:")
+                    .on_hover_text("Size of the bright central pluripotent nucleus.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.16..=0.38).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.005).range(0.16..=0.38));
+                });
+
+                ui.label("Daughter Bud Size:")
+                    .on_hover_text("Size of the five potential daughter-state nuclei around the core.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.07..=0.22).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.004).range(0.07..=0.22));
+                });
+
+                ui.label("Branch Brightness:")
+                    .on_hover_text("Brightness of the five developmental paths connecting the core to its possible outcomes.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.2..=1.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.2..=1.5));
+                });
+
+                ui.label("Developmental Pulse:")
+                    .on_hover_text("Speed of the slow pulse and rotation through the five potential states.");
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                    ui.style_mut().spacing.slider_width = slider_width;
+                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=2.5).show_value(false));
+                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.02).range(0.0..=2.5));
                 });
             }
 

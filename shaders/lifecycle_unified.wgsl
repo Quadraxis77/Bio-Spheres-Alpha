@@ -423,6 +423,52 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
+    // === STEMOCYTE GRADIENT DIFFERENTIATION ===
+    // Stemocytes evaluate one developmental channel when their split timer completes.
+    // v9: [channel, weak_first, outcome_0, outcome_1]
+    // v10: [outcome_2, outcome_3, outcome_4, 0]
+    // Outcomes: -2 = apoptosis, -1 = remain Stemocyte (continue to normal split),
+    //           >= 0 = absolute target mode index.
+    if (cell_type == 19u) {
+        let age = params.current_time - birth_times[cell_idx];
+        if (age >= split_intervals[cell_idx]) {
+            let stem_v9 = embryocyte_mode_v9[mode_idx];
+            let stem_v10 = embryocyte_mode_v10[mode_idx];
+            let signal_ch = clamp(u32(stem_v9.x), 8u, 15u);
+            let raw_signal = signal_flags_read[cell_idx * 16u + signal_ch];
+            let normalized_signal = clamp(f32(raw_signal & 0x7FFu) / 2047.0, 0.0, 1.0);
+            let weak_band = min(u32(normalized_signal * 5.0), 4u);
+            let band = select(4u - weak_band, weak_band, stem_v9.y > 0.5);
+
+            var outcome = -1.0;
+            if (band == 0u) { outcome = stem_v9.z; }
+            else if (band == 1u) { outcome = stem_v9.w; }
+            else if (band == 2u) { outcome = stem_v10.x; }
+            else if (band == 3u) { outcome = stem_v10.y; }
+            else { outcome = stem_v10.z; }
+
+            if (outcome < -1.5) {
+                death_flags[cell_idx] = 1u;
+                division_flags[cell_idx] = 0u;
+                push_free_slot(cell_idx);
+                atomicSub(&cell_count_buffer[1], 1u);
+                let pos = positions_out[cell_idx].xyz;
+                positions_out[cell_idx] = vec4<f32>(pos, 0.0);
+                velocities_out[cell_idx] = vec4<f32>(0.0);
+                atomicStore(&nutrients_buffer[cell_idx], 0i);
+                atomicStore(&embryocyte_reserves[cell_idx], 0u);
+                return;
+            }
+
+            if (outcome >= 0.0) {
+                division_flags[cell_idx] = 3u;
+                division_slot_assignments[cell_idx] = u32(outcome);
+                return;
+            }
+            // -1 remains a Stemocyte and proceeds through normal split checks below.
+        }
+    }
+
     // === EMBRYOCYTE RESERVE BURN + RELEASE TRIGGER ===
     // Embryocytes never divide normally. When free (no active adhesions) they burn
     // their reserve at 10 units/sec. When attached, AND-logic release triggers fire

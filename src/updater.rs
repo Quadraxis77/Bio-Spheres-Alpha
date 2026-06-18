@@ -129,6 +129,19 @@ pub fn migrate_config_files() {
                 Err(e) => log::warn!("Config migration failed for fluid nutrient density: {}", e),
             }
         }
+
+        if *filename == "light_settings.ron" {
+            match migrate_legacy_photocyte_production(&path) {
+                Ok(true) => {
+                    log::info!("Config migration: increased legacy photocyte production rate")
+                }
+                Ok(false) => {}
+                Err(e) => log::warn!(
+                    "Config migration failed for photocyte production rate: {}",
+                    e
+                ),
+            }
+        }
     }
 }
 
@@ -292,6 +305,22 @@ fn migrate_legacy_fluid_nutrient_density(path: &Path) -> Result<bool, String> {
     }
 
     let updated = text.replacen("nutrient_density: 0.2", "nutrient_density: 0.35", 1);
+    std::fs::write(path, updated).map_err(|e| format!("write error: {}", e))?;
+    Ok(true)
+}
+
+fn migrate_legacy_photocyte_production(path: &Path) -> Result<bool, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
+
+    if !text.contains("photocyte_mass_per_second: 0.012") {
+        return Ok(false);
+    }
+
+    let updated = text.replacen(
+        "photocyte_mass_per_second: 0.012",
+        "photocyte_mass_per_second: 0.2",
+        1,
+    );
     std::fs::write(path, updated).map_err(|e| format!("write error: {}", e))?;
     Ok(true)
 }

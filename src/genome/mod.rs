@@ -353,10 +353,16 @@ pub struct ModeSettings {
     pub siphon_mode: i32, // 0 = impulse, 1 = signal impulse, 2 = signal intake, 3 = signal expulsion
 
     // Plumocyte settings
-    pub plumocyte_extension: f32,     // Passive extension amount, 0.0 retracted to 1.0 extended
-    pub plumocyte_drag_mult: f32,     // Extra drag in still or moving media
+    pub plumocyte_extension: f32, // Passive extension amount, 0.0 retracted to 1.0 extended
+    pub plumocyte_drag_mult: f32, // Extra drag in still or moving media
     pub plumocyte_flow_coupling: f32, // Coupling strength toward local medium/current motion
     pub plumocyte_exposure_mult: f32, // Weak heat/water exposure multiplier
+
+    // Stemocyte settings
+    // Outcomes: -2 = apoptosis, -1 = remain Stemocyte and split normally, >= 0 = target mode.
+    pub stemocyte_signal_channel: i32, // Developmental channel to read (8-15)
+    pub stemocyte_weak_first: bool,    // False = strong signal first, true = weak signal first
+    pub stemocyte_outcomes: [i32; 5],  // Five fixed 20% signal bands in presentation order
 
     // Child settings
     pub child_a: ChildSettings,
@@ -377,6 +383,48 @@ impl ModeSettings {
     pub fn get_split_mass(&self, _cell_id: u32, _tick: u64, _rng_seed: u64) -> f32 {
         // For now, return the fixed value. In the future, this could be randomized
         self.split_mass
+    }
+
+    /// Select the configured Stemocyte outcome for an existing 0-2047 signal value.
+    pub fn stemocyte_outcome_for_signal(&self, signal_value: f32) -> i32 {
+        let normalized = (signal_value / 2047.0).clamp(0.0, 1.0);
+        let weak_band = ((normalized * 5.0) as usize).min(4);
+        let band = if self.stemocyte_weak_first {
+            weak_band
+        } else {
+            4 - weak_band
+        };
+        self.stemocyte_outcomes[band]
+    }
+}
+
+#[cfg(test)]
+mod stemocyte_tests {
+    use super::ModeSettings;
+
+    #[test]
+    fn stemocyte_bands_follow_selected_direction() {
+        let mut mode = ModeSettings::default();
+        mode.stemocyte_outcomes = [10, 11, 12, 13, 14];
+
+        assert_eq!(mode.stemocyte_outcome_for_signal(2047.0), 10);
+        assert_eq!(mode.stemocyte_outcome_for_signal(0.0), 14);
+
+        mode.stemocyte_weak_first = true;
+        assert_eq!(mode.stemocyte_outcome_for_signal(0.0), 10);
+        assert_eq!(mode.stemocyte_outcome_for_signal(2047.0), 14);
+    }
+
+    #[test]
+    fn stemocyte_mode_targets_follow_mode_edits() {
+        let mut genome = super::Genome::new_with_mode_count(3);
+        genome.modes[0].stemocyte_outcomes = [1, 2, -1, -2, 0];
+
+        assert_eq!(genome.insert_mode_after(0), Some(1));
+        assert_eq!(genome.modes[0].stemocyte_outcomes, [2, 3, -1, -2, 0]);
+
+        genome.remove_modes_except_initial(&[2]);
+        assert_eq!(genome.modes[0].stemocyte_outcomes, [-1, 2, -1, -2, 0]);
     }
 }
 
@@ -523,6 +571,9 @@ impl Default for ModeSettings {
             plumocyte_drag_mult: 0.7,
             plumocyte_flow_coupling: 0.5,
             plumocyte_exposure_mult: 0.25,
+            stemocyte_signal_channel: 8,
+            stemocyte_weak_first: false,
+            stemocyte_outcomes: [-1; 5],
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),
@@ -784,6 +835,11 @@ impl Genome {
             if mode.mode_switch_target >= 0 {
                 mode.mode_switch_target = remap(mode.mode_switch_target);
             }
+            for outcome in &mut mode.stemocyte_outcomes {
+                if *outcome >= 0 {
+                    *outcome = remap(*outcome);
+                }
+            }
         }
     }
 
@@ -914,6 +970,12 @@ impl Genome {
                 mode.mode_switch_signal_threshold = defaults.mode_switch_signal_threshold;
                 mode.mode_switch_target = defaults.mode_switch_target;
                 mode.mode_switch_invert = defaults.mode_switch_invert;
+            }
+
+            for outcome in &mut mode.stemocyte_outcomes {
+                if *outcome >= 0 {
+                    *outcome = child_remap(*outcome).unwrap_or(-1);
+                }
             }
         }
 
@@ -1842,6 +1904,11 @@ impl Genome {
             mode.mode_a_after_splits = clamp_mode(mode.mode_a_after_splits);
             mode.mode_b_after_splits = clamp_mode(mode.mode_b_after_splits);
             mode.mode_switch_target = clamp_mode(mode.mode_switch_target);
+            for outcome in &mut mode.stemocyte_outcomes {
+                if *outcome >= 0 {
+                    *outcome = clamp_mode(*outcome);
+                }
+            }
 
             // Blend color from both parents at shared positions; tail modes keep their own color
             if have_a && have_b {

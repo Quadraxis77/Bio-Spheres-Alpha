@@ -572,6 +572,60 @@ fn internals_luminocyte(p: vec3<f32>, r: f32, current_time: f32, type_data_0: ve
     return vec3<f32>(light, color_shift * rings * ring_zone, 0.0);
 }
 
+fn distance_to_segment_3d(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>) -> f32 {
+    let ab = b - a;
+    let t = clamp(dot(p - a, ab) / max(dot(ab, ab), 0.0001), 0.0, 1.0);
+    return length(p - (a + ab * t));
+}
+
+// Type 19: Stemocyte - pluripotent rosette.
+// A large, calm central nucleus is linked to five daughter-bud nuclei. The fivefold
+// symmetry mirrors the five differentiation bands and reads as "many possible futures"
+// before the cell commits to one specialized mode.
+// type_data_0: x=core_radius, y=bud_radius, z=branch_brightness, w=pulse_speed
+fn internals_stemocyte(p: vec3<f32>, r: f32, current_time: f32, type_data_0: vec4<f32>) -> vec3<f32> {
+    let core_radius = clamp(type_data_0.x, 0.16, 0.38);
+    let bud_radius = clamp(type_data_0.y, 0.07, 0.22);
+    let brightness = clamp(type_data_0.z, 0.2, 1.5);
+    let pulse_speed = clamp(type_data_0.w, 0.0, 2.5);
+    let pulse = 0.82 + 0.18 * sin(current_time * pulse_speed * 6.2831853);
+
+    let core_dist = length(p);
+    let core = smoothstep(core_radius + 0.055, core_radius - 0.055, core_dist);
+    let core_halo = smoothstep(core_radius + 0.20, core_radius, core_dist)
+                  * (1.0 - smoothstep(core_radius - 0.04, core_radius + 0.02, core_dist));
+
+    var buds = 0.0;
+    var branches = 0.0;
+    let orbit_radius = 0.57;
+    let rotation = current_time * pulse_speed * 0.12;
+    for (var i = 0u; i < 5u; i++) {
+        let angle = f32(i) * 1.25663706 + rotation;
+        let depth = sin(angle * 2.0 + 0.7) * 0.10;
+        let center = vec3<f32>(cos(angle) * orbit_radius, sin(angle) * orbit_radius, depth);
+        let bud_dist = length(p - center);
+        buds = max(buds, smoothstep(bud_radius + 0.035, bud_radius - 0.035, bud_dist));
+
+        let branch_dist = distance_to_segment_3d(p, vec3<f32>(0.0), center * 0.90);
+        let branch = smoothstep(0.055, 0.018, branch_dist)
+                   * smoothstep(core_radius * 0.55, core_radius + 0.08, length(p));
+        branches = max(branches, branch);
+    }
+
+    let cytoplasm_haze = (1.0 - smoothstep(0.18, 0.88, r)) * 0.10;
+    let pattern = clamp(
+        core * pulse * 1.05
+        + core_halo * 0.38
+        + buds * (0.72 + pulse * 0.18)
+        + branches * brightness * 0.62
+        + cytoplasm_haze,
+        0.0,
+        1.35,
+    );
+    let color_shift = core * 0.42 + buds * 0.30 + branches * 0.18 + core_halo * 0.12;
+    return vec3<f32>(pattern, color_shift, branches);
+}
+
 // Type 14: Cognocyte - Signal-processing cell with a pulsing computational core
 // and three pairs of radiating signal traces (one per axis).
 // The traces pulse with 120-degree phase offsets suggesting active signal routing.
@@ -889,6 +943,7 @@ fn get_internals(cell_type: u32, p: vec3<f32>, r: f32, cell_index: u32, type_dat
         case 16u: { return internals_luminocyte(p, r, camera.time, type_data_0); }
         case 17u: { return internals_siphonocyte(p, r, type_data_0); }
         case 18u: { return vec3<f32>(0.0); }
+        case 19u: { return internals_stemocyte(p, r, camera.time, type_data_0); }
         default: { return internals_test(p, r, type_data_0); }
     }
 }
@@ -996,6 +1051,12 @@ fn get_membrane_params(cell_type: u32) -> MembraneParams {
             m.opacity = 0.30;
             m.rim_power = 1.7;
             m.color_darken = 0.05;
+        }
+        case 19u: { // Stemocyte - clear, pearlescent shell revealing the rosette
+            m.thickness = 0.045;
+            m.opacity = 0.34;
+            m.rim_power = 1.8;
+            m.color_darken = 0.08;
         }
         default: {
             m.thickness = 0.06;
@@ -1187,6 +1248,26 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
 
     // ====================================================================
+    // Stemocyte (type 19): pearlescent fivefold developmental halo
+    // ====================================================================
+    if (cell_type == 19u) {
+        let surf_local = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+        let angle = atan2(surf_local.y, surf_local.x);
+        let latitude = abs(surf_local.z);
+        let fivefold = pow(0.5 + 0.5 * cos(angle * 5.0 + camera.time * in.type_data_0.w * 0.35), 7.0);
+        let petal_band = fivefold * (1.0 - smoothstep(0.72, 0.98, latitude));
+        let center_pearl = pow(max(surf_local.z, 0.0), 6.0);
+        let pulse = 0.72 + 0.28 * sin(camera.time * in.type_data_0.w * 6.2831853);
+
+        let pearl_cool = mix(base_color, vec3<f32>(0.72, 0.94, 1.0), 0.58);
+        let pearl_warm = mix(base_color, vec3<f32>(1.0, 0.76, 0.94), 0.42);
+        let petal_color = mix(pearl_cool, pearl_warm, 0.5 + 0.5 * sin(angle * 5.0));
+        interior_result = mix(interior_result, petal_color, petal_band * 0.36 * pulse);
+        interior_result += vec3<f32>(0.16, 0.20, 0.24) * center_pearl * pulse;
+    }
+
+    // ====================================================================
     // Myocyte (type 9): Sarcomere striations + longitudinal myofibril bundles (LOD >= 1)
     //
     // Two overlapping patterns produce the classic striated-muscle appearance:
@@ -1345,6 +1426,16 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     // Membrane normal (no per-type perturbation currently)
     var perturbed_normal = world_normal_front;
+
+    if (cell_type == 19u) {
+        let stem_local = normalize(quat_rotate_inverse(in.rotation,
+            in.cam_right * front_pos.x + in.cam_up * front_pos.y + in.to_camera * front_pos.z));
+        let stem_angle = atan2(stem_local.y, stem_local.x);
+        let ridge_wave = sin(stem_angle * 5.0 + camera.time * in.type_data_0.w * 0.35);
+        let tangent_local = normalize(vec3<f32>(-stem_local.y, stem_local.x, 0.001));
+        let tangent_world = quat_rotate(in.rotation, tangent_local);
+        perturbed_normal = normalize(perturbed_normal + tangent_world * ridge_wave * 0.055);
+    }
 
     // Ciliocyte (type 8): Perturb membrane normal to create rolling ridge highlights
     if (cell_type == 8u) {

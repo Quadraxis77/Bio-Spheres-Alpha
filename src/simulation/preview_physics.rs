@@ -1990,6 +1990,47 @@ pub fn physics_step_with_genome(
     let max_cells = state.capacity;
     let rng_seed = 12345;
 
+    // Stemocyte cycle completion: read one developmental gradient and either
+    // differentiate in place, enter apoptosis, or remain a Stemocyte so the
+    // normal division path below can run.
+    let mut stemocyte_deaths = Vec::new();
+    let mut stemocyte_switches = Vec::new();
+    for i in 0..state.cell_count {
+        let mode_index = state.mode_indices[i];
+        let Some(mode) = genome.modes.get(mode_index) else {
+            continue;
+        };
+        if mode.cell_type != crate::cell::CellType::Stemocyte as i32 {
+            continue;
+        }
+        let age = current_time - state.birth_times[i];
+        if age < state.split_intervals[i] {
+            continue;
+        }
+
+        let channel = mode.stemocyte_signal_channel.clamp(8, 15) as usize;
+        let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
+        match mode.stemocyte_outcome_for_signal(signal_value) {
+            -2 => stemocyte_deaths.push(i),
+            target if target >= 0 && (target as usize) < genome.modes.len() => {
+                stemocyte_switches.push((i, target as usize));
+            }
+            _ => {}
+        }
+    }
+    for (cell_index, target) in stemocyte_switches {
+        state.mode_indices[cell_index] = target;
+        state.split_counts[cell_index] = 0;
+        state.birth_times[cell_index] = current_time;
+        let new_mode = &genome.modes[target];
+        state.split_intervals[cell_index] = new_mode.split_interval;
+        state.split_nutrient_thresholds[cell_index] = (new_mode.split_mass - 1.0) * 100.0;
+        state.stiffnesses[cell_index] = new_mode.membrane_stiffness;
+    }
+    if !stemocyte_deaths.is_empty() {
+        state.remove_cells(&stemocyte_deaths);
+    }
+
     // Signal-conditional apoptosis: kill cells whose signal meets the apoptosis condition
     let mut apoptosis_cells: Vec<usize> = Vec::new();
     for i in 0..state.cell_count {

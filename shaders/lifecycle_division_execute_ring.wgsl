@@ -595,6 +595,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (cell_idx >= cell_count) {
         return;
     }
+
+    // === STEMOCYTE IN-PLACE DIFFERENTIATION (division_flags == 3u) ===
+    // The scan pass stores the selected absolute target mode in slot_assignments.
+    if (division_flags[cell_idx] == 3u) {
+        let target_mode = division_slot_assignments[cell_idx];
+        if (target_mode < arrayLength(&mode_cell_types)) {
+            let target_v0 = mode_properties_v0[target_mode];
+            let target_v1 = mode_properties_v1[target_mode];
+            let target_v2 = mode_properties_v2[target_mode];
+            mode_indices[cell_idx] = target_mode;
+            cell_types[cell_idx] = mode_cell_types[target_mode];
+            birth_times[cell_idx] = params.current_time;
+            split_counts[cell_idx] = 0u;
+            split_intervals[cell_idx] = target_v0.w;
+            split_nutrient_thresholds[cell_idx] = (target_v1.x - 1.0) * 100.0;
+            nutrient_gain_rates[cell_idx] = target_v0.x;
+            max_cell_sizes[cell_idx] = target_v0.y;
+            stiffnesses[cell_idx] = target_v0.z;
+            max_splits[cell_idx] = select(u32(target_v2.x), 0xFFFFFFFFu, target_v2.x < 0.0);
+        }
+        division_flags[cell_idx] = 0u;
+        return;
+    }
     
     // === EMBRYOCYTE RELEASE (division_flags == 2u) ===
     // Drop all active adhesions. The cell remains alive; reserve burn begins next frame.

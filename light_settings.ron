@@ -28,7 +28,7 @@
     caustic_intensity: 1.0,
     caustic_scale: 0.1,
     caustic_speed: 1.0,
-    photocyte_mass_per_second: 0.012,
+    photocyte_mass_per_second: 0.2,
     photocyte_min_light_threshold: 0.05,
     luminocyte_bloom_enabled: true,
     luminocyte_bloom_radius: 0.02,
