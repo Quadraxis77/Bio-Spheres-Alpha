@@ -68,6 +68,52 @@ pub struct GpuCellInspector {
 
     /// Extraction in progress flag
     extraction_in_progress: bool,
+
+    /// Previous nutrient sample used to calculate a live net rate for any cell.
+    last_nutrient_sample: Option<NutrientRateSample>,
+
+    /// Smoothed live nutrient rate shown by the inspector.
+    smoothed_nutrient_rate: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NutrientRateSample {
+    cell_index: u32,
+    simulation_age: f32,
+    nutrients: f32,
+}
+
+fn update_live_nutrient_rate(
+    last_sample: &mut Option<NutrientRateSample>,
+    smoothed_rate: &mut Option<f32>,
+    cell_index: u32,
+    data: &mut InspectedCellData,
+) {
+    let current = NutrientRateSample {
+        cell_index,
+        simulation_age: data.age,
+        nutrients: data.nutrients,
+    };
+
+    if let Some(previous) = *last_sample {
+        let dt = current.simulation_age - previous.simulation_age;
+        if previous.cell_index == cell_index && dt > 1e-4 {
+            let measured_rate = (current.nutrients - previous.nutrients) / dt;
+            let filtered_rate = match *smoothed_rate {
+                Some(old_rate) => old_rate + (measured_rate - old_rate) * 0.35,
+                None => measured_rate,
+            };
+            *smoothed_rate = Some(filtered_rate);
+            data.nutrient_gain_rate = filtered_rate;
+        } else {
+            *smoothed_rate = None;
+            data.nutrient_gain_rate = 0.0;
+        }
+    } else {
+        data.nutrient_gain_rate = 0.0;
+    }
+
+    *last_sample = Some(current);
 }
 
 impl GpuCellInspector {
@@ -105,6 +151,8 @@ impl GpuCellInspector {
             current_extraction: None,
             last_result: None,
             extraction_in_progress: false,
+            last_nutrient_sample: None,
+            smoothed_nutrient_rate: None,
         }
     }
 
@@ -126,9 +174,21 @@ impl GpuCellInspector {
         queue: &wgpu::Queue,
         cell_index: u32,
     ) {
+        // Never encode another copy into a staging buffer whose previous
+        // map/read/unmap cycle is still in flight.
+        if self.extraction_in_progress {
+            return;
+        }
+
+        let use_async_manager = self.readback_manager.is_some();
+
         // Use the extraction system to perform GPU compute
-        self.extraction_system
-            .extract_cell_data(encoder, queue, cell_index);
+        self.extraction_system.extract_cell_data(
+            encoder,
+            queue,
+            cell_index,
+            !use_async_manager,
+        );
 
         // If we have a readback manager, use it for async readback
         if let Some(ref mut readback_manager) = self.readback_manager {
@@ -187,12 +247,18 @@ impl GpuCellInspector {
                     // Extraction completed - parse the data
                     if data_bytes.len() == std::mem::size_of::<InspectedCellData>() {
                         // Safety: We know the data is the correct size and layout
-                        let data = unsafe {
+                        let mut data = unsafe {
                             std::ptr::read(data_bytes.as_ptr() as *const InspectedCellData)
                         };
 
                         // Store the result
                         if let Some(cell_index) = self.current_extraction.take() {
+                            update_live_nutrient_rate(
+                                &mut self.last_nutrient_sample,
+                                &mut self.smoothed_nutrient_rate,
+                                cell_index,
+                                &mut data,
+                            );
                             let result = ReadbackResult { cell_index, data };
                             self.last_result = Some(result);
                         }
@@ -222,11 +288,17 @@ impl GpuCellInspector {
             }
         } else if let Some(device) = device {
             // Fallback to direct extraction system
-            if let Some(data) = self.extraction_system.poll_extraction(device) {
+            if let Some(mut data) = self.extraction_system.poll_extraction(device) {
                 // Extraction completed
                 self.extraction_in_progress = false;
 
                 if let Some(cell_index) = self.current_extraction.take() {
+                    update_live_nutrient_rate(
+                        &mut self.last_nutrient_sample,
+                        &mut self.smoothed_nutrient_rate,
+                        cell_index,
+                        &mut data,
+                    );
                     // Store the result
                     let result = ReadbackResult { cell_index, data };
                     self.last_result = Some(result);
@@ -264,6 +336,8 @@ impl GpuCellInspector {
         self.current_extraction = None;
         self.current_readback_id = None;
         self.extraction_in_progress = false;
+        self.last_nutrient_sample = None;
+        self.smoothed_nutrient_rate = None;
     }
 
     /// Get readback manager statistics
@@ -457,5 +531,71 @@ impl AsyncReadbackManager {
             total_active: self.requests.len(),
             max_concurrent: self.max_concurrent_readbacks,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{update_live_nutrient_rate, InspectedCellData};
+
+    #[test]
+    fn live_nutrient_rate_uses_successive_samples_for_any_cell() {
+        let mut last_sample = None;
+        let mut smoothed_rate = None;
+        let mut first = InspectedCellData {
+            age: 10.0,
+            nutrients: 50.0,
+            ..Default::default()
+        };
+        update_live_nutrient_rate(
+            &mut last_sample,
+            &mut smoothed_rate,
+            7,
+            &mut first,
+        );
+        assert_eq!(first.nutrient_gain_rate, 0.0);
+
+        let mut second = InspectedCellData {
+            age: 10.5,
+            nutrients: 54.0,
+            ..Default::default()
+        };
+        update_live_nutrient_rate(
+            &mut last_sample,
+            &mut smoothed_rate,
+            7,
+            &mut second,
+        );
+        assert!((second.nutrient_gain_rate - 8.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn live_nutrient_rate_resets_when_selection_changes() {
+        let mut last_sample = None;
+        let mut smoothed_rate = None;
+        let mut first = InspectedCellData {
+            age: 4.0,
+            nutrients: 20.0,
+            ..Default::default()
+        };
+        update_live_nutrient_rate(
+            &mut last_sample,
+            &mut smoothed_rate,
+            1,
+            &mut first,
+        );
+
+        let mut other_cell = InspectedCellData {
+            age: 8.0,
+            nutrients: 90.0,
+            ..Default::default()
+        };
+        update_live_nutrient_rate(
+            &mut last_sample,
+            &mut smoothed_rate,
+            2,
+            &mut other_cell,
+        );
+        assert_eq!(other_cell.nutrient_gain_rate, 0.0);
     }
 }

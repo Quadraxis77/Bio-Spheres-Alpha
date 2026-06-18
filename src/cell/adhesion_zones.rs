@@ -42,15 +42,15 @@ pub fn compute_ratio_shift(split_ratio: f32) -> f32 {
 
 /// Classify adhesion bond direction relative to split direction with dynamic equatorial zone.
 ///
-/// The split plane is shifted by `ratio_shift = 2*split_ratio - 1` so that unequal
-/// splits move the equatorial band toward the smaller child's hemisphere.
+/// The adhesion classification plane is shifted by `ratio_shift = 2*split_ratio - 1`
+/// to bias which child inherits bonds without changing other divided resources.
 /// The equatorial band width is 60 deg at split_ratio=0.5 (giving a 120 deg total Zone C arc,
 /// wide enough for equilateral triangle formation), scaling to 75 deg at 0.3/0.7.
 ///
 /// # Arguments
 /// * `bond_direction` - Direction of the adhesion bond (normalized)
 /// * `split_direction` - Direction of cell division (normalized)
-/// * `split_ratio` - Mass split ratio (0.0-1.0, fraction going to child A)
+/// * `split_ratio` - Adhesion distribution ratio (0.0-1.0)
 ///
 /// # Returns
 /// The zone classification for this adhesion

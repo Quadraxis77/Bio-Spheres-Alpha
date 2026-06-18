@@ -312,12 +312,16 @@ fn migrate_legacy_fluid_nutrient_density(path: &Path) -> Result<bool, String> {
 fn migrate_legacy_photocyte_production(path: &Path) -> Result<bool, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
 
-    if !text.contains("photocyte_mass_per_second: 0.012") {
+    let legacy_value = if text.contains("photocyte_mass_per_second: 0.012") {
+        "photocyte_mass_per_second: 0.012"
+    } else if text.contains("photocyte_mass_per_second: 2.0") {
+        "photocyte_mass_per_second: 2.0"
+    } else {
         return Ok(false);
-    }
+    };
 
     let updated = text.replacen(
-        "photocyte_mass_per_second: 0.012",
+        legacy_value,
         "photocyte_mass_per_second: 0.2",
         1,
     );

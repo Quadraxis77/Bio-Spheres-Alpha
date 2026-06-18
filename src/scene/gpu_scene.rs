@@ -29,11 +29,26 @@ use wgpu::util::DeviceExt;
 
 const PHOTOCYTE_BASELINE_BRIGHTNESS: f32 = 2.5;
 const MAX_SUN_BRIGHTNESS: f32 = 5.0;
+const PHOTOCYTE_BASELINE_MASS_RATE: f32 = 0.2;
+const LEGACY_PHOTOCYTE_MASS_RATE_MAX: f32 = 0.02;
 
 /// Scale photocyte nutrient production across the sun's 0-5 brightness range.
-/// Brightness 2.5 preserves the configured baseline rate.
+/// The squared response keeps very low brightness weak, preserves the configured
+/// baseline at 2.5, and strongly rewards brightness above the baseline.
 fn photocyte_production_multiplier(brightness: f32) -> f32 {
-    brightness.clamp(0.0, MAX_SUN_BRIGHTNESS) / PHOTOCYTE_BASELINE_BRIGHTNESS
+    let normalized =
+        brightness.clamp(0.0, MAX_SUN_BRIGHTNESS) / PHOTOCYTE_BASELINE_BRIGHTNESS;
+    normalized * normalized
+}
+
+/// Promote the original underpowered rate at runtime while preserving current
+/// configured rates.
+fn effective_photocyte_mass_rate(configured_rate: f32) -> f32 {
+    if configured_rate <= LEGACY_PHOTOCYTE_MASS_RATE_MAX {
+        PHOTOCYTE_BASELINE_MASS_RATE
+    } else {
+        configured_rate
+    }
 }
 
 /// Camera uniform for voxel rendering
@@ -2770,11 +2785,16 @@ impl GpuScene {
                         .max_signal_hops
                         .max(m.regulation_emit_hops.clamp(1, 20) as u32);
                 }
-                // Mode-switch listeners (channels 8-15) also need the signal system to run
-                // so that signal_clear + mode_switch dispatch execute each frame.
+                // Signal listeners also keep the pass active so stale signal flags are
+                // cleared and inverted absence gates are evaluated consistently.
                 // max_signal_hops is not updated here — the emitter (regulation_emit or
                 // oculocyte) that sends the signal governs propagation distance.
-                if m.mode_switch_signal_channel >= 8 {
+                if m.mode_switch_signal_channel >= 8
+                    || m.division_signal_channel >= 8
+                    || m.apoptosis_signal_channel >= 8
+                    || m.signal_child_a_channel >= 8
+                    || m.signal_child_b_channel >= 8
+                {
                     self.has_oculocytes = true;
                 }
             }
@@ -4371,6 +4391,13 @@ impl GpuScene {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) -> bool {
+        // The inspector uses one shared staging buffer. Keep the newest pending
+        // request queued until the current map/read/unmap cycle is complete.
+        // Reusing it while mapped makes Queue::submit fail validation.
+        if self.is_extracting_cell_data() {
+            return false;
+        }
+
         // Check if there's a pending cell extraction
         let pending = self.pending_cell_extraction.take();
         if pending.is_none() {
@@ -7195,7 +7222,7 @@ impl GpuScene {
             light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
             light_field.set_mass_per_second(
-                editor_state.photocyte_mass_per_second
+                effective_photocyte_mass_rate(editor_state.photocyte_mass_per_second)
                     * photocyte_production_multiplier(effective_sun_intensity),
             );
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
@@ -8011,6 +8038,22 @@ impl Scene for GpuScene {
             false
         };
 
+        // Evaluate signals before lifecycle work so apoptosis, mode switching,
+        // child routing, and division gates all consume this frame's signal state.
+        // This matches the preview ordering: signal pass, gated actions, division.
+        if !self.paused && self.has_oculocytes {
+            execute_signal_system(
+                &mut encoder,
+                &self.gpu_physics_pipelines,
+                &self.gpu_triple_buffers,
+                &self.adhesion_buffers,
+                &self.cached_bind_groups,
+                self.has_oculocytes,
+                self.total_cell_slots,
+                self.max_signal_hops,
+            );
+        }
+
         // Snapshot death_flags BEFORE physics runs - needed by spawn_new to detect
         // the alive->dead transition this frame.
         if self.show_death_particles && !self.paused && !self.headless_no_render {
@@ -8093,22 +8136,6 @@ impl Scene for GpuScene {
         // Execute any pending cell extractions (inspect tool) AFTER physics
         // This extracts detailed cell data for the Cell Inspector panel
         let _cell_extracted = self.execute_pending_cell_extraction(device, &mut encoder, queue);
-
-        // Execute signal system ONCE PER FRAME (not per physics step)
-        // Runs after physics/lifecycle so adhesion state is up-to-date
-        // Skipped entirely if no genomes have oculocyte modes
-        if !self.paused && self.has_oculocytes {
-            execute_signal_system(
-                &mut encoder,
-                &self.gpu_physics_pipelines,
-                &self.gpu_triple_buffers,
-                &self.adhesion_buffers,
-                &self.cached_bind_groups,
-                self.has_oculocytes,
-                self.total_cell_slots,
-                self.max_signal_hops,
-            );
-        }
 
         // Copy buffers to instance builder after physics (always needed for division)
         // Division creates new cells with updated cell_types that must be copied before rendering
@@ -9197,30 +9224,45 @@ impl Scene for GpuScene {
 
 #[cfg(test)]
 mod tests {
-    use super::photocyte_production_multiplier;
+    use super::{effective_photocyte_mass_rate, photocyte_production_multiplier};
 
     #[test]
     fn photocyte_production_is_centered_on_brightness_2_5() {
         assert_eq!(photocyte_production_multiplier(0.0), 0.0);
-        assert_eq!(photocyte_production_multiplier(1.25), 0.5);
+        assert_eq!(photocyte_production_multiplier(1.25), 0.25);
         assert_eq!(photocyte_production_multiplier(2.5), 1.0);
-        assert_eq!(photocyte_production_multiplier(3.75), 1.5);
-        assert_eq!(photocyte_production_multiplier(5.0), 2.0);
+        assert_eq!(photocyte_production_multiplier(3.75), 2.25);
+        assert_eq!(photocyte_production_multiplier(5.0), 4.0);
 
-        let configured_mass_rate = 0.2;
+        let configured_mass_rate = effective_photocyte_mass_rate(0.2);
         assert_eq!(
             configured_mass_rate * photocyte_production_multiplier(2.5) * 100.0,
             20.0
         );
         assert_eq!(
             configured_mass_rate * photocyte_production_multiplier(5.0) * 100.0,
-            40.0
+            80.0
         );
+
+        let gain_at_brightness_one_full_light =
+            configured_mass_rate * photocyte_production_multiplier(1.0) * 100.0;
+        assert!((gain_at_brightness_one_full_light - 3.2).abs() < 1e-5);
+
+        let gain_at_extremely_low_brightness =
+            configured_mass_rate * photocyte_production_multiplier(0.1) * 100.0;
+        assert!((gain_at_extremely_low_brightness - 0.032).abs() < 1e-5);
     }
 
     #[test]
     fn photocyte_production_stays_within_the_brightness_range() {
         assert_eq!(photocyte_production_multiplier(-1.0), 0.0);
-        assert_eq!(photocyte_production_multiplier(6.0), 2.0);
+        assert_eq!(photocyte_production_multiplier(6.0), 4.0);
+    }
+
+    #[test]
+    fn legacy_photocyte_rates_are_promoted_at_runtime() {
+        assert_eq!(effective_photocyte_mass_rate(0.012), 0.2);
+        assert_eq!(effective_photocyte_mass_rate(0.02), 0.2);
+        assert_eq!(effective_photocyte_mass_rate(0.25), 0.25);
     }
 }

@@ -734,10 +734,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let parent_mass = nutrients_to_mass(parent_nutrients);
     let parent_radius = calculate_radius_from_mass(parent_mass);
 
-    // Split nutrients using split_ratio from mode (matching CPU)
-    let split_ratio = clamp(parent_split_ratio, 0.0, 1.0);
-    let child_a_nutrients = parent_nutrients * split_ratio;
-    let child_b_nutrients = parent_nutrients * (1.0 - split_ratio);
+    // Nutrients always split evenly. parent_split_ratio is reserved exclusively
+    // for adhesion-zone inheritance and classification.
+    let child_a_nutrients = parent_nutrients * 0.5;
+    let child_b_nutrients = parent_nutrients * 0.5;
 
     // Derive child masses from nutrients
     let child_a_mass = nutrients_to_mass(child_a_nutrients);
@@ -799,7 +799,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let child_a_ch = clamp(u32(child_a_channel), 8u, 15u);
             let raw_signal = signal_flags_read[cell_idx * 16u + child_a_ch];
             let signal_value = f32(raw_signal & 0x7FFu);
-            let has_signal = raw_signal > 0u;
+            let has_signal = signal_value > 0.0;
             
             let child_a_threshold = ss_v1.w;
             let child_a_mode_above = i32(ss_v2.x);
@@ -823,7 +823,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let child_b_ch = clamp(u32(child_b_channel), 8u, 15u);
             let raw_signal_b = signal_flags_read[cell_idx * 16u + child_b_ch];
             let signal_value_b = f32(raw_signal_b & 0x7FFu);
-            let has_signal_b = raw_signal_b > 0u;
+            let has_signal_b = signal_value_b > 0.0;
             
             let child_b_threshold = ss_v2.w;
             let child_b_mode_above = i32(ss_v3.x);

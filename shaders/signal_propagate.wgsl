@@ -158,16 +158,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let own_hops  = (own_signal >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
         let own_value = own_signal & SIGNAL_VALUE_MASK;
 
-        // Accumulate contributions from all neighbors:
+        // Recompute from direct emission and strictly-upstream neighbors.
         //   summed_value  – sum of each neighbor's attenuated value (clamped to 2047)
         //   best_hops     – max hops across contributing neighbors (determines reach)
-        //   any_source    - true if any contributing neighbor is a direct emitter (bit 24)
         //
-        // The cell's own current signal is included as the starting sum so that a cell
-        // which is itself an emitter (or already accumulated signal) carries it forward.
-        var summed_value: u32 = own_value;
+        // Propagated values are not reused as a base; doing so creates feedback growth
+        // on every dispatch and quickly saturates bonded loops at 2047.
+        let own_source_flag = own_signal & SIGNAL_SOURCE_FLAG;
+        var summed_value: u32 = select(0u, own_value, own_source_flag != 0u);
         var best_hops:    u32 = own_hops;
-        var any_source:   u32 = own_signal & SIGNAL_SOURCE_FLAG;
         let adhesion_base = idx * MAX_ADHESIONS_PER_CELL;
 
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
@@ -199,10 +198,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Decode signal word.
             let neighbor_hops        = (neighbor_signal >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
             let neighbor_value       = neighbor_signal & SIGNAL_VALUE_MASK;
-            let neighbor_source_flag = neighbor_signal & SIGNAL_SOURCE_FLAG;
 
             // Only accept contributions from neighbors with signal remaining to relay.
-            if (neighbor_hops >= edge_cost && neighbor_value > 0u) {
+            if (neighbor_hops >= edge_cost && neighbor_hops > own_hops && neighbor_value > 0u) {
                 let loss = SIGNAL_LOSS_PER_POINT * (f32(edge_cost) / f32(SIGNAL_NORMAL_COST));
                 let retain = clamp(1.0 - loss, 0.0, 1.0);
                 let contrib = max(1u, u32(f32(neighbor_value) * retain));
@@ -213,14 +211,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 if (remaining_hops > best_hops) {
                     best_hops = remaining_hops;
                 }
-                // If any contributor is a direct source, mark result as source-adjacent.
-                any_source = any_source | neighbor_source_flag;
             }
         }
 
         // Determine what to write to signal_flags_next for this cell/channel.
-        if (summed_value > 0u && best_hops > 0u) {
-            let encoded  = (best_hops << SIGNAL_HOP_SHIFT) | summed_value;
+        if (summed_value > 0u) {
+            let encoded  = own_source_flag | (best_hops << SIGNAL_HOP_SHIFT) | summed_value;
             signal_flags_next[my_base + ch] = encoded;
         } else {
             // No propagatable signal - preserve whatever this cell already had

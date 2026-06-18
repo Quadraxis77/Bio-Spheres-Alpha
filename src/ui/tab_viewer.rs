@@ -617,17 +617,19 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new("Gain rate")
+                            egui::RichText::new("Net rate")
                                 .size(11.0)
                                 .color(palette().text_secondary),
                         );
-                        let gain_color = if data.nutrient_gain_rate > 0.0 {
+                        let gain_color = if data.nutrient_gain_rate > 0.01 {
                             palette().status_ok
+                        } else if data.nutrient_gain_rate < -0.01 {
+                            palette().status_err
                         } else {
                             palette().text_dim
                         };
                         ui.label(
-                            egui::RichText::new(format!("{:.2}/s", data.nutrient_gain_rate))
+                            egui::RichText::new(format!("{:+.2}/s", data.nutrient_gain_rate))
                                 .size(11.0)
                                 .color(gain_color),
                         );
@@ -3215,42 +3217,22 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                         .color(palette().text_secondary),
                 )
                 .on_hover_text(
-                    "Higher = more aggressive LOD (switches to lower resolution sooner)",
+                    "Higher keeps cells at full detail from farther away",
                 );
                 ui.add(
                     egui::Slider::new(&mut state.lod_scale_factor, 50.0..=2000.0).fixed_decimals(0),
                 );
                 ui.end_row();
                 ui.label(
-                    egui::RichText::new("Low→Med")
+                    egui::RichText::new("Full Detail")
                         .size(11.0)
                         .color(palette().text_secondary),
                 )
-                .on_hover_text("Distance threshold for 32→64 texture transition");
+                .on_hover_text(
+                    "Screen-size threshold for switching from a shadowed basic sphere to full procedural detail",
+                );
                 ui.add(
                     egui::Slider::new(&mut state.lod_threshold_low, 1.0..=1000.0).fixed_decimals(0),
-                );
-                ui.end_row();
-                ui.label(
-                    egui::RichText::new("Med→High")
-                        .size(11.0)
-                        .color(palette().text_secondary),
-                )
-                .on_hover_text("Distance threshold for 64→128 texture transition");
-                ui.add(
-                    egui::Slider::new(&mut state.lod_threshold_medium, 1.0..=1000.0)
-                        .fixed_decimals(0),
-                );
-                ui.end_row();
-                ui.label(
-                    egui::RichText::new("High→Ultra")
-                        .size(11.0)
-                        .color(palette().text_secondary),
-                )
-                .on_hover_text("Distance threshold for 128→256 texture transition");
-                ui.add(
-                    egui::Slider::new(&mut state.lod_threshold_high, 1.0..=1000.0)
-                        .fixed_decimals(0),
                 );
                 ui.end_row();
                 ui.label(
@@ -3259,7 +3241,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                         .color(palette().text_secondary),
                 )
                 .on_hover_text(
-                    "Tint cells by LOD level: green=ultra, yellow=high, orange=med, red=low",
+                    "Tint cells by LOD level: red=basic sphere, green=full detail",
                 );
                 ui.checkbox(&mut state.lod_debug_colors, "");
                 ui.end_row();
@@ -9603,8 +9585,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, -100.0..=100.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(0.1).range(-100.0..=100.0));
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, 1.0..=2047.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(1.0..=2047.0));
                     });
 
                     // Signal Hops
@@ -10363,7 +10345,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(4.0);
                 ui.label("Split Ratio:")
-                    .on_hover_text("Controls the split axis and Zone C width. 0.5 = symmetric split (Zone C only 3° wide — ring bonds may be lost). 0.65 or 0.35 = asymmetric split (Zone C widens to 22° — recommended for ring-forming cells)");
+                    .on_hover_text("Controls only how adhesion bonds are distributed between children and the Zone C width. Nutrients and other cell state always split evenly. 0.5 = balanced adhesion inheritance; values toward 0 or 1 bias inheritance toward one child");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };

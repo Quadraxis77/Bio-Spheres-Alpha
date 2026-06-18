@@ -109,7 +109,7 @@ fn float_to_fixed(value: f32) -> i32 {
     return i32(value * FIXED_POINT_SCALE);
 }
 
-// Sample light intensity at a world position with nearest neighbor
+// Sample light intensity from the voxel occupied by the cell.
 fn sample_light(world_pos: vec3<f32>) -> f32 {
     let res = photocyte_params.grid_resolution;
 
@@ -117,9 +117,9 @@ fn sample_light(world_pos: vec3<f32>) -> f32 {
     let gy = (world_pos.y - photocyte_params.grid_origin_y) / photocyte_params.cell_size;
     let gz = (world_pos.z - photocyte_params.grid_origin_z) / photocyte_params.cell_size;
 
-    let ix = i32(round(gx));
-    let iy = i32(round(gy));
-    let iz = i32(round(gz));
+    let ix = i32(floor(gx));
+    let iy = i32(floor(gy));
+    let iz = i32(floor(gz));
 
     let ires = i32(res);
 

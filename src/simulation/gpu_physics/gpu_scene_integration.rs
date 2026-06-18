@@ -912,6 +912,21 @@ pub fn execute_lifecycle_pipeline(
         drop(compute_pass);
     }
 
+    // Stage 1.75: Signal-driven mode switches.
+    // Signal propagation runs once before the physics/lifecycle loop. Applying the
+    // switch here matches preview ordering: apoptosis first, then mode switch, then division.
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Lifecycle Pipeline - Mode Switch"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.mode_switch);
+        compute_pass.set_bind_group(0, &cached_bind_groups.mode_switch_group0, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.mode_switch_group1, &[]);
+        compute_pass.set_bind_group(2, &cached_bind_groups.mode_switch_group2, &[]);
+        compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
+    }
+
     // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
     // Runs AFTER death scan so recycled slots are available
     {
@@ -1038,10 +1053,10 @@ pub fn rebuild_spatial_grid_after_lifecycle(
 /// Execute the signal system (clear -> sense -> propagate)
 ///
 /// This runs ONCE PER FRAME, not per physics step, to avoid 4x over-dispatch.
-/// Should be called after lifecycle pipeline so adhesion state is up-to-date.
+/// Should be called before lifecycle so gated actions consume the current frame's signals.
 ///
 /// # Arguments
-/// * `has_oculocytes` - If false, skip entire signal system (no genomes have oculocyte modes)
+/// * `has_oculocytes` - If false, skip the signal system (no signal sources or listeners)
 /// * `cell_count_hint` - Live cell count for dispatch scaling
 /// * `max_signal_hops` - Maximum signal hops across all oculocyte modes (determines propagation iterations)
 pub fn execute_signal_system(
@@ -1054,7 +1069,7 @@ pub fn execute_signal_system(
     cell_count_hint: u32,
     max_signal_hops: u32,
 ) {
-    // Early-out if no oculocytes in any genome - skip entire signal system
+    // Early-out if no signal sources or listeners exist in any genome.
     if !has_oculocytes {
         return;
     }
@@ -1126,17 +1141,4 @@ pub fn execute_signal_system(
         );
     }
 
-    // Step 4: Mode switch - change cell mode_index based on received signal
-    // Runs after propagation so all cells have their final signal values for this frame.
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Mode Switch"),
-            timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&pipelines.mode_switch);
-        compute_pass.set_bind_group(0, &cached_bind_groups.mode_switch_group0, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.mode_switch_group1, &[]);
-        compute_pass.set_bind_group(2, &cached_bind_groups.mode_switch_group2, &[]);
-        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-    }
 }

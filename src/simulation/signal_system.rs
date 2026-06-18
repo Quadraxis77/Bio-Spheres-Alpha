@@ -5,7 +5,7 @@
 //!
 //! Signal semantics:
 //! - `None` = null (no signal on this channel)
-//! - `Some(value)` = active signal (including `Some(0.0)` which is a valid signal)
+//! - `Some(value)` = a propagated channel value; lifecycle gates treat values <= 0 as inactive
 //! - Multiple signals on the same channel are additive
 //! - Signals persist only while being actively sent (cleared each frame)
 
@@ -19,6 +19,21 @@ pub const SIGNAL_CHANNELS: usize = 16;
 pub const SIGNAL_LOSS_PER_TRAVEL_POINT: f32 = 0.05;
 pub const SIGNAL_NORMAL_STEP_COST: f32 = 1.0;
 pub const SIGNAL_VASCULAR_ROAD_COST: f32 = 0.25;
+
+/// Evaluate a signal threshold consistently across preview and GPU paths.
+///
+/// A zero value represents no active signal. Normal gates require a positive
+/// signal at or above the threshold. Inverted gates are active when that normal
+/// condition is false: no signal, or a signal below the threshold.
+#[inline]
+pub fn signal_gate_active(signal_value: f32, threshold: f32, invert: bool) -> bool {
+    let at_or_above = signal_value > 0.0 && signal_value >= threshold;
+    if invert {
+        !at_or_above
+    } else {
+        at_or_above
+    }
+}
 
 /// Oculocyte sense type bitmask bits
 pub const SENSE_CELL: u32 = 1 << 0; // bit 0
@@ -88,7 +103,9 @@ pub fn sense_oculocytes(
 
         let sense_mask = mode.oculocyte_sense_type;
         let channel = mode.oculocyte_signal_channel.clamp(0, 7) as usize; // Sensory channels 0-7
-        let signal_value = mode.oculocyte_signal_value.clamp(-100.0, 100.0);
+        // GPU signals use an unsigned 11-bit payload, so authored sensor signals
+        // share the same positive 1..2047 range in both scenes.
+        let signal_value = mode.oculocyte_signal_value.clamp(1.0, 2047.0);
         let hops = mode.oculocyte_signal_hops.clamp(1, 20) as usize;
         let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
 
@@ -790,4 +807,25 @@ pub fn propagate_test_signals(
     emissions: Vec<SignalEmission>,
 ) {
     propagate_signals(state, genome, &emissions);
+}
+
+#[cfg(test)]
+mod signal_gate_tests {
+    use super::signal_gate_active;
+
+    #[test]
+    fn normal_gate_requires_a_present_signal() {
+        assert!(!signal_gate_active(0.0, 0.0, false));
+        assert!(!signal_gate_active(0.0, 1.0, false));
+        assert!(!signal_gate_active(0.5, 1.0, false));
+        assert!(signal_gate_active(1.0, 1.0, false));
+    }
+
+    #[test]
+    fn inverted_gate_handles_absence_and_below_threshold() {
+        assert!(signal_gate_active(0.0, 0.0, true));
+        assert!(signal_gate_active(0.0, 1.0, true));
+        assert!(signal_gate_active(0.5, 1.0, true));
+        assert!(!signal_gate_active(1.0, 1.0, true));
+    }
 }

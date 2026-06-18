@@ -483,9 +483,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var desired_arr: array<f32, 20>;
     var rate_arr: array<f32, 20>;   // effective max rate per connection
     var cellb_arr: array<u32, 20>;
-    var nutrb_arr: array<f32, 20>;
     var prioa_arr: array<u32, 20>;
-    var priob_arr: array<u32, 20>;
     var valid_arr: array<u32, 20>;
 
     for (var i = 0; i < 20; i++) {
@@ -495,13 +493,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
         let adhesion = adhesion_connections[adhesion_idx];
-        if (adhesion.is_active == 0u || adhesion.cell_a_index != cell_idx) {
+        if (adhesion.is_active == 0u) {
             continue;
         }
         if ((adhesion.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
             continue;
         }
-        let cell_b_idx = adhesion.cell_b_index;
+
+        // Process this connection from the current cell's perspective. Each endpoint
+        // scans the bond, but only the endpoint with positive outgoing pressure applies
+        // a transfer. This keeps each cell's total outflow accounting local and makes
+        // priority behavior independent of which endpoint was stored as cell_a.
+        var cell_b_idx: u32;
+        if (adhesion.cell_a_index == cell_idx) {
+            cell_b_idx = adhesion.cell_b_index;
+        } else if (adhesion.cell_b_index == cell_idx) {
+            cell_b_idx = adhesion.cell_a_index;
+        } else {
+            continue;
+        }
         if (cell_b_idx >= cell_count || death_flags[cell_b_idx] == 1u) {
             continue;
         }
@@ -615,17 +625,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             desired = clamp(pressure_diff, -effective_rate, effective_rate);
         }
 
+        // The neighbor handles reverse flow in its own workgroup. Keeping this pass
+        // sender-only prevents reverse transfers from bypassing the sender's shared
+        // TRANSPORT_RATE budget across its other connections.
+        if (desired <= 0.0) {
+            continue;
+        }
+
         desired_arr[i] = desired;
         rate_arr[i]    = effective_rate;
         cellb_arr[i] = cell_b_idx;
-        nutrb_arr[i] = nutrients_b;
         prioa_arr[i] = select(0u, 1u, prioritize_a);
-        priob_arr[i] = select(0u, 1u, prioritize_b);
         valid_arr[i] = 1u;
 
-        if (desired > 0.0) {
-            total_out += desired;
-        }
+        total_out += desired;
     }
 
     // Pass 2: apply proportionally scaled transfers (matches preview)
@@ -638,16 +651,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let desired = desired_arr[i];
         let cell_b_idx = cellb_arr[i];
-        let nutrients_b = nutrb_arr[i];
         let prioritize_a = prioa_arr[i] == 1u;
-        let prioritize_b = priob_arr[i] == 1u;
 
         // Scale outflow so the sending cell's total outflow stays within budget.
         // Use the per-connection effective_rate as the cap (already accounts for
         // vascular highway rate and compression boost).
         let conn_rate = rate_arr[i];
         var scale: f32 = 1.0;
-        if (desired > 0.0 && total_out > conn_rate) {
+        if (total_out > conn_rate) {
             scale = conn_rate / total_out;
         }
 
@@ -662,37 +673,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             cell_b_is_embryocyte = mode_cell_types[mode_b_idx] == 10u;
         }
 
-        // Clamp by available nutrients and receiver capacity
+        // Clamp by available donor nutrients. Normal nutrient transport is
+        // pressure-limited, not storage-cap-limited: the pressure equation stops
+        // flow at nutrients / priority equilibrium. Applying the production cap
+        // here prevents a high-priority cell that starts "full" from receiving
+        // anything, so priority can never establish its intended equilibrium.
         let min_nutrients_a = select(0.0, 10.0, prioritize_a);
-        let min_nutrients_b = select(0.0, 10.0, prioritize_b);
-        // Cap at 200 before doubling so the "never split" sentinel (threshold > 100)
-        // doesn't inflate the nutrient cap to an absurd value.
-        let max_nutrients_a = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
-
-        // For Embryocyte receivers: capacity = space left in reserve (x1000 fixed-point)
-        var max_recv_b: f32;
+        var can_recv: f32;
         if (cell_b_is_embryocyte) {
             let cur_reserve_b = atomicLoad(&embryocyte_reserves[cell_b_idx]);
-            max_recv_b = f32(65535000u - min(cur_reserve_b, 65535000u)) / FIXED_POINT_SCALE;
+            can_recv = f32(65535000u - min(cur_reserve_b, 65535000u)) / FIXED_POINT_SCALE;
         } else {
-            max_recv_b = min(split_nutrient_thresholds[cell_b_idx], 200.0) * 2.0;
+            can_recv = nutrient_transfer;
         }
 
-        var actual_transfer: f32;
-        if (nutrient_transfer > 0.0) {
-            let can_give = max(nutrients_a_snap - min_nutrients_a, 0.0);
-            let can_recv = max(max_recv_b - nutrients_b, 0.0);
-            actual_transfer = min(nutrient_transfer, min(can_give, can_recv));
-        } else {
-            // Reverse flow (B->A): Embryocyte cell_b cannot send, so block
-            if (cell_b_is_embryocyte) {
-                actual_transfer = 0.0;
-            } else {
-                let can_give = max(nutrients_b - min_nutrients_b, 0.0);
-                let can_recv = max(max_nutrients_a - nutrients_a_snap, 0.0);
-                actual_transfer = max(nutrient_transfer, -min(can_give, can_recv));
-            }
-        }
+        let can_give = max(nutrients_a_snap - min_nutrients_a, 0.0);
+        let actual_transfer = min(nutrient_transfer, min(can_give, can_recv));
 
         // Apply transfer using atomic operations (thread-safe).
         // If cell_b is an Embryocyte, incoming nutrients go to its reserve buffer.

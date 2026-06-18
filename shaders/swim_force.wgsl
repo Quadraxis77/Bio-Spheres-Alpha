@@ -465,6 +465,11 @@ fn buoyancy_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let behavior = type_behaviors[cell_type];
     if (behavior.applies_buoyancy == 0u) { return; }
 
+    // Buoyocytes generate lift only while submerged. With no fluid grid, or
+    // while the cell is in air, they behave like ordinary cells under gravity.
+    let pos = positions_in[cell_idx].xyz;
+    if (!is_in_water(pos)) { return; }
+
     // v4.w = buoyancy_force
     let buoyancy_force = mode_properties_v4[mode_idx].w;
     if (buoyancy_force <= 0.0) { return; }
@@ -475,7 +480,6 @@ fn buoyancy_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // upward force that would fling them through the boundary.
     const BUOYANCY_MULTIPLIER: f32 = 120.0;
     const BUOYANCY_TERMINAL_SPEED: f32 = 12.0;
-    let pos = positions_in[cell_idx].xyz;
     let up = anti_gravity_direction(pos);
     let velocity_along_up = dot(velocities_in[cell_idx].xyz, up);
     let traction = clamp(1.0 - velocity_along_up / max(buoyancy_force * BUOYANCY_TERMINAL_SPEED, 0.001), 0.0, 1.0);

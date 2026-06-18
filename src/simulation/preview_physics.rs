@@ -1448,9 +1448,6 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         } else {
             0.0
         };
-        let max_a = state.split_nutrient_thresholds[cell_a].min(200.0) * 2.0;
-        let max_b = state.split_nutrient_thresholds[cell_b].min(200.0) * 2.0;
-
         let is_embryo_a = mode_a.cell_type == 10;
         let is_embryo_b = mode_b.cell_type == 10;
 
@@ -1473,7 +1470,9 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
                     65_535_000u32.saturating_sub(state.reserves[cell_b]) as f32 / 1000.0;
                 reserve_space
             } else {
-                (max_b - snap_b).max(0.0)
+                // Transport is pressure-limited. The nutrient production cap must
+                // not block a high-priority cell from receiving its equilibrium share.
+                transfer
             };
             transfer.min(can_give).min(can_recv)
         } else {
@@ -1483,7 +1482,7 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
                     65_535_000u32.saturating_sub(state.reserves[cell_a]) as f32 / 1000.0;
                 reserve_space
             } else {
-                (max_a - snap_a).max(0.0)
+                -transfer
             };
             transfer.max(-(can_give.min(can_recv)))
         };
@@ -2040,12 +2039,13 @@ pub fn physics_step_with_genome(
             {
                 let ch = mode.apoptosis_signal_channel as usize;
                 let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
-                let above = signal_val >= mode.apoptosis_signal_threshold;
-                let should_die = if mode.apoptosis_signal_invert {
-                    !above
-                } else {
-                    above
-                };
+                let cell_age = current_time - state.birth_times[i];
+                let should_die = cell_age >= 0.1
+                    && crate::simulation::signal_system::signal_gate_active(
+                        signal_val,
+                        mode.apoptosis_signal_threshold,
+                        mode.apoptosis_signal_invert,
+                    );
                 if should_die {
                     apoptosis_cells.push(i);
                 }
@@ -2066,12 +2066,11 @@ pub fn physics_step_with_genome(
             {
                 let ch = mode.mode_switch_signal_channel as usize;
                 let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
-                let above = signal_val >= mode.mode_switch_signal_threshold;
-                let should_switch = if mode.mode_switch_invert {
-                    !above
-                } else {
-                    above
-                };
+                let should_switch = crate::simulation::signal_system::signal_gate_active(
+                    signal_val,
+                    mode.mode_switch_signal_threshold,
+                    mode.mode_switch_invert,
+                );
                 if should_switch {
                     let target = mode.mode_switch_target as usize;
                     if target < genome.modes.len() {
@@ -2079,6 +2078,7 @@ pub fn physics_step_with_genome(
                         // Reset split count and copy new mode's per-cell settings,
                         // mirroring what mode_switch.wgsl does on the GPU side.
                         state.split_counts[i] = 0;
+                        state.birth_times[i] = current_time;
                         let new_mode = &genome.modes[target];
                         state.split_intervals[i] = new_mode.split_interval;
                         state.split_nutrient_thresholds[i] = (new_mode.split_mass - 1.0) * 100.0;

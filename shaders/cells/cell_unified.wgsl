@@ -179,21 +179,15 @@ fn vs_main(
     let camera_distance = max(length(instance.position - camera.camera_pos), 1.0);
     let screen_radius = (instance.radius / camera_distance) * camera.lod_scale_factor;
 
-    var lod_level: u32;
-    if (screen_radius < camera.lod_threshold_low) {
-        lod_level = 0u;
-    } else if (screen_radius < camera.lod_threshold_medium) {
-        lod_level = 1u;
-    } else if (screen_radius < camera.lod_threshold_high) {
-        lod_level = 2u;
-    } else {
-        lod_level = 3u;
-    }
+    // Two-tier LOD:
+    //   0 = shadowed basic sphere
+    //   1 = full procedural detail
+    let lod_level = select(0u, 1u, screen_radius >= camera.lod_threshold_low);
 
     // Devorocyte expands beyond the base sphere for spikes.
     let cell_type_vs = u32(round(instance.type_data_1.w));
     var billboard_scale = 1.1;
-    if (cell_type_vs == 11u) {
+    if (cell_type_vs == 11u && lod_level == 1u) {
         billboard_scale = 1.85;
     }
     let world_size_scaled = instance.radius * billboard_scale;
@@ -1097,21 +1091,15 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let r2 = dot(local_pos, local_pos);
 
     // For non-Devorocyte cells, discard outside the sphere as usual.
-    // For Devorocyte (type 11), the billboard is expanded - pixels outside r2>1 may be spikes.
+    // At full detail, Devorocyte uses the expanded region for spikes. At LOD 0 it
+    // deliberately collapses to the same basic sphere as every other cell.
     let is_devorocyte = (cell_type == 11u);
-    if (r2 > 1.0 && !is_devorocyte) {
+    if (r2 > 1.0 && (!is_devorocyte || lod == 0u)) {
         discard;
     }
 
     // Anti-aliased edge
-    var aa_width: f32;
-    switch (lod) {
-        case 0u: { aa_width = 0.06; }
-        case 1u: { aa_width = 0.03; }
-        case 2u: { aa_width = 0.015; }
-        case 3u: { aa_width = 0.008; }
-        default: { aa_width = 0.03; }
-    }
+    let aa_width = select(0.06, 0.015, lod == 1u);
     let r = sqrt(r2);
     let edge_alpha = smoothstep(1.0, 1.0 - aa_width, r);
 
@@ -1141,6 +1129,69 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let membrane = get_membrane_params(cell_type);
     let light_dir = normalize(lighting.light_dir);
     let view_dir = in.to_camera;
+
+    // ====================================================================
+    // LOD 0: Basic sphere with full scene shadow/light-field sampling
+    // ====================================================================
+    if (lod == 0u) {
+        // Keep distant cells integrated with scene lighting. Only procedural
+        // internals, specialized surfaces, and geometry effects are skipped.
+        let offset_distance = mix(3.0, 6.0, shadow_params.shadow_quality) * shadow_params.cell_size;
+        let shadow_sample_pos = in.center - light_dir * offset_distance;
+        let grid_size = shadow_params.cell_size * f32(shadow_params.grid_resolution);
+        let grid_min = vec3<f32>(
+            shadow_params.grid_origin_x,
+            shadow_params.grid_origin_y,
+            shadow_params.grid_origin_z,
+        );
+        let grid_max = grid_min + vec3<f32>(grid_size);
+        let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
+        let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
+        let local_light_color = sample_light_color_field(clamped_pos);
+
+        let ndotl = max(dot(world_normal_front, -light_dir), 0.0);
+        let diffuse = ndotl * local_light_color * shadow;
+        var simple_color =
+            base_color * (lighting.ambient + (1.0 - lighting.ambient) * diffuse);
+
+        // Preserve inexpensive material cues and emissive visibility without
+        // evaluating any type-specific procedural detail.
+        let half_vec = normalize(-light_dir + view_dir);
+        let spec = pow(max(dot(world_normal_front, half_vec), 0.0), in.visual_params.y);
+        simple_color += spec * in.visual_params.x * local_light_color * shadow;
+        let fresnel = pow(1.0 - max(dot(world_normal_front, view_dir), 0.0), 3.0);
+        simple_color += vec3<f32>(fresnel * in.visual_params.z);
+        simple_color += base_color * in.visual_params.w;
+
+        if (lighting.outline_width > 0.0) {
+            let outline_inner = 1.0 - lighting.outline_width;
+            let aa = fwidth(r) * 1.5;
+            let outline = smoothstep(outline_inner - aa, outline_inner + aa, r);
+            let outline_color = mix(
+                vec3<f32>(0.0),
+                base_color * 0.06,
+                clamp(in.visual_params.w * 0.4, 0.0, 1.0),
+            );
+            simple_color = mix(simple_color, outline_color, outline);
+        }
+
+        let highlight_flag = in.type_data_1.z;
+        if (highlight_flag > 0.5) {
+            let yellow_width = max(lighting.outline_width, 0.08);
+            let yellow_inner = 1.0 - yellow_width;
+            let aa = fwidth(r) * 1.5;
+            let yellow_outline = smoothstep(yellow_inner - aa, yellow_inner + aa, r);
+            simple_color = mix(simple_color, vec3<f32>(1.0, 1.0, 0.0), yellow_outline);
+        } else if (debug_colors > 0.5) {
+            simple_color = mix(simple_color, vec3<f32>(1.0, 0.2, 0.2), 0.35);
+        }
+
+        let sphere_world_pos = in.center + in.to_camera * z_front * in.radius;
+        let sphere_clip = camera.view_proj * vec4<f32>(sphere_world_pos, 1.0);
+        out.depth = sphere_clip.z / sphere_clip.w;
+        out.color = vec4<f32>(simple_color, in.color.a * edge_alpha);
+        return out;
+    }
 
     // ====================================================================
     // Layer 1+2: Base cytoplasm + interior organelles
@@ -1732,13 +1783,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var output_color: vec3<f32>;
     if (debug_colors > 0.5 && highlight_flag < 0.5) {
         var debug_color: vec3<f32>;
-        switch (lod) {
-            case 0u: { debug_color = vec3<f32>(1.0, 0.2, 0.2); }
-            case 1u: { debug_color = vec3<f32>(0.2, 1.0, 0.2); }
-            case 2u: { debug_color = vec3<f32>(0.2, 0.2, 1.0); }
-            case 3u: { debug_color = vec3<f32>(1.0, 1.0, 0.2); }
-            default: { debug_color = vec3<f32>(1.0, 0.2, 1.0); }
-        }
+        debug_color = vec3<f32>(0.2, 1.0, 0.2);
         output_color = mix(final_color, debug_color, 0.35);
     } else {
         output_color = final_color;

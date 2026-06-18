@@ -358,7 +358,7 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Check threshold: if invert=0, trigger when signal >= threshold
                     //                   if invert=1, trigger when signal < threshold
                     // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
-                    let above_threshold = signal_value >= apoptosis_threshold;
+                    let above_threshold = signal_value > 0.0 && signal_value >= apoptosis_threshold;
                     apoptosis_triggered = select(above_threshold, !above_threshold, apoptosis_invert > 0.5);
                 }
             }
@@ -586,8 +586,10 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let current_splits = split_counts[cell_idx];
     let max_split = max_splits[cell_idx];
 
-    // Check for "never split" condition (threshold > 100 means never split)
-    if (split_nutrient_threshold > 100.0) {
+    // Match preview semantics: Lipocytes can divide at thresholds up to 200,
+    // while thresholds above 100 are the never-split sentinel for other types.
+    let max_split_nutrient_threshold = select(100.0, 200.0, cell_type == 4u);
+    if (split_nutrient_threshold > max_split_nutrient_threshold) {
         division_flags[cell_idx] = 0u;
         return;
     }
@@ -628,7 +630,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             //                   if invert=1, allow division when signal < threshold
             // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
             // No separate has_signal guard - a zero signal simply fails a positive threshold.
-            let above_threshold = signal_value >= div_threshold;
+            let above_threshold = signal_value > 0.0 && signal_value >= div_threshold;
             let division_allowed = select(above_threshold, !above_threshold, div_invert > 0.5);
             
             if (!division_allowed) {
@@ -721,11 +723,6 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[neighbor_idx]));
         let neighbor_split_nutrient_threshold = split_nutrient_thresholds[neighbor_idx];
         
-        // Quick check: neighbor set to "never split" (threshold > 100)
-        if (neighbor_split_nutrient_threshold > 100.0) {
-            continue;
-        }
-        
         let neighbor_birth_time = birth_times[neighbor_idx];
         let neighbor_split_interval = split_intervals[neighbor_idx];
         let neighbor_current_splits = split_counts[neighbor_idx];
@@ -736,6 +733,14 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let neighbor_mode_idx = mode_indices[neighbor_idx];
         let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
         let neighbor_behavior = type_behaviors[neighbor_cell_type];
+
+        // Match the primary and preview checks: Lipocytes support thresholds
+        // through 200; other cell types use values above 100 as never-split.
+        let neighbor_max_split_nutrient_threshold =
+            select(100.0, 200.0, neighbor_cell_type == 4u);
+        if (neighbor_split_nutrient_threshold > neighbor_max_split_nutrient_threshold) {
+            continue;
+        }
         
         let neighbor_nutrients_ready = (neighbor_nutrients + f32(atomicLoad(&embryocyte_reserves[neighbor_idx])) / 1000.0) >= neighbor_split_nutrient_threshold;
         let neighbor_time_ready = (neighbor_behavior.ignores_split_interval != 0u) || (neighbor_age >= neighbor_split_interval);

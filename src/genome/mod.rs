@@ -152,8 +152,8 @@ pub struct ModeSettings {
     pub split_interval: f32,
     pub nutrient_gain_rate: f32, // Mass gained per second (for Test cells)
     pub max_cell_size: f32,      // Maximum visual size (1.0 to 2.0 units)
-    pub split_ratio: f32, // Ratio of parent mass going to Child A (0.0 to 1.0, default 0.5 for 50/50 split)
-    pub nutrient_priority: f32, // Priority for nutrient transport (0.1 to 10.0, default 1.0)
+    pub split_ratio: f32,        // Controls adhesion-zone inheritance during division (0.0 to 1.0)
+    pub nutrient_priority: f32,  // Priority for nutrient transport (0.1 to 10.0, default 1.0)
     pub prioritize_when_low: bool, // When enabled, priority increases when nutrients are low to prevent death
     pub parent_split_direction: Vec2, // pitch, yaw in degrees
     pub max_adhesions: i32,
@@ -213,7 +213,7 @@ pub struct ModeSettings {
     // Oculocyte settings
     pub oculocyte_sense_type: u32, // Bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
     pub oculocyte_signal_channel: i32, // Which channel to send on (0-7, sensory channel range)
-    pub oculocyte_signal_value: f32, // Signal value to send when target detected (-50.0 to 50.0)
+    pub oculocyte_signal_value: f32, // Signal value to send when target detected (1.0 to 2047.0)
     pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
     pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
     pub oculocyte_light_target_color: Vec3, // RGB color that light-sensing oculocytes can see
@@ -442,7 +442,7 @@ impl Default for ModeSettings {
             split_interval: 1.0,
             nutrient_gain_rate: 10.0,
             max_cell_size: 2.0,        // Default: max size of 2.0 units
-            split_ratio: 0.5,          // Default: 50/50 split
+            split_ratio: 0.5,          // Default: balanced adhesion inheritance
             nutrient_priority: 1.0,    // Default: neutral priority
             prioritize_when_low: true, // Default: protect cells from death
             parent_split_direction: Vec2::ZERO,

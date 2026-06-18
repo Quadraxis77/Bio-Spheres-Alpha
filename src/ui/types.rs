@@ -982,19 +982,19 @@ pub struct GlobalUiState {
     #[serde(default = "default_world_diameter")]
     pub world_diameter: f32,
 
-    /// LOD scale factor for distance calculations (higher = more aggressive LOD)
+    /// LOD scale factor for distance calculations (higher = full detail farther away)
     #[serde(default = "default_lod_scale_factor")]
     pub lod_scale_factor: f32,
 
-    /// LOD threshold for Low (32x32) to Medium (64x64) transition
+    /// Screen-size threshold from LOD 0 basic sphere to LOD 1 full detail
     #[serde(default = "default_lod_threshold_low")]
     pub lod_threshold_low: f32,
 
-    /// LOD threshold for Medium (64x64) to High (128x128) transition
+    /// Legacy serialized setting retained for compatibility
     #[serde(default = "default_lod_threshold_medium")]
     pub lod_threshold_medium: f32,
 
-    /// LOD threshold for High (128x128) to Ultra (256x256) transition
+    /// Legacy serialized setting retained for compatibility
     #[serde(default = "default_lod_threshold_high")]
     pub lod_threshold_high: f32,
 

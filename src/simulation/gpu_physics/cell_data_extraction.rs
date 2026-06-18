@@ -364,6 +364,7 @@ impl GpuCellDataExtraction {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         cell_index: u32,
+        copy_to_internal_readback: bool,
     ) {
         // Create cell extraction parameters
         let params = CellExtractionParams {
@@ -393,14 +394,17 @@ impl GpuCellDataExtraction {
 
         drop(compute_pass);
 
-        // Copy output buffer to staging buffer for CPU readback
-        encoder.copy_buffer_to_buffer(
-            &self.output_buffer,
-            0,
-            &self.readback_buffer,
-            0,
-            std::mem::size_of::<InspectedCellData>() as u64,
-        );
+        if copy_to_internal_readback {
+            // Legacy fallback path only. The primary async manager creates a
+            // dedicated staging buffer per request and copies from output_buffer.
+            encoder.copy_buffer_to_buffer(
+                &self.output_buffer,
+                0,
+                &self.readback_buffer,
+                0,
+                std::mem::size_of::<InspectedCellData>() as u64,
+            );
+        }
     }
 
     /// Poll for extraction completion and return extracted data if available
@@ -422,14 +426,15 @@ impl GpuCellDataExtraction {
         let _ = device.poll(wgpu::PollType::Poll);
 
         // Check if the in-flight mapping completed
-        let completed = if let Some(ref rx) = self.map_receiver {
-            matches!(rx.try_recv(), Ok(Ok(())))
-        } else {
-            false
-        };
+        let map_result = self.map_receiver.as_ref().and_then(|rx| rx.try_recv().ok());
 
-        if completed {
+        if let Some(result) = map_result {
             self.map_receiver = None;
+
+            if result.is_err() {
+                self.readback_buffer.unmap();
+                return None;
+            }
 
             let slice = self.readback_buffer.slice(..);
             let view = slice.get_mapped_range();
@@ -464,5 +469,7 @@ impl GpuCellDataExtraction {
     /// Clear cached data
     pub fn clear_cache(&mut self) {
         self.cached_data = None;
+        self.map_receiver = None;
+        self.readback_buffer.unmap();
     }
 }

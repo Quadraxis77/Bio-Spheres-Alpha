@@ -105,12 +105,11 @@ pub fn division_step(
                 if m.division_signal_channel >= 8 && (m.division_signal_channel as usize) <= 15 {
                     let ch = m.division_signal_channel as usize;
                     let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
-                    let above = signal_val >= m.division_signal_threshold;
-                    if m.division_signal_invert {
-                        !above
-                    } else {
-                        above
-                    }
+                    crate::simulation::signal_system::signal_gate_active(
+                        signal_val,
+                        m.division_signal_threshold,
+                        m.division_signal_invert,
+                    )
                 } else {
                     true // disabled = no gating
                 }
@@ -318,7 +317,11 @@ pub fn division_step(
                 {
                     let ch = mode.signal_child_a_channel as usize;
                     let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                    if signal_val >= mode.signal_child_a_threshold {
+                    if crate::simulation::signal_system::signal_gate_active(
+                        signal_val,
+                        mode.signal_child_a_threshold,
+                        false,
+                    ) {
                         if mode.signal_child_a_mode_above >= 0 {
                             child_a_mode_idx = mode.signal_child_a_mode_above as usize;
                         }
@@ -332,7 +335,11 @@ pub fn division_step(
                 {
                     let ch = mode.signal_child_b_channel as usize;
                     let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                    if signal_val >= mode.signal_child_b_threshold {
+                    if crate::simulation::signal_system::signal_gate_active(
+                        signal_val,
+                        mode.signal_child_b_threshold,
+                        false,
+                    ) {
                         if mode.signal_child_b_mode_above >= 0 {
                             child_b_mode_idx = mode.signal_child_b_mode_above as usize;
                         }
@@ -402,11 +409,10 @@ pub fn division_step(
                 let child_a_mode = genome.modes.get(child_a_mode_idx);
                 let child_b_mode = genome.modes.get(child_b_mode_idx);
 
-                // Split parent's nutrients according to split_ratio
-                // split_ratio determines what fraction goes to Child A (0.0 to 1.0)
-                let split_ratio = mode.split_ratio.clamp(0.0, 1.0);
-                let child_a_nutrients = parent_nutrients * split_ratio;
-                let child_b_nutrients = parent_nutrients * (1.0 - split_ratio);
+                // Nutrients always split evenly. The mode's split_ratio is reserved
+                // exclusively for adhesion-zone inheritance.
+                let child_a_nutrients = parent_nutrients * 0.5;
+                let child_b_nutrients = parent_nutrients * 0.5;
 
                 // Get split intervals (potentially randomized from range)
                 // Use parent cell_id + tick for deterministic randomness
@@ -865,6 +871,22 @@ pub fn division_step_multi(
                 true
             };
 
+            let can_split_by_signal = if let Some(m) = mode {
+                if m.division_signal_channel >= 8 && m.division_signal_channel <= 15 {
+                    let ch = m.division_signal_channel as usize;
+                    let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
+                    crate::simulation::signal_system::signal_gate_active(
+                        signal_val,
+                        m.division_signal_threshold,
+                        m.division_signal_invert,
+                    )
+                } else {
+                    true
+                }
+            } else {
+                true
+            };
+
             let can_split_by_adhesions = true;
             // Check nutrient threshold - cells must have enough nutrients to split
             // Values > 100 mean "never split" (UI sentinel: split_mass > 2.0 -> threshold > 100)
@@ -883,6 +905,7 @@ pub fn division_step_multi(
             let split_interval_valid = state.split_intervals[i] <= 59.0;
             if can_split_by_count
                 && can_split_by_adhesions
+                && can_split_by_signal
                 && can_split_by_nutrients
                 && can_split_by_time
                 && split_interval_valid
@@ -1009,7 +1032,11 @@ pub fn division_step_multi(
             if mode.signal_child_a_channel >= 0 && (mode.signal_child_a_channel as usize) < 16 {
                 let ch = mode.signal_child_a_channel as usize;
                 let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                if signal_val >= mode.signal_child_a_threshold {
+                if crate::simulation::signal_system::signal_gate_active(
+                    signal_val,
+                    mode.signal_child_a_threshold,
+                    false,
+                ) {
                     if mode.signal_child_a_mode_above >= 0 {
                         child_a_mode_idx = mode.signal_child_a_mode_above as usize;
                     }
@@ -1022,7 +1049,11 @@ pub fn division_step_multi(
             if mode.signal_child_b_channel >= 0 && (mode.signal_child_b_channel as usize) < 16 {
                 let ch = mode.signal_child_b_channel as usize;
                 let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                if signal_val >= mode.signal_child_b_threshold {
+                if crate::simulation::signal_system::signal_gate_active(
+                    signal_val,
+                    mode.signal_child_b_threshold,
+                    false,
+                ) {
                     if mode.signal_child_b_mode_above >= 0 {
                         child_b_mode_idx = mode.signal_child_b_mode_above as usize;
                     }
@@ -1068,10 +1099,10 @@ pub fn division_step_multi(
             let child_a_mode = genome.modes.get(child_a_mode_idx);
             let child_b_mode = genome.modes.get(child_b_mode_idx);
 
-            // Split parent's nutrients according to split_ratio
-            let split_ratio = mode.split_ratio.clamp(0.0, 1.0);
-            let child_a_nutrients = parent_nutrients * split_ratio;
-            let child_b_nutrients = parent_nutrients * (1.0 - split_ratio);
+            // Nutrients always split evenly. The mode's split_ratio is reserved
+            // exclusively for adhesion-zone inheritance.
+            let child_a_nutrients = parent_nutrients * 0.5;
+            let child_b_nutrients = parent_nutrients * 0.5;
 
             let parent_cell_id = state.cell_ids[parent_idx];
             let tick = (current_time * 60.0) as u64;
