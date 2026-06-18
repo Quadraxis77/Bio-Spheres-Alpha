@@ -446,7 +446,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let base_env_exchange = env_exchange;
-    heat_delta += max(env_temp - old_temp, 0.0) * base_env_exchange * exposure_mult * dt;
+    // Bidirectional passive exchange: warm environments heat the cell and cool
+    // environments remove heat. The previous positive-only clamp made cooling
+    // impossible regardless of the surrounding air or water temperature.
+    let env_temp_delta = env_temp - old_temp;
+    if (abs(env_temp_delta) > TEMP_DEADBAND) {
+        heat_delta += env_temp_delta * base_env_exchange * exposure_mult * dt;
+    }
 
     let next_water = clamp(old_water + water_delta, 0.0, capacity);
     // Water changes alter the cell's thermal mass, so dry cells still swing
