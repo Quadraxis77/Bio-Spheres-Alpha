@@ -444,6 +444,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stemocyte_outcomes: Option<[i32; 5]>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stemocyte_thresholds: Option<[u8; 4]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -1027,6 +1029,11 @@ fn mode_to_serializable(
         } else {
             None
         },
+        stemocyte_thresholds: if mode.stemocyte_thresholds != default.stemocyte_thresholds {
+            Some(mode.stemocyte_thresholds)
+        } else {
+            None
+        },
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(
@@ -1186,6 +1193,7 @@ impl SerializableModeSettings {
             || self.stemocyte_signal_channel.is_some()
             || self.stemocyte_weak_first.is_some()
             || self.stemocyte_outcomes.is_some()
+            || self.stemocyte_thresholds.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -1576,6 +1584,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.stemocyte_outcomes {
         mode.stemocyte_outcomes = v;
     }
+    if let Some(v) = ser.stemocyte_thresholds {
+        mode.stemocyte_thresholds = v;
+    }
     if let Some(v) = ser.embryocyte_use_timer {
         mode.embryocyte_use_timer = v;
     }
@@ -1889,6 +1900,7 @@ modified_modes:
         genome.modes[0].stemocyte_signal_channel = 12;
         genome.modes[0].stemocyte_weak_first = true;
         genome.modes[0].stemocyte_outcomes = [1, -1, -2, 2, 0];
+        genome.modes[0].stemocyte_thresholds = [5, 25, 70, 95];
 
         let yaml = genome.to_yaml_string().unwrap();
         let loaded = Genome::from_yaml_string(&yaml).unwrap();
@@ -1896,5 +1908,6 @@ modified_modes:
         assert_eq!(loaded.modes[0].stemocyte_signal_channel, 12);
         assert!(loaded.modes[0].stemocyte_weak_first);
         assert_eq!(loaded.modes[0].stemocyte_outcomes, [1, -1, -2, 2, 0]);
+        assert_eq!(loaded.modes[0].stemocyte_thresholds, [5, 25, 70, 95]);
     }
 }

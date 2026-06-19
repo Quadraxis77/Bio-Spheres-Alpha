@@ -2239,8 +2239,8 @@ impl GpuTripleBufferSystem {
         }
     }
 
-    /// Sync Devorocyte mode properties and myocyte grip into v11.
-    /// v11: [consume_range, consume_rate, myocyte_grip_contracted, myocyte_grip_extended]
+    /// Sync shared v11 properties. Stemocytes use all four lanes for cumulative
+    /// response thresholds; other modes retain Devorocyte/myocyte-grip parameters.
     pub fn sync_devorocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2249,12 +2249,16 @@ impl GpuTripleBufferSystem {
         let mut v11: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
-                v11.push([
-                    mode.devorocyte_consume_range,
-                    mode.devorocyte_consume_rate,
-                    mode.myocyte_grip_contracted,
-                    mode.myocyte_grip_extended,
-                ]);
+                if mode.cell_type == crate::cell::CellType::Stemocyte as i32 {
+                    v11.push(mode.stemocyte_thresholds.map(|value| value as f32 / 100.0));
+                } else {
+                    v11.push([
+                        mode.devorocyte_consume_range,
+                        mode.devorocyte_consume_rate,
+                        mode.myocyte_grip_contracted,
+                        mode.myocyte_grip_extended,
+                    ]);
+                }
             }
         }
         if !v11.is_empty() {
@@ -2273,12 +2277,16 @@ impl GpuTripleBufferSystem {
             .modes
             .iter()
             .map(|mode| {
-                [
-                    mode.devorocyte_consume_range,
-                    mode.devorocyte_consume_rate,
-                    mode.myocyte_grip_contracted,
-                    mode.myocyte_grip_extended,
-                ]
+                if mode.cell_type == crate::cell::CellType::Stemocyte as i32 {
+                    mode.stemocyte_thresholds.map(|value| value as f32 / 100.0)
+                } else {
+                    [
+                        mode.devorocyte_consume_range,
+                        mode.devorocyte_consume_rate,
+                        mode.myocyte_grip_contracted,
+                        mode.myocyte_grip_extended,
+                    ]
+                }
             })
             .collect();
         if !v11.is_empty() {

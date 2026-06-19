@@ -222,6 +222,12 @@ pub struct CaveVertex {
     pub uv: [f32; 2],
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct CulledCaveFragment {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
 /// Vertex data for collision (positions only, GPU-aligned)
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -263,6 +269,7 @@ pub struct CaveSystemRenderer {
     camera_bind_group: wgpu::BindGroup,
     index_count: u32,
     params: CaveParams,
+    culled_fragment_regions: Vec<CulledCaveFragment>,
     width: u32,
     height: u32,
 
@@ -290,7 +297,7 @@ impl CaveSystemRenderer {
         params.world_radius = world_radius;
 
         // Generate initial cave mesh with correct world size
-        let (vertices, indices) = Self::generate_cave_mesh(&params);
+        let (vertices, indices, culled_fragment_regions) = Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
 
         // Create parameter buffer
@@ -716,6 +723,7 @@ impl CaveSystemRenderer {
             camera_bind_group,
             index_count: indices.len() as u32,
             params,
+            culled_fragment_regions,
             width,
             height,
             collision_bind_group,
@@ -733,7 +741,7 @@ impl CaveSystemRenderer {
         mut params: CaveParams,
     ) {
         // Regenerate mesh
-        let (vertices, indices) = Self::generate_cave_mesh(&params);
+        let (vertices, indices, culled_fragment_regions) = Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
 
         self.params = params;
@@ -773,6 +781,7 @@ impl CaveSystemRenderer {
         }
 
         self.index_count = indices.len() as u32;
+        self.culled_fragment_regions = culled_fragment_regions;
     }
 
     /// Update cave world radius and regenerate mesh
@@ -967,6 +976,10 @@ impl CaveSystemRenderer {
 
     pub fn params_mut(&mut self) -> &mut CaveParams {
         &mut self.params
+    }
+
+    pub fn culled_fragment_regions(&self) -> &[CulledCaveFragment] {
+        &self.culled_fragment_regions
     }
 
     /// Build spatial grid for collision detection
@@ -1252,7 +1265,9 @@ pub fn cull_isolated_solid_chunks(solid: &mut [bool], dims: usize, min_voxels: u
 
 impl CaveSystemRenderer {
     /// Generate cave mesh using marching cubes
-    fn generate_cave_mesh(params: &CaveParams) -> (Vec<CaveVertex>, Vec<u32>) {
+    fn generate_cave_mesh(
+        params: &CaveParams,
+    ) -> (Vec<CaveVertex>, Vec<u32>, Vec<CulledCaveFragment>) {
         let resolution = params.grid_resolution as usize;
         let world_center = Vec3::from(params.world_center);
         let world_radius = params.world_radius;
@@ -1341,13 +1356,15 @@ impl CaveSystemRenderer {
             }
         }
 
-        let removed_triangles = Self::cull_small_mesh_components(
+        let (removed_triangles, culled_fragment_regions) = Self::cull_small_mesh_components(
             &mut vertices,
             &mut indices,
             params.isolated_chunk_cull_volume,
             cell_size,
             world_center - Vec3::splat(cave_generation_radius),
             world_center + Vec3::splat(cave_generation_radius),
+            world_center,
+            world_radius,
         );
         if removed_triangles > 0 {
             log::info!("Cave generation: culled {removed_triangles} isolated mesh triangles");
@@ -1367,7 +1384,7 @@ impl CaveSystemRenderer {
             params.mesh_smooth_normals != 0,
         );
 
-        (vertices, indices)
+        (vertices, indices, culled_fragment_regions)
     }
 
     /// Apply Laplacian smoothing to the marching cubes mesh to soften the
@@ -1529,9 +1546,11 @@ impl CaveSystemRenderer {
         cell_size: f32,
         grid_min: Vec3,
         grid_max: Vec3,
-    ) -> usize {
+        world_center: Vec3,
+        world_radius: f32,
+    ) -> (usize, Vec<CulledCaveFragment>) {
         if min_volume <= 0.0 || indices.is_empty() {
-            return 0;
+            return (0, Vec::new());
         }
 
         let tri_count = indices.len() / 3;
@@ -1560,6 +1579,7 @@ impl CaveSystemRenderer {
         let mut component = Vec::new();
         let mut keep_triangles = vec![true; tri_count];
         let mut removed = 0usize;
+        let mut culled_regions = Vec::new();
         let boundary_margin = cell_size * 1.5;
 
         for start in 0..tri_count {
@@ -1587,7 +1607,10 @@ impl CaveSystemRenderer {
                         || p.z <= grid_min.z + boundary_margin
                         || p.x >= grid_max.x - boundary_margin
                         || p.y >= grid_max.y - boundary_margin
-                        || p.z >= grid_max.z - boundary_margin;
+                        || p.z >= grid_max.z - boundary_margin
+                        // The world sphere is a hard containment shell even though
+                        // the render mesh extends three units beyond it.
+                        || (p - world_center).length() >= world_radius - boundary_margin;
 
                     for &next in vertex_to_tris
                         .get(&tri_keys[tri][corner])
@@ -1608,12 +1631,16 @@ impl CaveSystemRenderer {
                 for &tri in &component {
                     keep_triangles[tri] = false;
                 }
+                culled_regions.push(CulledCaveFragment {
+                    min: bounds_min,
+                    max: bounds_max,
+                });
                 removed += component.len();
             }
         }
 
         if removed == 0 {
-            return 0;
+            return (0, Vec::new());
         }
 
         let old_vertices = std::mem::take(vertices);
@@ -1631,7 +1658,7 @@ impl CaveSystemRenderer {
             }
         }
 
-        removed
+        (removed, culled_regions)
     }
 
     /// Hash function for single random value at integer coordinates (no gradients)

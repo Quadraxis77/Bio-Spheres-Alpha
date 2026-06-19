@@ -1585,6 +1585,7 @@ impl GpuScene {
                 stemocyte_signal_channel: 8,
                 stemocyte_weak_first: false,
                 stemocyte_outcomes: [-1; 5],
+                stemocyte_thresholds: [20, 40, 60, 80],
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,
@@ -7433,8 +7434,11 @@ impl GpuScene {
             &self.cave_renderer,
         ) {
             let cave_params = cave_renderer.params();
-            let (solid_mask, geothermal_fields) =
-                solid_mask_generator.generate_solid_mask_and_geothermal_fields(cave_params);
+            let (solid_mask, geothermal_fields) = solid_mask_generator
+                .generate_solid_mask_and_geothermal_fields_with_culled_fragments(
+                    cave_params,
+                    cave_renderer.culled_fragment_regions(),
+                );
 
             // Update the solid mask buffer
             fluid_buffers.update_solid_mask(queue, &solid_mask);

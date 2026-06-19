@@ -476,6 +476,12 @@ impl PreviewState {
             mode.siphon_signal_threshold.to_bits().hash(&mut hasher);
             mode.siphon_signal_invert.hash(&mut hasher);
             mode.siphon_mode.hash(&mut hasher);
+
+            // Stemocyte developmental outcomes change cell fate during resim.
+            mode.stemocyte_signal_channel.hash(&mut hasher);
+            mode.stemocyte_weak_first.hash(&mut hasher);
+            mode.stemocyte_outcomes.hash(&mut hasher);
+            mode.stemocyte_thresholds.hash(&mut hasher);
         }
 
         // Scaffold rules affect bond topology during resim.
@@ -758,5 +764,45 @@ impl PreviewState {
         if let Some(target_time) = self.target_time {
             self.step_to(target_time, genome, config, test_signals);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PreviewState;
+    use crate::genome::Genome;
+
+    #[test]
+    fn stemocyte_settings_affect_genome_hash() {
+        let genome = Genome::new_with_mode_count(1);
+        let original_hash = PreviewState::compute_genome_hash(&genome);
+
+        let mut changed_channel = genome.clone();
+        changed_channel.modes[0].stemocyte_signal_channel = 12;
+        assert_ne!(
+            PreviewState::compute_genome_hash(&changed_channel),
+            original_hash
+        );
+
+        let mut changed_direction = genome.clone();
+        changed_direction.modes[0].stemocyte_weak_first = true;
+        assert_ne!(
+            PreviewState::compute_genome_hash(&changed_direction),
+            original_hash
+        );
+
+        let mut changed_outcome = genome.clone();
+        changed_outcome.modes[0].stemocyte_outcomes[2] = -2;
+        assert_ne!(
+            PreviewState::compute_genome_hash(&changed_outcome),
+            original_hash
+        );
+
+        let mut changed_threshold = genome;
+        changed_threshold.modes[0].stemocyte_thresholds = [10, 30, 70, 90];
+        assert_ne!(
+            PreviewState::compute_genome_hash(&changed_threshold),
+            original_hash
+        );
     }
 }

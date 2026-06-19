@@ -163,6 +163,11 @@ var<storage, read> embryocyte_mode_v10: array<vec4<f32>>;
 @group(2) @binding(22)
 var<storage, read> cell_thermal_state: array<u32>;
 
+// Binding 23: shared mode properties v11. Stemocytes store four cumulative
+// normalized developmental response boundaries here.
+@group(2) @binding(23)
+var<storage, read> mode_properties_v11: array<vec4<f32>>;
+
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -437,7 +442,12 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let signal_ch = clamp(u32(stem_v9.x), 8u, 15u);
             let raw_signal = signal_flags_read[cell_idx * 16u + signal_ch];
             let normalized_signal = clamp(f32(raw_signal & 0x7FFu) / 2047.0, 0.0, 1.0);
-            let weak_band = min(u32(normalized_signal * 5.0), 4u);
+            let thresholds = mode_properties_v11[mode_idx];
+            var weak_band = 4u;
+            if (normalized_signal < thresholds.x) { weak_band = 0u; }
+            else if (normalized_signal < thresholds.y) { weak_band = 1u; }
+            else if (normalized_signal < thresholds.z) { weak_band = 2u; }
+            else if (normalized_signal < thresholds.w) { weak_band = 3u; }
             let band = select(4u - weak_band, weak_band, stem_v9.y > 0.5);
 
             var outcome = -1.0;

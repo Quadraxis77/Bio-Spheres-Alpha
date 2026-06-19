@@ -1688,6 +1688,10 @@ impl GpuPhysicsPipelines {
                     binding: 22,
                     resource: buffers.cell_thermal_state.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 23,
+                    resource: buffers.mode_properties_v11.as_entire_binding(),
+                },
             ],
         })
     }
@@ -3773,6 +3777,17 @@ impl GpuPhysicsPipelines {
                     // Binding 22: Thermal state blocks frozen/heat-shock division.
                     wgpu::BindGroupLayoutEntry {
                         binding: 22,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 23: Shared mode properties v11 (Stemocyte thresholds).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 23,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },

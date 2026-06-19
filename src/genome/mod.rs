@@ -362,7 +362,8 @@ pub struct ModeSettings {
     // Outcomes: -2 = apoptosis, -1 = remain Stemocyte and split normally, >= 0 = target mode.
     pub stemocyte_signal_channel: i32, // Developmental channel to read (8-15)
     pub stemocyte_weak_first: bool,    // False = strong signal first, true = weak signal first
-    pub stemocyte_outcomes: [i32; 5],  // Five fixed 20% signal bands in presentation order
+    pub stemocyte_outcomes: [i32; 5],  // Five signal bands in presentation order
+    pub stemocyte_thresholds: [u8; 4], // Cumulative percentage boundaries, strictly ascending
 
     // Child settings
     pub child_a: ChildSettings,
@@ -388,7 +389,12 @@ impl ModeSettings {
     /// Select the configured Stemocyte outcome for an existing 0-2047 signal value.
     pub fn stemocyte_outcome_for_signal(&self, signal_value: f32) -> i32 {
         let normalized = (signal_value / 2047.0).clamp(0.0, 1.0);
-        let weak_band = ((normalized * 5.0) as usize).min(4);
+        let percentage = normalized * 100.0;
+        let weak_band = self
+            .stemocyte_thresholds
+            .iter()
+            .position(|threshold| percentage < *threshold as f32)
+            .unwrap_or(4);
         let band = if self.stemocyte_weak_first {
             weak_band
         } else {
@@ -413,6 +419,20 @@ mod stemocyte_tests {
         mode.stemocyte_weak_first = true;
         assert_eq!(mode.stemocyte_outcome_for_signal(0.0), 10);
         assert_eq!(mode.stemocyte_outcome_for_signal(2047.0), 14);
+    }
+
+    #[test]
+    fn stemocyte_bands_follow_custom_thresholds() {
+        let mut mode = ModeSettings::default();
+        mode.stemocyte_weak_first = true;
+        mode.stemocyte_outcomes = [10, 11, 12, 13, 14];
+        mode.stemocyte_thresholds = [10, 25, 70, 90];
+
+        assert_eq!(mode.stemocyte_outcome_for_signal(0.0), 10);
+        assert_eq!(mode.stemocyte_outcome_for_signal(204.0), 10);
+        assert_eq!(mode.stemocyte_outcome_for_signal(205.0), 11);
+        assert_eq!(mode.stemocyte_outcome_for_signal(1024.0), 12);
+        assert_eq!(mode.stemocyte_outcome_for_signal(1843.0), 14);
     }
 
     #[test]
@@ -574,6 +594,7 @@ impl Default for ModeSettings {
             stemocyte_signal_channel: 8,
             stemocyte_weak_first: false,
             stemocyte_outcomes: [-1; 5],
+            stemocyte_thresholds: [20, 40, 60, 80],
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

@@ -8359,6 +8359,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     stemocyte_signal_channel: 8,
                     stemocyte_weak_first: false,
                     stemocyte_outcomes: [-1; 5],
+                    stemocyte_thresholds: [20, 40, 60, 80],
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -8713,6 +8714,227 @@ fn draw_marquee_text(
             text_color,
         );
     }
+}
+
+fn stemocyte_response_name(outcome: i32, modes: &[(String, glam::Vec3)]) -> String {
+    match outcome {
+        -2 => "Death".to_string(),
+        -1 => "Stem".to_string(),
+        target => modes
+            .get(target as usize)
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| "Stem".to_string()),
+    }
+}
+
+fn stemocyte_response_color(outcome: i32, modes: &[(String, glam::Vec3)]) -> egui::Color32 {
+    match outcome {
+        -2 => egui::Color32::from_rgb(170, 55, 70),
+        -1 => egui::Color32::from_rgb(132, 88, 170),
+        target => modes
+            .get(target as usize)
+            .map(|(_, color)| {
+                egui::Color32::from_rgb(
+                    (color.x * 255.0) as u8,
+                    (color.y * 255.0) as u8,
+                    (color.z * 255.0) as u8,
+                )
+            })
+            .unwrap_or(egui::Color32::from_rgb(132, 88, 170)),
+    }
+}
+
+fn draw_stemocyte_response_strip(
+    ui: &mut Ui,
+    weak_first: bool,
+    outcomes: &mut [i32; 5],
+    thresholds: &mut [u8; 4],
+    modes: &[(String, glam::Vec3)],
+) {
+    // Repair malformed imported values while preserving at least 1% per band.
+    for boundary in 0..4 {
+        let min = if boundary == 0 {
+            1
+        } else {
+            thresholds[boundary - 1] + 1
+        };
+        let max = 96 + boundary as u8;
+        thresholds[boundary] = thresholds[boundary].clamp(min, max);
+    }
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.small("W");
+
+        let width = (ui.available_width() - 18.0).max(120.0);
+        let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(width, 25.0), egui::Sense::hover());
+        let mut edges = [0.0_f32; 6];
+        edges[0] = bar_rect.left();
+        for boundary in 0..4 {
+            edges[boundary + 1] =
+                bar_rect.left() + bar_rect.width() * thresholds[boundary] as f32 / 100.0;
+        }
+        edges[5] = bar_rect.right();
+
+        for weak_band in 0..5 {
+            let outcome_index = if weak_first { weak_band } else { 4 - weak_band };
+            let outcome = outcomes[outcome_index];
+            let segment_rect = egui::Rect::from_min_max(
+                egui::pos2(edges[weak_band], bar_rect.top()),
+                egui::pos2(edges[weak_band + 1], bar_rect.bottom()),
+            );
+            let response = ui.interact(
+                segment_rect,
+                ui.make_persistent_id(("stemocyte_response_segment", weak_band)),
+                egui::Sense::click(),
+            );
+            let color = stemocyte_response_color(outcome, modes);
+            ui.painter()
+                .rect_filled(segment_rect.shrink(0.5), 3.0, color);
+
+            let percentage = ((edges[weak_band + 1] - edges[weak_band]) / bar_rect.width() * 100.0)
+                .round() as u8;
+            if segment_rect.width() >= 27.0 {
+                let name = stemocyte_response_name(outcome, modes);
+                let label = if segment_rect.width() >= 72.0 {
+                    format!("{name} {percentage}%")
+                } else {
+                    format!("{percentage}%")
+                };
+                let luminance = color.r() as u16 * 3 + color.g() as u16 * 6 + color.b() as u16;
+                let text_color = if luminance > 1450 {
+                    egui::Color32::BLACK
+                } else {
+                    egui::Color32::WHITE
+                };
+                ui.painter().text(
+                    segment_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(10.0),
+                    text_color,
+                );
+            }
+
+            egui::Popup::menu(&response)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    ui.set_min_width(170.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Width");
+                        let start = if weak_band == 0 {
+                            0
+                        } else {
+                            thresholds[weak_band - 1]
+                        };
+                        let mut exact_width = percentage;
+                        let max_width = if weak_band < 4 {
+                            let next_edge = if weak_band == 3 {
+                                100
+                            } else {
+                                thresholds[weak_band + 1]
+                            };
+                            next_edge.saturating_sub(start + 1)
+                        } else {
+                            99_u8.saturating_sub(thresholds[2])
+                        }
+                        .max(1);
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut exact_width)
+                                    .range(1..=max_width)
+                                    .suffix("%"),
+                            )
+                            .changed()
+                        {
+                            if weak_band < 4 {
+                                thresholds[weak_band] = start + exact_width;
+                            } else {
+                                thresholds[3] = 100 - exact_width;
+                            }
+                        }
+                    });
+                    ui.separator();
+                    if ui
+                        .selectable_label(outcome == -1, "Remain Stemocyte")
+                        .clicked()
+                    {
+                        outcomes[outcome_index] = -1;
+                        egui::Popup::close_all(ui.ctx());
+                    }
+                    if ui
+                        .selectable_label(outcome == -2, "Enter Apoptosis")
+                        .clicked()
+                    {
+                        outcomes[outcome_index] = -2;
+                        egui::Popup::close_all(ui.ctx());
+                    }
+                    ui.separator();
+                    for (target_index, (name, _)) in modes.iter().enumerate() {
+                        if ui
+                            .selectable_label(
+                                outcome == target_index as i32,
+                                format!("Change to {name}"),
+                            )
+                            .clicked()
+                        {
+                            outcomes[outcome_index] = target_index as i32;
+                            egui::Popup::close_all(ui.ctx());
+                        }
+                    }
+                });
+        }
+
+        for boundary in 0..4 {
+            let x = edges[boundary + 1];
+            let handle_rect = egui::Rect::from_center_size(
+                egui::pos2(x, bar_rect.center().y),
+                egui::vec2(9.0, bar_rect.height() + 8.0),
+            );
+            let response = ui.interact(
+                handle_rect,
+                ui.make_persistent_id(("stemocyte_response_boundary", boundary)),
+                egui::Sense::drag(),
+            );
+            if response.dragged() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    let requested =
+                        ((pointer.x - bar_rect.left()) / bar_rect.width() * 100.0).round() as i32;
+                    let min = if boundary == 0 {
+                        1
+                    } else {
+                        thresholds[boundary - 1] as i32 + 1
+                    };
+                    let max = if boundary == 3 {
+                        99
+                    } else {
+                        thresholds[boundary + 1] as i32 - 1
+                    };
+                    thresholds[boundary] = requested.clamp(min, max) as u8;
+                }
+            }
+            let stroke = if response.hovered() || response.dragged() {
+                egui::Stroke::new(2.0, egui::Color32::WHITE)
+            } else {
+                egui::Stroke::new(1.0, egui::Color32::from_white_alpha(180))
+            };
+            ui.painter().line_segment(
+                [
+                    egui::pos2(x, bar_rect.top() + 2.0),
+                    egui::pos2(x, bar_rect.bottom() - 2.0),
+                ],
+                stroke,
+            );
+        }
+
+        ui.painter().rect_stroke(
+            bar_rect,
+            3.0,
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(100)),
+            egui::StrokeKind::Inside,
+        );
+        ui.small("S");
+    });
 }
 
 /// Helper function to create a color-coded group container
@@ -9253,87 +9475,27 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
                 });
             } else if mode.cell_type == 19 { // Stemocyte (cell_type == 19)
-                group_container(ui, "Stemocyte Differentiation", egui::Color32::from_rgb(170, 120, 220), |ui| {
-                    ui.label("At the end of the split timer, read one developmental gradient channel and apply exactly one fixed signal-band outcome.");
-                    ui.separator();
-
-                    ui.label("Developmental Channel:")
-                        .on_hover_text("Stemocytes listen to exactly one regulation/developmental channel (8-15).");
+                group_container(ui, "Stemocyte Development", egui::Color32::from_rgb(170, 120, 220), |ui| {
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.label("Channel")
+                            .on_hover_text("Developmental gradient channel (8-15).");
                         mode.stemocyte_signal_channel = mode.stemocyte_signal_channel.clamp(8, 15);
-                        ui.add(egui::Slider::new(&mut mode.stemocyte_signal_channel, 8..=15).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.stemocyte_signal_channel).speed(0.1).range(8..=15));
+                        ui.add(
+                            egui::DragValue::new(&mut mode.stemocyte_signal_channel)
+                                .speed(0.1)
+                                .range(8..=15),
+                        );
+                        ui.separator();
+                        ui.small("Drag dividers · click a response");
                     });
 
-                    egui::ComboBox::from_id_salt("stemocyte_gradient_direction")
-                        .selected_text(if mode.stemocyte_weak_first {
-                            "Weak Signal First"
-                        } else {
-                            "Strong Signal First"
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut mode.stemocyte_weak_first, false, "Strong Signal First");
-                            ui.selectable_value(&mut mode.stemocyte_weak_first, true, "Weak Signal First");
-                        });
-
-                    ui.separator();
-                    for band_index in 0..5 {
-                        let low = if mode.stemocyte_weak_first {
-                            band_index * 20
-                        } else {
-                            (4 - band_index) * 20
-                        };
-                        let high = low + 20;
-                        let outcome = &mut mode.stemocyte_outcomes[band_index];
-                        let selected = if *outcome == -2 {
-                            "Enter Apoptosis".to_string()
-                        } else if *outcome == -1 {
-                            "Remain Stemocyte".to_string()
-                        } else {
-                            mode_info_for_dropdowns
-                                .get(*outcome as usize)
-                                .map(|(name, _)| format!("Change to {name}"))
-                                .unwrap_or_else(|| "Remain Stemocyte".to_string())
-                        };
-
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{low}-{high}%"));
-                            egui::ComboBox::from_id_salt(("stemocyte_outcome", band_index))
-                                .selected_text(selected)
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(outcome, -1, "Remain Stemocyte");
-                                    ui.selectable_value(outcome, -2, "Enter Apoptosis");
-                                    ui.separator();
-                                    for (target_index, (name, color)) in mode_info_for_dropdowns.iter().enumerate() {
-                                        ui.horizontal(|ui| {
-                                            let (rect, _) = ui.allocate_exact_size(
-                                                egui::vec2(10.0, 10.0),
-                                                egui::Sense::hover(),
-                                            );
-                                            ui.painter().circle_filled(
-                                                rect.center(),
-                                                5.0,
-                                                egui::Color32::from_rgb(
-                                                    (color.x * 255.0) as u8,
-                                                    (color.y * 255.0) as u8,
-                                                    (color.z * 255.0) as u8,
-                                                ),
-                                            );
-                                            ui.selectable_value(
-                                                outcome,
-                                                target_index as i32,
-                                                format!("Change to {name}"),
-                                            );
-                                        });
-                                    }
-                                });
-                        });
-                    }
-
-                    ui.small("Signal strength is interpreted as 0-2047 internally and normalized to 0-100% for these bands.");
+                    draw_stemocyte_response_strip(
+                        ui,
+                        mode.stemocyte_weak_first,
+                        &mut mode.stemocyte_outcomes,
+                        &mut mode.stemocyte_thresholds,
+                        &mode_info_for_dropdowns,
+                    );
                 });
             } else if mode.cell_type == 4 { // Lipocyte (cell_type == 4)
                 group_container(ui, "Lipocyte Functions", egui::Color32::from_rgb(220, 180, 100), |ui| {
@@ -11361,6 +11523,9 @@ fn sync_mode_changes_to_others(
         }
         if updated.stemocyte_outcomes != snapshot.stemocyte_outcomes {
             other.stemocyte_outcomes = updated.stemocyte_outcomes;
+        }
+        if updated.stemocyte_thresholds != snapshot.stemocyte_thresholds {
+            other.stemocyte_thresholds = updated.stemocyte_thresholds;
         }
         if updated.mode_switch_invert != snapshot.mode_switch_invert {
             other.mode_switch_invert = updated.mode_switch_invert;

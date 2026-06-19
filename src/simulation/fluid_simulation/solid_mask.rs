@@ -93,9 +93,66 @@ impl SolidMaskGenerator {
         Vec<u32>,
         crate::simulation::fluid_simulation::GeothermalFields,
     ) {
+        self.generate_solid_mask_and_geothermal_fields_with_culled_fragments(cave_params, &[])
+    }
+
+    pub fn generate_solid_mask_and_geothermal_fields_with_culled_fragments(
+        &self,
+        cave_params: &CaveParams,
+        culled_fragments: &[crate::rendering::cave_system::CulledCaveFragment],
+    ) -> (
+        Vec<u32>,
+        crate::simulation::fluid_simulation::GeothermalFields,
+    ) {
         let grid_size = self.grid_resolution as usize;
         let solid = self.build_solid_array(cave_params);
         let mut solid_mask: Vec<u32> = solid.iter().map(|&b| u32::from(b)).collect();
+
+        if !culled_fragments.is_empty() {
+            let cell_size = self.world_radius * 2.0 / self.grid_resolution as f32;
+            let grid_origin = self.world_center - Vec3::splat(self.world_radius);
+            // Preserve a full inner voxel layer at the world sphere. Fluid uses
+            // this shell for containment, so fragment cleanup must never punch it.
+            let protected_shell_radius = (self.world_radius - cell_size * 1.5).max(0.0);
+            let projection_margin = Vec3::splat(cell_size * 0.25);
+            let mut cleared = 0usize;
+
+            for z in 0..grid_size {
+                for y in 0..grid_size {
+                    for x in 0..grid_size {
+                        let i = x + y * grid_size + z * grid_size * grid_size;
+                        if solid_mask[i] == 0 {
+                            continue;
+                        }
+                        let center = grid_origin
+                            + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
+                        if (center - self.world_center).length() >= protected_shell_radius {
+                            continue;
+                        }
+                        let inside_culled_fragment = culled_fragments.iter().any(|fragment| {
+                            let min = fragment.min - projection_margin;
+                            let max = fragment.max + projection_margin;
+                            center.x >= min.x
+                                && center.x <= max.x
+                                && center.y >= min.y
+                                && center.y <= max.y
+                                && center.z >= min.z
+                                && center.z <= max.z
+                        });
+                        if inside_culled_fragment {
+                            solid_mask[i] = 0;
+                            cleared += 1;
+                        }
+                    }
+                }
+            }
+
+            if cleared > 0 {
+                log::info!(
+                    "Solid mask: cleared {cleared} voxels covered by culled mesh fragments"
+                );
+            }
+        }
 
         let fields = crate::simulation::fluid_simulation::geothermal_vents::apply_to_solid_mask(
             &mut solid_mask,
@@ -287,5 +344,46 @@ mod tests {
         // Result could be either solid or empty depending on noise
         // Just ensure the function runs without panic
         let _ = result;
+    }
+
+    #[test]
+    fn fragment_culling_never_opens_world_containment_shell() {
+        let resolution = 32u32;
+        let world_radius = 100.0;
+        let generator = SolidMaskGenerator::new(resolution, Vec3::ZERO, world_radius);
+        let mut cave_params = CaveParams::default();
+        cave_params.geothermal_enabled = 0;
+        let fragment = crate::rendering::cave_system::CulledCaveFragment {
+            min: Vec3::splat(-200.0),
+            max: Vec3::splat(200.0),
+        };
+
+        let baseline = generator.generate_solid_mask(&cave_params);
+        let (solid_mask, _) = generator
+            .generate_solid_mask_and_geothermal_fields_with_culled_fragments(
+                &cave_params,
+                &[fragment],
+            );
+
+        let grid_size = resolution as usize;
+        let cell_size = world_radius * 2.0 / resolution as f32;
+        let grid_origin = Vec3::splat(-world_radius);
+        let protected_shell_radius = world_radius - cell_size * 1.5;
+
+        for z in 0..grid_size {
+            for y in 0..grid_size {
+                for x in 0..grid_size {
+                    let center = grid_origin
+                        + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
+                    if center.length() >= protected_shell_radius {
+                        let i = x + y * grid_size + z * grid_size * grid_size;
+                        assert!(
+                            baseline[i] == 0 || solid_mask[i] == 1,
+                            "existing containment marker was removed at {center:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
