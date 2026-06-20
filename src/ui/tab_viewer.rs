@@ -17,7 +17,7 @@ use crate::ui::ui_system::{
 };
 use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
 use crate::field_report::{
-    render_lineage_snapshot_report, render_specimen_report, ArchivedFieldReport,
+    format_simulation_time, render_lineage_snapshot_report, render_specimen_report, ArchivedFieldReport,
     FieldReportHistory, FieldReportSeverity, LineageSnapshotReportSnapshot, RenderedFieldReport,
     SpecimenReportSnapshot, ToneProfile,
 };
@@ -1063,6 +1063,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 fn render_field_station_feed(ui: &mut Ui, context: &mut PanelContext) {
     ui.add_space(6.0);
     section_header(ui, "FIELD STATION REPORT");
+    let scheduled_status = field_report_schedule_status(context);
     if let Some(latest) = context.field_reports.history.reports.back() {
         render_field_report_card(ui, &latest.rendered, None);
         let recent: Vec<_> = context
@@ -1095,21 +1096,40 @@ fn render_field_station_feed(ui: &mut Ui, context: &mut PanelContext) {
                         .size(11.0)
                         .color(palette().text_secondary),
                 );
-                ui.label(
-                    egui::RichText::new(
-                        "Open the Lineage Viewer and use Refresh Scan to capture the first report.",
-                    )
-                    .size(9.5)
-                    .color(palette().text_dim),
-                );
             });
     }
+    ui.label(
+        egui::RichText::new(scheduled_status)
+            .size(9.5)
+            .color(palette().text_dim),
+    );
     ui.add_space(10.0);
     ui.label(
         egui::RichText::new("Select a cell to switch to specimen reporting.")
             .size(9.5)
             .color(palette().text_dim),
     );
+}
+
+fn field_report_schedule_status(context: &PanelContext) -> String {
+    context
+        .scene_manager
+        .gpu_scene()
+        .map(|scene| {
+            let interval = scene.lineage_capture_interval_seconds.max(1.0);
+            let elapsed = scene
+                .lineage_archive
+                .last_scan_frame
+                .map(|_| scene.current_time - scene.lineage_archive.last_scan_time)
+                .unwrap_or(scene.current_time);
+            let remaining = (interval - elapsed).max(0.0);
+            if scene.lineage_archive.last_scan_frame.is_some() {
+                format!("Next scheduled report scan in {:.0}s.", remaining.ceil())
+            } else {
+                format!("First scheduled report scan in {:.0}s.", remaining.ceil())
+            }
+        })
+        .unwrap_or_else(|| "Scheduled reporting begins in GPU biosphere mode.".to_string())
 }
 
 fn render_recent_report_row(ui: &mut Ui, report: &ArchivedFieldReport) {
@@ -1552,10 +1572,10 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         })
         .count();
 
-    let scan_text = if let Some(frame) = archive.last_scan_frame {
+    let scan_text = if archive.last_scan_frame.is_some() {
         format!(
-            "SCAN LOCKED / FRAME {} / {:.1}s",
-            frame, archive.last_scan_time
+            "SCAN LOCKED / {}",
+            format_simulation_time(archive.last_scan_time as f64)
         )
     } else {
         "SCAN PENDING ON PANEL OPEN".to_string()

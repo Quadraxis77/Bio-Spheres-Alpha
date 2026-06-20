@@ -177,27 +177,48 @@ impl FieldReportHistory {
         &self,
         lineage_id: LineageId,
         within_reports: usize,
+        current_frame: u64,
+        within_frames: u64,
     ) -> bool {
         self.reports
             .iter()
             .rev()
             .take(within_reports)
-            .any(|report| report.rendered.involved_lineages.contains(&lineage_id))
+            .any(|report| {
+                current_frame.saturating_sub(report.created_frame) < within_frames
+                    && report.rendered.involved_lineages.contains(&lineage_id)
+            })
     }
 
-    pub fn recent_theme(&self, theme: ReportTheme, within_reports: usize) -> bool {
+    pub fn recent_theme(
+        &self,
+        theme: ReportTheme,
+        within_reports: usize,
+        current_frame: u64,
+        within_frames: u64,
+    ) -> bool {
         self.reports
             .iter()
             .rev()
             .take(within_reports)
-            .any(|report| report.rendered.theme == theme)
+            .any(|report| {
+                current_frame.saturating_sub(report.created_frame) < within_frames
+                    && report.rendered.theme == theme
+            })
     }
 
-    pub fn recent_claim(&self, claims: &[ClaimKey], within_reports: usize) -> bool {
+    pub fn recent_claim(
+        &self,
+        claims: &[ClaimKey],
+        within_reports: usize,
+        current_frame: u64,
+        within_frames: u64,
+    ) -> bool {
         self.reports
             .iter()
             .rev()
             .take(within_reports)
+            .filter(|report| current_frame.saturating_sub(report.created_frame) < within_frames)
             .flat_map(|report| report.rendered.sentences.iter())
             .flat_map(|sentence| sentence.claim_keys.iter())
             .any(|claim| claims.contains(claim))
@@ -212,6 +233,21 @@ impl FieldReportHistory {
             .rev()
             .find(|report| report.rendered.involved_lineages.contains(&lineage_id))
             .map(|report| report.rendered.severity)
+    }
+
+    pub fn prior_reports_for_plan(&self, plan: &ReportPlan) -> usize {
+        self.reports
+            .iter()
+            .filter(|report| {
+                report.rendered.theme == plan.theme
+                    && match plan.subject_lineage {
+                        Some(lineage_id) => {
+                            report.rendered.involved_lineages.contains(&lineage_id)
+                        }
+                        None => report.rendered.involved_lineages.is_empty(),
+                    }
+            })
+            .count()
     }
 
     fn trim(&mut self) {

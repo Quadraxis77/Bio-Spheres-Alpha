@@ -16,6 +16,8 @@ pub enum ReportTheme {
     TerritoryObservation,
     EcosystemDominance,
     EcosystemBalance,
+    SingleLineageProfile,
+    SceneComposition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -127,6 +129,13 @@ pub fn build_report_plans(facts: &[ReportFact]) -> Vec<ReportPlan> {
                 ReportFactKind::PopulationChange,
                 RhetoricalShape::ObservationEvidenceWatch,
             )
+        } else if has(ReportFactKind::SingleLineageProfile) {
+            (
+                ReportTheme::SingleLineageProfile,
+                FieldReportSeverity::Notable,
+                ReportFactKind::SingleLineageProfile,
+                RhetoricalShape::ObservationEvidence,
+            )
         } else if has(ReportFactKind::PopulationComposition) {
             (
                 ReportTheme::CompositionShift,
@@ -180,6 +189,10 @@ pub fn build_report_plans(facts: &[ReportFact]) -> Vec<ReportPlan> {
 
     for fact in facts.iter().filter(|fact| fact.subject_lineage().is_none()) {
         let (theme, severity) = match fact {
+            ReportFact::SceneComposition { .. } => (
+                ReportTheme::SceneComposition,
+                FieldReportSeverity::Notable,
+            ),
             ReportFact::EcosystemDominance { .. } => (
                 ReportTheme::EcosystemDominance,
                 FieldReportSeverity::Warning,
@@ -191,7 +204,14 @@ pub fn build_report_plans(facts: &[ReportFact]) -> Vec<ReportPlan> {
             subject_lineage: None,
             supporting_lineages: Vec::new(),
             lead_fact: fact.clone(),
-            supporting_facts: Vec::new(),
+            supporting_facts: facts
+                .iter()
+                .filter(|candidate| {
+                    candidate.subject_lineage().is_none()
+                        && candidate.kind() != fact.kind()
+                })
+                .cloned()
+                .collect(),
             severity,
             tags: fact.tags().to_vec(),
             rhetorical_shape: RhetoricalShape::ObservationEvidence,

@@ -60,7 +60,6 @@ impl LineageTelemetryAccumulator {
         mode_index: u32,
         cell_type: u32,
         nutrients: f32,
-        nutrient_gain_rate: f32,
         age: f32,
         split_interval: f32,
         split_nutrient_threshold: f32,
@@ -68,7 +67,11 @@ impl LineageTelemetryAccumulator {
         self.cells = self.cells.saturating_add(1);
         self.nutrient_sum += nutrients as f64;
         self.age_sum += age as f64;
-        self.nutrient_positive += u32::from(nutrient_gain_rate > 0.01);
+        // Dynamic nutrient acquisition is applied by several specialized GPU
+        // systems and is not represented by the per-mode baseline gain buffer.
+        // Current reserves are directly observed and provide a truthful,
+        // low-cost indication of how many cells are presently nutrient-secure.
+        self.nutrient_positive += u32::from(nutrients > 10.0);
         self.starvation_risk += u32::from(nutrients <= 10.0);
         self.division_ready += u32::from(
             split_nutrient_threshold > 0.0
@@ -94,9 +97,35 @@ impl LineageTelemetryAccumulator {
         }
     }
 
-    fn report_fields(&self) -> (f32, f32, f32, f32, f32, u32, f32, u32, [f32; 3], f32) {
+    fn report_fields(
+        &self,
+    ) -> (
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        u32,
+        f32,
+        [u32; crate::cell::types::CellType::MAX_TYPES],
+        u32,
+        [f32; 3],
+        f32,
+    ) {
         if self.cells == 0 {
-            return (0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0, [0.0; 3], 0.0);
+            return (
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0,
+                0.0,
+                [0; crate::cell::types::CellType::MAX_TYPES],
+                0,
+                [0.0; 3],
+                0.0,
+            );
         }
 
         let count = self.cells as f32;
@@ -112,6 +141,12 @@ impl LineageTelemetryAccumulator {
         } else {
             0.0
         };
+        let mut cell_type_counts = [0; crate::cell::types::CellType::MAX_TYPES];
+        for (&cell_type, &count) in &self.cell_type_counts {
+            if let Some(slot) = cell_type_counts.get_mut(cell_type as usize) {
+                *slot = count;
+            }
+        }
 
         (
             (self.nutrient_sum / self.cells as f64) as f32,
@@ -121,10 +156,27 @@ impl LineageTelemetryAccumulator {
             (self.age_sum / self.cells as f64) as f32,
             dominant_cell_type,
             dominant_count as f32 / count,
+            cell_type_counts,
             self.active_modes.len().min(u32::MAX as usize) as u32,
             center.to_array(),
             bounding_radius,
         )
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::LineageTelemetryAccumulator;
+
+    #[test]
+    fn nutrient_security_uses_observed_reserves_not_configured_gain() {
+        let mut telemetry = LineageTelemetryAccumulator::default();
+        telemetry.record([0.0; 4], 0, 3, 25.0, 1.0, 10.0, 20.0);
+        telemetry.record([0.0; 4], 0, 3, 5.0, 1.0, 10.0, 20.0);
+
+        let (_, secure_fraction, _, starvation_fraction, ..) = telemetry.report_fields();
+        assert_eq!(secure_fraction, 0.5);
+        assert_eq!(starvation_fraction, 0.5);
     }
 }
 
@@ -856,15 +908,6 @@ impl GpuScene {
             &self.gpu_triple_buffers.split_nutrient_thresholds,
             slots,
         )?;
-        // These two compact scalar buffers complete the report-oriented
-        // resource/composition summary. They are read only during an explicit
-        // blocking lineage scan, never during the automatic refresh path.
-        let nutrient_gain_rates: Vec<f32> = readback_typed(
-            device,
-            queue,
-            &self.gpu_triple_buffers.nutrient_gain_rates,
-            slots,
-        )?;
         let cell_types: Vec<u32> =
             readback_typed(device, queue, &self.gpu_triple_buffers.cell_types, slots)?;
 
@@ -901,7 +944,6 @@ impl GpuScene {
                 mode_indices.get(i).copied().unwrap_or(0),
                 cell_types.get(i).copied().unwrap_or(0),
                 nutrient,
-                nutrient_gain_rates.get(i).copied().unwrap_or(0.0),
                 (self.current_time - birth_time).max(0.0),
                 split_intervals.get(i).copied().unwrap_or(0.0),
                 split_nutrient_thresholds.get(i).copied().unwrap_or(0.0),
@@ -1052,13 +1094,26 @@ impl GpuScene {
                 average_age,
                 dominant_cell_type,
                 dominant_cell_type_fraction,
+                cell_type_counts,
                 active_mode_count,
                 center,
                 bounding_radius,
             ) = telemetry_by_genome
                 .get(&genome_id)
                 .map(LineageTelemetryAccumulator::report_fields)
-                .unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0, [0.0; 3], 0.0));
+                .unwrap_or((
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0,
+                    0.0,
+                    [0; crate::cell::types::CellType::MAX_TYPES],
+                    0,
+                    [0.0; 3],
+                    0.0,
+                ));
             samples.push(LineagePopulationSample {
                 lineage_id,
                 cells,
@@ -1072,6 +1127,7 @@ impl GpuScene {
                 average_age,
                 dominant_cell_type,
                 dominant_cell_type_fraction,
+                cell_type_counts,
                 active_mode_count,
                 center,
                 bounding_radius,

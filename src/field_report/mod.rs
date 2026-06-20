@@ -15,7 +15,7 @@ pub mod scope;
 pub mod style;
 pub mod director;
 
-pub use context::{FieldReportContext, LineageReportSnapshot};
+pub use context::{FieldReportContext, LineageReportSnapshot, SceneCompositionSnapshot};
 pub use facts::{
     extract_facts, ClaimConfidence, FieldReportTag, ReportConfidence, ReportFact, ReportFactKind,
 };
@@ -29,11 +29,11 @@ pub use director::{
     ReportCooldownRules, ReportDecision, SuppressionReason,
 };
 pub use render::{
-    render_report, render_report_all_tones, validate_report, CoherenceError, RenderedFieldReport,
-    RenderedSentence,
+    render_report, render_report_all_tones, render_report_with_variation, validate_report,
+    CoherenceError, RenderedFieldReport, RenderedSentence,
 };
 pub use scope::{
-    render_lineage_snapshot_report, render_specimen_report, CellId,
+    format_simulation_time, render_lineage_snapshot_report, render_specimen_report, CellId,
     LineageSnapshotReportSnapshot, OrganismId, ReportScope, SpecimenReportSnapshot,
 };
 pub use style::{
@@ -106,6 +106,60 @@ mod tests {
                 growing_lineages: 2,
                 declining_lineages: 1,
                 ..EcosystemTelemetrySummary::default()
+            },
+            composition: SceneCompositionSnapshot::default(),
+        }
+    }
+
+    fn stable_single_lineage_context(frame: i32) -> FieldReportContext {
+        let mut cell_type_counts = [0; crate::cell::types::CellType::MAX_TYPES];
+        cell_type_counts[crate::cell::types::CellType::Photocyte as usize] = 210;
+        cell_type_counts[crate::cell::types::CellType::Flagellocyte as usize] = 90;
+        cell_type_counts[crate::cell::types::CellType::Lipocyte as usize] = 60;
+        cell_type_counts[crate::cell::types::CellType::Stemocyte as usize] = 40;
+        cell_type_counts[crate::cell::types::CellType::Glueocyte as usize] = 20;
+        FieldReportContext {
+            frame,
+            time_seconds: frame as f32 / 60.0,
+            lineages: vec![LineageReportSnapshot {
+                lineage_id: 4,
+                display_name: "Solum-4".to_string(),
+                current: LineageTelemetrySample {
+                    frame,
+                    time_seconds: frame as f32 / 60.0,
+                    cells: 420,
+                    cell_delta: 0,
+                    avg_nutrient: 61.0,
+                    nutrient_positive_fraction: 0.74,
+                    division_ready_fraction: 0.11,
+                    starvation_risk_fraction: 0.06,
+                    average_age: 18.5,
+                    dominant_cell_type: 3,
+                    dominant_cell_type_fraction: 0.58,
+                    cell_type_counts,
+                    active_mode_count: 5,
+                    bounding_radius: 24.0,
+                    ..LineageTelemetrySample::default()
+                },
+                peak_cells: 440,
+                ..LineageReportSnapshot::default()
+            }],
+            ecosystem: EcosystemTelemetrySummary {
+                active_lineages: 1,
+                total_cells: 420,
+                largest_lineage_fraction: 1.0,
+                diversity_score: 0.0,
+                evenness_score: 1.0,
+                ..EcosystemTelemetrySummary::default()
+            },
+            composition: SceneCompositionSnapshot {
+                current_counts: cell_type_counts,
+                previous_counts: {
+                    let mut previous = cell_type_counts;
+                    previous[crate::cell::types::CellType::Photocyte as usize] -= 15;
+                    previous[crate::cell::types::CellType::Stemocyte as usize] += 5;
+                    previous
+                },
             },
         }
     }
@@ -393,7 +447,7 @@ mod tests {
             1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
         ));
         let repeated = analysis_from_context(population_context(
-            1_200, 1, "Veyra", 130, 155, 1, 0, 0.0,
+            1_150, 1, "Veyra", 130, 155, 1, 0, 0.0,
         ));
 
         assert!(matches!(
@@ -697,7 +751,7 @@ mod tests {
             &ToneProfile::naturalist_field_journal(),
         )
         .unwrap();
-        assert!(report.title.contains("82400"));
+        assert!(report.title.contains("20:00"));
         assert!(report.body.contains("36 morphology cells"));
         assert!(report.body.contains("6 active modes"));
         assert_eq!(report.severity, FieldReportSeverity::Routine);
@@ -716,5 +770,244 @@ mod tests {
                 snapshot_frame: 10,
             }
         );
+    }
+
+    #[test]
+    fn repeated_lineage_can_emit_again_after_frame_cooldown_expires() {
+        let mut director = FieldReportDirector {
+            cooldowns: ReportCooldownRules {
+                min_frames_between_reports: 100,
+                lineage_cooldown_reports: 2,
+                theme_cooldown_reports: 2,
+                claim_cooldown_reports: 2,
+                ..ReportCooldownRules::default()
+            },
+            ..FieldReportDirector::default()
+        };
+        let first = analysis_from_context(population_context(
+            1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
+        ));
+        let later = analysis_from_context(population_context(
+            1_250, 1, "Veyra", 130, 170, 1, 0, 0.0,
+        ));
+        assert!(matches!(
+            director.decide_analysis(&first, ToneId::FormalScientific),
+            ReportDecision::Emit(_)
+        ));
+        assert!(matches!(
+            director.decide_analysis(&later, ToneId::FormalScientific),
+            ReportDecision::Emit(_)
+        ));
+    }
+
+    #[test]
+    fn recurring_condition_rotates_analysis_instead_of_repeating_report() {
+        let mut director = FieldReportDirector {
+            cooldowns: ReportCooldownRules {
+                min_frames_between_reports: 100,
+                lineage_cooldown_reports: 2,
+                theme_cooldown_reports: 2,
+                claim_cooldown_reports: 2,
+                ..ReportCooldownRules::default()
+            },
+            ..FieldReportDirector::default()
+        };
+        let first = analysis_from_context(population_context(
+            1_000, 1, "Veyra", 100, 140, 3, 0, 0.42,
+        ));
+        let later = analysis_from_context(population_context(
+            1_250, 1, "Veyra", 140, 180, 4, 0, 0.45,
+        ));
+
+        let ReportDecision::Emit(first_report) =
+            director.decide_analysis(&first, ToneId::NaturalistFieldJournal)
+        else {
+            panic!("first report should emit");
+        };
+        let ReportDecision::Emit(second_report) =
+            director.decide_analysis(&later, ToneId::NaturalistFieldJournal)
+        else {
+            panic!("recurring condition should emit after cooldown");
+        };
+
+        assert_eq!(
+            first_report.rendered.theme,
+            second_report.rendered.theme
+        );
+        assert_ne!(first_report.rendered.body, second_report.rendered.body);
+        assert!(first_report.rendered.body.contains("starvation risk"));
+        assert!(second_report.rendered.body.contains("nutrient-secure"));
+    }
+
+    #[test]
+    fn explicit_variations_preserve_facts_but_change_analytical_emphasis() {
+        let context = strained_growth_context();
+        let facts = extract_facts(&context);
+        let plan = build_report_plans(&facts)
+            .into_iter()
+            .find(|plan| plan.subject_lineage == Some(8))
+            .unwrap();
+        let tone = ToneProfile::formal_scientific();
+        let growth_focus = render_report_with_variation(&context, &plan, &tone, 0).unwrap();
+        let resource_focus = render_report_with_variation(&context, &plan, &tone, 1).unwrap();
+
+        assert_eq!(growth_focus.theme, resource_focus.theme);
+        assert_eq!(growth_focus.tags, resource_focus.tags);
+        assert_ne!(growth_focus.body, resource_focus.body);
+        assert!(growth_focus.body.contains("starvation risk"));
+        assert!(resource_focus.body.contains("nutrient-secure"));
+    }
+
+    #[test]
+    fn recurring_dominance_reports_rotate_ecosystem_analysis() {
+        let context = strained_growth_context();
+        let facts = extract_facts(&context);
+        let plan = build_report_plans(&facts)
+            .into_iter()
+            .find(|plan| plan.theme == ReportTheme::EcosystemDominance)
+            .unwrap();
+        let tone = ToneProfile::naturalist_field_journal();
+        let concentration = render_report_with_variation(&context, &plan, &tone, 0).unwrap();
+        let balance = render_report_with_variation(&context, &plan, &tone, 1).unwrap();
+        let trajectory = render_report_with_variation(&context, &plan, &tone, 2).unwrap();
+
+        assert_eq!(concentration.title, "One Lineage Takes Hold");
+        assert_eq!(balance.title, "An Uneven Living Field");
+        assert_eq!(trajectory.title, "Growth Beneath the Majority");
+        assert!(concentration.body.contains("largest lineage"));
+        assert!(balance.body.contains("Evenness"));
+        assert!(trajectory.body.contains("growing"));
+        assert_ne!(concentration.body, balance.body);
+        assert_ne!(balance.body, trajectory.body);
+    }
+
+    #[test]
+    fn a_single_lineage_is_profiled_instead_of_called_dominant() {
+        let context = stable_single_lineage_context(1_000);
+        let facts = extract_facts(&context);
+        assert!(!facts
+            .iter()
+            .any(|fact| matches!(fact, ReportFact::EcosystemDominance { .. })));
+
+        let plans = build_report_plans(&facts);
+        let profile = plans
+            .iter()
+            .find(|plan| plan.theme == ReportTheme::SingleLineageProfile)
+            .expect("stable single-lineage systems should produce a profile");
+        assert_eq!(profile.subject_lineage, Some(4));
+        assert_eq!(profile.severity, FieldReportSeverity::Notable);
+    }
+
+    #[test]
+    fn single_lineage_reports_rotate_across_five_useful_perspectives() {
+        let context = stable_single_lineage_context(1_000);
+        let facts = extract_facts(&context);
+        let plan = build_report_plans(&facts)
+            .into_iter()
+            .find(|plan| plan.theme == ReportTheme::SingleLineageProfile)
+            .unwrap();
+        let tone = ToneProfile::naturalist_field_journal();
+        let reports: Vec<_> = (0..5)
+            .map(|variation| {
+                render_report_with_variation(&context, &plan, &tone, variation).unwrap()
+            })
+            .collect();
+
+        assert_eq!(reports[0].title, "The Shape Within");
+        assert_eq!(reports[1].title, "How the Lineage Is Living");
+        assert_eq!(reports[2].title, "The Next Generation");
+        assert_eq!(reports[3].title, "The Reach of the Lineage");
+        assert_eq!(reports[4].title, "Holding Steady");
+        assert!(reports[0].body.contains("active modes"));
+        assert!(reports[1].body.contains("nutrient-secure"));
+        assert!(reports[2].body.contains("division-ready"));
+        assert!(reports[3].body.contains("radius"));
+        assert!(reports[4].body.contains("no population change"));
+    }
+
+    #[test]
+    fn scene_composition_reports_rotate_roles_and_implications() {
+        let context = stable_single_lineage_context(1_000);
+        let facts = extract_facts(&context);
+        let plan = build_report_plans(&facts)
+            .into_iter()
+            .find(|plan| plan.theme == ReportTheme::SceneComposition)
+            .expect("composition telemetry should produce a periodic report plan");
+        let tone = ToneProfile::naturalist_field_journal();
+        let reports: Vec<_> = (0..4)
+            .map(|variation| {
+                render_report_with_variation(&context, &plan, &tone, variation).unwrap()
+            })
+            .collect();
+
+        assert_eq!(reports[0].title, "The Work of the Living Field");
+        assert_eq!(reports[1].title, "How the Scene Feeds");
+        assert_eq!(reports[2].title, "How the Scene Moves and Senses");
+        assert_eq!(reports[3].title, "Holding Together, Making More");
+        assert!(reports[0].body.contains("Photocyte"));
+        assert!(reports[1].body.contains("acquiring or buffering nutrients"));
+        assert!(reports[2].body.contains("Movement cells"));
+        assert!(reports[3].body.contains("support"));
+    }
+
+    #[test]
+    fn report_body_starts_with_evidence_instead_of_repeating_the_title() {
+        let context = stable_single_lineage_context(1_000);
+        let facts = extract_facts(&context);
+        let plan = build_report_plans(&facts)
+            .into_iter()
+            .find(|plan| plan.theme == ReportTheme::SceneComposition)
+            .unwrap();
+        let report = render_report_with_variation(
+            &context,
+            &plan,
+            &ToneProfile::naturalist_field_journal(),
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(report.sentences[0].role, SentenceRole::Evidence);
+        assert!(report.body.starts_with("420 cells span"));
+        assert!(!report.body.starts_with(&report.title));
+    }
+
+    #[test]
+    fn scene_composition_returns_periodically_without_crowding_every_report() {
+        let mut director = FieldReportDirector {
+            cooldowns: ReportCooldownRules {
+                min_frames_between_reports: 100,
+                lineage_cooldown_reports: 1,
+                theme_cooldown_reports: 1,
+                claim_cooldown_reports: 1,
+                ..ReportCooldownRules::default()
+            },
+            ..FieldReportDirector::default()
+        };
+        let frames = [1_000, 1_300, 1_600, 1_900];
+        let themes: Vec<_> = frames
+            .into_iter()
+            .filter_map(|frame| {
+                let analysis = analysis_from_context(stable_single_lineage_context(frame));
+                match director.decide_analysis(&analysis, ToneId::NaturalistFieldJournal) {
+                    ReportDecision::Emit(report) => Some(report.rendered.theme),
+                    ReportDecision::Suppress(_) => None,
+                }
+            })
+            .collect();
+
+        assert_eq!(themes.first(), Some(&ReportTheme::SceneComposition));
+        assert!(themes.contains(&ReportTheme::SingleLineageProfile));
+        assert!(themes
+            .iter()
+            .filter(|&&theme| theme == ReportTheme::SceneComposition)
+            .count()
+            >= 2);
+    }
+
+    #[test]
+    fn simulation_time_formats_as_clock_time() {
+        assert_eq!(format_simulation_time(5.0), "0:05");
+        assert_eq!(format_simulation_time(125.0), "2:05");
+        assert_eq!(format_simulation_time(3_725.0), "1:02:05");
     }
 }

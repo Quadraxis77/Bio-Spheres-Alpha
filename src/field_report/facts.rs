@@ -37,6 +37,8 @@ pub enum ReportFactKind {
     ReproductiveReadiness,
     PopulationComposition,
     TerritoryExtent,
+    SingleLineageProfile,
+    SceneComposition,
     NearExtinction,
     EcosystemDominance,
     EcosystemBalance,
@@ -89,6 +91,28 @@ pub enum ReportFact {
         center: [f32; 3],
         radius: f32,
     },
+    SingleLineageProfile {
+        lineage_id: LineageId,
+        current_cells: u32,
+        delta_cells: i32,
+        avg_nutrient: f32,
+        nutrient_positive: f32,
+        starvation_risk: f32,
+        division_ready: f32,
+        average_age: f32,
+        dominant_cell_type: u32,
+        dominant_fraction: f32,
+        active_modes: u32,
+        territory_radius: f32,
+        growth_windows: u32,
+        decline_windows: u32,
+    },
+    SceneComposition {
+        total_cells: u32,
+        active_types: u32,
+        counts: [u32; crate::cell::types::CellType::MAX_TYPES],
+        deltas: [i32; crate::cell::types::CellType::MAX_TYPES],
+    },
     NearExtinction {
         lineage_id: LineageId,
         remaining_cells: u32,
@@ -117,6 +141,8 @@ impl ReportFact {
             Self::ReproductiveReadiness { .. } => ReportFactKind::ReproductiveReadiness,
             Self::PopulationComposition { .. } => ReportFactKind::PopulationComposition,
             Self::TerritoryExtent { .. } => ReportFactKind::TerritoryExtent,
+            Self::SingleLineageProfile { .. } => ReportFactKind::SingleLineageProfile,
+            Self::SceneComposition { .. } => ReportFactKind::SceneComposition,
             Self::NearExtinction { .. } => ReportFactKind::NearExtinction,
             Self::EcosystemDominance { .. } => ReportFactKind::EcosystemDominance,
             Self::EcosystemBalance { .. } => ReportFactKind::EcosystemBalance,
@@ -134,8 +160,11 @@ impl ReportFact {
             | Self::ReproductiveReadiness { lineage_id, .. }
             | Self::PopulationComposition { lineage_id, .. }
             | Self::TerritoryExtent { lineage_id, .. }
+            | Self::SingleLineageProfile { lineage_id, .. }
             | Self::NearExtinction { lineage_id, .. } => Some(*lineage_id),
-            Self::EcosystemDominance { .. } | Self::EcosystemBalance { .. } => None,
+            Self::SceneComposition { .. }
+            | Self::EcosystemDominance { .. }
+            | Self::EcosystemBalance { .. } => None,
         }
     }
 
@@ -145,7 +174,8 @@ impl ReportFact {
             | Self::Recovery { .. }
             | Self::PopulationPeak { .. }
             | Self::PopulationComposition { .. }
-            | Self::TerritoryExtent { .. } => ClaimConfidence::Observed,
+            | Self::TerritoryExtent { .. }
+            | Self::SingleLineageProfile { .. } => ClaimConfidence::Observed,
             _ => ClaimConfidence::Derived,
         }
     }
@@ -164,6 +194,8 @@ impl ReportFact {
             Self::ReproductiveReadiness { .. } => &[FieldReportTag::Reproduction],
             Self::PopulationComposition { .. } => &[FieldReportTag::Composition],
             Self::TerritoryExtent { .. } => &[FieldReportTag::Territory],
+            Self::SingleLineageProfile { .. } => &[FieldReportTag::Stability],
+            Self::SceneComposition { .. } => &[FieldReportTag::Composition],
             Self::NearExtinction { .. } => &[FieldReportTag::NearExtinction],
             Self::EcosystemDominance { .. } => &[FieldReportTag::Dominance],
             Self::EcosystemBalance { .. } => &[FieldReportTag::Diversity],
@@ -205,6 +237,7 @@ pub fn extract_facts(context: &FieldReportContext) -> Vec<ReportFact> {
             }
         }
         if sample.cells > 0
+            && sample.cell_delta > 0
             && sample.cells == lineage.peak_cells
             && lineage
                 .previous
@@ -251,10 +284,55 @@ pub fn extract_facts(context: &FieldReportContext) -> Vec<ReportFact> {
                 radius: sample.bounding_radius,
             });
         }
+        if context.ecosystem.active_lineages == 1 && sample.cells > 0 {
+            facts.push(ReportFact::SingleLineageProfile {
+                lineage_id: lineage.lineage_id,
+                current_cells: sample.cells,
+                delta_cells: sample.cell_delta,
+                avg_nutrient: sample.avg_nutrient,
+                nutrient_positive: sample.nutrient_positive_fraction,
+                starvation_risk: sample.starvation_risk_fraction,
+                division_ready: sample.division_ready_fraction,
+                average_age: sample.average_age,
+                dominant_cell_type: sample.dominant_cell_type,
+                dominant_fraction: sample.dominant_cell_type_fraction,
+                active_modes: sample.active_mode_count,
+                territory_radius: sample.bounding_radius,
+                growth_windows: lineage.consecutive_growth_windows,
+                decline_windows: lineage.consecutive_decline_windows,
+            });
+        }
+    }
+
+    let total_cells = context.composition.current_counts.iter().copied().sum();
+    if total_cells > 0 {
+        let mut deltas = [0; crate::cell::types::CellType::MAX_TYPES];
+        for ((delta, current), previous) in deltas
+            .iter_mut()
+            .zip(context.composition.current_counts)
+            .zip(context.composition.previous_counts)
+        {
+            *delta = (current as i64 - previous as i64)
+                .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        }
+        facts.push(ReportFact::SceneComposition {
+            total_cells,
+            active_types: context
+                .composition
+                .current_counts
+                .iter()
+                .filter(|&&count| count > 0)
+                .count()
+                .min(u32::MAX as usize) as u32,
+            counts: context.composition.current_counts,
+            deltas,
+        });
     }
 
     if context.ecosystem.active_lineages > 0 {
-        if context.ecosystem.largest_lineage_fraction >= 0.5 {
+        if context.ecosystem.active_lineages > 1
+            && context.ecosystem.largest_lineage_fraction >= 0.5
+        {
             facts.push(ReportFact::EcosystemDominance {
                 largest_lineage_fraction: context.ecosystem.largest_lineage_fraction,
                 active_lineages: context.ecosystem.active_lineages,

@@ -21,6 +21,8 @@ pub enum ClaimKey {
     DivisionReadiness(LineageId),
     DominantCellType(LineageId),
     Territory(LineageId),
+    LineageProfile(LineageId),
+    SceneComposition,
     EcosystemDiversity,
     EcosystemDominance,
 }

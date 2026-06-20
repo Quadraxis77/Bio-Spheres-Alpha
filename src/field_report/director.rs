@@ -2,8 +2,8 @@ use crate::field_report::history::{
     ArchivedFieldReport, FieldReportHistory, FieldReportId,
 };
 use crate::field_report::{
-    analyze_archive, render_report, ClaimKey, FieldReportAnalysis, FieldReportSeverity,
-    RenderedFieldReport, ReportPlan, ReportTheme, ToneId,
+    analyze_archive, render_report_with_variation, ClaimKey, FieldReportAnalysis,
+    FieldReportSeverity, RenderedFieldReport, ReportPlan, ReportTheme, ToneId,
 };
 use crate::scene::lineage::{EcosystemLineageArchive, LineageId};
 
@@ -103,7 +103,10 @@ impl FieldReportDirector {
             return ReportDecision::Suppress(reason);
         }
 
-        let Some(rendered) = render_report(&analysis.context, plan, &tone.profile()) else {
+        let variation = self.history.prior_reports_for_plan(plan);
+        let Some(rendered) =
+            render_report_with_variation(&analysis.context, plan, &tone.profile(), variation)
+        else {
             return ReportDecision::Suppress(SuppressionReason::RenderingFailed);
         };
         let continuity = self.history.continuity_for(plan);
@@ -127,8 +130,13 @@ impl FieldReportDirector {
             .iter()
             .filter(|plan| plan.severity >= FieldReportSeverity::Notable)
             .max_by(|a, b| {
-                plan_score(a, &self.history)
-                    .cmp(&plan_score(b, &self.history))
+                plan_score(a, &self.history, analysis.context.frame.max(0) as u64, &self.cooldowns)
+                    .cmp(&plan_score(
+                        b,
+                        &self.history,
+                        analysis.context.frame.max(0) as u64,
+                        &self.cooldowns,
+                    ))
                     .then_with(|| b.subject_lineage.cmp(&a.subject_lineage))
             })
     }
@@ -152,27 +160,59 @@ impl FieldReportDirector {
         if let Some(lineage_id) = plan.subject_lineage {
             if self
                 .history
-                .recent_report_for_lineage(lineage_id, self.cooldowns.lineage_cooldown_reports)
+                .recent_report_for_lineage(
+                    lineage_id,
+                    self.cooldowns.lineage_cooldown_reports,
+                    current_frame,
+                    cooldown_window_frames(
+                        self.cooldowns.min_frames_between_reports,
+                        self.cooldowns.lineage_cooldown_reports,
+                    ),
+                )
             {
                 return Some(SuppressionReason::LineageRecentlyReported { lineage_id });
             }
         }
         if self
             .history
-            .recent_theme(plan.theme, self.cooldowns.theme_cooldown_reports)
+            .recent_theme(
+                plan.theme,
+                self.cooldowns.theme_cooldown_reports,
+                current_frame,
+                cooldown_window_frames(
+                    self.cooldowns.min_frames_between_reports,
+                    self.cooldowns.theme_cooldown_reports,
+                ),
+            )
         {
             return Some(SuppressionReason::ThemeRecentlyReported { theme: plan.theme });
         }
         let claims = plan_claims(plan);
         if self
             .history
-            .recent_claim(&claims, self.cooldowns.claim_cooldown_reports)
+            .recent_claim(
+                &claims,
+                self.cooldowns.claim_cooldown_reports,
+                current_frame,
+                cooldown_window_frames(
+                    self.cooldowns.min_frames_between_reports,
+                    self.cooldowns.claim_cooldown_reports,
+                ),
+            )
         {
             return claims
                 .into_iter()
                 .find(|claim| {
                     self.history
-                        .recent_claim(&[*claim], self.cooldowns.claim_cooldown_reports)
+                        .recent_claim(
+                            &[*claim],
+                            self.cooldowns.claim_cooldown_reports,
+                            current_frame,
+                            cooldown_window_frames(
+                                self.cooldowns.min_frames_between_reports,
+                                self.cooldowns.claim_cooldown_reports,
+                            ),
+                        )
                 })
                 .map(|claim| SuppressionReason::ClaimRecentlyReported { claim });
         }
@@ -186,7 +226,12 @@ impl FieldReportDirector {
     }
 }
 
-fn plan_score(plan: &ReportPlan, history: &FieldReportHistory) -> i32 {
+fn plan_score(
+    plan: &ReportPlan,
+    history: &FieldReportHistory,
+    current_frame: u64,
+    cooldowns: &ReportCooldownRules,
+) -> i32 {
     let severity = match plan.severity {
         FieldReportSeverity::Routine => 0,
         FieldReportSeverity::Notable => 100,
@@ -196,14 +241,41 @@ fn plan_score(plan: &ReportPlan, history: &FieldReportHistory) -> i32 {
     let event_bonus = match plan.theme {
         ReportTheme::Recovery | ReportTheme::NewPopulationPeak => 50,
         ReportTheme::NearExtinction => 75,
+        ReportTheme::SceneComposition => {
+            if history
+                .reports
+                .iter()
+                .rev()
+                .take(2)
+                .any(|report| report.rendered.theme == ReportTheme::SceneComposition)
+            {
+                -15
+            } else {
+                25
+            }
+        }
         _ => 0,
     };
-    let novelty = if history.recent_theme(plan.theme, 4) {
+    let novelty = if history.recent_theme(
+        plan.theme,
+        4,
+        current_frame,
+        cooldown_window_frames(cooldowns.min_frames_between_reports, 4),
+    ) {
         -30
     } else {
         20
     };
     severity + event_bonus + novelty
+}
+
+fn cooldown_window_frames(min_frames: u64, report_window: usize) -> u64 {
+    if report_window == 0 {
+        return 0;
+    }
+    min_frames
+        .max(1)
+        .saturating_mul(report_window.min(u64::MAX as usize) as u64)
 }
 
 fn bypasses_cooldowns(plan: &ReportPlan, rules: &ReportCooldownRules) -> bool {
@@ -235,10 +307,14 @@ fn plan_claims(plan: &ReportPlan) -> Vec<ClaimKey> {
             ReportTheme::ReproductivePulse => claims.push(ClaimKey::DivisionReadiness(id)),
             ReportTheme::CompositionShift => claims.push(ClaimKey::DominantCellType(id)),
             ReportTheme::TerritoryObservation => claims.push(ClaimKey::Territory(id)),
-            ReportTheme::EcosystemDominance | ReportTheme::EcosystemBalance => {}
+            ReportTheme::SingleLineageProfile => claims.push(ClaimKey::LineageProfile(id)),
+            ReportTheme::SceneComposition
+            | ReportTheme::EcosystemDominance
+            | ReportTheme::EcosystemBalance => {}
         }
     } else {
         match plan.theme {
+            ReportTheme::SceneComposition => claims.push(ClaimKey::SceneComposition),
             ReportTheme::EcosystemDominance => claims.push(ClaimKey::EcosystemDominance),
             ReportTheme::EcosystemBalance => claims.push(ClaimKey::EcosystemDiversity),
             _ => {}

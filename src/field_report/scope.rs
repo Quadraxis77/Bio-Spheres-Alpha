@@ -67,7 +67,7 @@ pub fn render_specimen_report(
         format!("Cell {} · isolated · {}", snapshot.cell_id, subject)
     };
     let nutrient_state = if snapshot.nutrient_gain_rate > 0.01 {
-        "nutrient-positive"
+        "nutrient-secure"
     } else if snapshot.nutrient_gain_rate < -0.01 {
         "nutrient-negative"
     } else {
@@ -205,8 +205,10 @@ pub fn render_lineage_snapshot_report(
         ToneFamily::Any => unreachable!(),
     };
     let mut evidence = format!(
-        "Frame {} contains {} morphology cells within an approximate radius of {:.1} units.",
-        snapshot.snapshot_frame, snapshot.morphology_cells, snapshot.territory_radius
+        "At {}, the snapshot contains {} morphology cells within an approximate radius of {:.1} units.",
+        format_simulation_time(snapshot.captured_time as f64),
+        snapshot.morphology_cells,
+        snapshot.territory_radius
     );
     if let (Some(cell_type), Some(modes)) = (
         snapshot.dominant_cell_type_name.as_deref(),
@@ -238,7 +240,10 @@ pub fn render_lineage_snapshot_report(
         },
     ];
     let report = RenderedFieldReport {
-        title: format!("Snapshot Report · Frame {}", snapshot.snapshot_frame),
+        title: format!(
+            "Snapshot Report · {}",
+            format_simulation_time(snapshot.captured_time as f64)
+        ),
         body: sentence_body(&sentences),
         sentences,
         theme: ReportTheme::TerritoryObservation,
@@ -248,6 +253,18 @@ pub fn render_lineage_snapshot_report(
         involved_lineages: vec![snapshot.lineage_id],
     };
     validate_report(&report, &tone).is_empty().then_some(report)
+}
+
+pub fn format_simulation_time(seconds: f64) -> String {
+    let total_seconds = seconds.max(0.0).round() as u64;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
 }
 
 fn sentence_body(sentences: &[RenderedSentence]) -> String {

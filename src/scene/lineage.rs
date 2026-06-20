@@ -22,6 +22,10 @@ const DEFAULT_MAX_TELEMETRY_SAMPLES_PER_LINEAGE: usize = 32;
 
 /// Fraction change in total live cells below which a scan interval is considered stable.
 pub const STABLE_LIVE_CELL_CHANGE_THRESHOLD: f32 = 0.12;
+const BASE_LINEAGE_STABILITY_FRACTION: f32 = 0.03;
+const BASE_LINEAGE_STABILITY_CELLS: u32 = 10;
+const PHOTOCYTE_SWARM_STABILITY_FRACTION: f32 = 0.15;
+const PHOTOCYTE_SWARM_STABILITY_CELLS: u32 = 3_000;
 
 /// Resolution of the GPU scene thumbnail captured for each lineage node.
 ///
@@ -380,12 +384,15 @@ pub struct LineagePopulationSample {
     pub frame: i32,
     pub time_seconds: f32,
     pub avg_nutrient: f32,
+    /// Fraction of sampled cells with reserves above the starvation threshold.
+    /// The serialized name is retained for snapshot compatibility.
     pub nutrient_positive_fraction: f32,
     pub division_ready_fraction: f32,
     pub starvation_risk_fraction: f32,
     pub average_age: f32,
     pub dominant_cell_type: u32,
     pub dominant_cell_type_fraction: f32,
+    pub cell_type_counts: [u32; crate::cell::types::CellType::MAX_TYPES],
     pub active_mode_count: u32,
     pub center: [f32; 3],
     pub bounding_radius: f32,
@@ -405,12 +412,15 @@ pub struct LineageTelemetrySample {
     pub cell_delta: i32,
     pub organism_delta: i32,
     pub avg_nutrient: f32,
+    /// Fraction of sampled cells with reserves above the starvation threshold.
+    /// The serialized name is retained for snapshot compatibility.
     pub nutrient_positive_fraction: f32,
     pub division_ready_fraction: f32,
     pub starvation_risk_fraction: f32,
     pub average_age: f32,
     pub dominant_cell_type: u32,
     pub dominant_cell_type_fraction: f32,
+    pub cell_type_counts: [u32; crate::cell::types::CellType::MAX_TYPES],
     pub active_mode_count: u32,
     pub center: [f32; 3],
     pub bounding_radius: f32,
@@ -420,6 +430,43 @@ impl LineageTelemetrySample {
     pub fn growth_rate_per_second(&self, previous: &Self) -> f32 {
         let elapsed = (self.time_seconds - previous.time_seconds).max(f32::EPSILON);
         self.cell_delta as f32 / elapsed
+    }
+}
+
+fn meaningful_lineage_cell_delta(
+    previous_cells: u32,
+    sample: &LineagePopulationSample,
+    has_baseline: bool,
+) -> i32 {
+    if !has_baseline {
+        return 0;
+    }
+    let raw = (sample.cells as i64 - previous_cells as i64)
+        .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    if sample.cells == 0 || previous_cells == 0 {
+        return raw;
+    }
+
+    let reference = previous_cells.max(sample.cells);
+    let photocyte_dominant =
+        sample.dominant_cell_type == crate::cell::types::CellType::Photocyte as u32
+            && sample.dominant_cell_type_fraction >= 0.7;
+    let mostly_single_cell = sample.organisms == 0
+        || sample.organisms.saturating_mul(2) >= sample.cells;
+    let tolerance = if photocyte_dominant && mostly_single_cell {
+        PHOTOCYTE_SWARM_STABILITY_CELLS.max(
+            (reference as f32 * PHOTOCYTE_SWARM_STABILITY_FRACTION).round() as u32,
+        )
+    } else {
+        BASE_LINEAGE_STABILITY_CELLS.max(
+            (reference as f32 * BASE_LINEAGE_STABILITY_FRACTION).round() as u32,
+        )
+    };
+
+    if raw.unsigned_abs() <= tolerance {
+        0
+    } else {
+        raw
     }
 }
 
@@ -813,14 +860,14 @@ impl EcosystemLineageArchive {
                 node.last_seen_frame = sample.frame.max(frame);
 
                 let is_alive = sample.cells > 0 || sample.organisms > 0;
+                let meaningful_cell_delta =
+                    meaningful_lineage_cell_delta(previous_cells, sample, had_previous_telemetry);
                 let telemetry = LineageTelemetrySample {
                     frame: sample.frame,
                     time_seconds: sample.time_seconds,
                     cells: sample.cells,
                     organisms: sample.organisms,
-                    cell_delta: (sample.cells as i64 - previous_cells as i64)
-                        .clamp(i32::MIN as i64, i32::MAX as i64)
-                        as i32,
+                    cell_delta: meaningful_cell_delta,
                     organism_delta: (sample.organisms as i64 - previous_organisms as i64)
                         .clamp(i32::MIN as i64, i32::MAX as i64)
                         as i32,
@@ -831,6 +878,7 @@ impl EcosystemLineageArchive {
                     average_age: sample.average_age,
                     dominant_cell_type: sample.dominant_cell_type,
                     dominant_cell_type_fraction: sample.dominant_cell_type_fraction,
+                    cell_type_counts: sample.cell_type_counts,
                     active_mode_count: sample.active_mode_count,
                     center: sample.center,
                     bounding_radius: sample.bounding_radius,
@@ -842,13 +890,14 @@ impl EcosystemLineageArchive {
                     node.telemetry_history.drain(..excess);
                 }
 
-                let growth = sample.cells.saturating_sub(previous_cells);
-                let decline = previous_cells.saturating_sub(sample.cells);
+                let growth = meaningful_cell_delta.max(0) as u32;
+                let decline = meaningful_cell_delta.saturating_neg().max(0) as u32;
                 let boom_threshold = (previous_cells / 4).max(10);
                 let crashed_to_near_extinction =
                     sample.cells > 0 && sample.cells <= 5 && previous_cells > 5;
                 let recovered = previous_near_extinction && sample.cells > 5;
-                let new_peak = sample.cells > previous_peak && previous_peak > 0;
+                let new_peak =
+                    meaningful_cell_delta > 0 && sample.cells > previous_peak && previous_peak > 0;
 
                 if is_alive {
                     node.extinct_frame = None;
@@ -1519,9 +1568,89 @@ mod tests {
             DEFAULT_MAX_TELEMETRY_SAMPLES_PER_LINEAGE
         );
         assert_eq!(node.latest_telemetry().unwrap().cells, 49);
-        assert_eq!(node.consecutive_growth_windows(), 32);
+        assert_eq!(node.consecutive_growth_windows(), 0);
         assert_eq!(node.consecutive_decline_windows(), 0);
         assert_eq!(node.telemetry_at_least_seconds_ago(60.0).unwrap().cells, 47);
+    }
+
+    #[test]
+    fn photocyte_swarm_ignores_three_thousand_cell_churn() {
+        let mut archive = EcosystemLineageArchive::default();
+        archive.nodes.push(LineageNode {
+            id: 1,
+            ..LineageNode::default()
+        });
+        let sample = |cells, frame| LineagePopulationSample {
+            lineage_id: 1,
+            cells,
+            organisms: cells,
+            frame,
+            time_seconds: frame as f32 * 30.0,
+            dominant_cell_type: crate::cell::types::CellType::Photocyte as u32,
+            dominant_cell_type_fraction: 0.95,
+            ..LineagePopulationSample::default()
+        };
+
+        archive.apply_population_samples(&[sample(20_000, 1)], 1);
+        archive.apply_population_samples(&[sample(23_000, 2)], 2);
+        archive.apply_population_samples(&[sample(19_800, 3)], 3);
+
+        let history = &archive.nodes[0].telemetry_history;
+        assert_eq!(history[1].cell_delta, 0);
+        assert_eq!(history[2].cell_delta, 0);
+        assert_eq!(archive.nodes[0].consecutive_growth_windows(), 0);
+        assert_eq!(archive.nodes[0].consecutive_decline_windows(), 0);
+    }
+
+    #[test]
+    fn photocyte_swarm_still_detects_large_directional_change() {
+        let mut archive = EcosystemLineageArchive::default();
+        archive.nodes.push(LineageNode {
+            id: 1,
+            ..LineageNode::default()
+        });
+        let sample = |cells, frame| LineagePopulationSample {
+            lineage_id: 1,
+            cells,
+            organisms: cells,
+            frame,
+            time_seconds: frame as f32 * 30.0,
+            dominant_cell_type: crate::cell::types::CellType::Photocyte as u32,
+            dominant_cell_type_fraction: 0.95,
+            ..LineagePopulationSample::default()
+        };
+
+        archive.apply_population_samples(&[sample(20_000, 1)], 1);
+        archive.apply_population_samples(&[sample(24_500, 2)], 2);
+
+        assert_eq!(
+            archive.nodes[0].latest_telemetry().unwrap().cell_delta,
+            4_500
+        );
+    }
+
+    #[test]
+    fn compact_lineages_keep_fine_grained_trend_detection() {
+        let mut archive = EcosystemLineageArchive::default();
+        archive.nodes.push(LineageNode {
+            id: 1,
+            ..LineageNode::default()
+        });
+        let sample = |cells, frame| LineagePopulationSample {
+            lineage_id: 1,
+            cells,
+            organisms: 2,
+            frame,
+            time_seconds: frame as f32 * 30.0,
+            dominant_cell_type: crate::cell::types::CellType::Myocyte as u32,
+            dominant_cell_type_fraction: 0.8,
+            ..LineagePopulationSample::default()
+        };
+
+        archive.apply_population_samples(&[sample(100, 1)], 1);
+        archive.apply_population_samples(&[sample(115, 2)], 2);
+
+        assert_eq!(archive.nodes[0].latest_telemetry().unwrap().cell_delta, 15);
     }
 
     #[test]

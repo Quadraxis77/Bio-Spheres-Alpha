@@ -9,6 +9,13 @@ pub struct FieldReportContext {
     pub time_seconds: f32,
     pub lineages: Vec<LineageReportSnapshot>,
     pub ecosystem: EcosystemTelemetrySummary,
+    pub composition: SceneCompositionSnapshot,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SceneCompositionSnapshot {
+    pub current_counts: [u32; crate::cell::types::CellType::MAX_TYPES],
+    pub previous_counts: [u32; crate::cell::types::CellType::MAX_TYPES],
 }
 
 /// Compact lineage state used by the report brain.
@@ -59,11 +66,37 @@ impl FieldReportContext {
             })
             .collect();
 
+        let mut composition = SceneCompositionSnapshot::default();
+        for node in archive.nodes.iter().filter(|node| node.current_cells > 0) {
+            if let Some(current) = node.latest_telemetry() {
+                for (target, count) in composition
+                    .current_counts
+                    .iter_mut()
+                    .zip(current.cell_type_counts)
+                {
+                    *target = target.saturating_add(count);
+                }
+            }
+            if let Some(previous) = node
+                .telemetry_history
+                .get(node.telemetry_history.len().saturating_sub(2))
+            {
+                for (target, count) in composition
+                    .previous_counts
+                    .iter_mut()
+                    .zip(previous.cell_type_counts)
+                {
+                    *target = target.saturating_add(count);
+                }
+            }
+        }
+
         Self {
             frame: archive.last_scan_frame.unwrap_or_default(),
             time_seconds: archive.last_scan_time,
             lineages,
             ecosystem: archive.ecosystem_telemetry(),
+            composition,
         }
     }
 

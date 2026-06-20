@@ -2,14 +2,13 @@ use std::collections::HashSet;
 
 use crate::field_report::context::FieldReportContext;
 use crate::field_report::facts::{ClaimConfidence, FieldReportTag, ReportFact};
-use crate::field_report::fragments::{lead_concept, FragmentConcept};
 use crate::field_report::grammar::{role_allows_supporting_detail, ClaimKey, SentenceRole};
 use crate::field_report::plan::{
     FieldReportSeverity, ReportPlan, ReportTheme, RhetoricalShape,
 };
 use crate::field_report::style::{
-    format_cell_count, format_delta_cells, format_percent, render_title, resolve_tone,
-    NumberDensity, ToneFamily, ToneId, ToneLexicon, ToneProfile,
+    format_cell_count, format_delta_cells, format_percent, render_title_with_variation,
+    resolve_tone, NumberDensity, ToneFamily, ToneId, ToneLexicon, ToneProfile,
 };
 use crate::scene::lineage::LineageId;
 
@@ -54,6 +53,15 @@ pub fn render_report(
     plan: &ReportPlan,
     requested_tone: &ToneProfile,
 ) -> Option<RenderedFieldReport> {
+    render_report_with_variation(context, plan, requested_tone, 0)
+}
+
+pub fn render_report_with_variation(
+    context: &FieldReportContext,
+    plan: &ReportPlan,
+    requested_tone: &ToneProfile,
+    variation: usize,
+) -> Option<RenderedFieldReport> {
     let tone = resolve_tone(*requested_tone, plan.severity);
     let subject = plan
         .subject_lineage
@@ -65,34 +73,16 @@ pub fn render_report(
     let lineage_name = subject
         .map(|lineage| lineage.display_name.as_str())
         .unwrap_or("the ecosystem");
-    let lexicon = ToneLexicon::for_tone(&tone);
-    let lineage_ref = format!("{}{}", lexicon.lineage_prefix, lineage_name);
-
     let mut sentences = Vec::new();
-    let concept = lead_concept(plan.theme);
-    if concept_allowed(concept, plan) {
-        let variant = concept.variant_for(tone.family())?;
-        let text = fill_template(
-            variant.template,
-            &[("lineage", lineage_name), ("lineage_ref", &lineage_ref)],
-        );
-        sentences.push(RenderedSentence {
-            numeric_anchor: contains_numeric_anchor(&text),
-            text,
-            role: concept.role,
-            confidence: concept.confidence,
-            claim_keys: lead_claims(plan),
-            fragment_id: concept.id,
-            metaphor_cost: metaphor_cost(concept, tone.family()),
-        });
-    }
 
-    if let Some(evidence) = render_evidence(plan, &tone, lineage_name) {
+    if let Some(evidence) = render_evidence(plan, &tone, lineage_name, variation) {
         push_coherent(&mut sentences, evidence);
     }
 
     if matches!(plan.theme, ReportTheme::StarvingExpansion) {
-        if let Some(contrast) = render_starving_contrast(plan, &tone, lineage_name) {
+        if let Some(contrast) =
+            render_starving_contrast(plan, &tone, lineage_name, variation)
+        {
             push_coherent(&mut sentences, contrast);
         }
     } else if matches!(
@@ -135,7 +125,7 @@ pub fn render_report(
     }
 
     let report = RenderedFieldReport {
-        title: render_title(plan, &tone),
+        title: render_title_with_variation(plan, &tone, variation),
         body,
         sentences,
         theme: plan.theme,
@@ -220,50 +210,11 @@ pub fn validate_report(
     errors
 }
 
-fn concept_allowed(concept: &FragmentConcept, plan: &ReportPlan) -> bool {
-    concept.themes.contains(&plan.theme)
-        && concept
-            .required_tags
-            .iter()
-            .all(|tag| plan.tags.contains(tag))
-        && concept
-            .forbidden_tags
-            .iter()
-            .all(|tag| !plan.tags.contains(tag))
-}
-
-fn metaphor_cost(concept: &FragmentConcept, family: ToneFamily) -> u8 {
-    if matches!(family, ToneFamily::Naturalist | ToneFamily::Living) {
-        concept.metaphor_cost
-    } else {
-        0
-    }
-}
-
-fn lead_claims(plan: &ReportPlan) -> Vec<ClaimKey> {
-    let lineage_id = plan.subject_lineage;
-    match (plan.theme, lineage_id) {
-        (ReportTheme::StarvingExpansion, Some(id)) => {
-            vec![ClaimKey::PopulationIncrease(id), ClaimKey::NutrientPressure(id)]
-        }
-        (ReportTheme::PopulationBoom, Some(id)) => vec![ClaimKey::PopulationIncrease(id)],
-        (ReportTheme::SustainedDecline, Some(id)) => vec![ClaimKey::PopulationDecline(id)],
-        (ReportTheme::Recovery, Some(id)) => vec![ClaimKey::Recovery(id)],
-        (ReportTheme::NewPopulationPeak, Some(id)) => vec![ClaimKey::PopulationPeak(id)],
-        (ReportTheme::NearExtinction, Some(id)) => vec![ClaimKey::NearExtinction(id)],
-        (ReportTheme::ReproductivePulse, Some(id)) => vec![ClaimKey::DivisionReadiness(id)],
-        (ReportTheme::CompositionShift, Some(id)) => vec![ClaimKey::DominantCellType(id)],
-        (ReportTheme::TerritoryObservation, Some(id)) => vec![ClaimKey::Territory(id)],
-        (ReportTheme::EcosystemDominance, _) => vec![ClaimKey::EcosystemDominance],
-        (ReportTheme::EcosystemBalance, _) => vec![ClaimKey::EcosystemDiversity],
-        _ => Vec::new(),
-    }
-}
-
 fn render_evidence(
     plan: &ReportPlan,
     tone: &ToneProfile,
     lineage: &str,
+    variation: usize,
 ) -> Option<RenderedSentence> {
     let mut facts = std::iter::once(&plan.lead_fact).chain(plan.supporting_facts.iter());
     let population = facts.clone().find_map(|fact| match fact {
@@ -288,14 +239,43 @@ fn render_evidence(
         ReportTheme::StarvingExpansion => {
             let (current, delta) = population?;
             let (_, starvation, positive) = resources?;
-            (
+            let text = if variation % 3 == 0 {
                 format!(
-                    "The population changed by {} cells to {}, while starvation risk reached {} and {} of cells remained nutrient-positive.",
+                    "The population changed by {} cells to {}, while starvation risk reached {}.",
                     format_delta_cells(delta, tone, NumberDensity::Precise),
                     format_cell_count(current, tone, NumberDensity::Precise),
                     format_percent(starvation, tone, NumberDensity::Precise),
+                )
+            } else if variation % 3 == 1 {
+                format!(
+                    "Only {} of sampled cells remain nutrient-secure, despite a population of {}.",
                     format_percent(positive, tone, NumberDensity::Precise),
-                ),
+                    format_cell_count(current, tone, NumberDensity::Precise),
+                )
+            } else {
+                let readiness = facts.clone().find_map(|fact| match fact {
+                    ReportFact::ReproductiveReadiness { division_ready, .. } => {
+                        Some(*division_ready)
+                    }
+                    _ => None,
+                });
+                if let Some(readiness) = readiness {
+                    format!(
+                        "Population rose by {} cells, but division readiness is {} and starvation risk is {}.",
+                        format_delta_cells(delta, tone, NumberDensity::Precise),
+                        format_percent(readiness, tone, NumberDensity::Precise),
+                        format_percent(starvation, tone, NumberDensity::Precise),
+                    )
+                } else {
+                    format!(
+                        "Population rose by {} cells while the nutrient-secure share fell to {}.",
+                        format_delta_cells(delta, tone, NumberDensity::Precise),
+                        format_percent(positive, tone, NumberDensity::Precise),
+                    )
+                }
+            };
+            (
+                text,
                 vec![
                     ClaimKey::PopulationIncrease(plan.subject_lineage?),
                     ClaimKey::NutrientPressure(plan.subject_lineage?),
@@ -448,6 +428,132 @@ fn render_evidence(
                 "territory_evidence",
             )
         }
+        ReportTheme::SingleLineageProfile => {
+            let (
+                current,
+                delta,
+                avg_nutrient,
+                nutrient_positive,
+                starvation,
+                division_ready,
+                average_age,
+                dominant_cell_type,
+                dominant_fraction,
+                active_modes,
+                radius,
+                growth_windows,
+                decline_windows,
+            ) = facts.find_map(|fact| match fact {
+                ReportFact::SingleLineageProfile {
+                    current_cells,
+                    delta_cells,
+                    avg_nutrient,
+                    nutrient_positive,
+                    starvation_risk,
+                    division_ready,
+                    average_age,
+                    dominant_cell_type,
+                    dominant_fraction,
+                    active_modes,
+                    territory_radius,
+                    growth_windows,
+                    decline_windows,
+                    ..
+                } => Some((
+                    *current_cells,
+                    *delta_cells,
+                    *avg_nutrient,
+                    *nutrient_positive,
+                    *starvation_risk,
+                    *division_ready,
+                    *average_age,
+                    *dominant_cell_type,
+                    *dominant_fraction,
+                    *active_modes,
+                    *territory_radius,
+                    *growth_windows,
+                    *decline_windows,
+                )),
+                _ => None,
+            })?;
+            let type_name = crate::cell::types::CellType::names()
+                .get(dominant_cell_type as usize)
+                .copied()
+                .unwrap_or("Unknown");
+            let text = match variation % 5 {
+                0 => format!(
+                    "{type_name} cells make up {} of the {}-cell population across {} active modes.",
+                    format_percent(dominant_fraction, tone, NumberDensity::Precise),
+                    format_cell_count(current, tone, NumberDensity::Precise),
+                    active_modes,
+                ),
+                1 => format!(
+                    "{} of cells are nutrient-secure; average nutrient is {:.1}, with {} at starvation risk.",
+                    format_percent(nutrient_positive, tone, NumberDensity::Precise),
+                    avg_nutrient,
+                    format_percent(starvation, tone, NumberDensity::Precise),
+                ),
+                2 => format!(
+                    "{} of cells are division-ready, and their average age is {:.1} seconds.",
+                    format_percent(division_ready, tone, NumberDensity::Precise),
+                    average_age,
+                ),
+                3 => format!(
+                    "The {}-cell population occupies a sampled radius of {:.1} units.",
+                    format_cell_count(current, tone, NumberDensity::Precise),
+                    radius,
+                ),
+                _ => {
+                    let trend = if growth_windows >= 2 {
+                        format!("growth has continued for {growth_windows} scan windows")
+                    } else if decline_windows >= 2 {
+                        format!("decline has continued for {decline_windows} scan windows")
+                    } else if delta == 0 {
+                        "the latest scan shows no population change".to_string()
+                    } else {
+                        format!(
+                            "the latest population change was {} cells",
+                            format_delta_cells(delta, tone, NumberDensity::Precise)
+                        )
+                    };
+                    format!(
+                        "The lineage contains {} cells, and {trend}.",
+                        format_cell_count(current, tone, NumberDensity::Precise),
+                    )
+                }
+            };
+            (
+                text,
+                vec![ClaimKey::LineageProfile(plan.subject_lineage?)],
+                ClaimConfidence::Observed,
+                "single_lineage_profile_evidence",
+            )
+        }
+        ReportTheme::SceneComposition => {
+            let (total, active_types, counts, deltas) = facts.find_map(|fact| match fact {
+                ReportFact::SceneComposition {
+                    total_cells,
+                    active_types,
+                    counts,
+                    deltas,
+                } => Some((*total_cells, *active_types, *counts, *deltas)),
+                _ => None,
+            })?;
+            let text = render_scene_composition_evidence(
+                total,
+                active_types,
+                &counts,
+                &deltas,
+                tone,
+                variation,
+            );
+            (
+                text,
+                vec![ClaimKey::SceneComposition],
+                ClaimConfidence::Observed,
+                "scene_composition_evidence",
+            )
+        }
         ReportTheme::EcosystemDominance => {
             let (fraction, active) = facts.find_map(|fact| match fact {
                 ReportFact::EcosystemDominance {
@@ -456,12 +562,44 @@ fn render_evidence(
                 } => Some((*largest_lineage_fraction, *active_lineages)),
                 _ => None,
             })?;
-            (
-                format!(
+            let balance = std::iter::once(&plan.lead_fact)
+                .chain(plan.supporting_facts.iter())
+                .find_map(|fact| match fact {
+                    ReportFact::EcosystemBalance {
+                        diversity_score,
+                        evenness_score,
+                        growing_lineages,
+                        declining_lineages,
+                    } => Some((
+                        *diversity_score,
+                        *evenness_score,
+                        *growing_lineages,
+                        *declining_lineages,
+                    )),
+                    _ => None,
+                });
+            let text = match (variation % 3, balance) {
+                (1, Some((diversity, evenness, _, _))) => format!(
+                    "Evenness is {} and diversity is {}, while the largest lineage holds {} of active cells.",
+                    format_percent(evenness, tone, NumberDensity::Precise),
+                    format_percent(diversity, tone, NumberDensity::Precise),
+                    format_percent(fraction, tone, NumberDensity::Precise),
+                ),
+                (2, Some((_, _, growing, declining))) => format!(
+                    "Across {} living lineages, {} are growing and {} are declining beneath a {} majority.",
+                    active,
+                    growing,
+                    declining,
+                    format_percent(fraction, tone, NumberDensity::Precise),
+                ),
+                _ => format!(
                     "The largest lineage holds {} of active cells across {} living lineages.",
                     format_percent(fraction, tone, NumberDensity::Precise),
                     active
                 ),
+            };
+            (
+                text,
                 vec![ClaimKey::EcosystemDominance],
                 ClaimConfidence::Observed,
                 "ecosystem_dominance_evidence",
@@ -502,10 +640,167 @@ fn render_evidence(
     })
 }
 
+fn render_scene_composition_evidence(
+    total: u32,
+    active_types: u32,
+    counts: &[u32; crate::cell::types::CellType::MAX_TYPES],
+    deltas: &[i32; crate::cell::types::CellType::MAX_TYPES],
+    tone: &ToneProfile,
+    variation: usize,
+) -> String {
+    use crate::cell::types::CellType;
+
+    let fraction = |count: u32| count as f32 / total.max(1) as f32;
+    let category = |types: &[CellType]| {
+        types
+            .iter()
+            .map(|cell_type| counts[*cell_type as usize])
+            .sum::<u32>()
+    };
+    let category_delta = |types: &[CellType]| {
+        types
+            .iter()
+            .map(|cell_type| deltas[*cell_type as usize] as i64)
+            .sum::<i64>()
+    };
+    let implication = |share: f32, high: &'static str, low: &'static str| {
+        if share >= 0.35 {
+            high
+        } else if share <= 0.1 {
+            low
+        } else {
+            "The allocation is mixed rather than strongly specialized."
+        }
+    };
+
+    match variation % 4 {
+        0 => {
+            let mut ranked: Vec<_> = counts
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(_, count)| *count > 0)
+                .collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            let names = crate::cell::types::CellType::names();
+            let summary = ranked
+                .iter()
+                .take(3)
+                .map(|(index, count)| {
+                    format!(
+                        "{} {}",
+                        names.get(*index).copied().unwrap_or("Unknown"),
+                        format_percent(fraction(*count), tone, NumberDensity::Precise)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let strongest_change = deltas
+                .iter()
+                .copied()
+                .enumerate()
+                .max_by_key(|(index, delta)| (delta.unsigned_abs(), std::cmp::Reverse(*index)))
+                .filter(|(_, delta)| *delta != 0)
+                .map(|(index, delta)| {
+                    format!(
+                        " The largest compositional movement is {} at {} cells.",
+                        names.get(index).copied().unwrap_or("Unknown"),
+                        format_delta_cells(delta, tone, NumberDensity::Precise)
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "{} cells span {} active types; the largest shares are {}.{}",
+                format_cell_count(total, tone, NumberDensity::Precise),
+                active_types,
+                summary,
+                strongest_change,
+            )
+        }
+        1 => {
+            let acquisition = category(&[
+                CellType::Test,
+                CellType::Phagocyte,
+                CellType::Photocyte,
+                CellType::Devorocyte,
+            ]);
+            let storage = category(&[CellType::Lipocyte]);
+            let share = fraction(acquisition.saturating_add(storage));
+            format!(
+                "Resource acquisition and storage account for {} of cells (change: {:+}); {}",
+                format_percent(share, tone, NumberDensity::Precise),
+                category_delta(&[
+                    CellType::Test,
+                    CellType::Phagocyte,
+                    CellType::Photocyte,
+                    CellType::Devorocyte,
+                    CellType::Lipocyte,
+                ]),
+                implication(
+                    share,
+                    "The scene is heavily invested in acquiring or buffering nutrients.",
+                    "Resource work is thinly represented, which may limit resilience if conditions worsen.",
+                )
+            )
+        }
+        2 => {
+            let movement = category(&[
+                CellType::Flagellocyte,
+                CellType::Buoyocyte,
+                CellType::Ciliocyte,
+                CellType::Myocyte,
+                CellType::Plumocyte,
+            ]);
+            let sensing = category(&[
+                CellType::Oculocyte,
+                CellType::Cognocyte,
+                CellType::Memorocyte,
+                CellType::Luminocyte,
+            ]);
+            let share = fraction(movement.saturating_add(sensing));
+            format!(
+                "Movement cells make up {} and sensing or control cells {} of the scene; {}",
+                format_percent(fraction(movement), tone, NumberDensity::Precise),
+                format_percent(fraction(sensing), tone, NumberDensity::Precise),
+                implication(
+                    share,
+                    "A large share of the population is equipped to move, detect, or coordinate responses.",
+                    "The scene appears weighted toward passive or locally constrained strategies.",
+                )
+            )
+        }
+        _ => {
+            let structure = category(&[
+                CellType::Glueocyte,
+                CellType::Vasculocyte,
+                CellType::Siphonocyte,
+            ]);
+            let reproduction = category(&[
+                CellType::Embryocyte,
+                CellType::Gametocyte,
+                CellType::Stemocyte,
+            ]);
+            format!(
+                "Structural support accounts for {} and reproductive or developmental cells {} of the population. {}",
+                format_percent(fraction(structure), tone, NumberDensity::Precise),
+                format_percent(fraction(reproduction), tone, NumberDensity::Precise),
+                if reproduction > structure {
+                    "Current allocation leans more toward renewal and developmental change than physical support."
+                } else if structure > reproduction.saturating_mul(2) {
+                    "Current allocation favors cohesion and transport over producing the next generation."
+                } else {
+                    "Investment in support and renewal is comparatively balanced."
+                }
+            )
+        }
+    }
+}
+
 fn render_starving_contrast(
     plan: &ReportPlan,
     tone: &ToneProfile,
     lineage: &str,
+    variation: usize,
 ) -> Option<RenderedSentence> {
     let resource = plan
         .supporting_facts
@@ -519,21 +814,39 @@ fn render_starving_contrast(
             } => Some((*starvation_risk, *nutrient_positive)),
             _ => None,
         })?;
-    let text = match tone.family() {
+    let text = if variation % 2 == 0 {
+        match tone.family() {
         ToneFamily::Formal => format!(
             "The expansion is not yet evidence of durable growth: starvation risk is {}.",
             format_percent(resource.0, tone, NumberDensity::Rounded)
         ),
         ToneFamily::Naturalist => format!(
-            "The new growth is not carrying comfortably; only {} of cells are gaining nutrients.",
+            "The new growth is not carrying comfortably; only {} of cells have reserves above the starvation threshold.",
             format_percent(resource.1, tone, NumberDensity::Rounded)
         ),
         ToneFamily::Living => format!(
-            "The bloom is widening, but only {} of its cells are gaining nutrients.",
+            "The bloom is widening, but only {} of its cells have reserves above the starvation threshold.",
             format_percent(resource.1, tone, NumberDensity::Precise)
         ),
         ToneFamily::Alert => format!("{lineage} growth remains resource-limited."),
         ToneFamily::Any => unreachable!(),
+        }
+    } else {
+        match tone.family() {
+            ToneFamily::Formal => {
+                "Current abundance therefore overstates the lineage's resource security."
+                    .to_string()
+            }
+            ToneFamily::Naturalist => {
+                "The population is larger, but its reserves of easy growth appear narrower."
+                    .to_string()
+            }
+            ToneFamily::Living => {
+                "There is more of the bloom now, but less comfort inside it.".to_string()
+            }
+            ToneFamily::Alert => "Population size exceeds current resource health.".to_string(),
+            ToneFamily::Any => unreachable!(),
+        }
     };
     Some(RenderedSentence {
         numeric_anchor: contains_numeric_anchor(&text),
@@ -682,12 +995,6 @@ fn report_confidence(sentences: &[RenderedSentence]) -> ClaimConfidence {
     } else {
         ClaimConfidence::Observed
     }
-}
-
-fn fill_template(template: &str, replacements: &[(&str, &str)]) -> String {
-    replacements.iter().fold(template.to_string(), |text, (key, value)| {
-        text.replace(&format!("{{{key}}}"), value)
-    })
 }
 
 fn contains_numeric_anchor(text: &str) -> bool {
