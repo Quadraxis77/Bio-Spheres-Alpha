@@ -1586,6 +1586,8 @@ impl GpuScene {
                 stemocyte_weak_first: false,
                 stemocyte_outcomes: [-1; 5],
                 stemocyte_thresholds: [20, 40, 60, 80],
+                stemocyte_delay_mode: 0,
+                stemocyte_delay_value: 0.0,
                 child_a: crate::genome::ChildSettings {
                     mode_number: child_a_local,
                     orientation: qa,

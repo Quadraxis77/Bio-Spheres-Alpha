@@ -577,6 +577,8 @@ pub fn division_step(
                 // Inherit halved reserve; reset Embryocyte accumulation timer
                 state.reserves[data.child_a_slot] = child_reserve;
                 state.embryocyte_timers[data.child_a_slot] = 0.0;
+                state.stemocyte_delay_timers[data.child_a_slot] =
+                    state.stemocyte_delay_timers[data.parent_idx];
             }
 
             if data.child_b_slot < state.capacity {
@@ -617,6 +619,8 @@ pub fn division_step(
                 // Inherit halved reserve; reset Embryocyte accumulation timer
                 state.reserves[data.child_b_slot] = child_reserve;
                 state.embryocyte_timers[data.child_b_slot] = 0.0;
+                state.stemocyte_delay_timers[data.child_b_slot] =
+                    state.stemocyte_delay_timers[data.parent_idx];
             }
 
             // Record the division event
@@ -1253,6 +1257,8 @@ pub fn division_step_multi(
                 // Inherit halved reserve; reset Embryocyte accumulation timer
                 state.reserves[data.child_a_slot] = child_reserve;
                 state.embryocyte_timers[data.child_a_slot] = 0.0;
+                state.stemocyte_delay_timers[data.child_a_slot] =
+                    state.stemocyte_delay_timers[data.parent_idx];
             }
 
             if data.child_b_slot < state.capacity {
@@ -1289,6 +1295,8 @@ pub fn division_step_multi(
                 // Inherit halved reserve; reset Embryocyte accumulation timer
                 state.reserves[data.child_b_slot] = child_reserve;
                 state.embryocyte_timers[data.child_b_slot] = 0.0;
+                state.stemocyte_delay_timers[data.child_b_slot] =
+                    state.stemocyte_delay_timers[data.parent_idx];
             }
 
             // Log the division for scaffold descendant tracing

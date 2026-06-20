@@ -269,6 +269,9 @@ var<storage, read_write> cell_cached_temperature: array<f32>;
 @group(2) @binding(48)
 var<storage, read_write> cell_thermal_state: array<u32>;
 
+@group(2) @binding(49)
+var<storage, read_write> stemocyte_delay_timers: array<f32>;
+
 // Adhesion bind group (group 3)
 @group(3) @binding(0)
 var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
@@ -614,6 +617,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             max_cell_sizes[cell_idx] = target_v0.y;
             stiffnesses[cell_idx] = target_v0.z;
             max_splits[cell_idx] = select(u32(target_v2.x), 0xFFFFFFFFu, target_v2.x < 0.0);
+            stemocyte_delay_timers[cell_idx] = 0.0;
         }
         division_flags[cell_idx] = 0u;
         return;
@@ -685,6 +689,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Read parent's Embryocyte reserve; will be halved for each child
     let parent_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+    let parent_stemocyte_delay_timer = stemocyte_delay_timers[cell_idx];
     let child_reserve = parent_reserve >> 1u;
 
     let parent_water = cell_water[cell_idx];
@@ -956,6 +961,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Set child A nutrients and reserve (reserve halved from parent)
     atomicStore(&nutrients_buffer[cell_idx], float_to_fixed(child_a_nutrients));
     atomicStore(&embryocyte_reserves[cell_idx], child_reserve);
+    stemocyte_delay_timers[cell_idx] = parent_stemocyte_delay_timer;
     let child_a_water = min(parent_water * 0.5, physiology_water_capacity(child_a_cell_type));
     let child_a_temp = parent_temp;
     let child_a_heat_energy = physiology_heat_for_temperature(child_a_temp, child_a_water);
@@ -1013,6 +1019,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Set child B nutrients and reserve (reserve halved from parent)
     atomicStore(&nutrients_buffer[child_b_slot], float_to_fixed(child_b_nutrients));
     atomicStore(&embryocyte_reserves[child_b_slot], child_reserve);
+    stemocyte_delay_timers[child_b_slot] = parent_stemocyte_delay_timer;
     let child_b_water = min(parent_water * 0.5, physiology_water_capacity(child_b_cell_type));
     let child_b_temp = parent_temp;
     let child_b_heat_energy = physiology_heat_for_temperature(child_b_temp, child_b_water);

@@ -446,6 +446,10 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stemocyte_thresholds: Option<[u8; 4]>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stemocyte_delay_mode: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stemocyte_delay_value: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_a: Option<SerializableChildSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b: Option<SerializableChildSettings>,
@@ -1034,6 +1038,14 @@ fn mode_to_serializable(
         } else {
             None
         },
+        stemocyte_delay_mode: diff_i32(
+            mode.stemocyte_delay_mode,
+            default.stemocyte_delay_mode,
+        ),
+        stemocyte_delay_value: diff_f32(
+            mode.stemocyte_delay_value,
+            default.stemocyte_delay_value,
+        ),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(
@@ -1194,6 +1206,8 @@ impl SerializableModeSettings {
             || self.stemocyte_weak_first.is_some()
             || self.stemocyte_outcomes.is_some()
             || self.stemocyte_thresholds.is_some()
+            || self.stemocyte_delay_mode.is_some()
+            || self.stemocyte_delay_value.is_some()
             || self.child_a.is_some()
             || self.child_b.is_some()
             || self.adhesion_settings.is_some()
@@ -1587,6 +1601,12 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.stemocyte_thresholds {
         mode.stemocyte_thresholds = v;
     }
+    if let Some(v) = ser.stemocyte_delay_mode {
+        mode.stemocyte_delay_mode = v;
+    }
+    if let Some(v) = ser.stemocyte_delay_value {
+        mode.stemocyte_delay_value = v;
+    }
     if let Some(v) = ser.embryocyte_use_timer {
         mode.embryocyte_use_timer = v;
     }
@@ -1901,6 +1921,8 @@ modified_modes:
         genome.modes[0].stemocyte_weak_first = true;
         genome.modes[0].stemocyte_outcomes = [1, -1, -2, 2, 0];
         genome.modes[0].stemocyte_thresholds = [5, 25, 70, 95];
+        genome.modes[0].stemocyte_delay_mode = 3;
+        genome.modes[0].stemocyte_delay_value = 2.5;
 
         let yaml = genome.to_yaml_string().unwrap();
         let loaded = Genome::from_yaml_string(&yaml).unwrap();
@@ -1909,5 +1931,7 @@ modified_modes:
         assert!(loaded.modes[0].stemocyte_weak_first);
         assert_eq!(loaded.modes[0].stemocyte_outcomes, [1, -1, -2, 2, 0]);
         assert_eq!(loaded.modes[0].stemocyte_thresholds, [5, 25, 70, 95]);
+        assert_eq!(loaded.modes[0].stemocyte_delay_mode, 3);
+        assert_eq!(loaded.modes[0].stemocyte_delay_value, 2.5);
     }
 }

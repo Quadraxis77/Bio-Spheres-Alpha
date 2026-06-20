@@ -252,6 +252,14 @@ fn attenuate_signal(value: f32, edge_cost: f32) -> f32 {
     value * (1.0 - loss)
 }
 
+fn signal_after_edge(value: f32, edge_cost: f32, is_first_hop: bool) -> f32 {
+    if is_first_hop {
+        value
+    } else {
+        attenuate_signal(value, edge_cost)
+    }
+}
+
 /// Propagate signal emissions through adhesion connections using travel-point budgets.
 ///
 /// Normal tissue costs 1.0 point per edge. A signal road between two transport-enabled
@@ -331,7 +339,10 @@ pub fn propagate_signals(
 
                     let capped =
                         cap_signal_at_mode(genome, mode_idx, signal_contribution[cell_idx]);
-                    let outgoing = attenuate_signal(capped, edge_cost);
+                    // The source-to-neighbor edge is lossless. Attenuation starts
+                    // when the received contribution crosses its second edge.
+                    let outgoing =
+                        signal_after_edge(capped, edge_cost, cell_idx == emission.source_cell);
                     let next_budget = budget - edge_cost;
                     let budget_delta = next_budget - remaining_budget[neighbor];
 
@@ -811,7 +822,7 @@ pub fn propagate_test_signals(
 
 #[cfg(test)]
 mod signal_gate_tests {
-    use super::signal_gate_active;
+    use super::{signal_after_edge, signal_gate_active};
 
     #[test]
     fn normal_gate_requires_a_present_signal() {
@@ -827,5 +838,11 @@ mod signal_gate_tests {
         assert!(signal_gate_active(0.0, 1.0, true));
         assert!(signal_gate_active(0.5, 1.0, true));
         assert!(!signal_gate_active(1.0, 1.0, true));
+    }
+
+    #[test]
+    fn signal_attenuation_starts_after_first_hop() {
+        assert_eq!(signal_after_edge(100.0, 1.0, true), 100.0);
+        assert!((signal_after_edge(100.0, 1.0, false) - 95.0).abs() < 1e-5);
     }
 }

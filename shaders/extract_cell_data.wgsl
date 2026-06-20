@@ -87,6 +87,9 @@ struct InspectedCellData {
     cell_heat_energy: f32,
     cell_cached_temperature: f32,
     cell_thermal_state: u32,
+
+    // Packed words: bits 0-10 = strength, bit 24 = direct source.
+    signal_channels: array<u32, 16>,
 }
 
 // Physics bind group (group 0) - standard 6-binding layout
@@ -186,6 +189,9 @@ var<storage, read> cell_cached_temperature: array<f32>;
 @group(2) @binding(21)
 var<storage, read> cell_thermal_state: array<u32>;
 
+@group(2) @binding(22)
+var<storage, read> signal_flags: array<u32>;
+
 // Output buffer for extracted cell data
 @group(3) @binding(0)
 var<storage, read_write> extracted_data: InspectedCellData;
@@ -231,6 +237,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         extracted_data.cell_heat_energy = 0.0;
         extracted_data.cell_cached_temperature = 0.0;
         extracted_data.cell_thermal_state = 0u;
+        for (var channel = 0u; channel < 16u; channel++) {
+            extracted_data.signal_channels[channel] = 0u;
+        }
         return;
     }
     
@@ -292,6 +301,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     extracted_data.cell_heat_energy = cell_heat_energy[cell_index];
     extracted_data.cell_cached_temperature = cell_cached_temperature[cell_index];
     extracted_data.cell_thermal_state = cell_thermal_state[cell_index];
+
+    // Preserve the packed words so the CPU inspector can show strength and
+    // distinguish direct emissions from received signals.
+    let signal_base = cell_index * 16u;
+    for (var channel = 0u; channel < 16u; channel++) {
+        extracted_data.signal_channels[channel] = signal_flags[signal_base + channel];
+    }
     
     // Debug: log organism ID values
     if (extracted_data.organism_id == 0u) {

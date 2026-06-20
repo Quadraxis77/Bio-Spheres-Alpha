@@ -168,6 +168,9 @@ var<storage, read> cell_thermal_state: array<u32>;
 @group(2) @binding(23)
 var<storage, read> mode_properties_v11: array<vec4<f32>>;
 
+@group(2) @binding(24)
+var<storage, read_write> stemocyte_delay_timers: array<f32>;
+
 // Adhesion bind group (group 3) - read-only for neighbor deferral check in division_scan
 @group(3) @binding(0)
 var<storage, read> adhesion_connections: array<AdhesionConnection>;
@@ -429,19 +432,42 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // === STEMOCYTE GRADIENT DIFFERENTIATION ===
-    // Stemocytes evaluate one developmental channel when their split timer completes.
+    // Stemocytes continuously evaluate one developmental channel. The explicit
+    // developmental delay controls when a response may occur; while it is not
+    // ready, the cell continues through the normal division path below.
     // v9: [channel, weak_first, outcome_0, outcome_1]
-    // v10: [outcome_2, outcome_3, outcome_4, 0]
+    // v10: [outcome_2, outcome_3, outcome_4, delay_mode * 4096 + delay_value]
     // Outcomes: -2 = apoptosis, -1 = remain Stemocyte (continue to normal split),
     //           >= 0 = absolute target mode index.
     if (cell_type == 19u) {
-        let age = params.current_time - birth_times[cell_idx];
-        if (age >= split_intervals[cell_idx]) {
-            let stem_v9 = embryocyte_mode_v9[mode_idx];
-            let stem_v10 = embryocyte_mode_v10[mode_idx];
-            let signal_ch = clamp(u32(stem_v9.x), 8u, 15u);
-            let raw_signal = signal_flags_read[cell_idx * 16u + signal_ch];
-            let normalized_signal = clamp(f32(raw_signal & 0x7FFu) / 2047.0, 0.0, 1.0);
+        let stem_v9 = embryocyte_mode_v9[mode_idx];
+        let stem_v10 = embryocyte_mode_v10[mode_idx];
+        let signal_ch = clamp(u32(stem_v9.x), 8u, 15u);
+        let raw_signal = signal_flags_read[cell_idx * 16u + signal_ch];
+        let signal_value = f32(raw_signal & 0x7FFu);
+        let normalized_signal = clamp(signal_value / 2047.0, 0.0, 1.0);
+        let packed_delay = max(stem_v10.w, 0.0);
+        let delay_mode = u32(floor(packed_delay / 4096.0));
+        let delay_value = packed_delay - f32(delay_mode) * 4096.0;
+
+        var delay_ready = true;
+        if (delay_mode == 1u) {
+            delay_ready = f32(split_counts[cell_idx]) >= ceil(delay_value);
+        } else if (delay_mode == 2u) {
+            stemocyte_delay_timers[cell_idx] += params.delta_time;
+            delay_ready = stemocyte_delay_timers[cell_idx] >= delay_value;
+        } else if (delay_mode == 3u) {
+            if (signal_value > 0.0) {
+                stemocyte_delay_timers[cell_idx] += params.delta_time;
+            } else {
+                stemocyte_delay_timers[cell_idx] = 0.0;
+            }
+            delay_ready = stemocyte_delay_timers[cell_idx] >= delay_value;
+        } else if (delay_mode == 4u) {
+            delay_ready = signal_value >= delay_value;
+        }
+
+        if (delay_ready) {
             let thresholds = mode_properties_v11[mode_idx];
             var weak_band = 4u;
             if (normalized_signal < thresholds.x) { weak_band = 0u; }

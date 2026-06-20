@@ -364,6 +364,8 @@ pub struct ModeSettings {
     pub stemocyte_weak_first: bool,    // False = strong signal first, true = weak signal first
     pub stemocyte_outcomes: [i32; 5],  // Five signal bands in presentation order
     pub stemocyte_thresholds: [u8; 4], // Cumulative percentage boundaries, strictly ascending
+    pub stemocyte_delay_mode: i32, // 0 none, 1 divisions, 2 elapsed time, 3 signal hold, 4 threshold
+    pub stemocyte_delay_value: f32, // Cycles, seconds, seconds, or signal strength
 
     // Child settings
     pub child_a: ChildSettings,
@@ -595,6 +597,8 @@ impl Default for ModeSettings {
             stemocyte_weak_first: false,
             stemocyte_outcomes: [-1; 5],
             stemocyte_thresholds: [20, 40, 60, 80],
+            stemocyte_delay_mode: 0,
+            stemocyte_delay_value: 0.0,
             child_a: ChildSettings::default(),
             child_b: ChildSettings::default(),
             adhesion_settings: AdhesionSettings::default(),

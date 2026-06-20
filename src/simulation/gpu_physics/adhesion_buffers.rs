@@ -101,6 +101,10 @@ pub struct AdhesionBuffers {
     /// During propagation: read from signal_flags, write to signal_flags_next, then swap.
     pub signal_flags_next: wgpu::Buffer,
 
+    /// Snapshot of the low-index-to-high-index propagation sweep. A reverse
+    /// sweep is combined with this so same-mode emitters accumulate from both sides.
+    pub signal_flags_forward: wgpu::Buffer,
+
     /// Current allocated size of the adhesion settings mode pool (in number of modes).
     /// Starts at 16K and doubles on demand up to MAX_TOTAL_MODES.
     pub adhesion_mode_pool_capacity: u64,
@@ -198,6 +202,11 @@ impl AdhesionBuffers {
             cell_capacity as u64 * 16 * 4,
             "Signal Flags Next (16 channels)",
         );
+        let signal_flags_forward = Self::create_storage_buffer(
+            device,
+            cell_capacity as u64 * 16 * 4,
+            "Signal Flags Forward Sweep (16 channels)",
+        );
 
         // Initialize CPU-side caches
         let connections_cache = vec![GpuAdhesionConnection::inactive(); max_connections as usize];
@@ -227,6 +236,7 @@ impl AdhesionBuffers {
             needs_sync: true,
             signal_flags,
             signal_flags_next,
+            signal_flags_forward,
             adhesion_mode_pool_capacity: INITIAL_MODE_POOL_SIZE,
         }
     }

@@ -228,6 +228,9 @@ var<storage, read_write> cell_cached_temperature_next: array<f32>;
 @group(2) @binding(29)
 var<storage, read_write> cell_thermal_state_next: array<u32>;
 
+@group(2) @binding(30)
+var<storage, read_write> stemocyte_delay_timers: array<f32>;
+
 const CELL_TYPE_VASCULOCYTE: u32 = 12u;
 const INITIAL_CELL_TEMPERATURE: f32 = 105.0;
 const THERMAL_STATE_IDEAL: u32 = 4u;
@@ -479,6 +482,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     cell_heat_energy_next[slot] = initial_heat_energy;
     cell_cached_temperature_next[slot] = INITIAL_CELL_TEMPERATURE;
     cell_thermal_state_next[slot] = THERMAL_STATE_IDEAL;
+    stemocyte_delay_timers[slot] = 0.0;
 
     // Live cell count was reserved before slot allocation.
 }

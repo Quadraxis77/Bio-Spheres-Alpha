@@ -1107,7 +1107,7 @@ pub fn execute_signal_system(
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
 
-    // Step 3: Double-buffered pull propagation - one hop per dispatch.
+    // Step 3: Forward double-buffered pull propagation - one hop per dispatch.
     //
     // The propagate shader reads from signal_flags (binding 0, read-only) and writes
     // to signal_flags_next (binding 2, read_write).  After each dispatch we copy
@@ -1116,10 +1116,15 @@ pub fn execute_signal_system(
     // writes targeted the same buffer (where thread scheduling order determined whether
     // a relay cell's output was visible to its own neighbors in the same dispatch).
     //
-    // The signal word's hop-count field naturally limits propagation: a cell with
-    // hops == 0 writes nothing to its neighbors, so extra iterations are no-ops.
-    let signal_buffer_size = adhesion_buffers.signal_flags.size();
-    let propagation_iterations = max_signal_hops.saturating_mul(4).clamp(1, 80);
+    // The packed budget is measured in quarter-hop cost units, but each dispatch
+    // crosses one complete adhesion edge and subtracts that edge's full cost. The
+    // number of dispatches is therefore the authored hop count, not budget units.
+    //
+    // Copy only the active cell range between ping-pong buffers. Copying the full
+    // capacity-sized allocation for every hop dominates frame time in sparse scenes.
+    let signal_buffer_size = (u64::from(cell_count_hint.max(1)) * 16 * 4)
+        .min(adhesion_buffers.signal_flags.size());
+    let propagation_iterations = max_signal_hops.clamp(1, 20);
     for _ in 0..propagation_iterations {
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1140,5 +1145,80 @@ pub fn execute_signal_system(
             signal_buffer_size,
         );
     }
+
+    // Preserve the forward sweep, then rebuild direct emissions and sweep in the
+    // opposite stable-index direction. Combining both gives same-mode emitter
+    // chains contributions from both sides without allowing feedback loops.
+    encoder.copy_buffer_to_buffer(
+        &adhesion_buffers.signal_flags,
+        0,
+        &adhesion_buffers.signal_flags_forward,
+        0,
+        signal_buffer_size,
+    );
+
+    // Re-seed direct emissions.
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Signal Clear For Reverse Sweep"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.signal_clear);
+        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+    }
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Signal Sense For Reverse Sweep"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.signal_sense);
+        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
+        compute_pass.set_bind_group(
+            1,
+            &cached_bind_groups.signal_sense_cell_data[current_index],
+            &[],
+        );
+        compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
+        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+    }
+
+    for _ in 0..propagation_iterations {
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Signal Propagate Reverse"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&pipelines.signal_propagate_reverse);
+            compute_pass.set_bind_group(0, &cached_bind_groups.signal_propagate_flags, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
+            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(
+            &adhesion_buffers.signal_flags_next,
+            0,
+            &adhesion_buffers.signal_flags,
+            0,
+            signal_buffer_size,
+        );
+    }
+
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Signal Combine Sweeps"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(&pipelines.signal_combine_sweeps);
+        compute_pass.set_bind_group(0, &cached_bind_groups.signal_propagate_flags, &[]);
+        compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
+        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(
+        &adhesion_buffers.signal_flags_next,
+        0,
+        &adhesion_buffers.signal_flags,
+        0,
+        signal_buffer_size,
+    );
 
 }

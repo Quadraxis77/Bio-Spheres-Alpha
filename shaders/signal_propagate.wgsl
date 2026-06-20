@@ -15,8 +15,10 @@
 // Signal word format: bit24 = source flag, bits 11-23 = scaled travel budget, bits 0-10 = value
 //
 // Summation semantics: contributions from multiple neighbors are SUMMED (clamped to 2047),
-// and hops is the MAX across all contributing neighbors. This enables quorum-sensing patterns
-// where a cell crossing a threshold only when many neighbours are emitting.
+// and hops is the MAX across all contributing neighbors. Same-mode regulation emitters also
+// form a deterministic accumulation chain. The host runs this shader in both index
+// directions and invokes `combine_sweeps` so emitters receive contributions from both sides.
+// Re-basing each emitter on its authored value prevents feedback growth.
 
 struct AdhesionConnection {
     cell_a_index: u32,
@@ -44,6 +46,7 @@ const SIGNAL_SOURCE_FLAG: u32 = 1u << 24u;
 const SIGNAL_NORMAL_COST: u32 = 4u;
 const SIGNAL_ROAD_COST: u32 = 1u;
 const SIGNAL_LOSS_PER_POINT: f32 = 0.05;
+const PROPAGATION_DIRECTION: u32 = 0u;
 
 // Group 0: signal buffers + cell count
 // binding 0: signal_flags      - read-only source for this hop (previous state)
@@ -57,6 +60,9 @@ var<storage, read> cell_count_buffer: array<u32>;
 
 @group(0) @binding(2)
 var<storage, read_write> signal_flags_next: array<u32>;
+
+@group(0) @binding(3)
+var<storage, read> signal_flags_forward: array<u32>;
 
 // Group 1: adhesion topology + cell type data
 @group(1) @binding(0)
@@ -78,6 +84,10 @@ const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 // [nutrient_transport, nutrient_exchange, signal_transport, signal_exchange]
 @group(1) @binding(4)
 var<storage, read> mode_properties_v12: array<vec4<f32>>;
+
+// [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
+@group(1) @binding(5)
+var<storage, read> regulation_params: array<vec4<u32>>;
 
 fn is_signal_transport_vascular(mode_idx: u32, cell_type: u32) -> bool {
     if (cell_type != VASCULOCYTE_TYPE || mode_idx >= arrayLength(&mode_properties_v12)) {
@@ -143,8 +153,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let my_base = idx * SIGNAL_CHANNELS;
 
-    // Propagate each channel independently.
-    for (var ch = 0u; ch < SIGNAL_CHANNELS; ch++) {
+    // The reverse sweep exists only for equal-budget regulation-source chains,
+    // which occupy channels 8-15. Sensory channels have strictly decreasing
+    // budgets and are already complete after the forward sweep.
+    let first_channel = select(0u, 8u, PROPAGATION_DIRECTION == 1u);
+
+    // Propagate each relevant channel independently.
+    for (var ch = first_channel; ch < SIGNAL_CHANNELS; ch++) {
         // Oculocytes are hard stops on all channels - they never relay signals.
         if (is_oculocyte) {
             // Copy the source signal unchanged so the emitter's own value persists
@@ -157,6 +172,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let own_signal = signal_flags[my_base + ch];
         let own_hops  = (own_signal >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
         let own_value = own_signal & SIGNAL_VALUE_MASK;
+        let own_source_flag = own_signal & SIGNAL_SOURCE_FLAG;
+        let own_regulation = regulation_params[mode_idx];
+        let is_regulation_source =
+            own_source_flag != 0u &&
+            own_regulation.x == ch &&
+            ch >= 8u &&
+            ch <= 15u;
 
         // Recompute from direct emission and strictly-upstream neighbors.
         //   summed_value  – sum of each neighbor's attenuated value (clamped to 2047)
@@ -164,8 +186,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //
         // Propagated values are not reused as a base; doing so creates feedback growth
         // on every dispatch and quickly saturates bonded loops at 2047.
-        let own_source_flag = own_signal & SIGNAL_SOURCE_FLAG;
-        var summed_value: u32 = select(0u, own_value, own_source_flag != 0u);
+        // Regulation emitters are re-based on their authored value. Their packed
+        // signal may contain an upstream sum from the previous pass, which must not
+        // be treated as a fresh local emission or it would grow on every iteration.
+        var direct_value = own_value;
+        if (is_regulation_source) {
+            direct_value = min(
+                u32(max(bitcast<f32>(own_regulation.y), 0.0)),
+                SIGNAL_VALUE_MASK,
+            );
+        }
+        var summed_value: u32 = select(0u, direct_value, own_source_flag != 0u);
         var best_hops:    u32 = own_hops;
         let adhesion_base = idx * MAX_ADHESIONS_PER_CELL;
 
@@ -198,12 +229,44 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Decode signal word.
             let neighbor_hops        = (neighbor_signal >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
             let neighbor_value       = neighbor_signal & SIGNAL_VALUE_MASK;
+            let neighbor_source_flag = neighbor_signal & SIGNAL_SOURCE_FLAG;
+            let neighbor_regulation = regulation_params[neighbor_mode];
+
+            // Equal-budget sources need a deterministic acyclic sweep. The host runs
+            // both directions and combines them afterward.
+            let neighbor_is_upstream = select(neighbor < idx, neighbor > idx, PROPAGATION_DIRECTION == 1u);
+            let same_mode_source_upstream =
+                is_regulation_source &&
+                neighbor_source_flag != 0u &&
+                neighbor_mode == mode_idx &&
+                neighbor_regulation.x == ch &&
+                neighbor_is_upstream;
 
             // Only accept contributions from neighbors with signal remaining to relay.
-            if (neighbor_hops >= edge_cost && neighbor_hops > own_hops && neighbor_value > 0u) {
+            if (neighbor_hops >= edge_cost &&
+                (neighbor_hops > own_hops || same_mode_source_upstream) &&
+                neighbor_value > 0u) {
                 let loss = SIGNAL_LOSS_PER_POINT * (f32(edge_cost) / f32(SIGNAL_NORMAL_COST));
                 let retain = clamp(1.0 - loss, 0.0, 1.0);
-                let contrib = max(1u, u32(f32(neighbor_value) * retain));
+                var contrib = max(1u, u32(f32(neighbor_value) * retain));
+
+                // The first hop from a source is lossless. Regulation emitters may
+                // also contain accumulated incoming traffic, so restore attenuation
+                // only for their authored local component; the incoming portion
+                // continues to degrade normally. Oculocytes never accept incoming
+                // signals, so their whole value is the direct component.
+                if (neighbor_source_flag != 0u) {
+                    var direct_value = neighbor_value;
+                    if (neighbor_regulation.x == ch && ch >= 8u && ch <= 15u) {
+                        direct_value = min(
+                            u32(max(bitcast<f32>(neighbor_regulation.y), 0.0)),
+                            SIGNAL_VALUE_MASK,
+                        );
+                    }
+                    let direct_component = min(direct_value, neighbor_value);
+                    let restored = u32(f32(direct_component) * (1.0 - retain));
+                    contrib = min(contrib + restored, SIGNAL_VALUE_MASK);
+                }
                 // Sum contributions; clamp to 11-bit max.
                 summed_value = min(summed_value + contrib, SIGNAL_VALUE_MASK);
                 // Track max remaining budget so the furthest-reaching signal governs propagation distance.
@@ -223,5 +286,48 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // (e.g. its own emission from the sense pass, or zero after clear).
             signal_flags_next[my_base + ch] = own_signal;
         }
+    }
+}
+
+@compute @workgroup_size(256)
+fn combine_sweeps(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    let cell_count = cell_count_buffer[0];
+    if (idx >= cell_count) { return; }
+
+    let mode_idx = mode_indices[idx];
+    let regulation = regulation_params[mode_idx];
+    let base = idx * SIGNAL_CHANNELS;
+
+    for (var ch = 0u; ch < SIGNAL_CHANNELS; ch++) {
+        let forward = signal_flags_forward[base + ch];
+        let reverse = signal_flags[base + ch];
+        let forward_value = forward & SIGNAL_VALUE_MASK;
+        let reverse_value = reverse & SIGNAL_VALUE_MASK;
+        let source_flag = (forward | reverse) & SIGNAL_SOURCE_FLAG;
+        let forward_hops = (forward >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
+        let reverse_hops = (reverse >> SIGNAL_HOP_SHIFT) & SIGNAL_HOP_MASK;
+        let best_hops = max(forward_hops, reverse_hops);
+
+        let is_regulation_source =
+            source_flag != 0u &&
+            regulation.x == ch &&
+            ch >= 8u &&
+            ch <= 15u;
+
+        var combined_value = max(forward_value, reverse_value);
+        if (is_regulation_source) {
+            let direct_value = min(
+                u32(max(bitcast<f32>(regulation.y), 0.0)),
+                SIGNAL_VALUE_MASK,
+            );
+            combined_value = min(
+                forward_value + reverse_value - min(direct_value, min(forward_value, reverse_value)),
+                SIGNAL_VALUE_MASK,
+            );
+        }
+
+        signal_flags_next[base + ch] =
+            source_flag | (best_hops << SIGNAL_HOP_SHIFT) | combined_value;
     }
 }

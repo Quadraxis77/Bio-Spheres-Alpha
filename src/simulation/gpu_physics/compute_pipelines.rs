@@ -455,6 +455,8 @@ pub struct GpuPhysicsPipelines {
     pub signal_clear: wgpu::ComputePipeline,
     pub signal_sense: wgpu::ComputePipeline,
     pub signal_propagate: wgpu::ComputePipeline,
+    pub signal_propagate_reverse: wgpu::ComputePipeline,
+    pub signal_combine_sweeps: wgpu::ComputePipeline,
     pub mode_switch: wgpu::ComputePipeline,
 
     // Signal system bind group layouts
@@ -1129,15 +1131,40 @@ impl GpuPhysicsPipelines {
             ],
             "Signal Sense",
         );
+        let signal_propagate_source = include_str!("../../../shaders/signal_propagate.wgsl");
         let signal_propagate = Self::create_compute_pipeline(
             device,
-            include_str!("../../../shaders/signal_propagate.wgsl"),
+            signal_propagate_source,
             "main",
             &[
                 &signal_propagate_flags_layout,
                 &signal_propagate_adhesion_layout,
             ],
             "Signal Propagate",
+        );
+        let reverse_source = signal_propagate_source.replace(
+            "const PROPAGATION_DIRECTION: u32 = 0u;",
+            "const PROPAGATION_DIRECTION: u32 = 1u;",
+        );
+        let signal_propagate_reverse = Self::create_compute_pipeline(
+            device,
+            &reverse_source,
+            "main",
+            &[
+                &signal_propagate_flags_layout,
+                &signal_propagate_adhesion_layout,
+            ],
+            "Signal Propagate Reverse",
+        );
+        let signal_combine_sweeps = Self::create_compute_pipeline(
+            device,
+            signal_propagate_source,
+            "combine_sweeps",
+            &[
+                &signal_propagate_flags_layout,
+                &signal_propagate_adhesion_layout,
+            ],
+            "Signal Combine Sweeps",
         );
 
         // Mode switch bind group layouts and pipeline
@@ -1450,6 +1477,8 @@ impl GpuPhysicsPipelines {
             signal_clear,
             signal_sense,
             signal_propagate,
+            signal_propagate_reverse,
+            signal_combine_sweeps,
             mode_switch,
             signal_flags_layout,
             signal_propagate_flags_layout,
@@ -1692,6 +1721,10 @@ impl GpuPhysicsPipelines {
                     binding: 23,
                     resource: buffers.mode_properties_v11.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 24,
+                    resource: buffers.stemocyte_delay_timers.as_entire_binding(),
+                },
             ],
         })
     }
@@ -1904,6 +1937,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 48,
                     resource: buffers.cell_thermal_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 49,
+                    resource: buffers.stemocyte_delay_timers.as_entire_binding(),
                 },
             ],
         })
@@ -3796,6 +3833,16 @@ impl GpuPhysicsPipelines {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 24,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             })
         } else {
@@ -4309,6 +4356,16 @@ impl GpuPhysicsPipelines {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 48,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 49,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -6759,6 +6816,7 @@ impl GpuPhysicsPipelines {
                 rw_storage(27),
                 rw_storage(28),
                 rw_storage(29),
+                rw_storage(30),
             ],
         })
     }
@@ -7023,6 +7081,17 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 21,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 22: packed signal flags, 16 channels per cell.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 22,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -8369,6 +8438,7 @@ impl GpuPhysicsPipelines {
     ///   binding 0: signal_flags      (read-only  - source for this hop)
     ///   binding 1: cell_count_buffer (read-only)
     ///   binding 2: signal_flags_next (read_write - destination for this hop)
+    ///   binding 3: signal_flags_forward (read-only - completed forward sweep)
     /// After each dispatch the caller copies signal_flags_next -> signal_flags.
     fn create_signal_propagate_flags_bind_group_layout(
         device: &wgpu::Device,
@@ -8401,6 +8471,16 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -8698,7 +8778,8 @@ impl GpuPhysicsPipelines {
 
     /// Signal propagate adhesion bind group layout (Group 1 for signal_propagate)
     /// binding 0: adhesion_connections (read), binding 1: cell_adhesion_indices (read)
-    /// binding 2: mode_indices (read), binding 3: mode_cell_types (read), binding 4: mode_properties_v12 (read)
+    /// binding 2: mode_indices (read), binding 3: mode_cell_types (read),
+    /// binding 4: mode_properties_v12 (read), binding 5: regulation_params (read)
     fn create_signal_propagate_adhesion_bind_group_layout(
         device: &wgpu::Device,
     ) -> wgpu::BindGroupLayout {
@@ -8755,6 +8836,16 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -8788,6 +8879,7 @@ impl GpuPhysicsPipelines {
     /// binding 0: signal_flags (read) - source for this hop
     /// binding 1: cell_count_buffer (read)
     /// binding 2: signal_flags_next (read_write) - destination for this hop
+    /// binding 3: signal_flags_forward (read) - completed forward sweep
     fn create_signal_propagate_flags_bind_group(
         &self,
         device: &wgpu::Device,
@@ -8809,6 +8901,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: adhesion_buffers.signal_flags_next.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: adhesion_buffers.signal_flags_forward.as_entire_binding(),
                 },
             ],
         })
@@ -8899,6 +8995,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: buffers.mode_properties_v12.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.regulation_params.as_entire_binding(),
                 },
             ],
         })

@@ -716,6 +716,54 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
 
                 ui.add_space(4.0);
 
+                // -- SIGNALS section -----------------------------------------
+                section_header(ui, "SIGNALS");
+
+                egui::Grid::new("inspector_signals_grid")
+                    .num_columns(4)
+                    .spacing([8.0, 2.0])
+                    .show(ui, |ui| {
+                        for row in 0..8 {
+                            for channel in [row, row + 8] {
+                                let strength = data.signal_strength(channel);
+                                let is_source = data.signal_is_source(channel);
+                                let value_color = if is_source {
+                                    palette().accent_secondary
+                                } else if strength > 0 {
+                                    palette().status_warn
+                                } else {
+                                    palette().text_dim
+                                };
+
+                                ui.label(
+                                    egui::RichText::new(format!("Ch {channel}"))
+                                        .size(10.0)
+                                        .color(palette().text_secondary),
+                                );
+                                let value = if is_source {
+                                    format!("{strength}  emit")
+                                } else {
+                                    strength.to_string()
+                                };
+                                ui.label(
+                                    egui::RichText::new(value)
+                                        .size(10.0)
+                                        .monospace()
+                                        .color(value_color),
+                                );
+                            }
+                            ui.end_row();
+                        }
+                    });
+
+                ui.label(
+                    egui::RichText::new("emit = direct source · other values are received strength")
+                        .size(9.0)
+                        .color(palette().text_dim),
+                );
+
+                ui.add_space(4.0);
+
                 // -- PHYSIOLOGY section --------------------------------------
                 section_header(ui, "PHYSIOLOGY");
 
@@ -8360,6 +8408,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     stemocyte_weak_first: false,
                     stemocyte_outcomes: [-1; 5],
                     stemocyte_thresholds: [20, 40, 60, 80],
+                    stemocyte_delay_mode: 0,
+                    stemocyte_delay_value: 0.0,
                     child_a: crate::genome::ChildSettings {
                         mode_number: idx as i32,
                         ..Default::default()
@@ -9487,6 +9537,65 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         );
                         ui.separator();
                         ui.small("Drag dividers · click a response");
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.label("Delay").on_hover_text(
+                            "None: immediate. Cycles: wait for inherited divisions. Time: inherited developmental seconds. Signal hold: require uninterrupted signal. Threshold: require minimum strength.",
+                        );
+                        mode.stemocyte_delay_mode = mode.stemocyte_delay_mode.clamp(0, 4);
+                        let delay_label = match mode.stemocyte_delay_mode {
+                            1 => "Cycles",
+                            2 => "Time",
+                            3 => "Signal hold",
+                            4 => "Threshold",
+                            _ => "None",
+                        };
+                        egui::ComboBox::from_id_salt("stemocyte_response_delay")
+                            .selected_text(delay_label)
+                            .width(78.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut mode.stemocyte_delay_mode, 0, "None");
+                                ui.selectable_value(&mut mode.stemocyte_delay_mode, 1, "Cycles");
+                                ui.selectable_value(&mut mode.stemocyte_delay_mode, 2, "Time");
+                                ui.selectable_value(&mut mode.stemocyte_delay_mode, 3, "Signal hold");
+                                ui.selectable_value(&mut mode.stemocyte_delay_mode, 4, "Threshold");
+                            });
+
+                        match mode.stemocyte_delay_mode {
+                            1 => {
+                                mode.stemocyte_delay_value =
+                                    mode.stemocyte_delay_value.round().clamp(0.0, 20.0);
+                                ui.add(
+                                    egui::DragValue::new(&mut mode.stemocyte_delay_value)
+                                        .range(0.0..=20.0)
+                                        .suffix(" cyc"),
+                                );
+                            }
+                            2 | 3 => {
+                                mode.stemocyte_delay_value =
+                                    mode.stemocyte_delay_value.clamp(0.0, 120.0);
+                                ui.add(
+                                    egui::DragValue::new(&mut mode.stemocyte_delay_value)
+                                        .speed(0.1)
+                                        .range(0.0..=120.0)
+                                        .suffix(" s"),
+                                );
+                            }
+                            4 => {
+                                mode.stemocyte_delay_value =
+                                    mode.stemocyte_delay_value.clamp(0.0, 2047.0);
+                                ui.add(
+                                    egui::DragValue::new(&mut mode.stemocyte_delay_value)
+                                        .speed(1.0)
+                                        .range(0.0..=2047.0),
+                                );
+                            }
+                            _ => {
+                                ui.small("immediate");
+                            }
+                        }
                     });
 
                     draw_stemocyte_response_strip(
@@ -11526,6 +11635,14 @@ fn sync_mode_changes_to_others(
         }
         if updated.stemocyte_thresholds != snapshot.stemocyte_thresholds {
             other.stemocyte_thresholds = updated.stemocyte_thresholds;
+        }
+        if updated.stemocyte_delay_mode != snapshot.stemocyte_delay_mode {
+            other.stemocyte_delay_mode = updated.stemocyte_delay_mode;
+        }
+        if (updated.stemocyte_delay_value - snapshot.stemocyte_delay_value).abs()
+            > f32::EPSILON
+        {
+            other.stemocyte_delay_value = updated.stemocyte_delay_value;
         }
         if updated.mode_switch_invert != snapshot.mode_switch_invert {
             other.mode_switch_invert = updated.mode_switch_invert;

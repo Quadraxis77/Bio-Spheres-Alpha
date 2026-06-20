@@ -529,6 +529,10 @@ pub struct CanonicalState {
     /// Always 0.0 for non-Embryocyte cells.
     pub embryocyte_timers: Vec<f32>,
 
+    /// Inherited Stemocyte developmental timer. Used as total lineage time for
+    /// time delays, or continuous exposure time for signal-hold delays.
+    pub stemocyte_delay_timers: Vec<f32>,
+
     /// Per-cell memory state for Memorocyte cells.
     /// Holds the current integrated value of the leaky integrator.
     /// Updated each signal frame: memo = memo * decay + input * gain.
@@ -828,6 +832,7 @@ impl CanonicalState {
 
             // Embryocyte accumulation timer - 0.0 for all cells initially
             embryocyte_timers: vec![0.0f32; capacity],
+            stemocyte_delay_timers: vec![0.0f32; capacity],
 
             // Memorocyte leaky-integrator state - 0.0 for all cells initially
             memo_state: vec![0.0f32; capacity],
@@ -950,6 +955,7 @@ impl CanonicalState {
         // Reserve starts at 0; caller must set it for Embryocytes
         self.reserves[index] = 0;
         self.embryocyte_timers[index] = 0.0;
+        self.stemocyte_delay_timers[index] = 0.0;
         self.memo_state[index] = 0.0;
         self.cell_water[index] = 1.0;
         self.cell_heat_energy[index] = 210.0;
@@ -1075,6 +1081,7 @@ impl CanonicalState {
         // Reserve starts at 0; caller must set it for Embryocytes
         self.reserves[slot_index] = 0;
         self.embryocyte_timers[slot_index] = 0.0;
+        self.stemocyte_delay_timers[slot_index] = 0.0;
         self.memo_state[slot_index] = 0.0;
         self.cell_water[slot_index] = 1.0;
         self.cell_heat_energy[slot_index] = 210.0;
@@ -1148,6 +1155,8 @@ impl CanonicalState {
             self.env_anchor_active[cell_index] = self.env_anchor_active[last_index];
             self.reserves[cell_index] = self.reserves[last_index];
             self.embryocyte_timers[cell_index] = self.embryocyte_timers[last_index];
+            self.stemocyte_delay_timers[cell_index] =
+                self.stemocyte_delay_timers[last_index];
             self.memo_state[cell_index] = self.memo_state[last_index];
 
             // Swap signal channels (16 channels per cell)

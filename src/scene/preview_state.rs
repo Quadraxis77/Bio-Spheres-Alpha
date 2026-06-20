@@ -482,6 +482,8 @@ impl PreviewState {
             mode.stemocyte_weak_first.hash(&mut hasher);
             mode.stemocyte_outcomes.hash(&mut hasher);
             mode.stemocyte_thresholds.hash(&mut hasher);
+            mode.stemocyte_delay_mode.hash(&mut hasher);
+            mode.stemocyte_delay_value.to_bits().hash(&mut hasher);
         }
 
         // Scaffold rules affect bond topology during resim.

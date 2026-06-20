@@ -1989,9 +1989,9 @@ pub fn physics_step_with_genome(
     let max_cells = state.capacity;
     let rng_seed = 12345;
 
-    // Stemocyte cycle completion: read one developmental gradient and either
-    // differentiate in place, enter apoptosis, or remain a Stemocyte so the
-    // normal division path below can run.
+    // Stemocyte development: continuously read one developmental gradient and
+    // respond as soon as the explicit delay is ready. While delayed, or when the
+    // selected response is "remain", the normal division path below can run.
     let mut stemocyte_deaths = Vec::new();
     let mut stemocyte_switches = Vec::new();
     for i in 0..state.cell_count {
@@ -2002,13 +2002,30 @@ pub fn physics_step_with_genome(
         if mode.cell_type != crate::cell::CellType::Stemocyte as i32 {
             continue;
         }
-        let age = current_time - state.birth_times[i];
-        if age < state.split_intervals[i] {
+        let channel = mode.stemocyte_signal_channel.clamp(8, 15) as usize;
+        let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
+        let delay_value = mode.stemocyte_delay_value.max(0.0);
+        let delay_ready = match mode.stemocyte_delay_mode {
+            1 => state.split_counts[i] as f32 >= delay_value.ceil(),
+            2 => {
+                state.stemocyte_delay_timers[i] += dt;
+                state.stemocyte_delay_timers[i] >= delay_value
+            }
+            3 => {
+                if signal_value > 0.0 {
+                    state.stemocyte_delay_timers[i] += dt;
+                } else {
+                    state.stemocyte_delay_timers[i] = 0.0;
+                }
+                state.stemocyte_delay_timers[i] >= delay_value
+            }
+            4 => signal_value >= delay_value,
+            _ => true,
+        };
+        if !delay_ready {
             continue;
         }
 
-        let channel = mode.stemocyte_signal_channel.clamp(8, 15) as usize;
-        let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
         match mode.stemocyte_outcome_for_signal(signal_value) {
             -2 => stemocyte_deaths.push(i),
             target if target >= 0 && (target as usize) < genome.modes.len() => {
@@ -2020,6 +2037,7 @@ pub fn physics_step_with_genome(
     for (cell_index, target) in stemocyte_switches {
         state.mode_indices[cell_index] = target;
         state.split_counts[cell_index] = 0;
+        state.stemocyte_delay_timers[cell_index] = 0.0;
         state.birth_times[cell_index] = current_time;
         let new_mode = &genome.modes[target];
         state.split_intervals[cell_index] = new_mode.split_interval;

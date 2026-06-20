@@ -134,9 +134,16 @@ fn vs_main(
 
         // Signal flowed along this bond if both ends have signal and their hop counts
         // differ by exactly 1 (one is exactly one step upstream of the other).
+        //
+        // Two adjacent emitters start with the same travel budget. Regulation-emitter
+        // chains intentionally reinforce across that equal-budget bond, so source-to-source
+        // links must also be shown as active or an emitting Stemocyte line appears silent.
         let both_have_signal = (value_a != 0u) && (value_b != 0u);
         let hops_differ_by_one = (hops_a == hops_b + 1u) || (hops_b == hops_a + 1u);
-        if (both_have_signal && hops_differ_by_one) {
+        let both_are_sources =
+            (signal_a & (1u << 24u)) != 0u &&
+            (signal_b & (1u << 24u)) != 0u;
+        if (both_have_signal && (hops_differ_by_one || both_are_sources)) {
             signal_flowed_through = true;
             break;
         }

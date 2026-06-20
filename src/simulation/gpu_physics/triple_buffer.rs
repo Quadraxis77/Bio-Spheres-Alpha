@@ -401,6 +401,7 @@ pub struct GpuTripleBufferSystem {
     /// Non-Embryocytes: provides extended life; burns before normal nutrients.
     /// Halved on division: child_reserve = parent_reserve >> 1.
     pub embryocyte_reserve_buffer: wgpu::Buffer,
+    pub stemocyte_delay_timers: wgpu::Buffer,
 
     /// Mode cell types lookup table: mode_cell_types[mode_index] = cell_type
     /// Used by shaders to derive cell_type from mode_index (always up-to-date with genome settings)
@@ -820,6 +821,11 @@ impl GpuTripleBufferSystem {
             capacity as u64 * 4, // 4 bytes per u32
             "Embryocyte Reserve Buffer",
         );
+        let stemocyte_delay_timers = Self::create_zero_initialized_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Stemocyte Delay Timers",
+        );
 
         // Mode cell types: one u32 per mode - lookup table for deriving cell_type from mode_index
         let mode_cell_types = Self::create_storage_buffer(device, max_modes * 4, "Mode Cell Types");
@@ -1034,6 +1040,7 @@ impl GpuTripleBufferSystem {
             mode_properties_v14,
             mode_properties_v15,
             embryocyte_reserve_buffer,
+            stemocyte_delay_timers,
             mode_cell_types,
             behavior_flags,
             env_anchor_buffer,
@@ -1263,6 +1270,11 @@ impl GpuTripleBufferSystem {
         // Birth times
         let birth_times: Vec<f32> = state.birth_times[..state.cell_count].to_vec();
         queue.write_buffer(&self.birth_times, 0, bytemuck::cast_slice(&birth_times));
+        queue.write_buffer(
+            &self.stemocyte_delay_timers,
+            0,
+            bytemuck::cast_slice(&state.stemocyte_delay_timers[..state.cell_count]),
+        );
 
         // Split intervals
         let split_intervals: Vec<f32> = state.split_intervals[..state.cell_count].to_vec();
@@ -2113,7 +2125,7 @@ impl GpuTripleBufferSystem {
     /// v9:  [use_timer as f32, release_timer, use_threshold as f32, threshold_value as f32]
     /// v10: [use_signal as f32, signal_channel as f32, signal_value, 0.0]
     /// Stemocyte v9:  [signal_channel, weak_first, outcome_0, outcome_1]
-    /// Stemocyte v10: [outcome_2, outcome_3, outcome_4, 0.0]
+    /// Stemocyte v10: [outcome_2, outcome_3, outcome_4, packed_delay]
     pub fn sync_embryocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2123,6 +2135,11 @@ impl GpuTripleBufferSystem {
         let mut v10: Vec<[f32; 4]> = Vec::new();
 
         let mut global_start_index = 0usize;
+        let pack_stemocyte_delay = |mode: &crate::genome::ModeSettings| {
+            let kind = mode.stemocyte_delay_mode.clamp(0, 4) as f32;
+            let value = mode.stemocyte_delay_value.clamp(0.0, 4095.0);
+            kind * 4096.0 + value
+        };
         for genome in genomes {
             for mode in &genome.modes {
                 if mode.cell_type == crate::cell::CellType::Stemocyte as i32 {
@@ -2145,7 +2162,7 @@ impl GpuTripleBufferSystem {
                         remap(mode.stemocyte_outcomes[2]),
                         remap(mode.stemocyte_outcomes[3]),
                         remap(mode.stemocyte_outcomes[4]),
-                        0.0,
+                        pack_stemocyte_delay(mode),
                     ]);
                 } else {
                     v9.push([
@@ -2184,6 +2201,11 @@ impl GpuTripleBufferSystem {
     ) {
         let mut v9: Vec<[f32; 4]> = Vec::new();
         let mut v10: Vec<[f32; 4]> = Vec::new();
+        let pack_stemocyte_delay = |mode: &crate::genome::ModeSettings| {
+            let kind = mode.stemocyte_delay_mode.clamp(0, 4) as f32;
+            let value = mode.stemocyte_delay_value.clamp(0.0, 4095.0);
+            kind * 4096.0 + value
+        };
 
         for mode in &genome.modes {
             if mode.cell_type == crate::cell::CellType::Stemocyte as i32 {
@@ -2206,7 +2228,7 @@ impl GpuTripleBufferSystem {
                     remap(mode.stemocyte_outcomes[2]),
                     remap(mode.stemocyte_outcomes[3]),
                     remap(mode.stemocyte_outcomes[4]),
-                    0.0,
+                    pack_stemocyte_delay(mode),
                 ]);
             } else {
                 v9.push([

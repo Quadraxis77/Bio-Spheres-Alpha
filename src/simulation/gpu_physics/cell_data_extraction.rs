@@ -68,6 +68,10 @@ pub struct InspectedCellData {
     pub cell_heat_energy: f32,
     pub cell_cached_temperature: f32,
     pub cell_thermal_state: u32,
+
+    // Packed signal words for channels 0-15 (64 bytes).
+    // Bits 0-10 = strength, bit 24 = direct source.
+    pub signal_channels: [u32; 16],
 }
 
 impl Default for InspectedCellData {
@@ -105,6 +109,7 @@ impl Default for InspectedCellData {
             cell_heat_energy: 0.0,
             cell_cached_temperature: 0.0,
             cell_thermal_state: 0,
+            signal_channels: [0; 16],
         }
     }
 }
@@ -123,6 +128,35 @@ impl InspectedCellData {
     /// Get velocity as glam::Vec3
     pub fn velocity_vec3(&self) -> glam::Vec3 {
         glam::Vec3::new(self.velocity[0], self.velocity[1], self.velocity[2])
+    }
+
+    /// Decoded 11-bit signal strength for one channel.
+    pub fn signal_strength(&self, channel: usize) -> u32 {
+        self.signal_channels.get(channel).copied().unwrap_or(0) & 0x7ff
+    }
+
+    /// Whether this cell directly emits the signal currently on this channel.
+    pub fn signal_is_source(&self, channel: usize) -> bool {
+        self.signal_channels
+            .get(channel)
+            .is_some_and(|word| word & (1 << 24) != 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InspectedCellData;
+
+    #[test]
+    fn decodes_signal_strength_and_source_flag() {
+        let mut data = InspectedCellData::default();
+        data.signal_channels[8] = (1 << 24) | 1536;
+        data.signal_channels[9] = 42;
+
+        assert_eq!(data.signal_strength(8), 1536);
+        assert!(data.signal_is_source(8));
+        assert_eq!(data.signal_strength(9), 42);
+        assert!(!data.signal_is_source(9));
     }
 }
 
@@ -327,6 +361,10 @@ impl GpuCellDataExtraction {
                 wgpu::BindGroupEntry {
                     binding: 21,
                     resource: buffers.cell_thermal_state.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 22,
+                    resource: adhesion_buffers.signal_flags.as_entire_binding(),
                 },
             ],
         });

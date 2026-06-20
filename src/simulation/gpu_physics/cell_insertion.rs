@@ -263,6 +263,10 @@ impl GpuCellInsertion {
                     binding: 29,
                     resource: buffers.cell_thermal_state_next.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 30,
+                    resource: buffers.stemocyte_delay_timers.as_entire_binding(),
+                },
             ],
         });
 
