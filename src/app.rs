@@ -3982,7 +3982,7 @@ impl App {
                 }
                 crate::ui::panel_context::SceneModeRequest::ScanLineageForViewer => {
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-                        match gpu_scene.scan_lineage_for_viewer_nonblocking() {
+                        match gpu_scene.scan_lineage_for_viewer(&self.device, &self.queue) {
                             Ok(()) => {}
                             Err(err) => {
                                 log::error!("Failed to scan lineage archive for viewer: {err}");

@@ -3758,6 +3758,8 @@ pub struct PanelContext<'a> {
     pub current_mode: SimulationMode,
     /// Performance metrics
     pub performance: &'a PerformanceMetrics,
+    /// Shared backend report stream and bounded history.
+    pub field_reports: &'a mut crate::field_report::FieldReportDirector,
     /// When true, panel content should not render (hide UI mode).
     pub hide_ui: bool,
 }
@@ -3772,6 +3774,7 @@ impl<'a> PanelContext<'a> {
         scene_request: &'a mut SceneModeRequest,
         current_mode: SimulationMode,
         performance: &'a PerformanceMetrics,
+        field_reports: &'a mut crate::field_report::FieldReportDirector,
         hide_ui: bool,
     ) -> Self {
         Self {
@@ -3782,6 +3785,7 @@ impl<'a> PanelContext<'a> {
             scene_request,
             current_mode,
             performance,
+            field_reports,
             hide_ui,
         }
     }

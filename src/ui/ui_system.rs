@@ -176,6 +176,10 @@ pub struct UiSystem {
     pub loading_gif_frame: usize,
     /// Timer for loading animation frame advance.
     pub loading_gif_timer: f32,
+    /// Backend-only report stream controller. UI panels only read its bounded history.
+    pub field_report_director: crate::field_report::FieldReportDirector,
+    /// Last lineage scan frame submitted to the report director.
+    last_report_scan_frame: Option<i32>,
 }
 
 impl UiSystem {
@@ -281,6 +285,8 @@ impl UiSystem {
             loading_gif_frames,
             loading_gif_frame: 0,
             loading_gif_timer: 0.0,
+            field_report_director: crate::field_report::FieldReportDirector::default(),
+            last_report_scan_frame: None,
         }
     }
 
@@ -900,6 +906,22 @@ impl UiSystem {
         scene_request: &mut crate::ui::panel_context::SceneModeRequest,
         performance: &crate::ui::performance::PerformanceMetrics,
     ) -> egui::FullOutput {
+        if let Some(gpu_scene) = scene_manager.gpu_scene() {
+            if let Some(scan_frame) = gpu_scene.lineage_archive.last_scan_frame {
+                if self.last_report_scan_frame != Some(scan_frame)
+                    && gpu_scene
+                        .lineage_archive
+                        .nodes
+                        .iter()
+                        .any(|node| !node.telemetry_history.is_empty())
+                {
+                    let _ = self
+                        .field_report_director
+                        .update(&gpu_scene.lineage_archive);
+                    self.last_report_scan_frame = Some(scan_frame);
+                }
+            }
+        }
         // Apply UI scale only when it changes
         let scale_changed = (self.last_scale - self.state.ui_scale).abs() > 0.001;
         if scale_changed {
@@ -1707,6 +1729,7 @@ impl UiSystem {
                     scene_request,
                     current_mode,
                     performance,
+                    &mut self.field_report_director,
                     ui_state_copy.hide_ui,
                 );
 

@@ -16,6 +16,11 @@ use crate::ui::ui_system::{
     stat_label,
 };
 use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
+use crate::field_report::{
+    render_lineage_snapshot_report, render_specimen_report, ArchivedFieldReport,
+    FieldReportHistory, FieldReportSeverity, LineageSnapshotReportSnapshot, RenderedFieldReport,
+    SpecimenReportSnapshot, ToneProfile,
+};
 
 /// TabViewer implementation for Bio-Spheres panels.
 ///
@@ -431,7 +436,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             // no spinner needed since updates are continuous and near-instant.
 
             if let (Some(extraction_result), Some(data_valid)) = (extraction_result, data_valid) {
-                let data = &extraction_result.data;
+                let data = extraction_result.data;
 
                 // -- Invalid / dead cell --------------------------------------
                 if !data_valid {
@@ -562,6 +567,61 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                 });
 
                 ui.add_space(8.0);
+
+                let lineage_context = context.scene_manager.gpu_scene().and_then(|scene| {
+                    scene
+                        .lineage_archive
+                        .lineage_for_genome_id(data.genome_id)
+                        .and_then(|lineage_id| {
+                            scene
+                                .lineage_archive
+                                .nodes
+                                .iter()
+                                .find(|node| node.id == lineage_id)
+                                .map(|node| (lineage_id, node.display_name.clone()))
+                        })
+                });
+                let specimen_snapshot = SpecimenReportSnapshot {
+                    cell_id: data.cell_id,
+                    cell_type_name: type_name.to_string(),
+                    lineage_id: lineage_context.as_ref().map(|(id, _)| *id),
+                    lineage_name: lineage_context.as_ref().map(|(_, name)| name.clone()),
+                    organism_id: (data.organism_id != u32::MAX).then_some(data.organism_id),
+                    alive: data.is_dead == 0,
+                    nutrient_level: data.nutrients,
+                    nutrient_gain_rate: data.nutrient_gain_rate,
+                    thermal_state: data.cell_thermal_state,
+                    adhesion_count: data.adhesion_count,
+                    active_signal_channels: (0..16)
+                        .filter(|&channel| data.signal_strength(channel) > 0)
+                        .count() as u32,
+                };
+                if let Some(report) = render_specimen_report(
+                    &specimen_snapshot,
+                    &ToneProfile::naturalist_field_journal(),
+                ) {
+                    render_field_report_card(ui, &report, Some("SPECIMEN REPORT"));
+                }
+                if let Some(lineage_id) = specimen_snapshot.lineage_id {
+                    if let Some(related) = context
+                        .field_reports
+                        .history
+                        .reports
+                        .iter()
+                        .rev()
+                        .find(|report| report.rendered.involved_lineages.contains(&lineage_id))
+                    {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Related lineage report: {}",
+                                related.rendered.title
+                            ))
+                            .size(9.5)
+                            .color(palette().text_dim),
+                        );
+                        ui.add_space(4.0);
+                    }
+                }
 
                 // -- NUTRIENTS section ----------------------------------------
                 section_header(ui, "NUTRIENTS");
@@ -976,6 +1036,10 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
             }
         }
     } else {
+        if context.is_gpu_mode() {
+            render_field_station_feed(ui, context);
+            return;
+        }
         // -- Empty state ------------------------------------------------------
         ui.add_space(24.0);
         ui.vertical_centered(|ui| {
@@ -993,6 +1057,156 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
                     .color(palette().text_dim),
             );
         });
+    }
+}
+
+fn render_field_station_feed(ui: &mut Ui, context: &mut PanelContext) {
+    ui.add_space(6.0);
+    section_header(ui, "FIELD STATION REPORT");
+    if let Some(latest) = context.field_reports.history.reports.back() {
+        render_field_report_card(ui, &latest.rendered, None);
+        let recent: Vec<_> = context
+            .field_reports
+            .history
+            .reports
+            .iter()
+            .rev()
+            .skip(1)
+            .take(4)
+            .collect();
+        if !recent.is_empty() {
+            ui.label(
+                egui::RichText::new("RECENT OBSERVATIONS")
+                    .size(9.5)
+                    .color(palette().accent_primary),
+            );
+            for report in recent {
+                render_recent_report_row(ui, report);
+            }
+        }
+    } else {
+        egui::Frame::new()
+            .fill(palette().bg_widget)
+            .stroke(egui::Stroke::new(1.0, palette().border_subtle))
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Awaiting a report-grade ecosystem scan.")
+                        .size(11.0)
+                        .color(palette().text_secondary),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Open the Lineage Viewer and use Refresh Scan to capture the first report.",
+                    )
+                    .size(9.5)
+                    .color(palette().text_dim),
+                );
+            });
+    }
+    ui.add_space(10.0);
+    ui.label(
+        egui::RichText::new("Select a cell to switch to specimen reporting.")
+            .size(9.5)
+            .color(palette().text_dim),
+    );
+}
+
+fn render_recent_report_row(ui: &mut Ui, report: &ArchivedFieldReport) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new("•")
+                .size(10.0)
+                .color(severity_color(report.rendered.severity)),
+        );
+        ui.label(
+            egui::RichText::new(&report.rendered.title)
+                .size(10.0)
+                .color(palette().text_primary),
+        );
+        if let Some(first) = report.rendered.sentences.first() {
+            ui.label(
+                egui::RichText::new(format!("— {}", first.text))
+                    .size(9.5)
+                    .color(palette().text_secondary),
+            );
+        }
+    });
+}
+
+fn render_field_report_card(
+    ui: &mut Ui,
+    report: &RenderedFieldReport,
+    scope_label: Option<&str>,
+) {
+    let accent = severity_color(report.severity);
+    egui::Frame::new()
+        .fill(palette().bg_panel)
+        .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.75)))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    if let Some(scope) = scope_label {
+                        ui.label(
+                            egui::RichText::new(scope)
+                                .size(8.5)
+                                .color(palette().text_dim),
+                        );
+                    }
+                    ui.label(
+                        egui::RichText::new(&report.title)
+                            .size(14.0)
+                            .strong()
+                            .color(palette().text_primary),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    ui.label(
+                        egui::RichText::new(severity_label(report.severity))
+                            .size(8.5)
+                            .strong()
+                            .color(accent),
+                    );
+                });
+            });
+            ui.add_space(5.0);
+            ui.label(
+                egui::RichText::new(&report.body)
+                    .size(10.5)
+                    .color(palette().text_secondary),
+            );
+            if !report.tags.is_empty() {
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for tag in &report.tags {
+                        ui.label(
+                            egui::RichText::new(format!("{tag:?}"))
+                                .size(8.5)
+                                .color(accent),
+                        );
+                    }
+                });
+            }
+        });
+    ui.add_space(6.0);
+}
+
+fn severity_label(severity: FieldReportSeverity) -> &'static str {
+    match severity {
+        FieldReportSeverity::Routine => "INFO",
+        FieldReportSeverity::Notable => "NOTABLE",
+        FieldReportSeverity::Warning => "WARNING",
+        FieldReportSeverity::Critical => "CRITICAL",
+    }
+}
+
+fn severity_color(severity: FieldReportSeverity) -> egui::Color32 {
+    match severity {
+        FieldReportSeverity::Routine => palette().status_info,
+        FieldReportSeverity::Notable => palette().accent_secondary,
+        FieldReportSeverity::Warning => palette().status_warn,
+        FieldReportSeverity::Critical => palette().status_err,
     }
 }
 
@@ -1287,6 +1501,7 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         return;
     };
 
+    let report_history = &context.field_reports.history;
     let archive = &scene.lineage_archive;
     let mut nodes: Vec<_> = archive.nodes.iter().collect();
     nodes.sort_by(|a, b| {
@@ -1428,21 +1643,6 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                 archive.events.len().to_string(),
                 p.accent_primary,
             );
-            let ecosystem = archive.ecosystem_telemetry();
-            if ecosystem.active_lineages > 0 {
-                lineage_metric_chip(
-                    ui,
-                    "Largest Share",
-                    format!("{:.0}%", ecosystem.largest_lineage_fraction * 100.0),
-                    p.status_info,
-                );
-                lineage_metric_chip(
-                    ui,
-                    "Evenness",
-                    format!("{:.0}%", ecosystem.evenness_score * 100.0),
-                    p.accent_secondary,
-                );
-            }
             lineage_metric_chip(
                 ui,
                 "Loadable",
@@ -1485,7 +1685,12 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                 scene.genomes.len(),
                 context.scene_request,
             );
-            render_lineage_intel_panel(&mut columns[1], archive, selected_node);
+            render_lineage_intel_panel(
+                &mut columns[1],
+                archive,
+                selected_node,
+                report_history,
+            );
         });
     } else {
         render_lineage_specimen_panel(
@@ -1497,7 +1702,7 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             context.scene_request,
         );
         ui.add_space(8.0);
-        render_lineage_intel_panel(ui, archive, selected_node);
+        render_lineage_intel_panel(ui, archive, selected_node, report_history);
     }
 
     ui.add_space(8.0);
@@ -1619,6 +1824,40 @@ fn render_lineage_specimen_panel(
                         lineage_badge(ui, tag);
                     }
                 });
+
+                let active_snapshot = selected_snap_frame
+                    .and_then(|frame| node.snapshot_near_frame(frame))
+                    .or_else(|| node.latest_snapshot());
+                if let Some(snapshot) = active_snapshot {
+                    let telemetry = node
+                        .telemetry_history
+                        .iter()
+                        .min_by_key(|sample| (sample.frame - snapshot.captured_frame).abs());
+                    let dominant_cell_type_name = telemetry.and_then(|sample| {
+                        crate::cell::types::CellType::names()
+                            .get(sample.dominant_cell_type as usize)
+                            .map(|name| (*name).to_string())
+                    });
+                    let snapshot_report = LineageSnapshotReportSnapshot {
+                        lineage_id: node.id,
+                        lineage_name: node.display_name.clone(),
+                        snapshot_frame: snapshot.captured_frame.max(0) as u64,
+                        captured_time: snapshot.captured_time,
+                        morphology_cells: snapshot.cells.len().min(u32::MAX as usize) as u32,
+                        current_cells_at_snapshot: telemetry.map(|sample| sample.cells),
+                        peak_cells: node.peak_cells,
+                        dominant_cell_type_name,
+                        active_modes: telemetry.map(|sample| sample.active_mode_count),
+                        territory_radius: snapshot.world_radius,
+                    };
+                    if let Some(report) = render_lineage_snapshot_report(
+                        &snapshot_report,
+                        &ToneProfile::naturalist_field_journal(),
+                    ) {
+                        ui.add_space(8.0);
+                        render_field_report_card(ui, &report, Some("SNAPSHOT NOTE"));
+                    }
+                }
 
                 ui.add_space(8.0);
                 let scene_genome_available = (node.genome_id as usize) < scene_genome_count;
@@ -2046,6 +2285,7 @@ fn render_lineage_intel_panel(
     ui: &mut Ui,
     archive: &crate::scene::lineage::EcosystemLineageArchive,
     selected_node: Option<&crate::scene::lineage::LineageNode>,
+    report_history: &FieldReportHistory,
 ) {
     let p = palette();
     egui::Frame::new()
@@ -2061,6 +2301,15 @@ fn render_lineage_intel_panel(
             ui.add_space(6.0);
 
             if let Some(node) = selected_node {
+                if let Some(report) = report_history
+                    .reports
+                    .iter()
+                    .rev()
+                    .find(|report| report.rendered.involved_lineages.contains(&node.id))
+                {
+                    render_field_report_card(ui, &report.rendered, Some("LINEAGE REPORT"));
+                    ui.add_space(4.0);
+                }
                 egui::Grid::new("lineage_intel_grid")
                     .num_columns(4)
                     .spacing([10.0, 6.0])
@@ -2083,64 +2332,9 @@ fn render_lineage_intel_panel(
                             archive.generation_for_lineage(node.id).to_string(),
                         );
                         ui.end_row();
-
-                        if let Some(latest) = node.latest_telemetry() {
-                            lineage_readout(
-                                ui,
-                                "Change",
-                                format!("{:+}", latest.cell_delta),
-                            );
-                            lineage_readout(
-                                ui,
-                                "Nutrients",
-                                format!("{:.1}", latest.avg_nutrient),
-                            );
-                            ui.end_row();
-                            lineage_readout(
-                                ui,
-                                "Division-ready",
-                                format!("{:.0}%", latest.division_ready_fraction * 100.0),
-                            );
-                            lineage_readout(
-                                ui,
-                                "Starvation risk",
-                                format!("{:.0}%", latest.starvation_risk_fraction * 100.0),
-                            );
-                            ui.end_row();
-                            lineage_readout(
-                                ui,
-                                "Avg age",
-                                format!("{:.1}s", latest.average_age),
-                            );
-                            lineage_readout(
-                                ui,
-                                "Territory",
-                                format!("r {:.1}", latest.bounding_radius),
-                            );
-                            ui.end_row();
-                        }
                     });
 
                 ui.add_space(8.0);
-                if let Some(latest) = node.latest_telemetry() {
-                    let type_name = crate::cell::types::CellType::names()
-                        .get(latest.dominant_cell_type as usize)
-                        .copied()
-                        .unwrap_or("Unknown");
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Dominant tissue: {} ({:.0}%) / {} active mode(s) / trend +{} -{} windows",
-                            type_name,
-                            latest.dominant_cell_type_fraction * 100.0,
-                            latest.active_mode_count,
-                            node.consecutive_growth_windows(),
-                            node.consecutive_decline_windows(),
-                        ))
-                        .size(10.0)
-                        .color(p.text_secondary),
-                    );
-                    ui.add_space(4.0);
-                }
                 if !archive.last_scan_organism_counts_reliable {
                     ui.label(
                         egui::RichText::new(
