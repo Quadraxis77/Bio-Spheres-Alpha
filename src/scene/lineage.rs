@@ -18,6 +18,7 @@ const DEFAULT_MAX_EVENTS: usize = 8_000;
 const DEFAULT_MAX_BOOKMARKS: usize = 256;
 const DEFAULT_MAX_TIME_GAPS: usize = 1_024;
 const DEFAULT_MAX_MINOR_VARIANT_STATS: usize = 512;
+const DEFAULT_MAX_TELEMETRY_SAMPLES_PER_LINEAGE: usize = 32;
 
 /// Fraction change in total live cells below which a scan interval is considered stable.
 pub const STABLE_LIVE_CELL_CHANGE_THRESHOLD: f32 = 0.12;
@@ -227,6 +228,11 @@ pub struct LineageNode {
     pub total_birth_events: u32,
     pub total_death_events: u32,
     pub mutation_count: u32,
+    /// Bounded, low-frequency telemetry captured by explicit lineage scans.
+    ///
+    /// This deliberately stores compact aggregates rather than per-cell data.
+    #[serde(default)]
+    pub telemetry_history: Vec<LineageTelemetrySample>,
     pub pinned: bool,
     pub noteworthy_score: f32,
     pub traits: LineageTraitSummary,
@@ -258,6 +264,7 @@ impl Default for LineageNode {
             total_birth_events: 0,
             total_death_events: 0,
             mutation_count: 0,
+            telemetry_history: Vec::new(),
             pinned: false,
             noteworthy_score: 0.0,
             traits: LineageTraitSummary::default(),
@@ -284,6 +291,38 @@ impl LineageNode {
             return self.adult_snapshot.as_ref();
         }
         self.snapshots.last()
+    }
+
+    pub fn latest_telemetry(&self) -> Option<&LineageTelemetrySample> {
+        self.telemetry_history.last()
+    }
+
+    pub fn telemetry_at_least_seconds_ago(&self, seconds: f32) -> Option<&LineageTelemetrySample> {
+        let latest = self.latest_telemetry()?;
+        let target = latest.time_seconds - seconds.max(0.0);
+        self.telemetry_history
+            .iter()
+            .rev()
+            .find(|sample| sample.time_seconds <= target)
+            .or_else(|| self.telemetry_history.first())
+    }
+
+    pub fn consecutive_growth_windows(&self) -> u32 {
+        self.telemetry_history
+            .iter()
+            .rev()
+            .take_while(|sample| sample.cell_delta > 0)
+            .count()
+            .min(u32::MAX as usize) as u32
+    }
+
+    pub fn consecutive_decline_windows(&self) -> u32 {
+        self.telemetry_history
+            .iter()
+            .rev()
+            .take_while(|sample| sample.cell_delta < 0)
+            .count()
+            .min(u32::MAX as usize) as u32
     }
 }
 
@@ -323,6 +362,8 @@ pub enum LineageEventKind {
     Hybridization,
     PopulationBoom,
     NearExtinction,
+    Recovery,
+    NewPopulationPeak,
     Extinction,
     Dominance,
     Bookmark,
@@ -337,6 +378,61 @@ pub struct LineagePopulationSample {
     pub cells: u32,
     pub organisms: u32,
     pub frame: i32,
+    pub time_seconds: f32,
+    pub avg_nutrient: f32,
+    pub nutrient_positive_fraction: f32,
+    pub division_ready_fraction: f32,
+    pub starvation_risk_fraction: f32,
+    pub average_age: f32,
+    pub dominant_cell_type: u32,
+    pub dominant_cell_type_fraction: f32,
+    pub active_mode_count: u32,
+    pub center: [f32; 3],
+    pub bounding_radius: f32,
+}
+
+/// Compact report-oriented telemetry for one lineage at one scan.
+///
+/// Samples are captured only by the explicit blocking lineage scan and retained
+/// in a small ring-like history. Trends and report events are derived on CPU.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LineageTelemetrySample {
+    pub frame: i32,
+    pub time_seconds: f32,
+    pub cells: u32,
+    pub organisms: u32,
+    pub cell_delta: i32,
+    pub organism_delta: i32,
+    pub avg_nutrient: f32,
+    pub nutrient_positive_fraction: f32,
+    pub division_ready_fraction: f32,
+    pub starvation_risk_fraction: f32,
+    pub average_age: f32,
+    pub dominant_cell_type: u32,
+    pub dominant_cell_type_fraction: f32,
+    pub active_mode_count: u32,
+    pub center: [f32; 3],
+    pub bounding_radius: f32,
+}
+
+impl LineageTelemetrySample {
+    pub fn growth_rate_per_second(&self, previous: &Self) -> f32 {
+        let elapsed = (self.time_seconds - previous.time_seconds).max(f32::EPSILON);
+        self.cell_delta as f32 / elapsed
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EcosystemTelemetrySummary {
+    pub active_lineages: u32,
+    pub total_cells: u32,
+    pub largest_lineage_fraction: f32,
+    pub diversity_score: f32,
+    pub evenness_score: f32,
+    pub rare_lineages: u32,
+    pub growing_lineages: u32,
+    pub declining_lineages: u32,
 }
 
 /// Aggregated telemetry for mutation genomes that were culled instead of
@@ -519,6 +615,54 @@ impl Default for EcosystemLineageArchive {
 }
 
 impl EcosystemLineageArchive {
+    pub fn ecosystem_telemetry(&self) -> EcosystemTelemetrySummary {
+        let mut active_lineages = 0usize;
+        let mut total_cells = 0u32;
+        for node in &self.nodes {
+            if node.current_cells > 0 {
+                active_lineages += 1;
+                total_cells = total_cells.saturating_add(node.current_cells);
+            }
+        }
+        if active_lineages == 0 || total_cells == 0 {
+            return EcosystemTelemetrySummary::default();
+        }
+
+        let mut entropy = 0.0f32;
+        let mut largest_fraction = 0.0f32;
+        let mut rare_lineages = 0u32;
+        let mut growing_lineages = 0u32;
+        let mut declining_lineages = 0u32;
+        for node in self.nodes.iter().filter(|node| node.current_cells > 0) {
+            let fraction = node.current_cells as f32 / total_cells as f32;
+            largest_fraction = largest_fraction.max(fraction);
+            entropy -= fraction * fraction.ln();
+            rare_lineages += u32::from(fraction <= 0.02);
+            if let Some(latest) = node.latest_telemetry() {
+                growing_lineages += u32::from(latest.cell_delta > 0);
+                declining_lineages += u32::from(latest.cell_delta < 0);
+            }
+        }
+
+        let max_entropy = (active_lineages as f32).ln();
+        let evenness = if max_entropy > 0.0 {
+            entropy / max_entropy
+        } else {
+            1.0
+        };
+
+        EcosystemTelemetrySummary {
+            active_lineages: active_lineages.min(u32::MAX as usize) as u32,
+            total_cells,
+            largest_lineage_fraction: largest_fraction,
+            diversity_score: entropy,
+            evenness_score: evenness,
+            rare_lineages,
+            growing_lineages,
+            declining_lineages,
+        }
+    }
+
     pub fn lineage_for_genome_id(&self, genome_id: u32) -> Option<LineageId> {
         self.nodes
             .iter()
@@ -657,6 +801,11 @@ impl EcosystemLineageArchive {
         for sample in samples {
             if let Some(node) = self.nodes.iter_mut().find(|n| n.id == sample.lineage_id) {
                 let was_alive = node.current_cells > 0 || node.current_organisms > 0;
+                let had_previous_telemetry = !node.telemetry_history.is_empty();
+                let previous_cells = node.current_cells;
+                let previous_organisms = node.current_organisms;
+                let previous_peak = node.peak_cells;
+                let previous_near_extinction = previous_cells > 0 && previous_cells <= 5;
                 node.current_cells = sample.cells;
                 node.current_organisms = sample.organisms;
                 node.peak_cells = node.peak_cells.max(sample.cells);
@@ -664,6 +813,43 @@ impl EcosystemLineageArchive {
                 node.last_seen_frame = sample.frame.max(frame);
 
                 let is_alive = sample.cells > 0 || sample.organisms > 0;
+                let telemetry = LineageTelemetrySample {
+                    frame: sample.frame,
+                    time_seconds: sample.time_seconds,
+                    cells: sample.cells,
+                    organisms: sample.organisms,
+                    cell_delta: (sample.cells as i64 - previous_cells as i64)
+                        .clamp(i32::MIN as i64, i32::MAX as i64)
+                        as i32,
+                    organism_delta: (sample.organisms as i64 - previous_organisms as i64)
+                        .clamp(i32::MIN as i64, i32::MAX as i64)
+                        as i32,
+                    avg_nutrient: sample.avg_nutrient,
+                    nutrient_positive_fraction: sample.nutrient_positive_fraction,
+                    division_ready_fraction: sample.division_ready_fraction,
+                    starvation_risk_fraction: sample.starvation_risk_fraction,
+                    average_age: sample.average_age,
+                    dominant_cell_type: sample.dominant_cell_type,
+                    dominant_cell_type_fraction: sample.dominant_cell_type_fraction,
+                    active_mode_count: sample.active_mode_count,
+                    center: sample.center,
+                    bounding_radius: sample.bounding_radius,
+                };
+                node.telemetry_history.push(telemetry);
+                if node.telemetry_history.len() > DEFAULT_MAX_TELEMETRY_SAMPLES_PER_LINEAGE {
+                    let excess =
+                        node.telemetry_history.len() - DEFAULT_MAX_TELEMETRY_SAMPLES_PER_LINEAGE;
+                    node.telemetry_history.drain(..excess);
+                }
+
+                let growth = sample.cells.saturating_sub(previous_cells);
+                let decline = previous_cells.saturating_sub(sample.cells);
+                let boom_threshold = (previous_cells / 4).max(10);
+                let crashed_to_near_extinction =
+                    sample.cells > 0 && sample.cells <= 5 && previous_cells > 5;
+                let recovered = previous_near_extinction && sample.cells > 5;
+                let new_peak = sample.cells > previous_peak && previous_peak > 0;
+
                 if is_alive {
                     node.extinct_frame = None;
                 } else if was_alive && node.extinct_frame.is_none() {
@@ -676,6 +862,56 @@ impl EcosystemLineageArchive {
                         "No living cells remain for this lineage.",
                         0.7,
                         true,
+                    );
+                }
+
+                if had_previous_telemetry && growth >= boom_threshold {
+                    self.push_event(
+                        frame,
+                        sample.lineage_id,
+                        LineageEventKind::PopulationBoom,
+                        "Population boom",
+                        format!(
+                            "Population increased by {} cells to {}.",
+                            growth, sample.cells
+                        ),
+                        0.55,
+                        true,
+                    );
+                } else if had_previous_telemetry && crashed_to_near_extinction {
+                    self.push_event(
+                        frame,
+                        sample.lineage_id,
+                        LineageEventKind::NearExtinction,
+                        "Near extinction",
+                        format!(
+                            "Population fell by {} cells; only {} remain.",
+                            decline, sample.cells
+                        ),
+                        0.75,
+                        true,
+                    );
+                } else if had_previous_telemetry && recovered {
+                    self.push_event(
+                        frame,
+                        sample.lineage_id,
+                        LineageEventKind::Recovery,
+                        "Population recovery",
+                        format!("Population recovered to {} cells.", sample.cells),
+                        0.5,
+                        true,
+                    );
+                }
+
+                if had_previous_telemetry && new_peak {
+                    self.push_event(
+                        frame,
+                        sample.lineage_id,
+                        LineageEventKind::NewPopulationPeak,
+                        "New population peak",
+                        format!("Population reached a new peak of {} cells.", sample.cells),
+                        0.35,
+                        false,
                     );
                 }
             }
@@ -1252,5 +1488,113 @@ mod tests {
         assert_eq!(archive.generation_for_lineage(2), 1);
         assert_eq!(archive.generation_for_lineage(4), 2);
         assert_eq!(archive.generation_for_lineage(5), 3);
+    }
+
+    #[test]
+    fn telemetry_history_is_bounded_and_tracks_trends() {
+        let mut archive = EcosystemLineageArchive::default();
+        archive.nodes.push(LineageNode {
+            id: 1,
+            ..LineageNode::default()
+        });
+
+        for scan in 0..40 {
+            archive.apply_population_samples(
+                &[LineagePopulationSample {
+                    lineage_id: 1,
+                    cells: 10 + scan,
+                    organisms: 1,
+                    frame: scan as i32,
+                    time_seconds: scan as f32 * 30.0,
+                    avg_nutrient: 50.0,
+                    ..LineagePopulationSample::default()
+                }],
+                scan as i32,
+            );
+        }
+
+        let node = &archive.nodes[0];
+        assert_eq!(
+            node.telemetry_history.len(),
+            DEFAULT_MAX_TELEMETRY_SAMPLES_PER_LINEAGE
+        );
+        assert_eq!(node.latest_telemetry().unwrap().cells, 49);
+        assert_eq!(node.consecutive_growth_windows(), 32);
+        assert_eq!(node.consecutive_decline_windows(), 0);
+        assert_eq!(node.telemetry_at_least_seconds_ago(60.0).unwrap().cells, 47);
+    }
+
+    #[test]
+    fn population_changes_generate_report_events_after_baseline() {
+        let mut archive = EcosystemLineageArchive::default();
+        archive.nodes.push(LineageNode {
+            id: 1,
+            ..LineageNode::default()
+        });
+
+        archive.apply_population_samples(
+            &[LineagePopulationSample {
+                lineage_id: 1,
+                cells: 20,
+                frame: 1,
+                time_seconds: 30.0,
+                ..LineagePopulationSample::default()
+            }],
+            1,
+        );
+        assert!(archive.events.is_empty());
+
+        archive.apply_population_samples(
+            &[LineagePopulationSample {
+                lineage_id: 1,
+                cells: 35,
+                frame: 2,
+                time_seconds: 60.0,
+                ..LineagePopulationSample::default()
+            }],
+            2,
+        );
+
+        assert!(archive
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, LineageEventKind::PopulationBoom)));
+        assert!(archive
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, LineageEventKind::NewPopulationPeak)));
+    }
+
+    #[test]
+    fn ecosystem_summary_reports_dominance_evenness_and_direction() {
+        let mut archive = EcosystemLineageArchive::default();
+        archive.nodes.push(LineageNode {
+            id: 1,
+            current_cells: 75,
+            telemetry_history: vec![LineageTelemetrySample {
+                cells: 75,
+                cell_delta: 5,
+                ..LineageTelemetrySample::default()
+            }],
+            ..LineageNode::default()
+        });
+        archive.nodes.push(LineageNode {
+            id: 2,
+            current_cells: 25,
+            telemetry_history: vec![LineageTelemetrySample {
+                cells: 25,
+                cell_delta: -2,
+                ..LineageTelemetrySample::default()
+            }],
+            ..LineageNode::default()
+        });
+
+        let summary = archive.ecosystem_telemetry();
+        assert_eq!(summary.active_lineages, 2);
+        assert_eq!(summary.total_cells, 100);
+        assert!((summary.largest_lineage_fraction - 0.75).abs() < 0.001);
+        assert!(summary.evenness_score > 0.0 && summary.evenness_score < 1.0);
+        assert_eq!(summary.growing_lineages, 1);
+        assert_eq!(summary.declining_lineages, 1);
     }
 }

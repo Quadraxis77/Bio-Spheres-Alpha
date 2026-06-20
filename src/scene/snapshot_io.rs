@@ -37,6 +37,97 @@ use crate::genome::Genome;
 use crate::simulation::gpu_physics::GenomeMeta;
 use crate::simulation::CanonicalState;
 
+#[derive(Default)]
+struct LineageTelemetryAccumulator {
+    cells: u32,
+    nutrient_sum: f64,
+    nutrient_positive: u32,
+    division_ready: u32,
+    starvation_risk: u32,
+    age_sum: f64,
+    position_sum: glam::DVec3,
+    min_position: glam::Vec3,
+    max_position: glam::Vec3,
+    has_position: bool,
+    cell_type_counts: HashMap<u32, u32>,
+    active_modes: HashSet<u32>,
+}
+
+impl LineageTelemetryAccumulator {
+    fn record(
+        &mut self,
+        position_and_mass: [f32; 4],
+        mode_index: u32,
+        cell_type: u32,
+        nutrients: f32,
+        nutrient_gain_rate: f32,
+        age: f32,
+        split_interval: f32,
+        split_nutrient_threshold: f32,
+    ) {
+        self.cells = self.cells.saturating_add(1);
+        self.nutrient_sum += nutrients as f64;
+        self.age_sum += age as f64;
+        self.nutrient_positive += u32::from(nutrient_gain_rate > 0.01);
+        self.starvation_risk += u32::from(nutrients <= 10.0);
+        self.division_ready += u32::from(
+            split_nutrient_threshold > 0.0
+                && nutrients >= split_nutrient_threshold
+                && age >= split_interval,
+        );
+        self.active_modes.insert(mode_index);
+        *self.cell_type_counts.entry(cell_type).or_default() += 1;
+
+        let position = glam::vec3(
+            position_and_mass[0],
+            position_and_mass[1],
+            position_and_mass[2],
+        );
+        self.position_sum += position.as_dvec3();
+        if self.has_position {
+            self.min_position = self.min_position.min(position);
+            self.max_position = self.max_position.max(position);
+        } else {
+            self.min_position = position;
+            self.max_position = position;
+            self.has_position = true;
+        }
+    }
+
+    fn report_fields(&self) -> (f32, f32, f32, f32, f32, u32, f32, u32, [f32; 3], f32) {
+        if self.cells == 0 {
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0, [0.0; 3], 0.0);
+        }
+
+        let count = self.cells as f32;
+        let (dominant_cell_type, dominant_count) = self
+            .cell_type_counts
+            .iter()
+            .max_by_key(|(cell_type, count)| (**count, std::cmp::Reverse(**cell_type)))
+            .map(|(&cell_type, &count)| (cell_type, count))
+            .unwrap_or((0, 0));
+        let center = (self.position_sum / self.cells as f64).as_vec3();
+        let bounding_radius = if self.has_position {
+            (self.max_position - self.min_position).length() * 0.5
+        } else {
+            0.0
+        };
+
+        (
+            (self.nutrient_sum / self.cells as f64) as f32,
+            self.nutrient_positive as f32 / count,
+            self.division_ready as f32 / count,
+            self.starvation_risk as f32 / count,
+            (self.age_sum / self.cells as f64) as f32,
+            dominant_cell_type,
+            dominant_count as f32 / count,
+            self.active_modes.len().min(u32::MAX as usize) as u32,
+            center.to_array(),
+            bounding_radius,
+        )
+    }
+}
+
 // --- helpers -----------------------------------------------------------------
 
 /// Read `byte_count` bytes from `src_buffer` starting at `src_offset` into a
@@ -762,6 +853,17 @@ impl GpuScene {
             &self.gpu_triple_buffers.split_nutrient_thresholds,
             slots,
         )?;
+        // These two compact scalar buffers complete the report-oriented
+        // resource/composition summary. They are read only during an explicit
+        // blocking lineage scan, never during the automatic refresh path.
+        let nutrient_gain_rates: Vec<f32> = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.nutrient_gain_rates,
+            slots,
+        )?;
+        let cell_types: Vec<u32> =
+            readback_typed(device, queue, &self.gpu_triple_buffers.cell_types, slots)?;
 
         let organism_labels: Option<Vec<u32>> = self
             .organism_label_system
@@ -771,6 +873,7 @@ impl GpuScene {
 
         let mut cell_counts: BTreeMap<u32, u32> = BTreeMap::new();
         let mut organism_sets: HashMap<u32, HashSet<u32>> = HashMap::new();
+        let mut telemetry_by_genome: HashMap<u32, LineageTelemetryAccumulator> = HashMap::new();
         let mut invalid_live_cells = 0u32;
         let mut labeled_live_cells = 0u32;
 
@@ -787,6 +890,19 @@ impl GpuScene {
 
             let count = cell_counts.entry(genome_id).or_default();
             *count = count.saturating_add(1);
+
+            let nutrient = nutrients.get(i).copied().unwrap_or(0) as f32 / 1000.0;
+            let birth_time = birth_times.get(i).copied().unwrap_or(self.current_time);
+            telemetry_by_genome.entry(genome_id).or_default().record(
+                positions_and_mass.get(i).copied().unwrap_or([0.0; 4]),
+                mode_indices.get(i).copied().unwrap_or(0),
+                cell_types.get(i).copied().unwrap_or(0),
+                nutrient,
+                nutrient_gain_rates.get(i).copied().unwrap_or(0.0),
+                (self.current_time - birth_time).max(0.0),
+                split_intervals.get(i).copied().unwrap_or(0.0),
+                split_nutrient_thresholds.get(i).copied().unwrap_or(0.0),
+            );
 
             if let Some(labels) = &organism_labels {
                 let label = labels.get(i).copied().unwrap_or(u32::MAX);
@@ -925,11 +1041,37 @@ impl GpuScene {
                 );
             }
             tracked_cells = tracked_cells.saturating_add(cells);
+            let (
+                avg_nutrient,
+                nutrient_positive_fraction,
+                division_ready_fraction,
+                starvation_risk_fraction,
+                average_age,
+                dominant_cell_type,
+                dominant_cell_type_fraction,
+                active_mode_count,
+                center,
+                bounding_radius,
+            ) = telemetry_by_genome
+                .get(&genome_id)
+                .map(LineageTelemetryAccumulator::report_fields)
+                .unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0, [0.0; 3], 0.0));
             samples.push(LineagePopulationSample {
                 lineage_id,
                 cells,
                 organisms,
                 frame: self.current_frame,
+                time_seconds: self.current_time,
+                avg_nutrient,
+                nutrient_positive_fraction,
+                division_ready_fraction,
+                starvation_risk_fraction,
+                average_age,
+                dominant_cell_type,
+                dominant_cell_type_fraction,
+                active_mode_count,
+                center,
+                bounding_radius,
             });
         }
 

@@ -1428,6 +1428,21 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                 archive.events.len().to_string(),
                 p.accent_primary,
             );
+            let ecosystem = archive.ecosystem_telemetry();
+            if ecosystem.active_lineages > 0 {
+                lineage_metric_chip(
+                    ui,
+                    "Largest Share",
+                    format!("{:.0}%", ecosystem.largest_lineage_fraction * 100.0),
+                    p.status_info,
+                );
+                lineage_metric_chip(
+                    ui,
+                    "Evenness",
+                    format!("{:.0}%", ecosystem.evenness_score * 100.0),
+                    p.accent_secondary,
+                );
+            }
             lineage_metric_chip(
                 ui,
                 "Loadable",
@@ -2068,9 +2083,64 @@ fn render_lineage_intel_panel(
                             archive.generation_for_lineage(node.id).to_string(),
                         );
                         ui.end_row();
+
+                        if let Some(latest) = node.latest_telemetry() {
+                            lineage_readout(
+                                ui,
+                                "Change",
+                                format!("{:+}", latest.cell_delta),
+                            );
+                            lineage_readout(
+                                ui,
+                                "Nutrients",
+                                format!("{:.1}", latest.avg_nutrient),
+                            );
+                            ui.end_row();
+                            lineage_readout(
+                                ui,
+                                "Division-ready",
+                                format!("{:.0}%", latest.division_ready_fraction * 100.0),
+                            );
+                            lineage_readout(
+                                ui,
+                                "Starvation risk",
+                                format!("{:.0}%", latest.starvation_risk_fraction * 100.0),
+                            );
+                            ui.end_row();
+                            lineage_readout(
+                                ui,
+                                "Avg age",
+                                format!("{:.1}s", latest.average_age),
+                            );
+                            lineage_readout(
+                                ui,
+                                "Territory",
+                                format!("r {:.1}", latest.bounding_radius),
+                            );
+                            ui.end_row();
+                        }
                     });
 
                 ui.add_space(8.0);
+                if let Some(latest) = node.latest_telemetry() {
+                    let type_name = crate::cell::types::CellType::names()
+                        .get(latest.dominant_cell_type as usize)
+                        .copied()
+                        .unwrap_or("Unknown");
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Dominant tissue: {} ({:.0}%) / {} active mode(s) / trend +{} -{} windows",
+                            type_name,
+                            latest.dominant_cell_type_fraction * 100.0,
+                            latest.active_mode_count,
+                            node.consecutive_growth_windows(),
+                            node.consecutive_decline_windows(),
+                        ))
+                        .size(10.0)
+                        .color(p.text_secondary),
+                    );
+                    ui.add_space(4.0);
+                }
                 if !archive.last_scan_organism_counts_reliable {
                     ui.label(
                         egui::RichText::new(
