@@ -761,6 +761,14 @@ fn default_horizontal_fov_degrees() -> f32 {
     crate::ui::camera::DEFAULT_HORIZONTAL_FOV_DEGREES
 }
 
+fn default_camera_sprint_multiplier() -> f32 {
+    6.0
+}
+
+fn default_camera_scroll_sensitivity() -> f32 {
+    0.2
+}
+
 fn default_field_report_interval_seconds() -> f32 {
     crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS
 }
@@ -966,6 +974,14 @@ pub struct GlobalUiState {
     #[serde(default = "default_horizontal_fov_degrees")]
     pub horizontal_fov_degrees: f32,
 
+    /// FreeFly sprint multiplier shared by preview and GPU scenes.
+    #[serde(default = "default_camera_sprint_multiplier")]
+    pub camera_sprint_multiplier: f32,
+
+    /// Mouse-wheel scroll sensitivity shared by preview and GPU scenes.
+    #[serde(default = "default_camera_scroll_sensitivity")]
+    pub camera_scroll_sensitivity: f32,
+
     /// Interval between scheduled ecosystem field-report scans.
     #[serde(default = "default_field_report_interval_seconds")]
     pub field_report_interval_seconds: f32,
@@ -1124,6 +1140,8 @@ impl Default for GlobalUiState {
             gpu_timing_enabled: true,
             field_reports_enabled: true,
             horizontal_fov_degrees: default_horizontal_fov_degrees(),
+            camera_sprint_multiplier: default_camera_sprint_multiplier(),
+            camera_scroll_sensitivity: default_camera_scroll_sensitivity(),
             field_report_interval_seconds: default_field_report_interval_seconds(),
             gpu_headless_mode: false,
             gpu_headless_auto_speed: false,

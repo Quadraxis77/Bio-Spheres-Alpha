@@ -1161,6 +1161,13 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         simple_color += spec * in.visual_params.x * local_light_color * shadow;
         let fresnel = pow(1.0 - max(dot(world_normal_front, view_dir), 0.0), 3.0);
         simple_color += vec3<f32>(fresnel * in.visual_params.z);
+
+        // Match the transmitted backlight used by the full-detail path. Without
+        // this, backlit cells gain or lose a broad warm term exactly when the
+        // procedural LOD switches.
+        let sss = max(dot(world_normal_front, light_dir), 0.0) * 0.12;
+        simple_color += base_color * sss * local_light_color * shadow;
+
         simple_color += base_color * in.visual_params.w;
 
         if (lighting.outline_width > 0.0) {
@@ -1597,10 +1604,12 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);
     let front_diffuse = front_ndotl * local_light_color * shadow;
 
-    // Apply diffuse to the composited result.
-    // ambient doubles as the shadow floor so both scale together with sun intensity.
+    // Apply diffuse to the detailed composite, but keep the ambient/shadow floor
+    // anchored to base_color. LOD 0 uses the same base-color floor, so cells no
+    // longer jump darker or lighter at the fixed detail-switch distance.
     let unlit_composited = composited;
-    composited = composited * (lighting.ambient + (1.0 - lighting.ambient) * front_diffuse);
+    composited = base_color * lighting.ambient
+        + composited * ((1.0 - lighting.ambient) * front_diffuse);
 
     // Specular highlight on membrane surface (uses perturbed normal for ridge highlights)
     let half_vec = normalize(-light_dir + view_dir);

@@ -1732,7 +1732,7 @@ impl UiSystem {
                     current_mode,
                     performance,
                     &mut self.field_report_director,
-                    ui_state_copy.hide_ui,
+                    hide_ui,
                 );
 
                 let mut dock_area = egui_dock::DockArea::new(dock_manager.current_tree_mut())
@@ -2822,6 +2822,42 @@ fn show_windows_menu(
             .active_scene_mut()
             .camera_mut()
             .horizontal_fov_degrees = state.horizontal_fov_degrees;
+    }
+
+    ui.add_space(6.0);
+    ui.label("Sprint Multiplier:")
+        .on_hover_text("Speed multiplier applied while holding Shift in FreeFly camera mode. Double-click the slider to reset.");
+    let sprint_response = ui.add(
+        egui::Slider::new(&mut state.camera_sprint_multiplier, 1.0..=20.0)
+            .custom_formatter(|value, _| format!("{value:.1}x")),
+    );
+    let mut sprint_multiplier_changed = sprint_response.changed();
+    if sprint_response.double_clicked() {
+        state.camera_sprint_multiplier = 6.0;
+        sprint_multiplier_changed = true;
+    }
+    if sprint_multiplier_changed {
+        scene_manager
+            .active_scene_mut()
+            .camera_mut()
+            .sprint_multiplier = state.camera_sprint_multiplier;
+    }
+
+    ui.add_space(6.0);
+    ui.label("Scroll Sensitivity:")
+        .on_hover_text("How strongly mouse-wheel scrolling zooms the active scene camera. Double-click the slider to reset.");
+    let scroll_response = ui.add(
+        egui::Slider::new(&mut state.camera_scroll_sensitivity, 0.01..=2.0)
+            .logarithmic(true)
+            .custom_formatter(|value, _| format!("{value:.2}x")),
+    );
+    let mut scroll_sensitivity_changed = scroll_response.changed();
+    if scroll_response.double_clicked() {
+        state.camera_scroll_sensitivity = 0.2;
+        scroll_sensitivity_changed = true;
+    }
+    if scroll_sensitivity_changed {
+        scene_manager.active_scene_mut().camera_mut().zoom_speed = state.camera_scroll_sensitivity;
     }
 
     ui.separator();

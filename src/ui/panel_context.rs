@@ -1442,9 +1442,8 @@ impl GenomeEditorState {
             return false;
         }
 
-        let angle_radians =
-            (self.sun_orbit_angle.to_radians() + self.sun_rotation_speed * wall_dt)
-                .rem_euclid(std::f32::consts::TAU);
+        let angle_radians = (self.sun_orbit_angle.to_radians() + self.sun_rotation_speed * wall_dt)
+            .rem_euclid(std::f32::consts::TAU);
         self.sun_orbit_angle = angle_radians.to_degrees();
         self.apply_sun_orbit();
         true
@@ -3330,10 +3329,10 @@ impl GenomeEditorState {
             1.0, // caustic_speed
             // Photocyte settings
             0.2,  // photocyte_mass_per_second (scales with brightness and occupied-voxel light)
-            0.05,  // photocyte_min_light_threshold
+            0.05, // photocyte_min_light_threshold
             // Luminocyte bloom
-            true, // luminocyte_bloom_enabled
-            0.02, // luminocyte_bloom_radius
+            true,  // luminocyte_bloom_enabled
+            0.02,  // luminocyte_bloom_radius
             0.4,   // fog_water_wave_strength
             0.15,  // fog_water_wave_scale
             true,  // fog_smooth_light_field
@@ -3949,10 +3948,8 @@ mod tests {
         state.sun_rotation_enabled = true;
         state.sun_rotation_axis = [0.0, 1.0, 0.0];
         state.sun_orbit_angle = 0.0;
-        state.light_dir = GenomeEditorState::orbit_direction(
-            state.sun_rotation_axis,
-            state.sun_orbit_angle,
-        );
+        state.light_dir =
+            GenomeEditorState::orbit_direction(state.sun_rotation_axis, state.sun_orbit_angle);
         state.sun_rotation_speed = 1.0_f32.to_radians();
 
         let old_dir = state.light_dir;
@@ -3967,10 +3964,8 @@ mod tests {
         state.sun_rotation_enabled = true;
         state.sun_rotation_axis = [0.0, 1.0, 0.0];
         state.sun_orbit_angle = 0.0;
-        state.light_dir = GenomeEditorState::orbit_direction(
-            state.sun_rotation_axis,
-            state.sun_orbit_angle,
-        );
+        state.light_dir =
+            GenomeEditorState::orbit_direction(state.sun_rotation_axis, state.sun_orbit_angle);
         state.sun_rotation_speed = 0.1_f32.to_radians();
 
         let old_dir = state.light_dir;
@@ -3986,10 +3981,8 @@ mod tests {
             state.sun_rotation_enabled = true;
             state.sun_rotation_axis = [0.0, 1.0, 0.0];
             state.sun_orbit_angle = 180.0;
-            state.light_dir = GenomeEditorState::orbit_direction(
-                state.sun_rotation_axis,
-                state.sun_orbit_angle,
-            );
+            state.light_dir =
+                GenomeEditorState::orbit_direction(state.sun_rotation_axis, state.sun_orbit_angle);
             state.sun_rotation_speed = speed_degrees.to_radians();
 
             let old_angle = state.sun_orbit_angle;

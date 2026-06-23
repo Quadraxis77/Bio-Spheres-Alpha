@@ -189,6 +189,19 @@ fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     }
     return sample.rgb;
 }
+
+fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
+    let fallback = vec4<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b, 0.0);
+    if (shadow_params.shadow_enabled == 0u) {
+        return fallback;
+    }
+    let uvw = world_to_light_uvw(world_pos);
+    if (!light_uvw_in_bounds(uvw)) {
+        return fallback;
+    }
+    return textureSampleLevel(light_color_field_tex, light_field_sampler, uvw, 0.0);
+}
+
 @vertex
 fn vs_main(vertex: VertexInput) -> VertexOutput {
     var out: VertexOutput;
@@ -797,11 +810,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // fully sunlit instead - matching how the compute shader lights voxels
     // outside the world sphere.
     var shadow = 1.0;
+    var raw_light_visibility = 1.0;
+    var local_light_weight = 0.0;
     var sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     if (all(in.world_position >= grid_min) && all(in.world_position <= grid_max)) {
         let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
-        shadow = mix(1.0, sample_light_field_lod(clamped_pos), shadow_params.shadow_strength);
+        let raw_light = sample_light_field_lod(clamped_pos);
+        let light_color_sample = sample_light_color_field_full(clamped_pos);
+        shadow = mix(1.0, raw_light, shadow_params.shadow_strength);
         sun_color = sample_light_color_field(clamped_pos);
+        raw_light_visibility = raw_light;
+        local_light_weight = light_color_sample.w;
     }
     // Ambient scales with sun_color so cave walls go pitch black when sun is off.
     let ambient = sun_color * cave_params.rock_ambient_strength * ao;
@@ -811,11 +830,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply underwater caustics on lit surfaces
     let water_check_pos = in.world_position + N * shadow_params.cell_size * 1.5;
     let density = sample_water_density(water_check_pos);
-    if (shadow_params.caustic_intensity > 0.0 && shadow > 0.3 && density > 0.01) {
+    let direct_sun_visibility = raw_light_visibility - local_light_weight;
+    let direct_sun_caustics = direct_sun_visibility > 0.35 && diffuse > 0.001;
+    if (shadow_params.caustic_intensity > 0.0 && direct_sun_caustics && density > 0.01) {
         let caustic = caustic_pattern(in.world_position, N, shadow_params.time);
         let density_fade = smoothstep(0.0, 0.5, density);
         let caustic_tint = sun_color * vec3<f32>(0.7, 0.85, 1.0);
-        final_color += caustic_tint * caustic * shadow_params.caustic_intensity * shadow * density_fade * 0.5;
+        final_color += caustic_tint * caustic * shadow_params.caustic_intensity * direct_sun_visibility * density_fade * 0.5;
     }
     
     // Completely opaque walls

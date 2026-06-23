@@ -7,6 +7,11 @@ use egui::{Id, Ui, WidgetText};
 use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 
+use crate::field_report::{
+    format_simulation_time, render_lineage_snapshot_report, render_specimen_report,
+    ArchivedFieldReport, FieldReportHistory, FieldReportSeverity, LineageSnapshotReportSnapshot,
+    RenderedFieldReport, SpecimenReportSnapshot, ToneProfile,
+};
 use crate::ui::panel::Panel;
 use crate::ui::panel_context::{CaveAppearanceVisualSettings, PanelContext, SceneModeRequest};
 use crate::ui::types::GlobalUiState;
@@ -16,11 +21,6 @@ use crate::ui::ui_system::{
     stat_label,
 };
 use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
-use crate::field_report::{
-    format_simulation_time, render_lineage_snapshot_report, render_specimen_report, ArchivedFieldReport,
-    FieldReportHistory, FieldReportSeverity, LineageSnapshotReportSnapshot, RenderedFieldReport,
-    SpecimenReportSnapshot, ToneProfile,
-};
 
 /// TabViewer implementation for Bio-Spheres panels.
 ///
@@ -123,7 +123,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::LightSettings => render_light_settings_organized(ui, self.context, self.state),
             Panel::TimeScrubber => render_time_scrubber(ui, self.context),
             Panel::ThemeEditor => render_theme_editor(ui, self.state),
-            Panel::CameraSettings => render_camera_settings(ui, self.context),
+            Panel::CameraSettings => render_camera_settings(ui, self.context, self.state),
             Panel::LightingSettings => render_lighting_settings(ui),
             Panel::GizmoSettings => render_gizmo_settings(ui, self.context),
             Panel::CellTypeVisuals => render_cell_type_visuals(ui, self.context),
@@ -817,9 +817,11 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                     });
 
                 ui.label(
-                    egui::RichText::new("emit = direct source · other values are received strength")
-                        .size(9.0)
-                        .color(palette().text_dim),
+                    egui::RichText::new(
+                        "emit = direct source · other values are received strength",
+                    )
+                    .size(9.0)
+                    .color(palette().text_dim),
                 );
 
                 ui.add_space(4.0);
@@ -1174,11 +1176,7 @@ fn render_recent_report_row(ui: &mut Ui, report: &ArchivedFieldReport) {
     });
 }
 
-fn render_field_report_card(
-    ui: &mut Ui,
-    report: &RenderedFieldReport,
-    scope_label: Option<&str>,
-) {
+fn render_field_report_card(ui: &mut Ui, report: &RenderedFieldReport, scope_label: Option<&str>) {
     let accent = severity_color(report.severity);
     egui::Frame::new()
         .fill(palette().bg_panel)
@@ -1727,12 +1725,7 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                 scene.genomes.len(),
                 context.scene_request,
             );
-            render_lineage_intel_panel(
-                &mut columns[1],
-                archive,
-                selected_node,
-                report_history,
-            );
+            render_lineage_intel_panel(&mut columns[1], archive, selected_node, report_history);
         });
     } else {
         render_lineage_specimen_panel(
@@ -5837,31 +5830,9 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.horizontal(|ui| {
             ui.label("Surface Color");
-            let mut c = egui::Color32::from_rgb(
-                (ice.surface_color[0] * 255.0) as u8,
-                (ice.surface_color[1] * 255.0) as u8,
-                (ice.surface_color[2] * 255.0) as u8,
-            );
-            if ui.color_edit_button_srgba(&mut c).changed() {
-                ice.surface_color = [
-                    c.r() as f32 / 255.0,
-                    c.g() as f32 / 255.0,
-                    c.b() as f32 / 255.0,
-                ];
-            }
+            ui.color_edit_button_rgb(&mut ice.surface_color);
             ui.label("Deep Color");
-            let mut d = egui::Color32::from_rgb(
-                (ice.deep_color[0] * 255.0) as u8,
-                (ice.deep_color[1] * 255.0) as u8,
-                (ice.deep_color[2] * 255.0) as u8,
-            );
-            if ui.color_edit_button_srgba(&mut d).changed() {
-                ice.deep_color = [
-                    d.r() as f32 / 255.0,
-                    d.g() as f32 / 255.0,
-                    d.b() as f32 / 255.0,
-                ];
-            }
+            ui.color_edit_button_rgb(&mut ice.deep_color);
         });
 
         if advanced {
@@ -6307,17 +6278,7 @@ fn render_organism_skin_settings(
     ui.separator();
     ui.label("Skin Colour:");
     ui.horizontal(|ui| {
-        let c = &mut organism_skin.base_color;
-        let mut rgb = egui::Color32::from_rgb(
-            (c[0] * 255.0) as u8,
-            (c[1] * 255.0) as u8,
-            (c[2] * 255.0) as u8,
-        );
-        if ui.color_edit_button_srgba(&mut rgb).changed() {
-            c[0] = rgb.r() as f32 / 255.0;
-            c[1] = rgb.g() as f32 / 255.0;
-            c[2] = rgb.b() as f32 / 255.0;
-        }
+        ui.color_edit_button_rgb(&mut organism_skin.base_color);
     });
 
     ui.add_space(4.0);
@@ -6375,26 +6336,13 @@ fn render_organism_skin_settings(
     ui.add_space(4.0);
 }
 
-/// Render the organized lighting settings panel.
-fn normalize_sun_tint(color: [f32; 3]) -> [f32; 3] {
-    let max_channel = color[0].max(color[1]).max(color[2]);
-    if max_channel > 0.001 {
-        [
-            color[0] / max_channel,
-            color[1] / max_channel,
-            color[2] / max_channel,
-        ]
-    } else {
-        [1.0, 1.0, 1.0]
-    }
-}
-
 fn sun_tint_color32(color: [f32; 3]) -> egui::Color32 {
-    egui::Color32::from_rgb(
-        (color[0].clamp(0.0, 1.0) * 255.0) as u8,
-        (color[1].clamp(0.0, 1.0) * 255.0) as u8,
-        (color[2].clamp(0.0, 1.0) * 255.0) as u8,
+    egui::Rgba::from_rgb(
+        color[0].clamp(0.0, 1.0),
+        color[1].clamp(0.0, 1.0),
+        color[2].clamp(0.0, 1.0),
     )
+    .into()
 }
 
 fn render_sun_tint_control(ui: &mut Ui, tint: &mut [f32; 3], sun_intensity: f32) -> bool {
@@ -6430,13 +6378,7 @@ fn render_sun_tint_control(ui: &mut Ui, tint: &mut [f32; 3], sun_intensity: f32)
 
     ui.horizontal(|ui| {
         ui.label("Custom");
-        let mut c = sun_tint_color32(*tint);
-        if ui.color_edit_button_srgba(&mut c).changed() {
-            *tint = normalize_sun_tint([
-                c.r() as f32 / 255.0,
-                c.g() as f32 / 255.0,
-                c.b() as f32 / 255.0,
-            ]);
+        if ui.color_edit_button_rgb(tint).changed() {
             changed = true;
         }
 
@@ -6634,13 +6576,10 @@ fn render_light_settings_organized(
 
             ui.horizontal(|ui| {
                 ui.label("Tint");
-                let mut c = sun_tint_color32(context.editor_state.sun_color);
-                if ui.color_edit_button_srgba(&mut c).changed() {
-                    context.editor_state.sun_color = normalize_sun_tint([
-                        c.r() as f32 / 255.0,
-                        c.g() as f32 / 255.0,
-                        c.b() as f32 / 255.0,
-                    ]);
+                if ui
+                    .color_edit_button_rgb(&mut context.editor_state.sun_color)
+                    .changed()
+                {
                     sun_changed = true;
                 }
             });
@@ -6993,24 +6932,15 @@ fn render_light_settings_organized(
                     )
                     .changed();
 
-                let mut fog_color = context.editor_state.fog_color;
                 ui.horizontal(|ui| {
                     ui.label("Ambient Color");
-                    let mut c = egui::Color32::from_rgb(
-                        (fog_color[0] * 255.0) as u8,
-                        (fog_color[1] * 255.0) as u8,
-                        (fog_color[2] * 255.0) as u8,
-                    );
-                    if ui.color_edit_button_srgba(&mut c).changed() {
-                        fog_color = [
-                            c.r() as f32 / 255.0,
-                            c.g() as f32 / 255.0,
-                            c.b() as f32 / 255.0,
-                        ];
+                    if ui
+                        .color_edit_button_rgb(&mut context.editor_state.fog_color)
+                        .changed()
+                    {
                         changed = true;
                     }
                 });
-                context.editor_state.fog_color = fog_color;
 
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("Height Fog").strong());
@@ -7715,23 +7645,14 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
                 .changed();
 
             ui.add_space(4.0);
-            let mut fog_col = context.editor_state.fog_color;
             ui.label("Fog Colour:")
                 .on_hover_text("Ambient/shadow colour of the fog medium itself.");
-            let mut c32 = egui::Color32::from_rgb(
-                (fog_col[0] * 255.0) as u8,
-                (fog_col[1] * 255.0) as u8,
-                (fog_col[2] * 255.0) as u8,
-            );
-            if ui.color_edit_button_srgba(&mut c32).changed() {
-                fog_col = [
-                    c32.r() as f32 / 255.0,
-                    c32.g() as f32 / 255.0,
-                    c32.b() as f32 / 255.0,
-                ];
+            if ui
+                .color_edit_button_rgb(&mut context.editor_state.fog_color)
+                .changed()
+            {
                 changed = true;
             }
-            context.editor_state.fog_color = fog_col;
 
             ui.add_space(4.0);
             ui.label("Height Fog Density:")
@@ -8229,13 +8150,13 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
 }
 
 /// Render the CameraSettings panel (placeholder).
-fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext) {
+fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mut GlobalUiState) {
     let sw = (ui.available_width() - 60.0).max(60.0);
     ui.style_mut().spacing.slider_width = sw;
     ui.heading("Camera");
     ui.separator();
 
-    let camera = &mut context.camera;
+    let camera = &mut *context.camera;
     ui.label(format!("Mode: {:?}", camera.mode));
     ui.label(format!("Distance: {:.1}", camera.distance));
 
@@ -8246,11 +8167,34 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext) {
     ui.label("Sprint Multiplier:").on_hover_text(
         "Speed multiplier applied while holding Shift in FreeFly mode. Adjust with Shift+Scroll while flying",
     );
-    ui.add(egui::Slider::new(&mut camera.sprint_multiplier, 1.0..=20.0));
+    let sprint_response = ui.add(
+        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 1.0..=20.0)
+            .custom_formatter(|value, _| format!("{value:.1}x")),
+    );
+    let mut sprint_multiplier_changed = sprint_response.changed();
+    if sprint_response.double_clicked() {
+        ui_state.camera_sprint_multiplier = 6.0;
+        sprint_multiplier_changed = true;
+    }
+    if sprint_multiplier_changed {
+        camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
+    }
     ui.label("Zoom Speed:").on_hover_text(
         "How fast scrolling zooms the camera in Orbit mode. Adjust with Shift+Scroll while orbiting",
     );
-    ui.add(egui::Slider::new(&mut camera.zoom_speed, 0.01..=2.0).logarithmic(true));
+    let zoom_response = ui.add(
+        egui::Slider::new(&mut ui_state.camera_scroll_sensitivity, 0.01..=2.0)
+            .logarithmic(true)
+            .custom_formatter(|value, _| format!("{value:.2}x")),
+    );
+    let mut scroll_sensitivity_changed = zoom_response.changed();
+    if zoom_response.double_clicked() {
+        ui_state.camera_scroll_sensitivity = 0.2;
+        scroll_sensitivity_changed = true;
+    }
+    if scroll_sensitivity_changed {
+        camera.zoom_speed = ui_state.camera_scroll_sensitivity;
+    }
     ui.label("Mouse Sensitivity:")
         .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
     ui.add(egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01).logarithmic(true));
@@ -11945,9 +11889,7 @@ fn sync_mode_changes_to_others(
         if updated.stemocyte_delay_mode != snapshot.stemocyte_delay_mode {
             other.stemocyte_delay_mode = updated.stemocyte_delay_mode;
         }
-        if (updated.stemocyte_delay_value - snapshot.stemocyte_delay_value).abs()
-            > f32::EPSILON
-        {
+        if (updated.stemocyte_delay_value - snapshot.stemocyte_delay_value).abs() > f32::EPSILON {
             other.stemocyte_delay_value = updated.stemocyte_delay_value;
         }
         if updated.mode_switch_invert != snapshot.mode_switch_invert {

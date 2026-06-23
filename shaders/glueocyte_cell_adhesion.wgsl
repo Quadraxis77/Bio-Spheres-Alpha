@@ -145,6 +145,7 @@ fn allocate_adhesion_slot() -> u32 {
     // Monotonic fallback
     let slot = atomicAdd(&next_adhesion_id[0], 1u);
     if (slot < arrayLength(&adhesion_connections)) {
+        atomicMax(&adhesion_counts[0], slot + 1u);
         atomicAdd(&adhesion_counts[1], 1u);
         return slot;
     }

@@ -1644,10 +1644,12 @@ impl App {
 
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_keyboard_input() {
-                    self.scene_manager
-                        .active_scene_mut()
-                        .camera_mut()
-                        .handle_keyboard(event);
+                    let camera = self.scene_manager.active_scene_mut().camera_mut();
+                    let previous_zoom_speed = camera.zoom_speed;
+                    camera.handle_keyboard(event);
+                    if (camera.zoom_speed - previous_zoom_speed).abs() > f32::EPSILON {
+                        self.ui.state.camera_scroll_sensitivity = camera.zoom_speed;
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -2636,13 +2638,15 @@ impl App {
         // Auto-save dock layouts periodically
         self.dock_manager.auto_save();
 
-        self.scene_manager
-            .active_scene_mut()
-            .camera_mut()
-            .horizontal_fov_degrees = self.ui.state.horizontal_fov_degrees.clamp(
+        {
+            let camera = self.scene_manager.active_scene_mut().camera_mut();
+            camera.horizontal_fov_degrees = self.ui.state.horizontal_fov_degrees.clamp(
                 crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES,
                 crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
             );
+            camera.sprint_multiplier = self.ui.state.camera_sprint_multiplier.clamp(1.0, 20.0);
+            camera.zoom_speed = self.ui.state.camera_scroll_sensitivity.clamp(0.01, 2.0);
+        }
 
         let output = loop {
             match self.surface.get_current_texture() {
@@ -2664,8 +2668,11 @@ impl App {
 
         // Apply occlusion culling settings from UI to GPU scene before rendering
         if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
-            gpu_scene.lineage_capture_interval_seconds =
-                self.ui.state.field_report_interval_seconds.clamp(5.0, 600.0);
+            gpu_scene.lineage_capture_interval_seconds = self
+                .ui
+                .state
+                .field_report_interval_seconds
+                .clamp(5.0, 600.0);
             gpu_scene.headless_no_render = gpu_headless;
             gpu_scene.set_occlusion_bias(self.ui.state.occlusion_bias);
             gpu_scene.set_occlusion_mip_override(self.ui.state.occlusion_mip_override);

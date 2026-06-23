@@ -135,6 +135,11 @@ impl GpuCellInsertion {
                     binding: 8,
                     resource: adhesion_buffers.angular_velocities[2].as_entire_binding(),
                 },
+                // Binding 9: Per-cell adhesion indices - cleared for the inserted slot
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
+                },
             ],
         });
 

@@ -1356,6 +1356,11 @@ impl CaveSystemRenderer {
             }
         }
 
+        let sealed_holes = Self::seal_small_mesh_holes(&mut vertices, &mut indices, cell_size);
+        if sealed_holes > 0 {
+            log::info!("Cave generation: sealed {sealed_holes} small mesh holes");
+        }
+
         let (removed_triangles, culled_fragment_regions) = Self::cull_small_mesh_components(
             &mut vertices,
             &mut indices,
@@ -1385,6 +1390,168 @@ impl CaveSystemRenderer {
         );
 
         (vertices, indices, culled_fragment_regions)
+    }
+
+    /// Seal tiny closed boundary loops left by ambiguous marching-cubes cases.
+    ///
+    /// The classic 256-case table can choose different diagonals on a shared
+    /// checkerboard face. Rarely, the two choices leave a four-sided crack.
+    /// Restricting this repair to short, compact loops avoids filling any
+    /// intentional large opening in the cave surface.
+    fn seal_small_mesh_holes(
+        vertices: &mut Vec<CaveVertex>,
+        indices: &mut Vec<u32>,
+        cell_size: f32,
+    ) -> usize {
+        if indices.is_empty() {
+            return 0;
+        }
+
+        type VertexKey = (i32, i32, i32);
+        #[derive(Clone, Copy)]
+        struct BoundaryEdge {
+            from_key: VertexKey,
+            to_key: VertexKey,
+            from_index: u32,
+            to_index: u32,
+        }
+
+        let q = (cell_size * 0.0001).max(0.0001);
+        let quantize = |p: [f32; 3]| -> VertexKey {
+            (
+                (p[0] / q).round() as i32,
+                (p[1] / q).round() as i32,
+                (p[2] / q).round() as i32,
+            )
+        };
+        let canonical_edge = |a: VertexKey, b: VertexKey| {
+            if a <= b {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+
+        let mut edge_uses: HashMap<(VertexKey, VertexKey), Vec<BoundaryEdge>> = HashMap::new();
+        for tri in indices.chunks_exact(3) {
+            for &(from_index, to_index) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                let from_key = quantize(vertices[from_index as usize].position);
+                let to_key = quantize(vertices[to_index as usize].position);
+                if from_key == to_key {
+                    continue;
+                }
+                edge_uses
+                    .entry(canonical_edge(from_key, to_key))
+                    .or_default()
+                    .push(BoundaryEdge {
+                        from_key,
+                        to_key,
+                        from_index,
+                        to_index,
+                    });
+            }
+        }
+
+        let boundary_edges: Vec<BoundaryEdge> = edge_uses
+            .into_values()
+            .filter_map(|uses| (uses.len() == 1).then_some(uses[0]))
+            .collect();
+        if boundary_edges.is_empty() {
+            return 0;
+        }
+
+        let mut key_to_edges: HashMap<VertexKey, Vec<usize>> = HashMap::new();
+        for (edge_id, edge) in boundary_edges.iter().enumerate() {
+            key_to_edges.entry(edge.from_key).or_default().push(edge_id);
+            key_to_edges.entry(edge.to_key).or_default().push(edge_id);
+        }
+
+        let mut visited = vec![false; boundary_edges.len()];
+        let mut sealed = 0;
+        const MAX_LOOP_EDGES: usize = 8;
+        let max_extent = cell_size * 2.5;
+
+        for start in 0..boundary_edges.len() {
+            if visited[start] {
+                continue;
+            }
+
+            let mut component_edges = Vec::new();
+            let mut stack = vec![start];
+            visited[start] = true;
+            while let Some(edge_id) = stack.pop() {
+                component_edges.push(edge_id);
+                let edge = boundary_edges[edge_id];
+                for key in [edge.from_key, edge.to_key] {
+                    for &next in key_to_edges.get(&key).map(Vec::as_slice).unwrap_or(&[]) {
+                        if !visited[next] {
+                            visited[next] = true;
+                            stack.push(next);
+                        }
+                    }
+                }
+            }
+
+            if !(3..=MAX_LOOP_EDGES).contains(&component_edges.len()) {
+                continue;
+            }
+
+            let mut component_keys = HashSet::new();
+            let mut bounds_min = Vec3::splat(f32::INFINITY);
+            let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
+            let mut center = Vec3::ZERO;
+            let mut point_count = 0usize;
+            let mut closed_loop = true;
+
+            for &edge_id in &component_edges {
+                let edge = boundary_edges[edge_id];
+                component_keys.insert(edge.from_key);
+                component_keys.insert(edge.to_key);
+            }
+            for key in &component_keys {
+                if key_to_edges.get(key).map_or(0, Vec::len) != 2 {
+                    closed_loop = false;
+                    break;
+                }
+                let edge_id = key_to_edges[key][0];
+                let edge = boundary_edges[edge_id];
+                let vertex_index = if edge.from_key == *key {
+                    edge.from_index
+                } else {
+                    edge.to_index
+                };
+                let p = Vec3::from(vertices[vertex_index as usize].position);
+                bounds_min = bounds_min.min(p);
+                bounds_max = bounds_max.max(p);
+                center += p;
+                point_count += 1;
+            }
+
+            if !closed_loop
+                || component_keys.len() != component_edges.len()
+                || (bounds_max - bounds_min).max_element() > max_extent
+            {
+                continue;
+            }
+
+            center /= point_count as f32;
+            let center_index = vertices.len() as u32;
+            vertices.push(CaveVertex {
+                position: center.to_array(),
+                normal: Vec3::ZERO.to_array(),
+                uv: [0.0; 2],
+            });
+
+            // Reverse each existing boundary edge so the cap has the same
+            // winding as the surrounding surface.
+            for &edge_id in &component_edges {
+                let edge = boundary_edges[edge_id];
+                indices.extend_from_slice(&[edge.to_index, edge.from_index, center_index]);
+            }
+            sealed += 1;
+        }
+
+        sealed
     }
 
     /// Apply Laplacian smoothing to the marching cubes mesh to soften the
@@ -1460,7 +1627,6 @@ impl CaveSystemRenderer {
         for (v, &id) in vertices.iter_mut().zip(vertex_to_point.iter()) {
             v.position = positions[id as usize].to_array();
         }
-
     }
 
     fn recompute_cave_normals(

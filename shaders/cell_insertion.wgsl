@@ -130,6 +130,11 @@ var<storage, read_write> angular_velocities_1: array<vec4<f32>>;
 @group(1) @binding(8)
 var<storage, read_write> angular_velocities_2: array<vec4<f32>>;
 
+// Per-cell adhesion index slots. New/recycled cells must start empty so
+// division, scaffold, and glueocyte adhesion creators can attach fresh bonds.
+@group(1) @binding(9)
+var<storage, read_write> cell_adhesion_indices: array<i32>;
+
 // Cell state buffers for division system (single buffers, not triple-buffered)
 @group(2) @binding(0)
 var<storage, read_write> birth_times: array<f32>;
@@ -232,6 +237,7 @@ var<storage, read_write> cell_thermal_state_next: array<u32>;
 var<storage, read_write> stemocyte_delay_timers: array<f32>;
 
 const CELL_TYPE_VASCULOCYTE: u32 = 12u;
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const INITIAL_CELL_TEMPERATURE: f32 = 105.0;
 const THERMAL_STATE_IDEAL: u32 = 4u;
 const DRY_THERMAL_MASS: f32 = 1.0;
@@ -404,6 +410,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     angular_velocities_0[slot] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     angular_velocities_1[slot] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     angular_velocities_2[slot] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+
+    let adhesion_base = slot * MAX_ADHESIONS_PER_CELL;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        cell_adhesion_indices[adhesion_base + i] = -1;
+    }
     
     // Initialize genome orientation (same as initial rotation for newly inserted cells)
     genome_orientations[slot] = insertion_params.rotation;
