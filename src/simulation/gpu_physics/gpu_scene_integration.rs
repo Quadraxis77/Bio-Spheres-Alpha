@@ -161,6 +161,7 @@ pub fn execute_gpu_physics_step(
         encoder.clear_buffer(&triple_buffers.mass_deltas_buffer, 0, None);
         encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
         encoder.clear_buffer(&triple_buffers.occupied_grid_count, 0, None);
+        encoder.clear_buffer(&triple_buffers.spatial_grid_overflow_count, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
@@ -639,6 +640,7 @@ pub fn execute_gpu_mechanics_step(
     if _cell_count_hint > 0 {
         encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
         encoder.clear_buffer(&triple_buffers.occupied_grid_count, 0, None);
+        encoder.clear_buffer(&triple_buffers.spatial_grid_overflow_count, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
         encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
@@ -1019,6 +1021,7 @@ pub fn rebuild_spatial_grid_after_lifecycle(
 
     // Stage 1: Clear spatial grid counts using DMA zero-fill
     encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
+    encoder.clear_buffer(&triple_buffers.spatial_grid_overflow_count, 0, None);
 
     {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

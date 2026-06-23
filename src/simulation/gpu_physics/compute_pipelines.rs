@@ -1574,6 +1574,20 @@ impl GpuPhysicsPipelines {
                     binding: 7,
                     resource: buffers.occupied_grid_count.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: buffers.spatial_grid_overflow_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: buffers
+                        .spatial_grid_overflow_grid_indices
+                        .as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: buffers.spatial_grid_overflow_count.as_entire_binding(),
+                },
             ],
         });
 
@@ -3192,6 +3206,20 @@ impl GpuPhysicsPipelines {
                     binding: 7,
                     resource: buffers.occupied_grid_count.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: buffers.spatial_grid_overflow_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: buffers
+                        .spatial_grid_overflow_grid_indices
+                        .as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: buffers.spatial_grid_overflow_count.as_entire_binding(),
+                },
             ],
         })
     }
@@ -3420,6 +3448,39 @@ impl GpuPhysicsPipelines {
                 // Occupied grid cell count
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Overflow side-list cell ids, appended when a bucket exceeds MAX_CELLS_PER_GRID
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Overflow source bucket ids
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Overflow side-list count
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },

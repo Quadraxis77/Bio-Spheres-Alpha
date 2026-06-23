@@ -214,6 +214,15 @@ pub struct GpuTripleBufferSystem {
     /// Occupied bucket count: [0] = number of entries in occupied_grid_cells.
     pub occupied_grid_count: wgpu::Buffer,
 
+    /// Cell indices that exceeded the fixed per-bucket spatial grid slots.
+    pub spatial_grid_overflow_cells: wgpu::Buffer,
+
+    /// Source grid bucket for each entry in spatial_grid_overflow_cells.
+    pub spatial_grid_overflow_grid_indices: wgpu::Buffer,
+
+    /// Overflow count: [0] = number of entries in the overflow side list.
+    pub spatial_grid_overflow_count: wgpu::Buffer,
+
     /// Physics parameters uniform buffer
     pub physics_params: wgpu::Buffer,
 
@@ -615,6 +624,19 @@ impl GpuTripleBufferSystem {
         let occupied_grid_count =
             Self::create_zero_initialized_storage_buffer(device, 16, "Occupied Spatial Grid Count");
 
+        let spatial_grid_overflow_cells = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4, // at most one overflow entry per live cell
+            "Spatial Grid Overflow Cells",
+        );
+        let spatial_grid_overflow_grid_indices = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4,
+            "Spatial Grid Overflow Grid Indices",
+        );
+        let spatial_grid_overflow_count =
+            Self::create_zero_initialized_storage_buffer(device, 16, "Spatial Grid Overflow Count");
+
         // Physics params uniform buffer (256 bytes aligned)
         let physics_params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Physics Params Uniform"),
@@ -985,6 +1007,9 @@ impl GpuTripleBufferSystem {
             cell_grid_indices,
             occupied_grid_cells,
             occupied_grid_count,
+            spatial_grid_overflow_cells,
+            spatial_grid_overflow_grid_indices,
+            spatial_grid_overflow_count,
             physics_params,
             death_flags,
             nutrients_buffer,

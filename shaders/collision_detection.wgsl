@@ -69,6 +69,15 @@ var<storage, read_write> occupied_grid_cells: array<u32>;
 @group(1) @binding(7)
 var<storage, read_write> occupied_grid_count: array<atomic<u32>>;
 
+@group(1) @binding(8)
+var<storage, read_write> spatial_grid_overflow_cells: array<u32>;
+
+@group(1) @binding(9)
+var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
+
+@group(1) @binding(10)
+var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
+
 @group(2) @binding(0)
 var<storage, read_write> force_accum_x: array<atomic<i32>>;
 
@@ -154,12 +163,18 @@ fn grid_index_to_coords(grid_idx: u32, grid_resolution: i32) -> vec3<i32> {
 }
 
 fn add_force(cell_idx: u32, force: vec3<f32>) {
+    if (dot(force, force) == 0.0) {
+        return;
+    }
     atomicAdd(&force_accum_x[cell_idx], i32(force.x * FIXED_POINT_SCALE));
     atomicAdd(&force_accum_y[cell_idx], i32(force.y * FIXED_POINT_SCALE));
     atomicAdd(&force_accum_z[cell_idx], i32(force.z * FIXED_POINT_SCALE));
 }
 
 fn add_torque(cell_idx: u32, torque: vec3<f32>) {
+    if (dot(torque, torque) == 0.0) {
+        return;
+    }
     atomicAdd(&torque_accum_x[cell_idx], i32(torque.x * FIXED_POINT_SCALE));
     atomicAdd(&torque_accum_y[cell_idx], i32(torque.y * FIXED_POINT_SCALE));
     atomicAdd(&torque_accum_z[cell_idx], i32(torque.z * FIXED_POINT_SCALE));
@@ -178,7 +193,7 @@ fn should_collide(a_idx: u32, b_idx: u32) -> bool {
 }
 
 fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
-    if (a_idx == b_idx || !live_cell(a_idx) || !live_cell(b_idx) || !should_collide(a_idx, b_idx)) {
+    if (a_idx == b_idx || !should_collide(a_idx, b_idx) || !live_cell(a_idx) || !live_cell(b_idx)) {
         return;
     }
 
@@ -380,6 +395,37 @@ fn process_neighbor_bucket(grid_idx_a: u32, count_a: u32, grid_idx_b: u32, count
     }
 }
 
+fn process_overflow_cell(cell_idx: u32, grid_idx: u32) {
+    let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
+
+    for (var dz: i32 = -1; dz <= 1; dz = dz + 1) {
+        for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
+            for (var dx: i32 = -1; dx <= 1; dx = dx + 1) {
+                let nx = coords.x + dx;
+                let ny = coords.y + dy;
+                let nz = coords.z + dz;
+                if (nx < 0 || ny < 0 || nz < 0 ||
+                    nx >= params.grid_resolution ||
+                    ny >= params.grid_resolution ||
+                    nz >= params.grid_resolution) {
+                    continue;
+                }
+
+                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+                let neighbor_count = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
+                if (neighbor_count == 0u) {
+                    continue;
+                }
+
+                let base = neighbor_grid_idx * MAX_CELLS_PER_GRID;
+                for (var i = 0u; i < neighbor_count; i++) {
+                    resolve_cell_pair(cell_idx, spatial_grid_cells[base + i]);
+                }
+            }
+        }
+    }
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dispatch_idx = global_id.x;
@@ -394,37 +440,42 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let occupied_idx = dispatch_idx;
     let occupied_count = atomicLoad(&occupied_grid_count[0]);
-    if (occupied_idx >= occupied_count) {
-        return;
+    if (occupied_idx < occupied_count) {
+        let grid_idx = occupied_grid_cells[occupied_idx];
+        let count = min(spatial_grid_counts[grid_idx], MAX_CELLS_PER_GRID);
+        if (count > 0u) {
+            process_same_bucket(grid_idx, count);
+
+            let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
+            for (var n = 0u; n < 13u; n++) {
+                let offset = FORWARD_NEIGHBOR_OFFSETS_3D[n];
+                let nx = coords.x + offset.x;
+                let ny = coords.y + offset.y;
+                let nz = coords.z + offset.z;
+                if (nx < 0 || ny < 0 || nz < 0 ||
+                    nx >= params.grid_resolution ||
+                    ny >= params.grid_resolution ||
+                    nz >= params.grid_resolution) {
+                    continue;
+                }
+
+                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+                let neighbor_count = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
+                if (neighbor_count == 0u) {
+                    continue;
+                }
+
+                process_neighbor_bucket(grid_idx, count, neighbor_grid_idx, neighbor_count);
+            }
+        }
     }
 
-    let grid_idx = occupied_grid_cells[occupied_idx];
-    let count = min(spatial_grid_counts[grid_idx], MAX_CELLS_PER_GRID);
-    if (count == 0u) {
-        return;
-    }
-
-    process_same_bucket(grid_idx, count);
-
-    let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
-    for (var n = 0u; n < 13u; n++) {
-        let offset = FORWARD_NEIGHBOR_OFFSETS_3D[n];
-        let nx = coords.x + offset.x;
-        let ny = coords.y + offset.y;
-        let nz = coords.z + offset.z;
-        if (nx < 0 || ny < 0 || nz < 0 ||
-            nx >= params.grid_resolution ||
-            ny >= params.grid_resolution ||
-            nz >= params.grid_resolution) {
-            continue;
-        }
-
-        let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
-        let neighbor_count = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
-        if (neighbor_count == 0u) {
-            continue;
-        }
-
-        process_neighbor_bucket(grid_idx, count, neighbor_grid_idx, neighbor_count);
+    let overflow_idx = dispatch_idx;
+    let overflow_count = atomicLoad(&spatial_grid_overflow_count[0]);
+    if (overflow_idx < overflow_count && overflow_idx < params.cell_capacity) {
+        process_overflow_cell(
+            spatial_grid_overflow_cells[overflow_idx],
+            spatial_grid_overflow_grid_indices[overflow_idx]
+        );
     }
 }

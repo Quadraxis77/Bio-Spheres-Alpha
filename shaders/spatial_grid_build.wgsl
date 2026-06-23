@@ -78,6 +78,16 @@ var<storage, read_write> occupied_grid_cells: array<u32>;
 @group(1) @binding(7)
 var<storage, read_write> occupied_grid_count: array<atomic<u32>>;
 
+// Compact side list for cells that overflow the fixed per-bucket slots.
+@group(1) @binding(8)
+var<storage, read_write> spatial_grid_overflow_cells: array<u32>;
+
+@group(1) @binding(9)
+var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
+
+@group(1) @binding(10)
+var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
 
 fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32, grid_resolution: i32) -> u32 {
@@ -121,5 +131,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     if (slot < MAX_CELLS_PER_GRID) {
         spatial_grid_cells[grid_idx * MAX_CELLS_PER_GRID + slot] = cell_idx;
+    } else {
+        let overflow_slot = atomicAdd(&spatial_grid_overflow_count[0], 1u);
+        if (overflow_slot < params.cell_capacity) {
+            spatial_grid_overflow_cells[overflow_slot] = cell_idx;
+            spatial_grid_overflow_grid_indices[overflow_slot] = grid_idx;
+        }
     }
 }

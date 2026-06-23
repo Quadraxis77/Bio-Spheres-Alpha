@@ -66,6 +66,16 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 @group(1) @binding(4)
 var<storage, read> stiffnesses: array<f32>;
 
+// Compact side list for cells that overflow the fixed per-bucket slots.
+@group(1) @binding(8)
+var<storage, read_write> spatial_grid_overflow_cells: array<u32>;
+
+@group(1) @binding(9)
+var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
+
+@group(1) @binding(10)
+var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
 
 @compute @workgroup_size(256)
@@ -87,11 +97,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let grid_base_offset = grid_idx * MAX_CELLS_PER_GRID;
         spatial_grid_cells[grid_base_offset + slot] = cell_idx;
     } else {
-        // Voxel is full - mark this cell as an overflow cell by writing a sentinel
-        // into cell_grid_indices. The collision shader skips overflow cells entirely,
-        // preserving Newton's third law. Without this, overflow cells query the grid
-        // and receive one-sided collision forces that visible cells can't react to -
-        // the primary phantom force source in dense blobs.
-        cell_grid_indices[cell_idx] = 0xFFFFFFFFu;
+        let overflow_slot = atomicAdd(&spatial_grid_overflow_count[0], 1u);
+        if (overflow_slot < params.cell_capacity) {
+            spatial_grid_overflow_cells[overflow_slot] = cell_idx;
+            spatial_grid_overflow_grid_indices[overflow_slot] = grid_idx;
+        }
     }
 }
