@@ -183,12 +183,8 @@ impl GpuCellInspector {
         let use_async_manager = self.readback_manager.is_some();
 
         // Use the extraction system to perform GPU compute
-        self.extraction_system.extract_cell_data(
-            encoder,
-            queue,
-            cell_index,
-            !use_async_manager,
-        );
+        self.extraction_system
+            .extract_cell_data(encoder, queue, cell_index, !use_async_manager);
 
         // If we have a readback manager, use it for async readback
         if let Some(ref mut readback_manager) = self.readback_manager {
@@ -547,12 +543,7 @@ mod tests {
             nutrients: 50.0,
             ..Default::default()
         };
-        update_live_nutrient_rate(
-            &mut last_sample,
-            &mut smoothed_rate,
-            7,
-            &mut first,
-        );
+        update_live_nutrient_rate(&mut last_sample, &mut smoothed_rate, 7, &mut first);
         assert_eq!(first.nutrient_gain_rate, 0.0);
 
         let mut second = InspectedCellData {
@@ -560,12 +551,7 @@ mod tests {
             nutrients: 54.0,
             ..Default::default()
         };
-        update_live_nutrient_rate(
-            &mut last_sample,
-            &mut smoothed_rate,
-            7,
-            &mut second,
-        );
+        update_live_nutrient_rate(&mut last_sample, &mut smoothed_rate, 7, &mut second);
         assert!((second.nutrient_gain_rate - 8.0).abs() < 1e-5);
     }
 
@@ -578,24 +564,14 @@ mod tests {
             nutrients: 20.0,
             ..Default::default()
         };
-        update_live_nutrient_rate(
-            &mut last_sample,
-            &mut smoothed_rate,
-            1,
-            &mut first,
-        );
+        update_live_nutrient_rate(&mut last_sample, &mut smoothed_rate, 1, &mut first);
 
         let mut other_cell = InspectedCellData {
             age: 8.0,
             nutrients: 90.0,
             ..Default::default()
         };
-        update_live_nutrient_rate(
-            &mut last_sample,
-            &mut smoothed_rate,
-            2,
-            &mut other_cell,
-        );
+        update_live_nutrient_rate(&mut last_sample, &mut smoothed_rate, 2, &mut other_cell);
         assert_eq!(other_cell.nutrient_gain_rate, 0.0);
     }
 }

@@ -1155,8 +1155,7 @@ impl CanonicalState {
             self.env_anchor_active[cell_index] = self.env_anchor_active[last_index];
             self.reserves[cell_index] = self.reserves[last_index];
             self.embryocyte_timers[cell_index] = self.embryocyte_timers[last_index];
-            self.stemocyte_delay_timers[cell_index] =
-                self.stemocyte_delay_timers[last_index];
+            self.stemocyte_delay_timers[cell_index] = self.stemocyte_delay_timers[last_index];
             self.memo_state[cell_index] = self.memo_state[last_index];
 
             // Swap signal channels (16 channels per cell)

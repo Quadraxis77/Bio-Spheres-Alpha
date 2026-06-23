@@ -6,8 +6,8 @@
 use crate::genome::Genome;
 use crate::rendering::fov_cone::FovConeRenderer;
 use crate::rendering::{
-    AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, PreviewSkyboxRenderer,
-    PlumageInstance, SiphonApertureInstance, SplitRingRenderer, TailInstance, TailRenderer,
+    AdhesionLineRenderer, CellRenderer, OrientationGizmoRenderer, PlumageInstance,
+    PreviewSkyboxRenderer, SiphonApertureInstance, SplitRingRenderer, TailInstance, TailRenderer,
 };
 use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
@@ -613,7 +613,9 @@ impl PreviewScene {
         let visuals = cell_type_visuals
             .and_then(|v| v.get(plumocyte_index))
             .copied()
-            .unwrap_or_else(|| crate::cell::types::CellTypeVisuals::default_for_type(CellType::Plumocyte));
+            .unwrap_or_else(|| {
+                crate::cell::types::CellTypeVisuals::default_for_type(CellType::Plumocyte)
+            });
 
         for i in 0..self.state.display_state.cell_count {
             let mode_index = self.state.display_state.mode_indices[i];
@@ -672,7 +674,9 @@ impl PreviewScene {
         let visuals = cell_type_visuals
             .and_then(|v| v.get(siphon_index))
             .copied()
-            .unwrap_or_else(|| crate::cell::types::CellTypeVisuals::default_for_type(CellType::Siphonocyte));
+            .unwrap_or_else(|| {
+                crate::cell::types::CellTypeVisuals::default_for_type(CellType::Siphonocyte)
+            });
 
         for i in 0..self.state.display_state.cell_count {
             let mode_index = self.state.display_state.mode_indices[i];

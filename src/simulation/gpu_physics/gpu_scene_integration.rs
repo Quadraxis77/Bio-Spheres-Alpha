@@ -92,6 +92,9 @@ pub struct PhysicsFeatureFlags {
     pub has_siphonocytes: bool,
     pub has_plumocytes: bool,
     pub has_glueocytes: bool,
+    pub has_mode_switches: bool,
+    pub has_auto_nutrient_gain: bool,
+    pub has_division: bool,
 }
 
 /// Execute the 9-stage GPU physics pipeline (added nutrient transport)
@@ -410,20 +413,7 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(3, &cached_bind_groups.position_update_spatial_grid, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        // Stage 6.5: Cave collision (if enabled) - corrects positions using SDF
-        if let (Some(cave_renderer), Some(cave_bind_groups)) =
-            (cave_renderer, cave_physics_bind_groups)
-        {
-            if cave_renderer.params().collision_enabled != 0 {
-                // SDF-based collision - no spatial grid building needed
-                compute_pass.set_pipeline(cave_renderer.collision_pipeline());
-                compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
-                compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
-                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-            }
-        }
-
-        // Stage 6.6: Boulder physics is now in a separate pass after nutrient apply.
+        // Stage 6.5: Boulder physics is now in a separate pass after nutrient apply.
         // (Moved to avoid buffer aliasing with cell_count_buffer.)
 
         // Stage 7: Angular velocity integration (256 threads)
@@ -443,33 +433,39 @@ pub fn execute_gpu_physics_step(
         // Each iteration re-evaluates adhesion forces against latest positions and
         // applies corrections directly to output buffers. Dramatically increases
         // effective joint stiffness without changing spring constants.
-        // Cave collision is re-applied after each substep to prevent adhesion forces
-        // from pulling cells through cave walls.
         for _ in 0..constraint_iterations {
             compute_pass.set_pipeline(&pipelines.adhesion_substep);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
             compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
-            // Re-apply cave collision after each substep to enforce cave boundaries
-            if let (Some(cave_renderer), Some(cave_bind_groups)) =
-                (cave_renderer, cave_physics_bind_groups)
-            {
-                if cave_renderer.params().collision_enabled != 0 {
-                    compute_pass.set_pipeline(cave_renderer.collision_pipeline());
-                    compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
-                    compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
-                    compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-                }
+        // Stage 7.6: Cave collision (if enabled) - one final environmental SDF
+        // enforcement after all position/substep corrections. This replaces the
+        // previous per-substep cave pass and avoids repeating the same SDF work
+        // `1 + constraint_iterations` times per physics step.
+        if let (Some(cave_renderer), Some(cave_bind_groups)) =
+            (cave_renderer, cave_physics_bind_groups)
+        {
+            if cave_renderer.params().collision_enabled != 0 {
+                compute_pass.set_pipeline(cave_renderer.collision_pipeline());
+                compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
+                compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
             }
         }
 
-        // Stage 8: Mass accumulation (256 threads) - nutrient growth only
-        compute_pass.set_pipeline(&pipelines.mass_accum);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        // Stage 8: Mass accumulation (256 threads) - nutrient growth only.
+        // Only default/Test cells auto-gain nutrients here; specialist
+        // monocultures otherwise paid for a full all-cell pass that immediately
+        // returned in the shader.
+        if features.has_auto_nutrient_gain {
+            compute_pass.set_pipeline(&pipelines.mass_accum);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, mass_accum_bind_group, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
         // Stage 9a: Nutrient transport (256 threads) - consumption + transport accumulation only
         // This dispatch accumulates mass deltas via atomics but does NOT apply them.
@@ -790,18 +786,6 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_bind_group(3, &cached_bind_groups.position_update_spatial_grid, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        // Stage 6.5: Cave collision (if enabled)
-        if let (Some(cave_renderer), Some(cave_bind_groups)) =
-            (cave_renderer, cave_physics_bind_groups)
-        {
-            if cave_renderer.params().collision_enabled != 0 {
-                compute_pass.set_pipeline(cave_renderer.collision_pipeline());
-                compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
-                compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
-                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-            }
-        }
-
         // Stage 7: Angular velocity integration
         compute_pass.set_pipeline(&pipelines.velocity_update);
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
@@ -813,25 +797,24 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
-        // Cave collision is re-applied after each substep to prevent adhesion forces
-        // from pulling cells through cave walls.
         for _ in 0..constraint_iterations {
             compute_pass.set_pipeline(&pipelines.adhesion_substep);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
             compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
             compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
-            // Re-apply cave collision after each substep to enforce cave boundaries
-            if let (Some(cave_renderer), Some(cave_bind_groups)) =
-                (cave_renderer, cave_physics_bind_groups)
-            {
-                if cave_renderer.params().collision_enabled != 0 {
-                    compute_pass.set_pipeline(cave_renderer.collision_pipeline());
-                    compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
-                    compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
-                    compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-                }
+        // Stage 7.6: Cave collision (if enabled) - one final environmental SDF
+        // enforcement after all drag/mechanics corrections.
+        if let (Some(cave_renderer), Some(cave_bind_groups)) =
+            (cave_renderer, cave_physics_bind_groups)
+        {
+            if cave_renderer.params().collision_enabled != 0 {
+                compute_pass.set_pipeline(cave_renderer.collision_pipeline());
+                compute_pass.set_bind_group(0, &cave_bind_groups[current_index], &[]);
+                compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
             }
         }
 
@@ -852,7 +835,8 @@ pub fn execute_lifecycle_pipeline(
     adhesion_buffers: &super::AdhesionBuffers,
     _current_time: f32,
     total_cell_slots: u32,
-) {
+    features: PhysicsFeatureFlags,
+) -> bool {
     // Get current buffer index (already rotated by physics pipeline)
     let current_index = triple_buffers.current_index();
 
@@ -870,7 +854,7 @@ pub fn execute_lifecycle_pipeline(
     // death_flags across unused slots is still real.
     // When total_cell_slots == 0 there is nothing to scan - skip all lifecycle work.
     if total_cell_slots == 0 {
-        return;
+        return false;
     }
     let effective_slots = total_cell_slots.min(triple_buffers.capacity);
     let cell_workgroups_lifecycle =
@@ -915,7 +899,7 @@ pub fn execute_lifecycle_pipeline(
     // Stage 1.75: Signal-driven mode switches.
     // Signal propagation runs once before the physics/lifecycle loop. Applying the
     // switch here matches preview ordering: apoptosis first, then mode switch, then division.
-    {
+    if features.has_mode_switches {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Lifecycle Pipeline - Mode Switch"),
             timestamp_writes: None,
@@ -929,7 +913,7 @@ pub fn execute_lifecycle_pipeline(
 
     // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
     // Runs AFTER death scan so recycled slots are available
-    {
+    if features.has_division {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Lifecycle Pipeline - Division Scan"),
             timestamp_writes: None,
@@ -946,7 +930,7 @@ pub fn execute_lifecycle_pipeline(
     }
 
     // Stage 3: Division execute (uses pre-allocated slots from division scan)
-    {
+    if features.has_division {
         let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Lifecycle Pipeline - Division Execute Ring"),
             timestamp_writes: None,
@@ -958,6 +942,10 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(2, cell_state_write_bind_group, &[]);
         compute_pass.set_bind_group(3, &cached_bind_groups.division_execute_adhesion, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
+    }
+
+    if !features.has_division {
+        return false;
     }
 
     // Signal system moved to execute_signal_system() - runs once per frame, not per physics step
@@ -1007,6 +995,8 @@ pub fn execute_lifecycle_pipeline(
         0, // offset 0 = total_adhesion_count
         4, // 4 bytes (u32)
     );
+
+    true
 }
 
 /// Rebuild spatial grid after lifecycle pipeline
@@ -1079,16 +1069,14 @@ pub fn execute_signal_system(
     // Dispatch size: round up to workgroup boundary (workgroup_size = 256, matching all other cell passes)
     let signal_workgroups = (cell_count_hint.max(1) + 255) / 256;
 
-    // Step 1: Clear signal flags
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Signal Clear"),
-            timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&pipelines.signal_clear);
-        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-    }
+    // Copy/clear only the active slot range. At 100K cells this is 6.4 MB per
+    // signal buffer instead of touching the full capacity allocation.
+    let signal_buffer_size =
+        (u64::from(cell_count_hint.max(1)) * 16 * 4).min(adhesion_buffers.signal_flags.size());
+
+    // Step 1: Clear signal flags with DMA. This replaces a shader pass that
+    // performed 16 atomic stores per cell every signal frame.
+    encoder.clear_buffer(&adhesion_buffers.signal_flags, 0, Some(signal_buffer_size));
 
     // Step 2: Oculocyte sensing (detect targets, write initial signal values)
     {
@@ -1104,8 +1092,19 @@ pub fn execute_signal_system(
             &[],
         );
         compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
+        compute_pass.set_bind_group(3, &cached_bind_groups.cilia_force_spatial, &[]);
         compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
     }
+
+    // Preserve direct emissions so the reverse sweep can start from the same
+    // seed without re-running the expensive sense shader.
+    encoder.copy_buffer_to_buffer(
+        &adhesion_buffers.signal_flags,
+        0,
+        &adhesion_buffers.signal_flags_seed,
+        0,
+        signal_buffer_size,
+    );
 
     // Step 3: Forward double-buffered pull propagation - one hop per dispatch.
     //
@@ -1120,10 +1119,6 @@ pub fn execute_signal_system(
     // crosses one complete adhesion edge and subtracts that edge's full cost. The
     // number of dispatches is therefore the authored hop count, not budget units.
     //
-    // Copy only the active cell range between ping-pong buffers. Copying the full
-    // capacity-sized allocation for every hop dominates frame time in sparse scenes.
-    let signal_buffer_size = (u64::from(cell_count_hint.max(1)) * 16 * 4)
-        .min(adhesion_buffers.signal_flags.size());
     let propagation_iterations = max_signal_hops.clamp(1, 20);
     for _ in 0..propagation_iterations {
         {
@@ -1157,31 +1152,14 @@ pub fn execute_signal_system(
         signal_buffer_size,
     );
 
-    // Re-seed direct emissions.
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Signal Clear For Reverse Sweep"),
-            timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&pipelines.signal_clear);
-        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-    }
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Signal Sense For Reverse Sweep"),
-            timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&pipelines.signal_sense);
-        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-        compute_pass.set_bind_group(
-            1,
-            &cached_bind_groups.signal_sense_cell_data[current_index],
-            &[],
-        );
-        compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
-        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-    }
+    // Re-seed direct emissions for the reverse sweep from the captured seed.
+    encoder.copy_buffer_to_buffer(
+        &adhesion_buffers.signal_flags_seed,
+        0,
+        &adhesion_buffers.signal_flags,
+        0,
+        signal_buffer_size,
+    );
 
     for _ in 0..propagation_iterations {
         {
@@ -1220,5 +1198,4 @@ pub fn execute_signal_system(
         0,
         signal_buffer_size,
     );
-
 }

@@ -320,11 +320,7 @@ fn migrate_legacy_photocyte_production(path: &Path) -> Result<bool, String> {
         return Ok(false);
     };
 
-    let updated = text.replacen(
-        legacy_value,
-        "photocyte_mass_per_second: 0.2",
-        1,
-    );
+    let updated = text.replacen(legacy_value, "photocyte_mass_per_second: 0.2", 1);
     std::fs::write(path, updated).map_err(|e| format!("write error: {}", e))?;
     Ok(true)
 }

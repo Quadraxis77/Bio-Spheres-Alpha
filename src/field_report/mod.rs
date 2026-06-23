@@ -5,6 +5,7 @@
 //! model describes possible voices without changing those facts.
 
 pub mod context;
+pub mod director;
 pub mod facts;
 pub mod fragments;
 pub mod grammar;
@@ -13,21 +14,18 @@ pub mod plan;
 pub mod render;
 pub mod scope;
 pub mod style;
-pub mod director;
 
 pub use context::{FieldReportContext, LineageReportSnapshot, SceneCompositionSnapshot};
-pub use facts::{
-    extract_facts, ClaimConfidence, FieldReportTag, ReportConfidence, ReportFact, ReportFactKind,
-};
-pub use grammar::{ClaimKey, SentenceRole};
-pub use history::{
-    ArchivedFieldReport, ContinuityFact, FieldReportHistory, FieldReportId,
-};
-pub use plan::{build_report_plans, FieldReportSeverity, ReportPlan, ReportTheme, RhetoricalShape};
 pub use director::{
     debug_run_report_sequence_all_tones, rendered_from, DebugReportSequence, FieldReportDirector,
     ReportCooldownRules, ReportDecision, SuppressionReason,
 };
+pub use facts::{
+    extract_facts, ClaimConfidence, FieldReportTag, ReportConfidence, ReportFact, ReportFactKind,
+};
+pub use grammar::{ClaimKey, SentenceRole};
+pub use history::{ArchivedFieldReport, ContinuityFact, FieldReportHistory, FieldReportId};
+pub use plan::{build_report_plans, FieldReportSeverity, ReportPlan, ReportTheme, RhetoricalShape};
 pub use render::{
     render_report, render_report_all_tones, render_report_with_variation, validate_report,
     CoherenceError, RenderedFieldReport, RenderedSentence,
@@ -400,11 +398,7 @@ mod tests {
                     cells: current_cells,
                     cell_delta: current_cells as i32 - previous_cells as i32,
                     avg_nutrient: if starvation_risk > 0.0 { 20.0 } else { 60.0 },
-                    nutrient_positive_fraction: if starvation_risk > 0.0 {
-                        0.3
-                    } else {
-                        0.7
-                    },
+                    nutrient_positive_fraction: if starvation_risk > 0.0 { 0.3 } else { 0.7 },
                     starvation_risk_fraction: starvation_risk,
                     dominant_cell_type_fraction: 0.2,
                     ..LineageTelemetrySample::default()
@@ -443,12 +437,10 @@ mod tests {
             },
             ..FieldReportDirector::default()
         };
-        let first = analysis_from_context(population_context(
-            1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
-        ));
-        let repeated = analysis_from_context(population_context(
-            1_150, 1, "Veyra", 130, 155, 1, 0, 0.0,
-        ));
+        let first =
+            analysis_from_context(population_context(1_000, 1, "Veyra", 100, 130, 1, 0, 0.0));
+        let repeated =
+            analysis_from_context(population_context(1_150, 1, "Veyra", 130, 155, 1, 0, 0.0));
 
         assert!(matches!(
             director.decide_analysis(&first, ToneId::FormalScientific),
@@ -456,9 +448,7 @@ mod tests {
         ));
         assert!(matches!(
             director.decide_analysis(&repeated, ToneId::FormalScientific),
-            ReportDecision::Suppress(SuppressionReason::LineageRecentlyReported {
-                lineage_id: 1
-            })
+            ReportDecision::Suppress(SuppressionReason::LineageRecentlyReported { lineage_id: 1 })
         ));
     }
 
@@ -472,9 +462,8 @@ mod tests {
             },
             ..FieldReportDirector::default()
         };
-        let growth = analysis_from_context(population_context(
-            1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
-        ));
+        let growth =
+            analysis_from_context(population_context(1_000, 1, "Veyra", 100, 130, 1, 0, 0.0));
         let critical =
             analysis_from_context(population_context(1_001, 1, "Veyra", 130, 3, 0, 2, 0.5));
 
@@ -500,9 +489,8 @@ mod tests {
             },
             ..FieldReportDirector::default()
         };
-        let boom = analysis_from_context(population_context(
-            1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
-        ));
+        let boom =
+            analysis_from_context(population_context(1_000, 1, "Veyra", 100, 130, 1, 0, 0.0));
         let decline =
             analysis_from_context(population_context(1_001, 2, "Rill", 100, 70, 0, 2, 0.0));
 
@@ -528,12 +516,10 @@ mod tests {
             },
             ..FieldReportDirector::default()
         };
-        let first = analysis_from_context(population_context(
-            1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
-        ));
-        let second = analysis_from_context(population_context(
-            1_001, 2, "Sera", 200, 250, 1, 0, 0.0,
-        ));
+        let first =
+            analysis_from_context(population_context(1_000, 1, "Veyra", 100, 130, 1, 0, 0.0));
+        let second =
+            analysis_from_context(population_context(1_001, 2, "Sera", 200, 250, 1, 0, 0.0));
         director.decide_analysis(&first, ToneId::FormalScientific);
 
         assert!(matches!(
@@ -683,12 +669,8 @@ mod tests {
     #[test]
     fn all_tone_sequence_helper_preserves_decision_count() {
         let analyses = vec![
-            analysis_from_context(population_context(
-                1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
-            )),
-            analysis_from_context(population_context(
-                1_200, 1, "Veyra", 130, 160, 1, 0, 0.0,
-            )),
+            analysis_from_context(population_context(1_000, 1, "Veyra", 100, 130, 1, 0, 0.0)),
+            analysis_from_context(population_context(1_200, 1, "Veyra", 130, 160, 1, 0, 0.0)),
         ];
         let sequences =
             debug_run_report_sequence_all_tones(&analyses, ReportCooldownRules::default());
@@ -746,11 +728,9 @@ mod tests {
             active_modes: Some(6),
             territory_radius: 18.5,
         };
-        let report = render_lineage_snapshot_report(
-            &snapshot,
-            &ToneProfile::naturalist_field_journal(),
-        )
-        .unwrap();
+        let report =
+            render_lineage_snapshot_report(&snapshot, &ToneProfile::naturalist_field_journal())
+                .unwrap();
         assert!(report.title.contains("20:00"));
         assert!(report.body.contains("36 morphology cells"));
         assert!(report.body.contains("6 active modes"));
@@ -759,10 +739,7 @@ mod tests {
 
     #[test]
     fn report_scope_variants_remain_distinct() {
-        assert_ne!(
-            ReportScope::Ecosystem,
-            ReportScope::Specimen(1)
-        );
+        assert_ne!(ReportScope::Ecosystem, ReportScope::Specimen(1));
         assert_ne!(
             ReportScope::Lineage(1),
             ReportScope::LineageSnapshot {
@@ -784,12 +761,10 @@ mod tests {
             },
             ..FieldReportDirector::default()
         };
-        let first = analysis_from_context(population_context(
-            1_000, 1, "Veyra", 100, 130, 1, 0, 0.0,
-        ));
-        let later = analysis_from_context(population_context(
-            1_250, 1, "Veyra", 130, 170, 1, 0, 0.0,
-        ));
+        let first =
+            analysis_from_context(population_context(1_000, 1, "Veyra", 100, 130, 1, 0, 0.0));
+        let later =
+            analysis_from_context(population_context(1_250, 1, "Veyra", 130, 170, 1, 0, 0.0));
         assert!(matches!(
             director.decide_analysis(&first, ToneId::FormalScientific),
             ReportDecision::Emit(_)
@@ -812,12 +787,10 @@ mod tests {
             },
             ..FieldReportDirector::default()
         };
-        let first = analysis_from_context(population_context(
-            1_000, 1, "Veyra", 100, 140, 3, 0, 0.42,
-        ));
-        let later = analysis_from_context(population_context(
-            1_250, 1, "Veyra", 140, 180, 4, 0, 0.45,
-        ));
+        let first =
+            analysis_from_context(population_context(1_000, 1, "Veyra", 100, 140, 3, 0, 0.42));
+        let later =
+            analysis_from_context(population_context(1_250, 1, "Veyra", 140, 180, 4, 0, 0.45));
 
         let ReportDecision::Emit(first_report) =
             director.decide_analysis(&first, ToneId::NaturalistFieldJournal)
@@ -830,10 +803,7 @@ mod tests {
             panic!("recurring condition should emit after cooldown");
         };
 
-        assert_eq!(
-            first_report.rendered.theme,
-            second_report.rendered.theme
-        );
+        assert_eq!(first_report.rendered.theme, second_report.rendered.theme);
         assert_ne!(first_report.rendered.body, second_report.rendered.body);
         assert!(first_report.rendered.body.contains("starvation risk"));
         assert!(second_report.rendered.body.contains("nutrient-secure"));
@@ -997,11 +967,13 @@ mod tests {
 
         assert_eq!(themes.first(), Some(&ReportTheme::SceneComposition));
         assert!(themes.contains(&ReportTheme::SingleLineageProfile));
-        assert!(themes
-            .iter()
-            .filter(|&&theme| theme == ReportTheme::SceneComposition)
-            .count()
-            >= 2);
+        assert!(
+            themes
+                .iter()
+                .filter(|&&theme| theme == ReportTheme::SceneComposition)
+                .count()
+                >= 2
+        );
     }
 
     #[test]
@@ -1056,8 +1028,7 @@ mod tests {
         assert!(analysis.context.lineage(1).is_none());
         assert!(analysis.context.lineage(2).is_some());
         assert!(!analysis.facts.iter().any(|fact| {
-            fact.subject_lineage() == Some(1)
-                && matches!(fact, ReportFact::NearExtinction { .. })
+            fact.subject_lineage() == Some(1) && matches!(fact, ReportFact::NearExtinction { .. })
         }));
         assert!(analysis
             .plans

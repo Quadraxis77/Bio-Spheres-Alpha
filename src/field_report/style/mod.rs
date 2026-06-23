@@ -8,9 +8,7 @@ mod titles;
 mod tone;
 
 pub use lexicon::ToneLexicon;
-pub use numbers::{
-    format_cell_count, format_delta_cells, format_percent, NumberDensity,
-};
+pub use numbers::{format_cell_count, format_delta_cells, format_percent, NumberDensity};
 pub use titles::{render_title, render_title_with_variation};
 pub use tone::{
     resolve_tone, NumberPolicy, SentenceLengthStyle, ToneFamily, ToneId, ToneProfile,

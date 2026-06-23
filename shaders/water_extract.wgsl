@@ -67,8 +67,13 @@ fn random_float(seed: u32) -> f32 {
 fn should_render_as_particle(x: u32, y: u32, z: u32) -> bool {
     let res = params.grid_resolution;
     
-    // Check if water voxel is near the spherical world boundary (edge of simulation)
-    let world_pos = grid_to_world(x, y, z);
+    // Boundary rejection does not need the randomized render offset. Using the
+    // voxel center avoids hash/random work for every candidate water voxel.
+    let world_pos = params.grid_origin + vec3<f32>(
+        (f32(x) + 0.5) * params.cell_size,
+        (f32(y) + 0.5) * params.cell_size,
+        (f32(z) + 0.5) * params.cell_size
+    );
     let distance_from_center = length(world_pos);
     let boundary_threshold = params.world_radius * 0.95; // Near boundary threshold
     let near_boundary = distance_from_center > boundary_threshold;

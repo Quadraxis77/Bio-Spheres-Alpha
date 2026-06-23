@@ -1128,6 +1128,7 @@ impl GpuPhysicsPipelines {
                 &signal_flags_layout,
                 &signal_sense_cell_data_layout,
                 &signal_sense_world_data_layout,
+                &cilia_force_spatial_layout,
             ],
             "Signal Sense",
         );

@@ -745,8 +745,11 @@ impl InstanceBuilder {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let instance_velocity_buffer =
-            Self::create_storage_buffer(device, "Instance Builder Output Velocities", cell_capacity * 16);
+        let instance_velocity_buffer = Self::create_storage_buffer(
+            device,
+            "Instance Builder Output Velocities",
+            cell_capacity * 16,
+        );
         let siphon_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Siphonocyte Output"),
             size: (cell_capacity * std::mem::size_of::<CellInstance>()) as u64,
@@ -756,8 +759,11 @@ impl InstanceBuilder {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let siphon_instance_velocity_buffer =
-            Self::create_storage_buffer(device, "Instance Builder Siphonocyte Output Velocities", cell_capacity * 16);
+        let siphon_instance_velocity_buffer = Self::create_storage_buffer(
+            device,
+            "Instance Builder Siphonocyte Output Velocities",
+            cell_capacity * 16,
+        );
 
         // Indirect draw buffer: vertex_count, instance_count, first_vertex, first_instance
         // Main buffer for total visible count (legacy, kept for compatibility)
@@ -1484,8 +1490,11 @@ impl InstanceBuilder {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        self.instance_velocity_buffer =
-            Self::create_storage_buffer(device, "Instance Builder Output Velocities", new_capacity * 16);
+        self.instance_velocity_buffer = Self::create_storage_buffer(
+            device,
+            "Instance Builder Output Velocities",
+            new_capacity * 16,
+        );
         self.siphon_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Builder Siphonocyte Output"),
             size: (new_capacity * std::mem::size_of::<CellInstance>()) as u64,
@@ -1495,8 +1504,11 @@ impl InstanceBuilder {
                 | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        self.siphon_instance_velocity_buffer =
-            Self::create_storage_buffer(device, "Instance Builder Siphonocyte Output Velocities", new_capacity * 16);
+        self.siphon_instance_velocity_buffer = Self::create_storage_buffer(
+            device,
+            "Instance Builder Siphonocyte Output Velocities",
+            new_capacity * 16,
+        );
 
         self.bind_group = None;
         self.mark_all_dirty();

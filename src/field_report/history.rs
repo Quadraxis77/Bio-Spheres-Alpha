@@ -115,7 +115,10 @@ impl FieldReportHistory {
             previous_theme: previous.rendered.theme,
         }];
 
-        if previous.rendered.tags.contains(&FieldReportTag::NearExtinction)
+        if previous
+            .rendered
+            .tags
+            .contains(&FieldReportTag::NearExtinction)
             && plan.tags.contains(&FieldReportTag::Recovery)
         {
             continuity.push(ContinuityFact::ConditionReversed {
@@ -224,10 +227,7 @@ impl FieldReportHistory {
             .any(|claim| claims.contains(claim))
     }
 
-    pub fn last_severity_for_lineage(
-        &self,
-        lineage_id: LineageId,
-    ) -> Option<FieldReportSeverity> {
+    pub fn last_severity_for_lineage(&self, lineage_id: LineageId) -> Option<FieldReportSeverity> {
         self.reports
             .iter()
             .rev()
@@ -241,9 +241,7 @@ impl FieldReportHistory {
             .filter(|report| {
                 report.rendered.theme == plan.theme
                     && match plan.subject_lineage {
-                        Some(lineage_id) => {
-                            report.rendered.involved_lineages.contains(&lineage_id)
-                        }
+                        Some(lineage_id) => report.rendered.involved_lineages.contains(&lineage_id),
                         None => report.rendered.involved_lineages.is_empty(),
                     }
             })

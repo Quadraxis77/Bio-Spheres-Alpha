@@ -124,8 +124,8 @@ impl SolidMaskGenerator {
                         if solid_mask[i] == 0 {
                             continue;
                         }
-                        let center = grid_origin
-                            + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
+                        let center =
+                            grid_origin + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
                         if (center - self.world_center).length() >= protected_shell_radius {
                             continue;
                         }
@@ -148,9 +148,7 @@ impl SolidMaskGenerator {
             }
 
             if cleared > 0 {
-                log::info!(
-                    "Solid mask: cleared {cleared} voxels covered by culled mesh fragments"
-                );
+                log::info!("Solid mask: cleared {cleared} voxels covered by culled mesh fragments");
             }
         }
 
@@ -373,8 +371,7 @@ mod tests {
         for z in 0..grid_size {
             for y in 0..grid_size {
                 for x in 0..grid_size {
-                    let center = grid_origin
-                        + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
+                    let center = grid_origin + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
                     if center.length() >= protected_shell_radius {
                         let i = x + y * grid_size + z * grid_size * grid_size;
                         assert!(

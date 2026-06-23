@@ -35,7 +35,9 @@ pub fn format_cell_count(value: u32, tone: &ToneProfile, density: NumberDensity)
     match effective_density(tone, density) {
         NumberDensity::None => "the sampled population".to_string(),
         NumberDensity::Rounded if value >= 100 => format!("about {}", ((value + 5) / 10) * 10),
-        NumberDensity::Sparse if matches!(tone.number_policy, NumberPolicy::Sparse) && value >= 1000 => {
+        NumberDensity::Sparse
+            if matches!(tone.number_policy, NumberPolicy::Sparse) && value >= 1000 =>
+        {
             format!("{:.1}k", value as f32 / 1000.0)
         }
         _ => value.to_string(),

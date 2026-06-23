@@ -3,9 +3,7 @@ use std::collections::HashSet;
 use crate::field_report::context::FieldReportContext;
 use crate::field_report::facts::{ClaimConfidence, FieldReportTag, ReportFact};
 use crate::field_report::grammar::{role_allows_supporting_detail, ClaimKey, SentenceRole};
-use crate::field_report::plan::{
-    FieldReportSeverity, ReportPlan, ReportTheme, RhetoricalShape,
-};
+use crate::field_report::plan::{FieldReportSeverity, ReportPlan, ReportTheme, RhetoricalShape};
 use crate::field_report::style::{
     format_cell_count, format_delta_cells, format_percent, render_title_with_variation,
     resolve_tone, NumberDensity, ToneFamily, ToneId, ToneLexicon, ToneProfile,
@@ -80,9 +78,7 @@ pub fn render_report_with_variation(
     }
 
     if matches!(plan.theme, ReportTheme::StarvingExpansion) {
-        if let Some(contrast) =
-            render_starving_contrast(plan, &tone, lineage_name, variation)
-        {
+        if let Some(contrast) = render_starving_contrast(plan, &tone, lineage_name, variation) {
             push_coherent(&mut sentences, contrast);
         }
     } else if matches!(
@@ -153,10 +149,7 @@ pub fn render_report_all_tones(
     .collect()
 }
 
-pub fn validate_report(
-    report: &RenderedFieldReport,
-    tone: &ToneProfile,
-) -> Vec<CoherenceError> {
+pub fn validate_report(report: &RenderedFieldReport, tone: &ToneProfile) -> Vec<CoherenceError> {
     let mut errors = Vec::new();
     if report.title.trim().is_empty() {
         errors.push(CoherenceError::EmptyTitle);
@@ -876,7 +869,9 @@ fn render_interpretation(
             ToneFamily::Living => {
                 "A few cells still hold on; the lineage has not disappeared.".to_string()
             }
-            ToneFamily::Alert => "Extinction is not confirmed; survival remains critical.".to_string(),
+            ToneFamily::Alert => {
+                "Extinction is not confirmed; survival remains critical.".to_string()
+            }
             ToneFamily::Any => unreachable!(),
         },
         ReportTheme::SustainedDecline => {
@@ -968,7 +963,11 @@ fn push_coherent(sentences: &mut Vec<RenderedSentence>, candidate: RenderedSente
             .flat_map(|sentence| sentence.claim_keys.iter())
             .any(|used| used == claim)
     }) && !role_allows_supporting_detail(candidate.role);
-    if !duplicate_non_detail && !sentences.iter().any(|sentence| sentence.text == candidate.text) {
+    if !duplicate_non_detail
+        && !sentences
+            .iter()
+            .any(|sentence| sentence.text == candidate.text)
+    {
         sentences.push(candidate);
     }
 }

@@ -1038,14 +1038,8 @@ fn mode_to_serializable(
         } else {
             None
         },
-        stemocyte_delay_mode: diff_i32(
-            mode.stemocyte_delay_mode,
-            default.stemocyte_delay_mode,
-        ),
-        stemocyte_delay_value: diff_f32(
-            mode.stemocyte_delay_value,
-            default.stemocyte_delay_value,
-        ),
+        stemocyte_delay_mode: diff_i32(mode.stemocyte_delay_mode, default.stemocyte_delay_mode),
+        stemocyte_delay_value: diff_f32(mode.stemocyte_delay_value, default.stemocyte_delay_value),
         child_a: child_to_serializable(&mode.child_a, &default.child_a),
         child_b: child_to_serializable(&mode.child_b, &default.child_b),
         adhesion_settings: adhesion_to_serializable(

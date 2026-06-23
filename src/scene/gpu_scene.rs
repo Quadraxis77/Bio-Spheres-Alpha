@@ -31,13 +31,13 @@ const PHOTOCYTE_BASELINE_BRIGHTNESS: f32 = 2.5;
 const MAX_SUN_BRIGHTNESS: f32 = 5.0;
 const PHOTOCYTE_BASELINE_MASS_RATE: f32 = 0.2;
 const LEGACY_PHOTOCYTE_MASS_RATE_MAX: f32 = 0.02;
+const SIGNAL_UPDATE_INTERVAL_FRAMES: i32 = 4;
 
 /// Scale photocyte nutrient production across the sun's 0-5 brightness range.
 /// The squared response keeps very low brightness weak, preserves the configured
 /// baseline at 2.5, and strongly rewards brightness above the baseline.
 fn photocyte_production_multiplier(brightness: f32) -> f32 {
-    let normalized =
-        brightness.clamp(0.0, MAX_SUN_BRIGHTNESS) / PHOTOCYTE_BASELINE_BRIGHTNESS;
+    let normalized = brightness.clamp(0.0, MAX_SUN_BRIGHTNESS) / PHOTOCYTE_BASELINE_BRIGHTNESS;
     normalized * normalized
 }
 
@@ -156,6 +156,10 @@ pub struct GpuScene {
     pub(super) physics_features: PhysicsFeatureFlags,
     /// Maximum signal hops across all oculocyte modes in all genomes (for signal propagation dispatch count)
     pub(super) max_signal_hops: u32,
+    /// Last simulation frame where adhesion signals were recomputed.
+    last_signal_update_frame: Option<i32>,
+    /// Cell-slot high-water mark used by the most recent signal recompute.
+    last_signal_total_cell_slots: u32,
     /// Genome buffer manager for per-genome GPU resources
     pub genome_buffer_manager: GenomeBufferManager,
     /// Cached parent_make_adhesion flags from genome modes for quick lookup during division
@@ -772,6 +776,8 @@ impl GpuScene {
             has_gametocytes: false,
             physics_features: PhysicsFeatureFlags::default(),
             max_signal_hops: 0,
+            last_signal_update_frame: None,
+            last_signal_total_cell_slots: 0,
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
@@ -1017,6 +1023,8 @@ impl GpuScene {
         self.has_gametocytes = false;
         self.physics_features = PhysicsFeatureFlags::default();
         self.max_signal_hops = 0;
+        self.last_signal_update_frame = None;
+        self.last_signal_total_cell_slots = 0;
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately
         let cell_counts: [u32; 2] = [0, 0];
@@ -2003,7 +2011,7 @@ impl GpuScene {
         }
 
         // Update signal sense world params (boundary_radius, light_dir, fluid grid params)
-        {
+        if self.has_oculocytes {
             let boundary_radius = world_diameter * 0.5;
             let light_dir = self
                 .light_field_system
@@ -2053,6 +2061,9 @@ impl GpuScene {
                 has_siphonocytes: true,
                 has_plumocytes: true,
                 has_glueocytes: true,
+                has_mode_switches: true,
+                has_auto_nutrient_gain: true,
+                has_division: true,
             }
         } else {
             self.physics_features
@@ -2095,7 +2106,7 @@ impl GpuScene {
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
         // Cell count is updated on GPU by division shader
-        execute_lifecycle_pipeline(
+        let division_pipeline_ran = execute_lifecycle_pipeline(
             device,
             encoder,
             queue,
@@ -2107,14 +2118,17 @@ impl GpuScene {
             // Use max(1) so lifecycle runs on the first cell even before the async
             // readback has reported total_cell_slots > 0 (lags 1-3 frames).
             self.total_cell_slots.max(1),
+            physics_features,
         );
 
         self.dispatch_scaffold_rules(device, encoder, queue);
 
         // Mutation pass: collect candidates from division results, then apply mutations.
         // Runs after division execute so division_flags and division_slot_assignments are set.
-        if let Some(mutation_system) = &mut self.mutation_system {
-            mutation_system.dispatch(device, encoder, queue, self.current_frame as u32);
+        if division_pipeline_ran {
+            if let Some(mutation_system) = &mut self.mutation_system {
+                mutation_system.dispatch(device, encoder, queue, self.current_frame as u32);
+            }
         }
 
         // NOTE: Spatial grid rebuild after lifecycle is unnecessary because the grid
@@ -2725,6 +2739,7 @@ impl GpuScene {
         let luminocyte_type = CellType::Luminocyte as u32 as i32;
         let siphonocyte_type = CellType::Siphonocyte as u32 as i32;
         let plumocyte_type = CellType::Plumocyte as u32 as i32;
+        let test_type = CellType::Test as u32 as i32;
         self.has_oculocytes = false;
         self.has_glueocytes = false;
         self.has_phagocytes = false;
@@ -2737,6 +2752,12 @@ impl GpuScene {
             for m in &g.modes {
                 if m.cell_type == flagellocyte_type {
                     self.physics_features.has_flagellocytes = true;
+                }
+                if m.cell_type == test_type {
+                    self.physics_features.has_auto_nutrient_gain = true;
+                }
+                if m.max_splits != 0 {
+                    self.physics_features.has_division = true;
                 }
                 if m.cell_type == phagocyte_type {
                     self.has_phagocytes = true;
@@ -2792,7 +2813,12 @@ impl GpuScene {
                 // cleared and inverted absence gates are evaluated consistently.
                 // max_signal_hops is not updated here — the emitter (regulation_emit or
                 // oculocyte) that sends the signal governs propagation distance.
-                if m.mode_switch_signal_channel >= 8
+                let has_mode_switch =
+                    m.mode_switch_signal_channel >= 8 && m.mode_switch_target >= 0;
+                if has_mode_switch {
+                    self.physics_features.has_mode_switches = true;
+                }
+                if has_mode_switch
                     || m.division_signal_channel >= 8
                     || m.apoptosis_signal_channel >= 8
                     || m.signal_child_a_channel >= 8
@@ -2803,6 +2829,35 @@ impl GpuScene {
             }
         }
         self.physics_features.has_glueocytes = self.has_glueocytes;
+        self.last_signal_update_frame = None;
+    }
+
+    /// Decide whether adhesion signals should be recomputed this frame.
+    ///
+    /// Signal state is intentionally persistent between refreshes so lifecycle
+    /// gates and signal-reactive cell forces can reuse the most recent result.
+    /// We refresh immediately for topology/slot changes and periodically for
+    /// motion-dependent sensing such as oculocyte rays.
+    fn should_update_signals(&self, cell_inserted: bool, is_dragging: bool) -> bool {
+        if self.paused || !self.has_oculocytes {
+            return false;
+        }
+        if self.total_cell_slots == 0 && !cell_inserted {
+            return false;
+        }
+        if cell_inserted || is_dragging {
+            return true;
+        }
+        if self.last_signal_total_cell_slots != self.total_cell_slots {
+            return true;
+        }
+        match self.last_signal_update_frame {
+            None => true,
+            Some(frame) => {
+                (self.current_frame as u32).wrapping_sub(frame as u32)
+                    >= SIGNAL_UPDATE_INTERVAL_FRAMES as u32
+            }
+        }
     }
 
     /// Incremental sync of a single genome's data to GPU buffers
@@ -6574,6 +6629,9 @@ impl GpuScene {
         dt: f32,
     ) {
         if let Some(ref simulator) = self.fluid_simulator {
+            if simulator.paused {
+                return;
+            }
             simulator.set_gravity_mode(self.gravity_mode);
             simulator.set_surface_pressure(self.surface_pressure);
             simulator.set_humidity_diffusion_rate(self.humidity_diffusion_rate);
@@ -7955,7 +8013,13 @@ impl Scene for GpuScene {
         self.update_cave_params(device, queue);
 
         // Step fluid simulation (GPU compute)
-        if self.fluid_simulator.is_some() && !self.paused {
+        let fluid_active = !self.paused
+            && self
+                .fluid_simulator
+                .as_ref()
+                .map(|simulator| !simulator.paused)
+                .unwrap_or(false);
+        if fluid_active {
             let dt = 1.0 / 60.0; // Fixed timestep for fluid
             self.step_fluid_simulation(device, queue, &mut encoder, dt);
 
@@ -8045,9 +8109,11 @@ impl Scene for GpuScene {
         };
 
         // Evaluate signals before lifecycle work so apoptosis, mode switching,
-        // child routing, and division gates all consume this frame's signal state.
-        // This matches the preview ordering: signal pass, gated actions, division.
-        if !self.paused && self.has_oculocytes {
+        // child routing, and division gates all consume signal state. The signal
+        // buffers persist between refreshes; recomputing lazily avoids the full
+        // adhesion propagation cost on every render frame at high cell counts.
+        if self.should_update_signals(cell_inserted, is_dragging) {
+            let signal_cell_slots = self.total_cell_slots.max(if cell_inserted { 1 } else { 0 });
             execute_signal_system(
                 &mut encoder,
                 &self.gpu_physics_pipelines,
@@ -8055,9 +8121,11 @@ impl Scene for GpuScene {
                 &self.adhesion_buffers,
                 &self.cached_bind_groups,
                 self.has_oculocytes,
-                self.total_cell_slots,
+                signal_cell_slots,
                 self.max_signal_hops,
             );
+            self.last_signal_update_frame = Some(self.current_frame);
+            self.last_signal_total_cell_slots = signal_cell_slots;
         }
 
         // Snapshot death_flags BEFORE physics runs - needed by spawn_new to detect

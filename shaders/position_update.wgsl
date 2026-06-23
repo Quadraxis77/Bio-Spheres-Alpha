@@ -118,6 +118,16 @@ const MIN_SAFE_DT: f32 = 0.0001;
 const MAX_CELL_ACCELERATION: f32 = 300.0;
 const ICE_CONTACT_FRICTION: f32 = 0.35;
 
+struct IceProbe {
+    center: bool,
+    x_pos: bool,
+    x_neg: bool,
+    y_pos: bool,
+    y_neg: bool,
+    z_pos: bool,
+    z_neg: bool,
+}
+
 // Convert fixed-point i32 back to float
 fn fixed_to_float(v: i32) -> f32 {
     return f32(v) / FIXED_POINT_SCALE;
@@ -197,36 +207,43 @@ fn is_in_ice(world_pos: vec3<f32>) -> bool {
 
 // A single ice-voxel hit is surface contact, not entombment. Treat the cell as
 // immobilized only when ice spans across the cell along every cardinal axis.
-fn is_embedded_in_ice(world_pos: vec3<f32>, radius: f32) -> bool {
-    if (!is_in_ice(world_pos)) {
-        return false;
+fn sample_ice_probe(world_pos: vec3<f32>, radius: f32) -> IceProbe {
+    var probe = IceProbe(false, false, false, false, false, false, false);
+    probe.center = is_in_ice(world_pos);
+    if (!probe.center) {
+        return probe;
     }
 
     let sample_dist = max(radius * 0.75, water_params.cell_size * 0.5);
-    let x_axis = is_in_ice(world_pos + vec3<f32>( sample_dist, 0.0, 0.0)) &&
-                 is_in_ice(world_pos + vec3<f32>(-sample_dist, 0.0, 0.0));
-    let y_axis = is_in_ice(world_pos + vec3<f32>(0.0,  sample_dist, 0.0)) &&
-                 is_in_ice(world_pos + vec3<f32>(0.0, -sample_dist, 0.0));
-    let z_axis = is_in_ice(world_pos + vec3<f32>(0.0, 0.0,  sample_dist)) &&
-                 is_in_ice(world_pos + vec3<f32>(0.0, 0.0, -sample_dist));
-
-    return x_axis && y_axis && z_axis;
+    probe.x_pos = is_in_ice(world_pos + vec3<f32>( sample_dist, 0.0, 0.0));
+    probe.x_neg = is_in_ice(world_pos + vec3<f32>(-sample_dist, 0.0, 0.0));
+    probe.y_pos = is_in_ice(world_pos + vec3<f32>(0.0,  sample_dist, 0.0));
+    probe.y_neg = is_in_ice(world_pos + vec3<f32>(0.0, -sample_dist, 0.0));
+    probe.z_pos = is_in_ice(world_pos + vec3<f32>(0.0, 0.0,  sample_dist));
+    probe.z_neg = is_in_ice(world_pos + vec3<f32>(0.0, 0.0, -sample_dist));
+    return probe;
 }
 
-fn ice_collision_normal(previous_pos: vec3<f32>, probe_pos: vec3<f32>) -> vec3<f32> {
+fn is_ice_embedded(probe: IceProbe) -> bool {
+    return probe.center &&
+        (probe.x_pos && probe.x_neg) &&
+        (probe.y_pos && probe.y_neg) &&
+        (probe.z_pos && probe.z_neg);
+}
+
+fn ice_collision_normal_from_probe(previous_pos: vec3<f32>, probe_pos: vec3<f32>, probe: IceProbe) -> vec3<f32> {
     let from_motion = previous_pos - probe_pos;
     let motion_len = length(from_motion);
     if (motion_len > 0.0001) {
         return from_motion / motion_len;
     }
 
-    let sample_dist = max(water_params.cell_size, 0.25);
-    let sx0 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>( sample_dist, 0.0, 0.0)));
-    let sx1 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(-sample_dist, 0.0, 0.0)));
-    let sy0 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0,  sample_dist, 0.0)));
-    let sy1 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0, -sample_dist, 0.0)));
-    let sz0 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0, 0.0,  sample_dist)));
-    let sz1 = select(0.0, 1.0, is_in_ice(probe_pos + vec3<f32>(0.0, 0.0, -sample_dist)));
+    let sx0 = select(0.0, 1.0, probe.x_pos);
+    let sx1 = select(0.0, 1.0, probe.x_neg);
+    let sy0 = select(0.0, 1.0, probe.y_pos);
+    let sy1 = select(0.0, 1.0, probe.y_neg);
+    let sz0 = select(0.0, 1.0, probe.z_pos);
+    let sz1 = select(0.0, 1.0, probe.z_neg);
     let grad = vec3<f32>(sx0 - sx1, sy0 - sy1, sz0 - sz1);
     let grad_len = length(grad);
     if (grad_len > 0.0001) {
@@ -505,27 +522,31 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // grazing the ice voxel skin is only surface contact, so cells can still
     // roll and slide along ice instead of freezing to it.
     var entombed_acceleration = new_acceleration;
-    if (is_embedded_in_ice(pos, radius)) {
+    let current_ice_probe = sample_ice_probe(pos, radius);
+    if (is_ice_embedded(current_ice_probe)) {
         final_pos = pos;
         final_vel = vec3<f32>(0.0);
         // Zero stored acceleration so no Verlet momentum builds up while frozen.
         entombed_acceleration = vec3<f32>(0.0);
-    } else if (is_embedded_in_ice(final_pos, radius)) {
-        let normal = ice_collision_normal(pos, final_pos);
-        accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
-        final_pos = pos;
-        let vel_normal = dot(final_vel, normal);
-        let vel_tangent = final_vel - vel_normal * normal;
-        let vel_normal_out = max(vel_normal, 0.0) * normal;
-        final_vel = vel_normal_out + vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
-    } else if (is_in_ice(final_pos)) {
-        let normal = ice_collision_normal(pos, final_pos);
-        accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
-        final_pos = pos;
-        let vel_normal = dot(final_vel, normal);
-        let vel_tangent = final_vel - vel_normal * normal;
-        let vel_normal_out = max(vel_normal, 0.0) * normal;
-        final_vel = vel_normal_out + vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
+    } else {
+        let final_ice_probe = sample_ice_probe(final_pos, radius);
+        if (is_ice_embedded(final_ice_probe)) {
+            let normal = ice_collision_normal_from_probe(pos, final_pos, final_ice_probe);
+            accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
+            final_pos = pos;
+            let vel_normal = dot(final_vel, normal);
+            let vel_tangent = final_vel - vel_normal * normal;
+            let vel_normal_out = max(vel_normal, 0.0) * normal;
+            final_vel = vel_normal_out + vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
+        } else if (final_ice_probe.center) {
+            let normal = ice_collision_normal_from_probe(pos, final_pos, final_ice_probe);
+            accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
+            final_pos = pos;
+            let vel_normal = dot(final_vel, normal);
+            let vel_tangent = final_vel - vel_normal * normal;
+            let vel_normal_out = max(vel_normal, 0.0) * normal;
+            final_vel = vel_normal_out + vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
+        }
     }
 
     // Write updated position and velocity

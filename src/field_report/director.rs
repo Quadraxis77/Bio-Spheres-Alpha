@@ -1,6 +1,4 @@
-use crate::field_report::history::{
-    ArchivedFieldReport, FieldReportHistory, FieldReportId,
-};
+use crate::field_report::history::{ArchivedFieldReport, FieldReportHistory, FieldReportId};
 use crate::field_report::{
     analyze_archive, render_report_with_variation, ClaimKey, FieldReportAnalysis,
     FieldReportSeverity, RenderedFieldReport, ReportPlan, ReportTheme, ToneId,
@@ -34,18 +32,10 @@ impl Default for ReportCooldownRules {
 pub enum SuppressionReason {
     NoPlanAvailable,
     BelowInterestThreshold,
-    ReportCooldown {
-        remaining_frames: u64,
-    },
-    ThemeRecentlyReported {
-        theme: ReportTheme,
-    },
-    LineageRecentlyReported {
-        lineage_id: LineageId,
-    },
-    ClaimRecentlyReported {
-        claim: ClaimKey,
-    },
+    ReportCooldown { remaining_frames: u64 },
+    ThemeRecentlyReported { theme: ReportTheme },
+    LineageRecentlyReported { lineage_id: LineageId },
+    ClaimRecentlyReported { claim: ClaimKey },
     RenderingFailed,
 }
 
@@ -130,14 +120,19 @@ impl FieldReportDirector {
             .iter()
             .filter(|plan| plan.severity >= FieldReportSeverity::Notable)
             .max_by(|a, b| {
-                plan_score(a, &self.history, analysis.context.frame.max(0) as u64, &self.cooldowns)
-                    .cmp(&plan_score(
-                        b,
-                        &self.history,
-                        analysis.context.frame.max(0) as u64,
-                        &self.cooldowns,
-                    ))
-                    .then_with(|| b.subject_lineage.cmp(&a.subject_lineage))
+                plan_score(
+                    a,
+                    &self.history,
+                    analysis.context.frame.max(0) as u64,
+                    &self.cooldowns,
+                )
+                .cmp(&plan_score(
+                    b,
+                    &self.history,
+                    analysis.context.frame.max(0) as u64,
+                    &self.cooldowns,
+                ))
+                .then_with(|| b.subject_lineage.cmp(&a.subject_lineage))
             })
     }
 
@@ -158,61 +153,51 @@ impl FieldReportDirector {
             }
         }
         if let Some(lineage_id) = plan.subject_lineage {
-            if self
-                .history
-                .recent_report_for_lineage(
-                    lineage_id,
+            if self.history.recent_report_for_lineage(
+                lineage_id,
+                self.cooldowns.lineage_cooldown_reports,
+                current_frame,
+                cooldown_window_frames(
+                    self.cooldowns.min_frames_between_reports,
                     self.cooldowns.lineage_cooldown_reports,
-                    current_frame,
-                    cooldown_window_frames(
-                        self.cooldowns.min_frames_between_reports,
-                        self.cooldowns.lineage_cooldown_reports,
-                    ),
-                )
-            {
+                ),
+            ) {
                 return Some(SuppressionReason::LineageRecentlyReported { lineage_id });
             }
         }
-        if self
-            .history
-            .recent_theme(
-                plan.theme,
+        if self.history.recent_theme(
+            plan.theme,
+            self.cooldowns.theme_cooldown_reports,
+            current_frame,
+            cooldown_window_frames(
+                self.cooldowns.min_frames_between_reports,
                 self.cooldowns.theme_cooldown_reports,
-                current_frame,
-                cooldown_window_frames(
-                    self.cooldowns.min_frames_between_reports,
-                    self.cooldowns.theme_cooldown_reports,
-                ),
-            )
-        {
+            ),
+        ) {
             return Some(SuppressionReason::ThemeRecentlyReported { theme: plan.theme });
         }
         let claims = plan_claims(plan);
-        if self
-            .history
-            .recent_claim(
-                &claims,
+        if self.history.recent_claim(
+            &claims,
+            self.cooldowns.claim_cooldown_reports,
+            current_frame,
+            cooldown_window_frames(
+                self.cooldowns.min_frames_between_reports,
                 self.cooldowns.claim_cooldown_reports,
-                current_frame,
-                cooldown_window_frames(
-                    self.cooldowns.min_frames_between_reports,
-                    self.cooldowns.claim_cooldown_reports,
-                ),
-            )
-        {
+            ),
+        ) {
             return claims
                 .into_iter()
                 .find(|claim| {
-                    self.history
-                        .recent_claim(
-                            &[*claim],
+                    self.history.recent_claim(
+                        &[*claim],
+                        self.cooldowns.claim_cooldown_reports,
+                        current_frame,
+                        cooldown_window_frames(
+                            self.cooldowns.min_frames_between_reports,
                             self.cooldowns.claim_cooldown_reports,
-                            current_frame,
-                            cooldown_window_frames(
-                                self.cooldowns.min_frames_between_reports,
-                                self.cooldowns.claim_cooldown_reports,
-                            ),
-                        )
+                        ),
+                    )
                 })
                 .map(|claim| SuppressionReason::ClaimRecentlyReported { claim });
         }

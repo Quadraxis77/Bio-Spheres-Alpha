@@ -103,9 +103,7 @@ pub fn render_title_with_variation(
     }
 
     match (plan.theme, tone.family()) {
-        (ReportTheme::StarvingExpansion, ToneFamily::Formal) => {
-            "Expansion Under Resource Pressure"
-        }
+        (ReportTheme::StarvingExpansion, ToneFamily::Formal) => "Expansion Under Resource Pressure",
         (ReportTheme::StarvingExpansion, ToneFamily::Naturalist) => "A Strained Bloom",
         (ReportTheme::StarvingExpansion, ToneFamily::Living) => "Hungry Bloom",
         (ReportTheme::StarvingExpansion, ToneFamily::Alert) => "Bloom Instability",

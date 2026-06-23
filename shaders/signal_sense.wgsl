@@ -102,23 +102,103 @@ struct SenseBoulder {
 @group(2) @binding(6) var<storage, read> boulder_count_sense: array<u32>;
 @group(2) @binding(7) var<storage, read> light_color_field: array<vec4<f32>>;
 
+// Shared cell spatial grid. This is built by the physics step and reused here
+// so oculocyte cell sensing does not scan the whole population.
+@group(3) @binding(0) var<storage, read> spatial_grid_counts: array<u32>;
+@group(3) @binding(1) var<storage, read> spatial_grid_cells: array<u32>;
+@group(3) @binding(2) var<storage, read> cell_grid_indices: array<u32>;
+
 // Rotate vector by quaternion: q * v * q^-1
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
     let t = 2.0 * cross(q.xyz, v);
     return v + q.w * t + cross(q.xyz, t);
 }
 
-// sense_type 0: ray-vs-sphere test against every cell. Exits on first hit.
+const CELL_SPATIAL_GRID_RESOLUTION: i32 = 128;
+const CELL_SPATIAL_GRID_MAX_CELLS: u32 = 16u;
+const INVALID_GRID_INDEX: u32 = 0xFFFFFFFFu;
+
+fn cell_grid_index_to_coords(grid_idx: u32) -> vec3<i32> {
+    let res = CELL_SPATIAL_GRID_RESOLUTION;
+    let z = i32(grid_idx) / (res * res);
+    let y = (i32(grid_idx) - z * res * res) / res;
+    let x = i32(grid_idx) - z * res * res - y * res;
+    return vec3<i32>(x, y, z);
+}
+
+fn cell_grid_coords_to_index(cell_i: vec3<i32>) -> u32 {
+    let res = CELL_SPATIAL_GRID_RESOLUTION;
+    return u32(cell_i.x + cell_i.y * res + cell_i.z * res * res);
+}
+
+fn world_pos_to_cell_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32) -> u32 {
+    let grid_pos = (pos + world_size * 0.5) / grid_cell_size;
+    let grid_x = clamp(i32(grid_pos.x), 0, CELL_SPATIAL_GRID_RESOLUTION - 1);
+    let grid_y = clamp(i32(grid_pos.y), 0, CELL_SPATIAL_GRID_RESOLUTION - 1);
+    let grid_z = clamp(i32(grid_pos.z), 0, CELL_SPATIAL_GRID_RESOLUTION - 1);
+    return cell_grid_coords_to_index(vec3<i32>(grid_x, grid_y, grid_z));
+}
+
+fn ray_hits_cell_sphere(candidate_idx: u32, idx: u32, my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32) -> bool {
+    if (candidate_idx == idx) { return false; }
+    let other = positions[candidate_idx];
+    if (other.w < 0.5) { return false; }
+    let oc = other.xyz - my_pos;
+    let tca = dot(oc, forward);
+    if (tca < 0.0 || tca > ray_length) { return false; }
+    // positions[i].w stores mass; derive radius as clamp(mass, 0.5, 2.0)
+    let r = clamp(other.w, 0.5, 2.0);
+    let dist_sq = dot(oc, oc) - tca * tca;
+    return dist_sq <= r * r;
+}
+
+// sense_type 0: ray-vs-sphere test against cells in spatial-grid buckets crossed by the ray.
 fn sense_cells(idx: u32, my_pos: vec3<f32>, forward: vec3<f32>, ray_length: f32, cell_count: u32) -> bool {
-    for (var i = 0u; i < cell_count; i++) {
-        if (i == idx) { continue; }
-        let oc = positions[i].xyz - my_pos;
-        let tca = dot(oc, forward);
-        if (tca < 0.0 || tca > ray_length) { continue; }
-        // positions[i].w stores mass; derive radius as clamp(mass, 0.5, 2.0)
-        let r = clamp(positions[i].w, 0.5, 2.0);
-        let dist_sq = dot(oc, oc) - tca * tca;
-        if (dist_sq <= r * r) { return true; }
+    let world_size = world_params.boundary_radius * 2.0;
+    let cs = world_size / f32(CELL_SPATIAL_GRID_RESOLUTION);
+    if (cs <= 0.0) { return false; }
+
+    let grid_origin = vec3<f32>(-world_params.boundary_radius);
+    var cell_i = cell_grid_index_to_coords(world_pos_to_cell_grid_index(my_pos, world_size, cs));
+
+    let step = vec3<i32>(
+        select(-1, 1, forward.x >= 0.0),
+        select(-1, 1, forward.y >= 0.0),
+        select(-1, 1, forward.z >= 0.0),
+    );
+    let step_f = vec3<f32>(f32(step.x), f32(step.y), f32(step.z));
+    let next_boundary = (vec3<f32>(cell_i) + max(step_f, vec3(0.0))) * cs + grid_origin;
+    var t_max = abs((next_boundary - my_pos) / forward);
+    if (abs(forward.x) < 1e-6) { t_max.x = 1e30; }
+    if (abs(forward.y) < 1e-6) { t_max.y = 1e30; }
+    if (abs(forward.z) < 1e-6) { t_max.z = 1e30; }
+    var t_delta = abs(vec3(cs) / forward);
+    if (abs(forward.x) < 1e-6) { t_delta.x = 1e30; }
+    if (abs(forward.y) < 1e-6) { t_delta.y = 1e30; }
+    if (abs(forward.z) < 1e-6) { t_delta.z = 1e30; }
+
+    var t = 0.0;
+    for (var iter = 0; iter < 512; iter++) {
+        if (t > ray_length) { break; }
+        if (any(cell_i < vec3<i32>(0)) || any(cell_i >= vec3<i32>(CELL_SPATIAL_GRID_RESOLUTION))) { break; }
+
+        let grid_idx = cell_grid_coords_to_index(cell_i);
+        let count = min(spatial_grid_counts[grid_idx], CELL_SPATIAL_GRID_MAX_CELLS);
+        let base = grid_idx * CELL_SPATIAL_GRID_MAX_CELLS;
+        for (var i = 0u; i < count; i++) {
+            let candidate_idx = spatial_grid_cells[base + i];
+            if (candidate_idx < cell_count && ray_hits_cell_sphere(candidate_idx, idx, my_pos, forward, ray_length)) {
+                return true;
+            }
+        }
+
+        if (t_max.x < t_max.y && t_max.x < t_max.z) {
+            t = t_max.x; t_max.x += t_delta.x; cell_i.x += step.x;
+        } else if (t_max.y < t_max.z) {
+            t = t_max.y; t_max.y += t_delta.y; cell_i.y += step.y;
+        } else {
+            t = t_max.z; t_max.z += t_delta.z; cell_i.z += step.z;
+        }
     }
     return false;
 }

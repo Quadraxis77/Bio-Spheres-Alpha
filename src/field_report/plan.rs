@@ -189,10 +189,9 @@ pub fn build_report_plans(facts: &[ReportFact]) -> Vec<ReportPlan> {
 
     for fact in facts.iter().filter(|fact| fact.subject_lineage().is_none()) {
         let (theme, severity) = match fact {
-            ReportFact::SceneComposition { .. } => (
-                ReportTheme::SceneComposition,
-                FieldReportSeverity::Notable,
-            ),
+            ReportFact::SceneComposition { .. } => {
+                (ReportTheme::SceneComposition, FieldReportSeverity::Notable)
+            }
             ReportFact::EcosystemDominance { .. } => (
                 ReportTheme::EcosystemDominance,
                 FieldReportSeverity::Warning,
@@ -207,8 +206,7 @@ pub fn build_report_plans(facts: &[ReportFact]) -> Vec<ReportPlan> {
             supporting_facts: facts
                 .iter()
                 .filter(|candidate| {
-                    candidate.subject_lineage().is_none()
-                        && candidate.kind() != fact.kind()
+                    candidate.subject_lineage().is_none() && candidate.kind() != fact.kind()
                 })
                 .cloned()
                 .collect(),

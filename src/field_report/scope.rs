@@ -104,7 +104,11 @@ pub fn render_specimen_report(
         nutrient_state,
         thermal_state,
         snapshot.adhesion_count,
-        if snapshot.adhesion_count == 1 { "" } else { "s" }
+        if snapshot.adhesion_count == 1 {
+            ""
+        } else {
+            "s"
+        }
     );
     let interpretation = if snapshot.organism_id.is_some() {
         format!(
@@ -171,10 +175,7 @@ pub fn render_lineage_snapshot_report(
     snapshot: &LineageSnapshotReportSnapshot,
     requested_tone: &ToneProfile,
 ) -> Option<RenderedFieldReport> {
-    let tone = crate::field_report::resolve_tone(
-        *requested_tone,
-        FieldReportSeverity::Routine,
-    );
+    let tone = crate::field_report::resolve_tone(*requested_tone, FieldReportSeverity::Routine);
     let phase = match snapshot.current_cells_at_snapshot {
         Some(cells) if cells == snapshot.peak_cells && snapshot.peak_cells > 0 => {
             "near its retained population peak"
@@ -186,22 +187,13 @@ pub fn render_lineage_snapshot_report(
         None => "at a morphology capture without a matching population sample",
     };
     let lead = match tone.family() {
-        ToneFamily::Formal => format!(
-            "This snapshot records {} {}.",
-            snapshot.lineage_name, phase
-        ),
+        ToneFamily::Formal => format!("This snapshot records {} {}.", snapshot.lineage_name, phase),
         ToneFamily::Naturalist => format!(
             "This field image catches {} {}.",
             snapshot.lineage_name, phase
         ),
-        ToneFamily::Living => format!(
-            "{} is held here {}.",
-            snapshot.lineage_name, phase
-        ),
-        ToneFamily::Alert => format!(
-            "{} snapshot status recorded.",
-            snapshot.lineage_name
-        ),
+        ToneFamily::Living => format!("{} is held here {}.", snapshot.lineage_name, phase),
+        ToneFamily::Alert => format!("{} snapshot status recorded.", snapshot.lineage_name),
         ToneFamily::Any => unreachable!(),
     };
     let mut evidence = format!(

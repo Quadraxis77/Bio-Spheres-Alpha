@@ -441,26 +441,24 @@ fn meaningful_lineage_cell_delta(
     if !has_baseline {
         return 0;
     }
-    let raw = (sample.cells as i64 - previous_cells as i64)
-        .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    let raw = (sample.cells as i64 - previous_cells as i64).clamp(i32::MIN as i64, i32::MAX as i64)
+        as i32;
     if sample.cells == 0 || previous_cells == 0 {
         return raw;
     }
 
     let reference = previous_cells.max(sample.cells);
-    let photocyte_dominant =
-        sample.dominant_cell_type == crate::cell::types::CellType::Photocyte as u32
-            && sample.dominant_cell_type_fraction >= 0.7;
-    let mostly_single_cell = sample.organisms == 0
-        || sample.organisms.saturating_mul(2) >= sample.cells;
+    let photocyte_dominant = sample.dominant_cell_type
+        == crate::cell::types::CellType::Photocyte as u32
+        && sample.dominant_cell_type_fraction >= 0.7;
+    let mostly_single_cell =
+        sample.organisms == 0 || sample.organisms.saturating_mul(2) >= sample.cells;
     let tolerance = if photocyte_dominant && mostly_single_cell {
-        PHOTOCYTE_SWARM_STABILITY_CELLS.max(
-            (reference as f32 * PHOTOCYTE_SWARM_STABILITY_FRACTION).round() as u32,
-        )
+        PHOTOCYTE_SWARM_STABILITY_CELLS
+            .max((reference as f32 * PHOTOCYTE_SWARM_STABILITY_FRACTION).round() as u32)
     } else {
-        BASE_LINEAGE_STABILITY_CELLS.max(
-            (reference as f32 * BASE_LINEAGE_STABILITY_FRACTION).round() as u32,
-        )
+        BASE_LINEAGE_STABILITY_CELLS
+            .max((reference as f32 * BASE_LINEAGE_STABILITY_FRACTION).round() as u32)
     };
 
     if raw.unsigned_abs() <= tolerance {

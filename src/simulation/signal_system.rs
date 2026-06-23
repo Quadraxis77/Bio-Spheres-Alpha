@@ -103,8 +103,8 @@ pub fn sense_oculocytes(
 
         let sense_mask = mode.oculocyte_sense_type;
         let channel = mode.oculocyte_signal_channel.clamp(0, 7) as usize; // Sensory channels 0-7
-        // GPU signals use an unsigned 11-bit payload, so authored sensor signals
-        // share the same positive 1..2047 range in both scenes.
+                                                                          // GPU signals use an unsigned 11-bit payload, so authored sensor signals
+                                                                          // share the same positive 1..2047 range in both scenes.
         let signal_value = mode.oculocyte_signal_value.clamp(1.0, 2047.0);
         let hops = mode.oculocyte_signal_hops.clamp(1, 20) as usize;
         let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
