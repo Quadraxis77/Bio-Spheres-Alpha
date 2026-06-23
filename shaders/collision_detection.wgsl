@@ -265,7 +265,10 @@ fn apply_single_cell_forces(cell_idx: u32) {
     let dist_from_center = length(pos);
     let boundary_radius = params.world_size * 0.5;
     let soft_zone = 5.0;
-    let soft_zone_start = boundary_radius - soft_zone;
+    // Begin boundary response when the cell surface enters the soft zone.
+    // This is radius-aware without adding any samples or neighbor work.
+    let cell_boundary_radius = max(boundary_radius - radius, 0.0);
+    let soft_zone_start = max(cell_boundary_radius - soft_zone, 0.0);
 
     if (dist_from_center > soft_zone_start) {
         let penetration = (dist_from_center - soft_zone_start) / soft_zone;
@@ -360,7 +363,6 @@ fn process_same_bucket(grid_idx: u32, count: u32) {
     let base = grid_idx * MAX_CELLS_PER_GRID;
     for (var i = 0u; i < count; i++) {
         let a_idx = spatial_grid_cells[base + i];
-        apply_single_cell_forces(a_idx);
         for (var j = i + 1u; j < count; j++) {
             resolve_cell_pair(a_idx, spatial_grid_cells[base + j]);
         }
@@ -380,7 +382,17 @@ fn process_neighbor_bucket(grid_idx_a: u32, count_a: u32, grid_idx_b: u32, count
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let occupied_idx = global_id.x;
+    let dispatch_idx = global_id.x;
+
+    // Boundary and boulder response are per-cell operations, not broadphase
+    // pair operations. Run them directly by cell index so crowded grid buckets
+    // cannot silently drop cells beyond MAX_CELLS_PER_GRID and leave those cells
+    // without any world-boundary force.
+    if (dispatch_idx < cell_count_buffer[0]) {
+        apply_single_cell_forces(dispatch_idx);
+    }
+
+    let occupied_idx = dispatch_idx;
     let occupied_count = atomicLoad(&occupied_grid_count[0]);
     if (occupied_idx >= occupied_count) {
         return;

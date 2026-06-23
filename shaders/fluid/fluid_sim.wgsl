@@ -396,25 +396,38 @@ fn field_temp_c(idx: u32) -> f32 {
     return TEMP_MIN_C + f32(raw) / TFIELD_FP;
 }
 
-// Apply a signed Celsius delta to a voxel's temperature. Deltas carry no
-// offset, so plain atomic add/sub on the offset encoding is exact. Cooling
-// clamps at the encoding floor (TEMP_MIN_C) instead of wrapping the u32.
+// Apply a signed Celsius delta with an atomic saturating update. A previous
+// atomicSub-then-atomicStore implementation briefly exposed wrapped u32 values
+// when cooling crossed the floor. A concurrent heating thread could observe
+// that wrapped value and clamp the voxel to TEMP_MAX_C, creating persistent
+// false hot spots where solid and air voxels exchange heat near boundaries.
 fn nudge_field_temp(idx: u32, delta_c: f32) {
     let d = i32(delta_c * TFIELD_FP);
-    if d > 0 {
-        let add = u32(d);
-        let prev = atomicAdd(&temp_field[idx], add);
-        if prev > TFIELD_MAX_RAW || add > TFIELD_MAX_RAW - min(prev, TFIELD_MAX_RAW) {
-            atomicStore(&temp_field[idx], TFIELD_MAX_RAW);
+    if d == 0 {
+        return;
+    }
+
+    var expected = atomicLoad(&temp_field[idx]);
+    for (var attempt = 0u; attempt < 16u; attempt++) {
+        let bounded = clamp(expected, 1u, TFIELD_MAX_RAW);
+        var desired: u32;
+        if d > 0 {
+            let add = u32(d);
+            desired = bounded + min(add, TFIELD_MAX_RAW - bounded);
+        } else {
+            let sub = u32(-d);
+            if sub >= bounded {
+                desired = 1u;
+            } else {
+                desired = bounded - sub;
+            }
         }
-    } else if d < 0 {
-        let sub = u32(-d);
-        let prev = atomicSub(&temp_field[idx], sub);
-        if prev <= sub {
-            // Wrapped past the floor (or landed on the 0 sentinel) - pin to
-            // the coldest representable value.
-            atomicStore(&temp_field[idx], 1u);
+
+        let result = atomicCompareExchangeWeak(&temp_field[idx], expected, desired);
+        if result.exchanged {
+            return;
         }
+        expected = result.old_value;
     }
 }
 
@@ -634,8 +647,14 @@ fn in_contact_with_air(gid: vec3<u32>) -> bool {
         let ny = i32(gid.y) + neighbor_offsets[i].y;
         let nz = i32(gid.z) + neighbor_offsets[i].z;
         if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
-            let n_state = atomicLoad(&voxels[grid_index(u32(nx), u32(ny), u32(nz))]);
-            if get_fluid_type(n_state) == 0u {
+            let ux = u32(nx);
+            let uy = u32(ny);
+            let uz = u32(nz);
+            let n_state = atomicLoad(&voxels[grid_index(ux, uy, uz)]);
+            // Solid-mask voxels store fluid type 0 too, but they are rock or
+            // the world shell rather than atmosphere. Treating them as air
+            // makes water evaporate along every submerged wall.
+            if !is_solid(ux, uy, uz) && get_fluid_type(n_state) == 0u {
                 return true;
             }
         }

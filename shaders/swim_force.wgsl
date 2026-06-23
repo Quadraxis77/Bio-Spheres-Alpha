@@ -282,12 +282,13 @@ fn apply_siphon_force(cell_idx: u32, mode_idx: u32) {
     // below that floor. It changes internal reserves only; no steam voxels exist.
     let heat = max(cell_heat_energy[cell_idx], 0.0);
     let temp = temperature_for(heat, water);
+    var remaining_heat = heat;
     if (temp > 130.0) {
         let safe_heat = heat_for_temperature(STEAM_SAFE_FLOOR_TEMP, water);
         let available_heat = max(heat - safe_heat, 0.0);
         let heat_spend = min(available_heat, impulse * 6.0 * dt);
         if (heat_spend > 0.0) {
-            cell_heat_energy[cell_idx] = heat - heat_spend;
+            remaining_heat = heat - heat_spend;
             water_cost *= 0.55;
             impulse_mult = 1.35;
         }
@@ -297,7 +298,16 @@ fn apply_siphon_force(cell_idx: u32, mode_idx: u32) {
     if (spent <= 0.0) {
         return;
     }
-    cell_water[cell_idx] = water - spent;
+    let remaining_water = water - spent;
+
+    // Expelled water carries its share of the cell's heat. Previously water
+    // mass was removed while nearly all heat stayed behind, so repeated siphon
+    // strokes concentrated temperature until the cell entered heat shock.
+    // Preserve the post-steam-assist temperature across the mass change.
+    let post_assist_temp = temperature_for(remaining_heat, water);
+    cell_water[cell_idx] = remaining_water;
+    cell_heat_energy[cell_idx] =
+        heat_for_temperature(post_assist_temp, remaining_water);
 
     let force_magnitude = impulse * 80.0 * impulse_mult * clamp(spent / max(water_cost, 0.001), 0.0, 1.0);
     let force = forward * force_magnitude;

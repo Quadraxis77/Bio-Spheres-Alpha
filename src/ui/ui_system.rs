@@ -915,9 +915,11 @@ impl UiSystem {
                         .iter()
                         .any(|node| !node.telemetry_history.is_empty())
                 {
-                    let _ = self
-                        .field_report_director
-                        .update(&gpu_scene.lineage_archive);
+                    if self.state.field_reports_enabled {
+                        let _ = self
+                            .field_report_director
+                            .update(&gpu_scene.lineage_archive);
+                    }
                     self.last_report_scan_frame = Some(scan_frame);
                 }
             }
@@ -2807,15 +2809,20 @@ fn show_windows_menu(
     ui.add_space(6.0);
     ui.label("Horizontal FOV:")
         .on_hover_text("Horizontal camera field of view in degrees. Higher values show more of the scene with stronger perspective.");
-    let camera = scene_manager.active_scene_mut().camera_mut();
-    ui.add(
+    let fov_response = ui.add(
         egui::Slider::new(
-            &mut camera.horizontal_fov_degrees,
+            &mut state.horizontal_fov_degrees,
             crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES
                 ..=crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
         )
         .suffix(" deg"),
     );
+    if fov_response.changed() {
+        scene_manager
+            .active_scene_mut()
+            .camera_mut()
+            .horizontal_fov_degrees = state.horizontal_fov_degrees;
+    }
 
     ui.separator();
 

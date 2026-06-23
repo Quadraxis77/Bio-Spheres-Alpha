@@ -457,24 +457,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Smooth boundary collision with lerping to prevent teleporting
     let boundary_radius = params.world_size * 0.5;
+    // Keep the whole cell inside the world, not just its center. This avoids
+    // spending multiple frames partially embedded in the shell.
+    let cell_boundary_radius = max(boundary_radius - radius, 0.0);
     var final_pos = new_pos;
     var final_vel = new_vel;
     
     // Check if new position would violate boundary
     let dist_from_center = length(new_pos);
-    if (dist_from_center > boundary_radius) {
+    if (dist_from_center > cell_boundary_radius) {
         // Calculate penetration depth
-        let penetration = dist_from_center - boundary_radius;
-        
+        let penetration = dist_from_center - cell_boundary_radius;
+
         // Smooth lerp factor based on penetration (0.0 = no correction, 1.0 = full correction)
         // Use a soft lerp that increases gradually with penetration depth
         let max_penetration = 5.0; // Maximum penetration for full correction
         let lerp_factor = clamp(penetration / max_penetration, 0.0, 1.0);
         let smooth_lerp = lerp_factor * lerp_factor; // Quadratic for smoother transition
-        
+
         // Calculate target position (just inside boundary)
-        let target_pos = normalize(new_pos) * boundary_radius * 0.99;
-        
+        let target_pos =
+            normalize(new_pos) * max(cell_boundary_radius - 0.01, 0.0);
+
         // Smoothly lerp current position toward target position
         final_pos = mix(new_pos, target_pos, smooth_lerp);
         
@@ -483,13 +487,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let vel_normal = dot(new_vel, inward_dir);
         
         if (vel_normal < 0.0) {
-            // Reduce outward velocity smoothly based on penetration
-            let damping_factor = 1.0 - (smooth_lerp * 0.8); // Max 80% reduction
+            // Redirect a small fraction of impact speed back into the world.
+            // Zeroing this component creates a stable zero-velocity state when
+            // thrust or adhesion keeps aiming into the wall.
+            let restitution = mix(0.05, 0.12, smooth_lerp);
             let vel_tangent = new_vel - vel_normal * inward_dir;
-            let vel_normal_damped = max(vel_normal, 0.0) * damping_factor;
-            // Surface friction: resist sliding along the boundary wall
-            let friction_scale = 1.0 - smooth_lerp * 0.5;
-            final_vel = vel_tangent * friction_scale + vel_normal_damped * inward_dir;
+            let vel_normal_redirected = (-vel_normal) * restitution;
+            // Preserve tangent motion here. Rolling friction is already applied
+            // by collision_detection; damping it again causes wall sticking.
+            final_vel = vel_tangent + vel_normal_redirected * inward_dir;
         }
     }
     

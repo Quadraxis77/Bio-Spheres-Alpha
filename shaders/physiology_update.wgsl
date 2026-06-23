@@ -458,10 +458,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Water changes alter the cell's thermal mass, so dry cells still swing
     // faster than hydrated cells. Dampen that mass shock so rehydration does
     // not instantly crash body temperature toward freezing.
-    let water_adjusted_heat = mix(old_heat, heat_for_temperature(old_temp, next_water), WATER_MASS_TEMP_SHOCK_DAMPING);
+    var water_adjusted_heat =
+        mix(old_heat, heat_for_temperature(old_temp, next_water), WATER_MASS_TEMP_SHOCK_DAMPING);
+
+    // Siphonocytes intake surrounding fluid. That water arrives at the local
+    // ambient temperature; it must not act as zero-temperature thermal mass.
+    // Preserve the previous body temperature across intake, then let normal
+    // environment exchange cool it toward (but never through) ambient.
+    if (cell_type == CELL_TYPE_SIPHONOCYTE && next_water > old_water) {
+        water_adjusted_heat = heat_for_temperature(old_temp, next_water);
+    }
     let min_heat = heat_for_temperature(20.0, next_water);
     let max_heat = heat_for_temperature(180.0, next_water);
-    let next_heat = clamp(water_adjusted_heat + heat_delta, min_heat, max_heat);
+    var next_heat = clamp(water_adjusted_heat + heat_delta, min_heat, max_heat);
+    if (cell_type == CELL_TYPE_SIPHONOCYTE && env.valid) {
+        // Cooling mechanisms may approach ambient from above, but cannot make
+        // the siphonocyte colder than the medium supplying its intake water.
+        next_heat = max(next_heat, heat_for_temperature(env_temp, next_water));
+    }
     let next_temp = temperature_for(next_heat, next_water);
     let entombed_in_ice = env.valid && env.fluid_type == 2u && env.fill_fraction > 0.5;
     let next_state = classify_state(next_temp, old_state, entombed_in_ice);

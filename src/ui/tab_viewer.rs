@@ -105,7 +105,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::RightPanel => render_placeholder_panel(ui, "Right Panel"),
             Panel::BottomPanel => render_placeholder_panel(ui, "Bottom Panel"),
             Panel::SceneManager => render_scene_manager(ui, self.context, self.state),
-            Panel::CellInspector => render_cell_inspector(ui, self.context),
+            Panel::CellInspector => render_cell_inspector(ui, self.context, self.state),
             Panel::LineageViewer => render_lineage_viewer(ui, self.context, self.state),
             Panel::GenomeEditor => render_genome_editor(ui, self.context),
             Panel::PerformanceMonitor => render_performance_monitor(ui, self.context, self.state),
@@ -382,7 +382,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
 }
 
 /// Render the CellInspector panel.
-fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
+fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     // -- Header row ----------------------------------------------------------
     ui.horizontal(|ui| {
         ui.label(
@@ -1037,7 +1037,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
         }
     } else {
         if context.is_gpu_mode() {
-            render_field_station_feed(ui, context);
+            render_field_station_feed(ui, context, state);
             return;
         }
         // -- Empty state ------------------------------------------------------
@@ -1060,10 +1060,30 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-fn render_field_station_feed(ui: &mut Ui, context: &mut PanelContext) {
+fn render_field_station_feed(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     ui.add_space(6.0);
-    section_header(ui, "FIELD STATION REPORT");
-    let scheduled_status = field_report_schedule_status(context);
+    ui.horizontal(|ui| {
+        section_header(ui, "FIELD STATION REPORT");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let label = if state.field_reports_enabled {
+                "Disable Reports"
+            } else {
+                "Enable Reports"
+            };
+            if ui
+                .button(label)
+                .on_hover_text("Stop or resume scheduled ecosystem field-report generation")
+                .clicked()
+            {
+                state.field_reports_enabled = !state.field_reports_enabled;
+            }
+        });
+    });
+    let scheduled_status = if state.field_reports_enabled {
+        field_report_schedule_status(context)
+    } else {
+        "Scheduled field reports are disabled.".to_string()
+    };
     if let Some(latest) = context.field_reports.history.reports.back() {
         render_field_report_card(ui, &latest.rendered, None);
         let recent: Vec<_> = context
@@ -1478,17 +1498,18 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                     if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                         let resp = ui.add(
                             egui::Slider::new(
-                                &mut gpu_scene.lineage_capture_interval_seconds,
+                                &mut state.field_report_interval_seconds,
                                 5.0_f32..=600.0,
                             )
                             .logarithmic(true)
                             .suffix("s"),
                         );
                         if resp.changed() {
-                            // reset last_scan_time so we don't immediately fire
+                            gpu_scene.lineage_capture_interval_seconds =
+                                state.field_report_interval_seconds;
                         }
                         ui.add_space(8.0);
-                        let current = gpu_scene.lineage_capture_interval_seconds;
+                        let current = state.field_report_interval_seconds;
                         for preset in [15.0_f32, 30.0, 60.0, 120.0, 300.0] {
                             let label = if preset < 60.0 {
                                 format!("{:.0}s", preset)
@@ -1503,6 +1524,7 @@ fn render_lineage_viewer(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                                     p.bg_widget
                                 });
                             if ui.add(btn).clicked() {
+                                state.field_report_interval_seconds = preset;
                                 gpu_scene.lineage_capture_interval_seconds = preset;
                             }
                         }

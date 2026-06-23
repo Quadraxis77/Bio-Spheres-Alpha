@@ -1611,9 +1611,11 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let fresnel = pow(1.0 - max(dot(perturbed_normal, view_dir), 0.0), 3.0);
     let fresnel_contribution = fresnel * in.visual_params.z;
 
-    // Subsurface scattering (light bleeding through from behind)
+    // Subsurface scattering (light bleeding through from behind).
+    // Keep it tied to the sampled scene light so full-detail cells do not
+    // brighten when they cross the LOD boundary while sitting in shadow.
     let sss = max(dot(world_normal_front, light_dir), 0.0) * 0.12;
-    let sss_color = base_color * sss;
+    let sss_color = base_color * sss * local_light_color * shadow;
 
     var final_color = composited + specular + fresnel_contribution + sss_color
                     + unlit_composited * in.visual_params.w; // emissive: uses pre-lighting color so cells glow in darkness

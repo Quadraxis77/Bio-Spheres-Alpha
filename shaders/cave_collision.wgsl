@@ -110,7 +110,7 @@ struct CaveParams {
 const EPSILON: f32 = 0.0001;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const ROLLING_CONTACT_FRICTION: f32 = 0.18;
-const SURFACE_SLIDE_DAMPING: f32 = 0.05;
+const CAVE_RESTITUTION: f32 = 0.08;
 
 // Hash function for single random value at integer coordinates (no gradients)
 fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
@@ -254,9 +254,19 @@ fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     let grad = vec3<f32>(grad_x, grad_y, grad_z);
     let len = length(grad);
     
-    // Avoid division by zero
+    // Near the outer world shell, all six density samples can land in the
+    // same saturated solid value and produce a zero gradient. A fixed +Y
+    // fallback makes collision correction point -Y everywhere, creating one
+    // configuration-independent sticking sliver on the lower hemisphere.
+    // Use the sphere's local outward gradient instead, so the caller's
+    // negation always points back into the playable volume.
     if (len < 0.0001) {
-        return vec3<f32>(0.0, 1.0, 0.0); // Default up direction
+        let radial = pos - cave_params.world_center;
+        let radial_len = length(radial);
+        if (radial_len > 0.0001) {
+            return radial / radial_len;
+        }
+        return vec3<f32>(0.0, 1.0, 0.0);
     }
     
     return grad / len;
@@ -296,17 +306,25 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
 
         if (penetration > 0.0) {
             // XPBD-style: directly correct position out of wall
-            // Move cell along normal by penetration distance + small margin
-            let correction = normal * (penetration + radius * 0.1);
+            // Move the entire cell clear of the wall. The collision field is a
+            // density field rather than a true distance field, so a radius-sized
+            // separation margin is the cheapest robust way to avoid repeatedly
+            // correcting a partially embedded cell.
+            let correction = normal * (penetration + radius);
             let corrected_pos = pos + correction;
             positions[cell_idx] = vec4<f32>(corrected_pos, positions[cell_idx].w);
 
-            // Remove velocity component going into the wall
+            // Redirect a small fraction of inward speed into open space. Merely
+            // zeroing it creates a stable immobilized state when thrust or an
+            // adhesion continues pressing the cell into the wall.
             var vel = velocities[cell_idx].xyz;
             let vel_into_wall = dot(vel, -normal);
             if (vel_into_wall > 0.0) {
-                // Remove inward velocity and apply damping
-                vel = vel + normal * vel_into_wall * cave_params.collision_damping;
+                let inward_removal =
+                    clamp(cave_params.collision_damping, 0.0, 1.0);
+                let redirected_speed =
+                    vel_into_wall * (inward_removal + CAVE_RESTITUTION);
+                vel = vel + normal * redirected_speed;
             }
 
             // Rolling / sliding friction against the cave wall. The cave wall is
@@ -331,12 +349,13 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
                 atomicAdd(&torque_accum_z[cell_idx], i32(contact_torque.z * FIXED_POINT_SCALE));
             }
 
-            // Surface drag is intentionally light: rolling friction above handles
-            // contact spin/slip, while this only trims numerical scrape jitter.
+            // Preserve linear tangent motion. This pass is re-run after every
+            // adhesion constraint iteration, so even light per-pass damping
+            // compounds into severe wall friction.
             let vel_normal_comp = dot(vel, normal);
             let vel_tangent = vel - normal * vel_normal_comp;
             let vel_normal_out = max(vel_normal_comp, 0.0);
-            vel = normal * vel_normal_out + vel_tangent * (1.0 - SURFACE_SLIDE_DAMPING);
+            vel = normal * vel_normal_out + vel_tangent;
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }
     }

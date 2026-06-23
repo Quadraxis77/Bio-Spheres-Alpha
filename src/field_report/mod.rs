@@ -1010,4 +1010,58 @@ mod tests {
         assert_eq!(format_simulation_time(125.0), "2:05");
         assert_eq!(format_simulation_time(3_725.0), "1:02:05");
     }
+
+    #[test]
+    fn extinct_remnant_is_not_treated_as_a_current_near_extinction() {
+        let mut archive = EcosystemLineageArchive::default();
+        archive.last_scan_frame = Some(2_000);
+        archive.last_scan_time = 120.0;
+        archive.nodes.push(crate::scene::lineage::LineageNode {
+            id: 1,
+            display_name: "Lost Remnant".to_string(),
+            current_cells: 0,
+            extinct_frame: Some(1_900),
+            telemetry_history: vec![LineageTelemetrySample {
+                frame: 1_800,
+                time_seconds: 90.0,
+                cells: 2,
+                ..LineageTelemetrySample::default()
+            }],
+            ..crate::scene::lineage::LineageNode::default()
+        });
+        archive.nodes.push(crate::scene::lineage::LineageNode {
+            id: 2,
+            display_name: "Living Line".to_string(),
+            current_cells: 120,
+            peak_cells: 120,
+            telemetry_history: vec![
+                LineageTelemetrySample {
+                    frame: 1_900,
+                    time_seconds: 90.0,
+                    cells: 100,
+                    ..LineageTelemetrySample::default()
+                },
+                LineageTelemetrySample {
+                    frame: 2_000,
+                    time_seconds: 120.0,
+                    cells: 120,
+                    cell_delta: 20,
+                    ..LineageTelemetrySample::default()
+                },
+            ],
+            ..crate::scene::lineage::LineageNode::default()
+        });
+
+        let analysis = analyze_archive(&archive);
+        assert!(analysis.context.lineage(1).is_none());
+        assert!(analysis.context.lineage(2).is_some());
+        assert!(!analysis.facts.iter().any(|fact| {
+            fact.subject_lineage() == Some(1)
+                && matches!(fact, ReportFact::NearExtinction { .. })
+        }));
+        assert!(analysis
+            .plans
+            .iter()
+            .any(|plan| plan.subject_lineage == Some(2)));
+    }
 }

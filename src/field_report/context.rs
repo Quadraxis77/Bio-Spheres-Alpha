@@ -41,6 +41,13 @@ impl FieldReportContext {
             .nodes
             .iter()
             .filter_map(|node| {
+                // Extinct nodes retain their final telemetry for the lineage
+                // archive, but that sample is historical rather than a current
+                // condition. Keeping it in live report analysis would make the
+                // final remnant appear indefinitely near extinction.
+                if node.extinct_frame.is_some() || node.current_cells == 0 {
+                    return None;
+                }
                 let current = *node.latest_telemetry()?;
                 let previous = node
                     .telemetry_history

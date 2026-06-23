@@ -757,6 +757,14 @@ fn default_lod_threshold_high() -> f32 {
     50.0 // High to Ultra transition
 }
 
+fn default_horizontal_fov_degrees() -> f32 {
+    crate::ui::camera::DEFAULT_HORIZONTAL_FOV_DEGREES
+}
+
+fn default_field_report_interval_seconds() -> f32 {
+    crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS
+}
+
 fn default_true() -> bool {
     true
 }
@@ -950,6 +958,18 @@ pub struct GlobalUiState {
     #[serde(default = "default_true")]
     pub gpu_timing_enabled: bool,
 
+    /// Whether scheduled ecosystem field reports are generated.
+    #[serde(default = "default_true")]
+    pub field_reports_enabled: bool,
+
+    /// Horizontal camera field of view shared by preview and GPU scenes.
+    #[serde(default = "default_horizontal_fov_degrees")]
+    pub horizontal_fov_degrees: f32,
+
+    /// Interval between scheduled ecosystem field-report scans.
+    #[serde(default = "default_field_report_interval_seconds")]
+    pub field_report_interval_seconds: f32,
+
     /// GPU mode no-render performance cockpit. Simulation continues, visual render passes stop.
     #[serde(skip)]
     pub gpu_headless_mode: bool,
@@ -1102,6 +1122,9 @@ impl Default for GlobalUiState {
             frustum_enabled: true,
             gpu_readbacks_enabled: true,
             gpu_timing_enabled: true,
+            field_reports_enabled: true,
+            horizontal_fov_degrees: default_horizontal_fov_degrees(),
+            field_report_interval_seconds: default_field_report_interval_seconds(),
             gpu_headless_mode: false,
             gpu_headless_auto_speed: false,
             gpu_headless_target_fps: default_headless_target_fps(),

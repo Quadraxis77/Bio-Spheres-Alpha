@@ -1070,16 +1070,7 @@ impl App {
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
-                // Save dock layouts before exit
-                self.dock_manager.save_all();
-                // Save UI state before exit
-                self.ui.save_ui_state();
-                // Save cell type visuals before exit
-                self.editor_state.save_cell_type_visuals();
-                // Save fluid and light settings before exit
-                self.editor_state.save_fluid_settings();
-                self.editor_state.save_fluid_render_settings();
-                self.editor_state.save_light_settings();
+                self.save_persistent_settings();
 
                 // Wait for GPU to finish all work before surface cleanup
                 // This prevents SurfaceAcquireSemaphores panic on exit
@@ -1849,10 +1840,7 @@ impl App {
                 self.ui.state.tutorial.start();
             }
             MenuAction::Exit => {
-                // Save persistent state before exiting.
-                self.dock_manager.save_all();
-                self.ui.save_ui_state();
-                self.editor_state.save_cell_type_visuals();
+                self.save_persistent_settings();
                 std::process::exit(0);
             }
             _ => {}
@@ -1866,6 +1854,21 @@ impl App {
         }
 
         self.window.request_redraw();
+    }
+
+    fn save_persistent_settings(&mut self) {
+        self.dock_manager.save_all();
+        self.ui.save_ui_state();
+        self.save_editor_settings();
+    }
+
+    fn save_editor_settings(&self) {
+        self.editor_state.save_cell_type_visuals();
+        self.editor_state.save_cave_settings();
+        self.editor_state.save_fluid_settings();
+        self.editor_state.save_fluid_render_settings();
+        self.editor_state.save_light_settings();
+        self.editor_state.save_sun_settings();
     }
 
     /// Draw the main-menu egui overlay and return the button action (if any).
@@ -2633,6 +2636,14 @@ impl App {
         // Auto-save dock layouts periodically
         self.dock_manager.auto_save();
 
+        self.scene_manager
+            .active_scene_mut()
+            .camera_mut()
+            .horizontal_fov_degrees = self.ui.state.horizontal_fov_degrees.clamp(
+                crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES,
+                crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
+            );
+
         let output = loop {
             match self.surface.get_current_texture() {
                 Ok(output) => break output,
@@ -2653,6 +2664,8 @@ impl App {
 
         // Apply occlusion culling settings from UI to GPU scene before rendering
         if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+            gpu_scene.lineage_capture_interval_seconds =
+                self.ui.state.field_report_interval_seconds.clamp(5.0, 600.0);
             gpu_scene.headless_no_render = gpu_headless;
             gpu_scene.set_occlusion_bias(self.ui.state.occlusion_bias);
             gpu_scene.set_occlusion_mip_override(self.ui.state.occlusion_mip_override);
