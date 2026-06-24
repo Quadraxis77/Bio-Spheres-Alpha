@@ -353,10 +353,7 @@ pub struct ModeSettings {
     pub siphon_mode: i32, // 0 = impulse, 1 = signal impulse, 2 = signal intake, 3 = signal expulsion
 
     // Plumocyte settings
-    pub plumocyte_extension: f32, // Passive extension amount, 0.0 retracted to 1.0 extended
-    pub plumocyte_drag_mult: f32, // Extra drag in still or moving media
-    pub plumocyte_flow_coupling: f32, // Coupling strength toward local medium/current motion
-    pub plumocyte_exposure_mult: f32, // Weak heat/water exposure multiplier
+    pub plumocyte_drag_mult: f32, // Passive fall-slowing multiplier
 
     // Stemocyte settings
     // Outcomes: -2 = apoptosis, -1 = remain Stemocyte and split normally, >= 0 = target mode.
@@ -589,10 +586,7 @@ impl Default for ModeSettings {
             siphon_signal_threshold: 1.0,
             siphon_signal_invert: false,
             siphon_mode: 0,
-            plumocyte_extension: 1.0,
             plumocyte_drag_mult: 0.7,
-            plumocyte_flow_coupling: 0.5,
-            plumocyte_exposure_mult: 0.25,
             stemocyte_signal_channel: 8,
             stemocyte_weak_first: false,
             stemocyte_outcomes: [-1; 5],

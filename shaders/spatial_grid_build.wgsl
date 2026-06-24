@@ -68,7 +68,7 @@ var<storage, read> stiffnesses: array<f32>;
 
 // Unused in this shader but required for bind group layout compatibility
 @group(1) @binding(5)
-var<storage, read> organism_labels: array<u32>;
+var<storage, read> development_addresses: array<vec4<u32>>;
 
 // Dense list of buckets occupied this frame. Appended when a bucket first receives a cell.
 @group(1) @binding(6)
@@ -87,6 +87,10 @@ var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
 
 @group(1) @binding(10)
 var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
+
+// Unused in this shader but required for bind group layout compatibility.
+@group(1) @binding(11)
+var<storage, read> adhesion_counts: array<u32>;
 
 const MAX_CELLS_PER_GRID: u32 = 16u;
 

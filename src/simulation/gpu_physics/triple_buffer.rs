@@ -402,7 +402,7 @@ pub struct GpuTripleBufferSystem {
     pub mode_properties_v14: wgpu::Buffer,
 
     /// Mode properties v15 for Plumocyte parameters (16 bytes per mode each)
-    /// v15: [extension, drag_mult, flow_coupling, exposure_mult]
+    /// v15: [drag_mult, unused, unused, unused]
     pub mode_properties_v15: wgpu::Buffer,
 
     /// Per-cell Embryocyte reserve buffer (one u32 per cell).
@@ -2524,7 +2524,7 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync Plumocyte mode properties.
-    /// v15: [extension, drag_mult, flow_coupling, exposure_mult]
+    /// v15: [drag_mult, unused, unused, unused]
     pub fn sync_plumocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2533,12 +2533,7 @@ impl GpuTripleBufferSystem {
         let mut v15: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
-                v15.push([
-                    mode.plumocyte_extension,
-                    mode.plumocyte_drag_mult,
-                    mode.plumocyte_flow_coupling,
-                    mode.plumocyte_exposure_mult,
-                ]);
+                v15.push([mode.plumocyte_drag_mult, 0.0, 0.0, 0.0]);
             }
         }
         if !v15.is_empty() {
@@ -2556,14 +2551,7 @@ impl GpuTripleBufferSystem {
         let v15: Vec<[f32; 4]> = genome
             .modes
             .iter()
-            .map(|mode| {
-                [
-                    mode.plumocyte_extension,
-                    mode.plumocyte_drag_mult,
-                    mode.plumocyte_flow_coupling,
-                    mode.plumocyte_exposure_mult,
-                ]
-            })
+            .map(|mode| [mode.plumocyte_drag_mult, 0.0, 0.0, 0.0])
             .collect();
         if !v15.is_empty() {
             let offset = (global_start_index * 16) as u64;

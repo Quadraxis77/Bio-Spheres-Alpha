@@ -358,8 +358,7 @@ impl OrganismLabelSystem {
     /// Used by the follow camera to skip CoM updates on frames where labels are
     /// temporarily reset to each cell's own index.
     pub fn is_reset_frame(&self) -> bool {
-        const RESET_PERIOD: u32 = 300;
-        (self.debug_frame.wrapping_add(1) % RESET_PERIOD) == 1
+        false
     }
 
     pub fn encode_frame(
@@ -375,13 +374,12 @@ impl OrganismLabelSystem {
         let active_workgroups = (cell_slots_used + 255) / 256;
         self.debug_frame = self.debug_frame.wrapping_add(1);
 
-        // Every RESET_PERIOD frames, reinitialise label[i] = i so stale labels from
-        // dead organisms don't persist indefinitely. Between resets the continuous
-        // single-hop flood fill keeps labels fresh.
-        // 300 frames (~5 seconds at 60fps) - infrequent enough to avoid visible
-        // disruption, frequent enough to clear dead organism label fossils.
-        const RESET_PERIOD: u32 = 300;
-        let is_reset_frame = (self.debug_frame % RESET_PERIOD) == 1;
+        // The continuous hook pass propagates labels one adhesion hop per frame.
+        // Periodic full resets are cheap for small organisms, but catastrophic for
+        // very long chains: a 100k-cell chain can never reconverge before the next
+        // reset, so every cell appears to be a different organism for collision.
+        // New/dead cells are still stamped by hook_labels; avoid global resets here.
+        let is_reset_frame = false;
         const SIZE_PERIOD: u32 = 4;
         let update_sizes = !is_reset_frame && (self.debug_frame % SIZE_PERIOD == 0);
 
@@ -450,9 +448,7 @@ impl OrganismLabelSystem {
     pub fn prepare_frame(&self, queue: &wgpu::Queue) {
         // debug_frame hasn't been incremented yet (encode_frame does that), so the
         // next frame number is debug_frame + 1.
-        const RESET_PERIOD: u32 = 300;
-        let next_frame = self.debug_frame.wrapping_add(1);
-        let is_reset = (next_frame % RESET_PERIOD) == 1;
+        let is_reset = false;
 
         // LabelState layout (32 bytes):
         //   [_pad0(0), _pad1(4), _pad2(8), _pad3(12), run_init(16), run_hc(20), _pad4(24), _pad5(28)]

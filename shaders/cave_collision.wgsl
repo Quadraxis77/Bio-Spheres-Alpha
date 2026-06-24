@@ -112,7 +112,15 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 const ROLLING_CONTACT_FRICTION: f32 = 0.18;
 const CAVE_RESTITUTION: f32 = 0.08;
 const CAVE_RESTING_SPEED: f32 = 2.0;
-const CAVE_MAX_CORRECTION_PER_STEP: f32 = 4.0;
+const CAVE_MAX_CORRECTION_PER_STEP: f32 = 0.35;
+const CAVE_CONTACT_SLOP: f32 = 0.04;
+const CAVE_POSITION_CORRECTION_FRACTION: f32 = 0.35;
+const CAVE_SURFACE_PROBE_SCALE: f32 = 0.9;
+
+struct CaveCollisionProbe {
+    density: f32,
+    position: vec3<f32>,
+}
 
 // Hash function for single random value at integer coordinates (no gradients)
 fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
@@ -295,44 +303,70 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
 }
 
+fn choose_denser_probe(current: CaveCollisionProbe, candidate_pos: vec3<f32>) -> CaveCollisionProbe {
+    let density = sample_cave_density(candidate_pos);
+    if (density > current.density) {
+        return CaveCollisionProbe(density, candidate_pos);
+    }
+    return current;
+}
+
+fn probe_cell_surface(pos: vec3<f32>, radius: f32, center_density: f32) -> CaveCollisionProbe {
+    var probe = CaveCollisionProbe(center_density, pos);
+    let sample_dist = max(radius * CAVE_SURFACE_PROBE_SCALE, 0.35);
+    probe = choose_denser_probe(probe, pos + vec3<f32>( sample_dist, 0.0, 0.0));
+    probe = choose_denser_probe(probe, pos + vec3<f32>(-sample_dist, 0.0, 0.0));
+    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0,  sample_dist, 0.0));
+    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0, -sample_dist, 0.0));
+    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0, 0.0,  sample_dist));
+    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0, 0.0, -sample_dist));
+    return probe;
+}
+
 // Apply position-based collision - directly moves cells out of solid rock into cave tunnels
 // Uses XPBD-style position correction so adhesion substeps can't pull cells through walls
-// Optimized: only check cells near cave walls, skip cells safely in open space
+// Optimized: probe the cell surface once so a cell whose center is in open
+// space still collides when its radius overlaps a solid cave voxel.
 fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) {
     if (cave_params.collision_enabled == 0u) {
         return;
     }
 
-    // Quick check: sample density at cell center first
+    // Sample the center and six cardinal surface points. Center-only tests let
+    // packed cells sit with their centers in the open voxel while their shells
+    // overlap the wall, which looks like freezing on voxel boundaries.
     let center_density = sample_cave_density(pos);
-    
-    // Early exit: if we're safely in open space (density well below threshold), skip collision
-    let safety_margin = 0.2; // 20% safety margin
-    let open_space_threshold = cave_params.threshold - 0.5 - safety_margin;
-    
-    if (center_density <= open_space_threshold) {
-        // Cell is safely in open cave space - no collision check needed
-        return;
-    }
-    
-    // Cell might be near a cave wall - perform detailed collision check
-    let radius_threshold = cave_params.threshold;
-    
-    // If center density > threshold, we're inside solid rock
-    if (center_density > radius_threshold) {
-        // Compute gradient pointing toward lower density (into open cave space)
-        let normal = -compute_sdf_gradient(pos, radius);  // Points into cave (away from wall)
+    let surface_probe = probe_cell_surface(pos, radius, center_density);
 
-        // Penetration depth - how far into solid rock we are
-        let penetration = (center_density - radius_threshold) * cave_params.scale;
+    let radius_threshold = cave_params.threshold;
+
+    // If the center or any surface probe is solid, push the whole cell back
+    // toward lower density. This is intentionally radius-aware; cave density is
+    // not a true SDF, so the surface hit is our best cheap overlap estimate.
+    if (surface_probe.density > radius_threshold) {
+        // Compute gradient pointing toward lower density (into open cave space)
+        let normal = -compute_sdf_gradient(surface_probe.position, radius);  // Points into cave (away from wall)
+
+        // Penetration estimate. If only a surface probe is solid, move by the
+        // local density overlap without a radius-sized minimum; otherwise cells
+        // get visibly popped away from shallow cave contact instead of settling.
+        let density_penetration = (surface_probe.density - radius_threshold) * cave_params.scale;
+        let center_is_solid = center_density > radius_threshold;
+        let penetration = select(
+            max(density_penetration, 0.02),
+            max(density_penetration, radius * 0.2),
+            center_is_solid
+        );
 
         if (penetration > 0.0) {
-            // XPBD-style: directly correct position out of wall
-            // Move the entire cell clear of the wall. The collision field is a
-            // density field rather than a true distance field, so a radius-sized
-            // separation margin is the cheapest robust way to avoid repeatedly
-            // correcting a partially embedded cell.
-            let correction_distance = min(penetration + radius, CAVE_MAX_CORRECTION_PER_STEP + radius);
+            // Soft depenetration. Cave density is not a true signed-distance
+            // field, so `penetration + radius` behaves like a teleport near
+            // high-gradient/voxelized walls. Leave a small contact slop and
+            // correct a bounded fraction so cells can settle and roll.
+            let correction_distance = min(
+                max(penetration - CAVE_CONTACT_SLOP, 0.0) * CAVE_POSITION_CORRECTION_FRACTION,
+                CAVE_MAX_CORRECTION_PER_STEP
+            );
             let correction = normal * correction_distance;
             let corrected_pos = pos + correction;
             positions[cell_idx] = vec4<f32>(corrected_pos, positions[cell_idx].w);

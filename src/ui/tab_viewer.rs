@@ -8650,10 +8650,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     siphon_signal_threshold: 1.0,
                     siphon_signal_invert: false,
                     siphon_mode: 0,
-                    plumocyte_extension: 1.0,
                     plumocyte_drag_mult: 0.7,
-                    plumocyte_flow_coupling: 0.5,
-                    plumocyte_exposure_mult: 0.25,
                     stemocyte_signal_channel: 8,
                     stemocyte_weak_first: false,
                     stemocyte_outcomes: [-1; 5],
@@ -9734,16 +9731,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 18 { // Plumocyte (cell_type == 18)
                 group_container(ui, "Plumocyte Functions", egui::Color32::from_rgb(150, 210, 190), |ui| {
-                    ui.label("Extension:")
-                        .on_hover_text("How extended the passive tendrils are. Higher values increase drag and exposure.");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.plumocyte_extension, 0.0..=1.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.plumocyte_extension).speed(0.01).range(0.0..=1.0));
-                    });
-
                     ui.label("Drag:")
                         .on_hover_text("Passive fall-slowing multiplier. It resists downward motion along gravity without braking organism-initiated forward movement.");
                     ui.horizontal(|ui| {
@@ -9752,26 +9739,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.style_mut().spacing.slider_width = slider_width;
                         ui.add(egui::Slider::new(&mut mode.plumocyte_drag_mult, 0.0..=3.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.plumocyte_drag_mult).speed(0.01).range(0.0..=3.0));
-                    });
-
-                    ui.label("Flow Coupling:")
-                        .on_hover_text("Passive coupling strength to surrounding medium. Current v1 strengthens fall-slowing in water without adding thrust.");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.plumocyte_flow_coupling, 0.0..=3.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.plumocyte_flow_coupling).speed(0.01).range(0.0..=3.0));
-                    });
-
-                    ui.label("Exposure:")
-                        .on_hover_text("Weak multiplier for environmental heat exchange and hot/dry water loss while extended.");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.plumocyte_exposure_mult, 0.0..=2.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.plumocyte_exposure_mult).speed(0.01).range(0.0..=2.0));
                     });
                 });
             } else if mode.cell_type == 19 { // Stemocyte (cell_type == 19)

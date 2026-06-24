@@ -324,8 +324,8 @@ fn apply_plumocyte_force(cell_idx: u32, mode_idx: u32) {
         return;
     }
     let props = mode_properties_v15[mode_idx];
-    let extension = clamp(props.x, 0.0, 1.0);
-    if (extension <= 0.001) {
+    let drag_mult = max(props.x, 0.0);
+    if (drag_mult <= 0.001) {
         return;
     }
 
@@ -336,11 +336,7 @@ fn apply_plumocyte_force(cell_idx: u32, mode_idx: u32) {
         return;
     }
 
-    let in_water = is_in_water(positions_in[cell_idx].xyz);
-    let medium_mult = select(0.35, 1.0, in_water);
-    let drag_mult = max(props.y, 0.0);
-    let flow_coupling = max(props.z, 0.0);
-    let drag = anti_gravity * fall_speed * (drag_mult + flow_coupling * medium_mult) * extension * 18.0;
+    let drag = anti_gravity * fall_speed * drag_mult * 18.0;
     atomicAdd(&force_accum_x[cell_idx], float_to_fixed(drag.x));
     atomicAdd(&force_accum_y[cell_idx], float_to_fixed(drag.y));
     atomicAdd(&force_accum_z[cell_idx], float_to_fixed(drag.z));

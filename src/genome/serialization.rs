@@ -430,13 +430,7 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub siphon_mode: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plumocyte_extension: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub plumocyte_drag_mult: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plumocyte_flow_coupling: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plumocyte_exposure_mult: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stemocyte_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1013,16 +1007,7 @@ fn mode_to_serializable(
         ),
         siphon_signal_invert: diff_bool(mode.siphon_signal_invert, default.siphon_signal_invert),
         siphon_mode: diff_i32(mode.siphon_mode, default.siphon_mode),
-        plumocyte_extension: diff_f32(mode.plumocyte_extension, default.plumocyte_extension),
         plumocyte_drag_mult: diff_f32(mode.plumocyte_drag_mult, default.plumocyte_drag_mult),
-        plumocyte_flow_coupling: diff_f32(
-            mode.plumocyte_flow_coupling,
-            default.plumocyte_flow_coupling,
-        ),
-        plumocyte_exposure_mult: diff_f32(
-            mode.plumocyte_exposure_mult,
-            default.plumocyte_exposure_mult,
-        ),
         stemocyte_signal_channel: diff_i32(
             mode.stemocyte_signal_channel,
             default.stemocyte_signal_channel,
@@ -1192,10 +1177,7 @@ impl SerializableModeSettings {
             || self.siphon_signal_threshold.is_some()
             || self.siphon_signal_invert.is_some()
             || self.siphon_mode.is_some()
-            || self.plumocyte_extension.is_some()
             || self.plumocyte_drag_mult.is_some()
-            || self.plumocyte_flow_coupling.is_some()
-            || self.plumocyte_exposure_mult.is_some()
             || self.stemocyte_signal_channel.is_some()
             || self.stemocyte_weak_first.is_some()
             || self.stemocyte_outcomes.is_some()
@@ -1571,17 +1553,8 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.siphon_mode {
         mode.siphon_mode = v;
     }
-    if let Some(v) = ser.plumocyte_extension {
-        mode.plumocyte_extension = v;
-    }
     if let Some(v) = ser.plumocyte_drag_mult {
         mode.plumocyte_drag_mult = v;
-    }
-    if let Some(v) = ser.plumocyte_flow_coupling {
-        mode.plumocyte_flow_coupling = v;
-    }
-    if let Some(v) = ser.plumocyte_exposure_mult {
-        mode.plumocyte_exposure_mult = v;
     }
     if let Some(v) = ser.stemocyte_signal_channel {
         mode.stemocyte_signal_channel = v;

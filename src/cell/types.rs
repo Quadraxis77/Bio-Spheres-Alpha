@@ -1239,10 +1239,7 @@ impl CellType {
                 mode.nutrient_priority = 1.2;
                 mode.max_cell_size = 1.6;
                 mode.split_mass = 3.1;
-                mode.plumocyte_extension = 1.0;
                 mode.plumocyte_drag_mult = 0.7;
-                mode.plumocyte_flow_coupling = 0.5;
-                mode.plumocyte_exposure_mult = 0.25;
             }
             CellType::Stemocyte => {
                 mode.nutrient_priority = 1.0;

@@ -73,7 +73,6 @@ const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 const CELL_TYPE_VASCULOCYTE: u32 = 12u;
 const CELL_TYPE_SIPHONOCYTE: u32 = 17u;
-const CELL_TYPE_PLUMOCYTE: u32 = 18u;
 const STATE_FROZEN: u32 = 1u;
 const PHYSIOLOGY_TICK_SCALE: f32 = 4.0;
 const DRY_THERMAL_MASS: f32 = 1.0;
@@ -120,9 +119,6 @@ fn heat_transfer_mult(cell_type: u32) -> f32 {
     }
     if (cell_type == CELL_TYPE_SIPHONOCYTE) {
         return 3.0;
-    }
-    if (cell_type == CELL_TYPE_PLUMOCYTE) {
-        return 1.35;
     }
     return 1.0;
 }

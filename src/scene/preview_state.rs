@@ -477,6 +477,9 @@ impl PreviewState {
             mode.siphon_signal_invert.hash(&mut hasher);
             mode.siphon_mode.hash(&mut hasher);
 
+            // Plumocyte passive drag setting
+            mode.plumocyte_drag_mult.to_bits().hash(&mut hasher);
+
             // Stemocyte developmental outcomes change cell fate during resim.
             mode.stemocyte_signal_channel.hash(&mut hasher);
             mode.stemocyte_weak_first.hash(&mut hasher);
@@ -804,6 +807,19 @@ mod tests {
         changed_threshold.modes[0].stemocyte_thresholds = [10, 30, 70, 90];
         assert_ne!(
             PreviewState::compute_genome_hash(&changed_threshold),
+            original_hash
+        );
+    }
+
+    #[test]
+    fn plumocyte_settings_affect_genome_hash() {
+        let genome = Genome::new_with_mode_count(1);
+        let original_hash = PreviewState::compute_genome_hash(&genome);
+
+        let mut changed_drag = genome;
+        changed_drag.modes[0].plumocyte_drag_mult = 1.25;
+        assert_ne!(
+            PreviewState::compute_genome_hash(&changed_drag),
             original_hash
         );
     }

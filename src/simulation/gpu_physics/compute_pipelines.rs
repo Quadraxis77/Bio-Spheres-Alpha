@@ -1505,6 +1505,7 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
+        adhesion_buffers: &super::AdhesionBuffers,
         buffer_index: usize,
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
         let physics_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1564,7 +1565,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: buffers.stiffnesses.as_entire_binding(),
+                    resource: buffers.development_addresses.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -1587,6 +1588,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: buffers.spatial_grid_overflow_count.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
                 },
             ],
         });
@@ -2147,10 +2152,6 @@ impl GpuPhysicsPipelines {
                     resource: buffers.mode_properties_v14.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: buffers.mode_properties_v15.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
                     binding: 9,
                     resource: adhesion_buffers.signal_flags.as_entire_binding(),
                 },
@@ -2291,8 +2292,12 @@ impl GpuPhysicsPipelines {
         ];
 
         // Spatial grid bind group (same for all frames)
-        let spatial_grid =
-            self.create_spatial_grid_bind_group_internal(device, buffers, organism_label_buffer);
+        let spatial_grid = self.create_spatial_grid_bind_group_internal(
+            device,
+            buffers,
+            adhesion_buffers,
+            organism_label_buffer,
+        );
 
         // Position update spatial grid bind group (read-only, same for all frames)
         let position_update_spatial_grid =
@@ -3154,22 +3159,9 @@ impl GpuPhysicsPipelines {
         &self,
         device: &wgpu::Device,
         buffers: &GpuTripleBufferSystem,
-        organism_label_buffer: Option<&wgpu::Buffer>,
+        adhesion_buffers: &super::AdhesionBuffers,
+        _organism_label_buffer: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
-        // Create a dummy buffer if organism labels aren't available
-        let dummy_label_buffer;
-        let label_buffer = if let Some(buf) = organism_label_buffer {
-            buf
-        } else {
-            dummy_label_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Dummy Organism Label Buffer"),
-                size: buffers.capacity as u64 * 4, // u32 per cell
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            });
-            &dummy_label_buffer
-        };
-
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Spatial Grid Bind Group"),
             layout: &self.spatial_grid_layout,
@@ -3196,7 +3188,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: label_buffer.as_entire_binding(),
+                    resource: buffers.development_addresses.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -3219,6 +3211,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: buffers.spatial_grid_overflow_count.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
                 },
             ],
         })
@@ -3423,7 +3419,7 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Organism labels (per-cell organism ID for self-collision filtering)
+                // Development address (per-cell stable root organism ID for self-collision filtering)
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -3484,6 +3480,17 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Adhesion counts (per-cell current bond count for self-collision filtering)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -4541,7 +4548,6 @@ impl GpuPhysicsPipelines {
                 ro(5),  // per-voxel temperature field
                 ro(6),  // geothermal heat field
                 ro(7),  // mode_properties_v14: Siphonocyte params
-                ro(8),  // mode_properties_v15: Plumocyte params
                 ro(9),  // signal flags for signal-gated Siphonocyte intake
                 ro(10), // adhesion_settings_v0: rest length for bond heat behavior
             ],
