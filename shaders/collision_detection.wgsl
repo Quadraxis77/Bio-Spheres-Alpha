@@ -122,6 +122,14 @@ const FRICTION_COEFF: f32 = 0.3;
 const BOUNDARY_REDIRECT_FORCE: f32 = 15.0;
 const BOUNDARY_MAX_REDIRECT_FORCE: f32 = 250.0;
 const BOUNDARY_ALIGNMENT_TORQUE: f32 = 50.0;
+const OVERFLOW_DENSE_THRESHOLD: u32 = 16384u;
+const OVERFLOW_EXTREME_THRESHOLD: u32 = 65536u;
+const MEDIUM_BUCKET_THRESHOLD: u32 = 8u;
+const DENSE_BUCKET_THRESHOLD: u32 = 12u;
+const EXTREME_BUCKET_THRESHOLD: u32 = 32u;
+const MEDIUM_BUCKET_SAMPLE_LIMIT: u32 = 8u;
+const DENSE_BUCKET_SAMPLE_LIMIT: u32 = 6u;
+const EXTREME_BUCKET_SAMPLE_LIMIT: u32 = 4u;
 
 const FORWARD_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 13> = array<vec3<i32>, 13>(
     vec3<i32>(0, 0, 1),
@@ -137,6 +145,22 @@ const FORWARD_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 13> = array<vec3<i32>, 13>(
     vec3<i32>(1, 1, -1),
     vec3<i32>(1, 1, 0),
     vec3<i32>(1, 1, 1),
+);
+
+const FORWARD_FACE_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 3> = array<vec3<i32>, 3>(
+    vec3<i32>(0, 0, 1),
+    vec3<i32>(0, 1, 0),
+    vec3<i32>(1, 0, 0),
+);
+
+const OVERFLOW_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 7> = array<vec3<i32>, 7>(
+    vec3<i32>(0, 0, 0),
+    vec3<i32>(-1, 0, 0),
+    vec3<i32>(1, 0, 0),
+    vec3<i32>(0, -1, 0),
+    vec3<i32>(0, 1, 0),
+    vec3<i32>(0, 0, -1),
+    vec3<i32>(0, 0, 1),
 );
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
@@ -160,6 +184,13 @@ fn grid_index_to_coords(grid_idx: u32, grid_resolution: i32) -> vec3<i32> {
     let y = (i32(grid_idx) - z * res * res) / res;
     let x = i32(grid_idx) - z * res * res - y * res;
     return vec3<i32>(x, y, z);
+}
+
+fn collision_sample_count(raw_count: u32) -> u32 {
+    let capped_count = min(raw_count, MAX_CELLS_PER_GRID);
+    let medium_count = select(capped_count, MEDIUM_BUCKET_SAMPLE_LIMIT, raw_count > MEDIUM_BUCKET_THRESHOLD);
+    let dense_count = select(medium_count, DENSE_BUCKET_SAMPLE_LIMIT, raw_count > DENSE_BUCKET_THRESHOLD);
+    return select(dense_count, EXTREME_BUCKET_SAMPLE_LIMIT, raw_count > EXTREME_BUCKET_THRESHOLD);
 }
 
 fn add_force(cell_idx: u32, force: vec3<f32>) {
@@ -398,30 +429,27 @@ fn process_neighbor_bucket(grid_idx_a: u32, count_a: u32, grid_idx_b: u32, count
 fn process_overflow_cell(cell_idx: u32, grid_idx: u32) {
     let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
 
-    for (var dz: i32 = -1; dz <= 1; dz = dz + 1) {
-        for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
-            for (var dx: i32 = -1; dx <= 1; dx = dx + 1) {
-                let nx = coords.x + dx;
-                let ny = coords.y + dy;
-                let nz = coords.z + dz;
-                if (nx < 0 || ny < 0 || nz < 0 ||
-                    nx >= params.grid_resolution ||
-                    ny >= params.grid_resolution ||
-                    nz >= params.grid_resolution) {
-                    continue;
-                }
+    for (var n = 0u; n < 7u; n++) {
+        let offset = OVERFLOW_NEIGHBOR_OFFSETS_3D[n];
+        let nx = coords.x + offset.x;
+        let ny = coords.y + offset.y;
+        let nz = coords.z + offset.z;
+        if (nx < 0 || ny < 0 || nz < 0 ||
+            nx >= params.grid_resolution ||
+            ny >= params.grid_resolution ||
+            nz >= params.grid_resolution) {
+            continue;
+        }
 
-                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
-                let neighbor_count = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
-                if (neighbor_count == 0u) {
-                    continue;
-                }
+        let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+        let neighbor_count = collision_sample_count(spatial_grid_counts[neighbor_grid_idx]);
+        if (neighbor_count == 0u) {
+            continue;
+        }
 
-                let base = neighbor_grid_idx * MAX_CELLS_PER_GRID;
-                for (var i = 0u; i < neighbor_count; i++) {
-                    resolve_cell_pair(cell_idx, spatial_grid_cells[base + i]);
-                }
-            }
+        let base = neighbor_grid_idx * MAX_CELLS_PER_GRID;
+        for (var i = 0u; i < neighbor_count; i++) {
+            resolve_cell_pair(cell_idx, spatial_grid_cells[base + i]);
         }
     }
 }
@@ -442,37 +470,64 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let occupied_count = atomicLoad(&occupied_grid_count[0]);
     if (occupied_idx < occupied_count) {
         let grid_idx = occupied_grid_cells[occupied_idx];
-        let count = min(spatial_grid_counts[grid_idx], MAX_CELLS_PER_GRID);
+        let raw_count = spatial_grid_counts[grid_idx];
+        let count = collision_sample_count(raw_count);
         if (count > 0u) {
             process_same_bucket(grid_idx, count);
 
             let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
-            for (var n = 0u; n < 13u; n++) {
-                let offset = FORWARD_NEIGHBOR_OFFSETS_3D[n];
-                let nx = coords.x + offset.x;
-                let ny = coords.y + offset.y;
-                let nz = coords.z + offset.z;
-                if (nx < 0 || ny < 0 || nz < 0 ||
-                    nx >= params.grid_resolution ||
-                    ny >= params.grid_resolution ||
-                    nz >= params.grid_resolution) {
-                    continue;
-                }
+            if (raw_count > MEDIUM_BUCKET_THRESHOLD) {
+                for (var n = 0u; n < 3u; n++) {
+                    let offset = FORWARD_FACE_NEIGHBOR_OFFSETS_3D[n];
+                    let nx = coords.x + offset.x;
+                    let ny = coords.y + offset.y;
+                    let nz = coords.z + offset.z;
+                    if (nx < 0 || ny < 0 || nz < 0 ||
+                        nx >= params.grid_resolution ||
+                        ny >= params.grid_resolution ||
+                        nz >= params.grid_resolution) {
+                        continue;
+                    }
 
-                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
-                let neighbor_count = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
-                if (neighbor_count == 0u) {
-                    continue;
-                }
+                    let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+                    let neighbor_count = collision_sample_count(spatial_grid_counts[neighbor_grid_idx]);
+                    if (neighbor_count == 0u) {
+                        continue;
+                    }
 
-                process_neighbor_bucket(grid_idx, count, neighbor_grid_idx, neighbor_count);
+                    process_neighbor_bucket(grid_idx, count, neighbor_grid_idx, neighbor_count);
+                }
+            } else {
+                for (var n = 0u; n < 13u; n++) {
+                    let offset = FORWARD_NEIGHBOR_OFFSETS_3D[n];
+                    let nx = coords.x + offset.x;
+                    let ny = coords.y + offset.y;
+                    let nz = coords.z + offset.z;
+                    if (nx < 0 || ny < 0 || nz < 0 ||
+                        nx >= params.grid_resolution ||
+                        ny >= params.grid_resolution ||
+                        nz >= params.grid_resolution) {
+                        continue;
+                    }
+
+                    let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+                    let neighbor_count = collision_sample_count(spatial_grid_counts[neighbor_grid_idx]);
+                    if (neighbor_count == 0u) {
+                        continue;
+                    }
+
+                    process_neighbor_bucket(grid_idx, count, neighbor_grid_idx, neighbor_count);
+                }
             }
         }
     }
 
     let overflow_idx = dispatch_idx;
     let overflow_count = atomicLoad(&spatial_grid_overflow_count[0]);
-    if (overflow_idx < overflow_count && overflow_idx < params.cell_capacity) {
+    let dense_stride = select(1u, 2u, overflow_count > OVERFLOW_DENSE_THRESHOLD);
+    let overflow_stride = select(dense_stride, 4u, overflow_count > OVERFLOW_EXTREME_THRESHOLD);
+    let overflow_phase = (overflow_idx + u32(params.current_frame)) & (overflow_stride - 1u);
+    if (overflow_idx < overflow_count && overflow_idx < params.cell_capacity && overflow_phase == 0u) {
         process_overflow_cell(
             spatial_grid_overflow_cells[overflow_idx],
             spatial_grid_overflow_grid_indices[overflow_idx]

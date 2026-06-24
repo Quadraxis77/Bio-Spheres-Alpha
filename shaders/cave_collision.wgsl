@@ -111,6 +111,8 @@ const EPSILON: f32 = 0.0001;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const ROLLING_CONTACT_FRICTION: f32 = 0.18;
 const CAVE_RESTITUTION: f32 = 0.08;
+const CAVE_RESTING_SPEED: f32 = 2.0;
+const CAVE_MAX_CORRECTION_PER_STEP: f32 = 4.0;
 
 // Hash function for single random value at integer coordinates (no gradients)
 fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
@@ -241,8 +243,7 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     }
 }
 
-// Compute SDF gradient (normal) using central differences
-fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
+fn raw_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     let dx = vec3<f32>(h, 0.0, 0.0);
     let dy = vec3<f32>(0.0, h, 0.0);
     let dz = vec3<f32>(0.0, 0.0, h);
@@ -251,9 +252,27 @@ fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     let grad_y = sample_cave_density(pos + dy) - sample_cave_density(pos - dy);
     let grad_z = sample_cave_density(pos + dz) - sample_cave_density(pos - dz);
     
-    let grad = vec3<f32>(grad_x, grad_y, grad_z);
-    let len = length(grad);
-    
+    return vec3<f32>(grad_x, grad_y, grad_z);
+}
+
+// Compute SDF gradient (normal) using central differences. The cave density is
+// thresholded rather than a true distance field, so use a small local probe for
+// stable contact normals and fall back to wider probes only when fully embedded.
+fn compute_sdf_gradient(pos: vec3<f32>, radius: f32) -> vec3<f32> {
+    let local_h = max(radius * 0.75, 0.35);
+    var grad = raw_sdf_gradient(pos, local_h);
+    var len = length(grad);
+
+    if (len < 0.0001) {
+        grad = raw_sdf_gradient(pos, max(radius * 1.5, 1.0));
+        len = length(grad);
+    }
+
+    if (len < 0.0001) {
+        grad = raw_sdf_gradient(pos, max(cave_params.scale * 0.04, 2.0));
+        len = length(grad);
+    }
+
     // Near the outer world shell, all six density samples can land in the
     // same saturated solid value and produce a zero gradient. A fixed +Y
     // fallback makes collision correction point -Y everywhere, creating one
@@ -270,6 +289,10 @@ fn compute_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     }
     
     return grad / len;
+}
+
+fn calculate_radius_from_mass(mass: f32) -> f32 {
+    return clamp(mass, 0.5, 2.0);
 }
 
 // Apply position-based collision - directly moves cells out of solid rock into cave tunnels
@@ -298,8 +321,7 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
     // If center density > threshold, we're inside solid rock
     if (center_density > radius_threshold) {
         // Compute gradient pointing toward lower density (into open cave space)
-        let gradient_step = max(cave_params.scale * 0.1, radius * 0.5);
-        let normal = -compute_sdf_gradient(pos, gradient_step);  // Points into cave (away from wall)
+        let normal = -compute_sdf_gradient(pos, radius);  // Points into cave (away from wall)
 
         // Penetration depth - how far into solid rock we are
         let penetration = (center_density - radius_threshold) * cave_params.scale;
@@ -310,7 +332,8 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
             // density field rather than a true distance field, so a radius-sized
             // separation margin is the cheapest robust way to avoid repeatedly
             // correcting a partially embedded cell.
-            let correction = normal * (penetration + radius);
+            let correction_distance = min(penetration + radius, CAVE_MAX_CORRECTION_PER_STEP + radius);
+            let correction = normal * correction_distance;
             let corrected_pos = pos + correction;
             positions[cell_idx] = vec4<f32>(corrected_pos, positions[cell_idx].w);
 
@@ -320,10 +343,9 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
             var vel = velocities[cell_idx].xyz;
             let vel_into_wall = dot(vel, -normal);
             if (vel_into_wall > 0.0) {
-                let inward_removal =
-                    clamp(cave_params.collision_damping, 0.0, 1.0);
-                let redirected_speed =
-                    vel_into_wall * (inward_removal + CAVE_RESTITUTION);
+                let inward_removal = clamp(cave_params.collision_damping, 0.0, 1.0);
+                let restitution = select(0.0, CAVE_RESTITUTION, vel_into_wall > CAVE_RESTING_SPEED);
+                let redirected_speed = vel_into_wall * (inward_removal + restitution);
                 vel = vel + normal * redirected_speed;
             }
 
@@ -380,8 +402,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Calculate radius from mass (mass = 4/3 * pi * r^3)
-    let collision_radius = pow(mass * 0.75 / 3.14159265359, 1.0 / 3.0);
+    let collision_radius = calculate_radius_from_mass(mass);
 
     // Apply force-based cave collision (modifies velocity only)
     apply_cave_collision_force(idx, pos, collision_radius, mass, params.delta_time);

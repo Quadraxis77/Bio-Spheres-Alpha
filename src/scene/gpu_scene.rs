@@ -2061,6 +2061,7 @@ impl GpuScene {
                 has_siphonocytes: true,
                 has_plumocytes: true,
                 has_glueocytes: true,
+                has_structural_adhesion: true,
                 has_mode_switches: true,
                 has_auto_nutrient_gain: true,
                 has_division: true,
@@ -2792,6 +2793,9 @@ impl GpuScene {
                 }
                 if m.cell_type == glueocyte_type {
                     self.has_glueocytes = true;
+                }
+                if m.parent_make_adhesion || m.min_adhesions > 0 {
+                    self.physics_features.has_structural_adhesion = true;
                 }
                 if m.cell_type == oculocyte_type {
                     self.has_oculocytes = true;

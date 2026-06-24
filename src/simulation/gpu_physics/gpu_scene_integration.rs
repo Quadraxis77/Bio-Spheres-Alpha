@@ -92,6 +92,7 @@ pub struct PhysicsFeatureFlags {
     pub has_siphonocytes: bool,
     pub has_plumocytes: bool,
     pub has_glueocytes: bool,
+    pub has_structural_adhesion: bool,
     pub has_mode_switches: bool,
     pub has_auto_nutrient_gain: bool,
     pub has_division: bool,
@@ -123,6 +124,7 @@ pub fn execute_gpu_physics_step(
     features: PhysicsFeatureFlags,
 ) {
     let current_index = triple_buffers.rotate_buffers();
+    let has_adhesion_bonds = features.has_structural_adhesion || features.has_glueocytes;
 
     // Update physics params uniform buffer
     // Note: cell_count is now read from cell_count_buffer by shaders
@@ -308,12 +310,14 @@ pub fn execute_gpu_physics_step(
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 5: Adhesion physics
-        compute_pass.set_pipeline(&pipelines.adhesion_physics);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
-        compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        if has_adhesion_bonds {
+            compute_pass.set_pipeline(&pipelines.adhesion_physics);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+            compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
         // Stage 5.5: Swim force (256 threads) - applies thrust for Flagellocyte cells
         // Accumulates swim force to force buffers based on cell rotation and mode swim_force setting
@@ -434,12 +438,14 @@ pub fn execute_gpu_physics_step(
         // Each iteration re-evaluates adhesion forces against latest positions and
         // applies corrections directly to output buffers. Dramatically increases
         // effective joint stiffness without changing spring constants.
-        for _ in 0..constraint_iterations {
-            compute_pass.set_pipeline(&pipelines.adhesion_substep);
-            compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
-            compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
-            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        if has_adhesion_bonds {
+            for _ in 0..constraint_iterations {
+                compute_pass.set_pipeline(&pipelines.adhesion_substep);
+                compute_pass.set_bind_group(0, physics_bind_group, &[]);
+                compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+                compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            }
         }
 
         // Stage 7.6: Cave collision (if enabled) - one final environmental SDF
@@ -598,6 +604,7 @@ pub fn execute_gpu_mechanics_step(
 ) {
     // Rotate to next buffer set
     let current_index = triple_buffers.rotate_buffers();
+    let has_adhesion_bonds = features.has_structural_adhesion || features.has_glueocytes;
 
     let world_size = world_diameter;
     let params = PhysicsParams {
@@ -687,12 +694,14 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 5: Adhesion physics
-        compute_pass.set_pipeline(&pipelines.adhesion_physics);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
-        compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        if has_adhesion_bonds {
+            compute_pass.set_pipeline(&pipelines.adhesion_physics);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+            compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+            compute_pass.set_bind_group(3, &cached_bind_groups.force_accum, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
 
         // Stage 5.5: Swim force
         if features.has_flagellocytes || features.has_siphonocytes || features.has_plumocytes {
@@ -799,12 +808,14 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 7.5: Adhesion constraint sub-stepping (N additional iterations)
-        for _ in 0..constraint_iterations {
-            compute_pass.set_pipeline(&pipelines.adhesion_substep);
-            compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
-            compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
-            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        if has_adhesion_bonds {
+            for _ in 0..constraint_iterations {
+                compute_pass.set_pipeline(&pipelines.adhesion_substep);
+                compute_pass.set_bind_group(0, physics_bind_group, &[]);
+                compute_pass.set_bind_group(1, &cached_bind_groups.adhesion, &[]);
+                compute_pass.set_bind_group(2, adhesion_rotations_bind_group, &[]);
+                compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+            }
         }
 
         // Stage 7.6: Cave collision (if enabled) - one final environmental SDF
