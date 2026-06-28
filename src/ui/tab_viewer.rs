@@ -4057,7 +4057,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             ui.label("Scale:")
                 .on_hover_text("Size of the cave features. Higher values create larger, more open chambers; lower values create tighter, more intricate passages");
             params_changed |= ui
-                .add(egui::Slider::new(&mut scale, 50.0..=100.0))
+                .add(egui::Slider::new(&mut scale, 50.0..=300.0))
                 .changed();
 
             if state.show_advanced_options {
@@ -8651,6 +8651,7 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     siphon_signal_invert: false,
                     siphon_mode: 0,
                     plumocyte_drag_mult: 0.7,
+                    plumocyte_rotation_resistance: 0.7,
                     stemocyte_signal_channel: 8,
                     stemocyte_weak_first: false,
                     stemocyte_outcomes: [-1; 5],
@@ -9739,6 +9740,15 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.style_mut().spacing.slider_width = slider_width;
                         ui.add(egui::Slider::new(&mut mode.plumocyte_drag_mult, 0.0..=3.0).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.plumocyte_drag_mult).speed(0.01).range(0.0..=3.0));
+                    });
+                    ui.label("Rotation:")
+                        .on_hover_text("Passive spin resistance. It damps angular velocity so Plumocytes stay oriented instead of tumbling freely.");
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
+                        ui.style_mut().spacing.slider_width = slider_width;
+                        ui.add(egui::Slider::new(&mut mode.plumocyte_rotation_resistance, 0.0..=3.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.plumocyte_rotation_resistance).speed(0.01).range(0.0..=3.0));
                     });
                 });
             } else if mode.cell_type == 19 { // Stemocyte (cell_type == 19)

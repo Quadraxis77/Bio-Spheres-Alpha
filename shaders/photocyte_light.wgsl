@@ -30,11 +30,17 @@ struct PhotocyteParams {
     grid_origin_x: f32,
     grid_origin_y: f32,
     grid_origin_z: f32,
-    // Mass gained per second at full light intensity
+    // Mass gained per second at full sunlight intensity
     mass_per_second_full_light: f32,
+    // Mass gained per second from geothermal light. This intentionally does
+    // not receive the sun brightness multiplier.
+    geothermal_mass_per_second_full_light: f32,
     // Minimum light intensity to gain any mass (threshold)
     min_light_threshold: f32,
     _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
 
 // Physics bind group (group 0)
@@ -97,6 +103,9 @@ const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
 // Luminocyte energy cost per second at full brightness.
 const LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND: f32 = 6.0;
+// Full sunlight is 1.0. Geothermal vents are allowed to be worth 1.5x the
+// default photocyte replacement rate: 75 nutrients/sec / 20 nutrients/sec.
+const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
 
 // Fixed-point conversion
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -220,8 +229,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let light_intensity = sample_light(pos);
     let in_light = light_intensity >= photocyte_params.min_light_threshold;
 
-    let nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0
-                        * clamp(light_intensity, 0.0, 1.0);
+    var nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0
+        * clamp(light_intensity, 0.0, 1.0);
+    if (light_intensity > 1.0) {
+        nutrient_rate = photocyte_params.geothermal_mass_per_second_full_light * 100.0
+            * clamp(light_intensity, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
+    }
 
     if (in_light) {
         let nutrient_gain = min(nutrient_rate * params.delta_time, max(max_nutrients - current_nutrients, 0.0));

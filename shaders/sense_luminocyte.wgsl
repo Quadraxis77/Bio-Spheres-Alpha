@@ -30,8 +30,12 @@ struct PhotocyteParams {
     grid_origin_y: f32,
     grid_origin_z: f32,
     mass_per_second_full_light: f32,
+    geothermal_mass_per_second_full_light: f32,
     min_light_threshold: f32,
     _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
 
 // Group 0: physics (reuses photocyte_physics_layout)

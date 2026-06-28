@@ -2259,7 +2259,7 @@ impl GenomeEditorState {
             8.0
         }
         fn default_geothermal_glow_strength() -> f32 {
-            2.8
+            3.75
         }
         fn default_geothermal_glow_radius() -> f32 {
             10.0
@@ -2650,7 +2650,7 @@ impl GenomeEditorState {
             2.0,
             34.0,
             8.0,
-            2.8,
+            3.75,
             10.0,
             [1.0, 0.32, 0.055],
             0,

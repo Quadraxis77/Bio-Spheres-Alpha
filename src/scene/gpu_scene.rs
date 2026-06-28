@@ -1587,6 +1587,7 @@ impl GpuScene {
                 siphon_signal_invert: false,
                 siphon_mode: 0,
                 plumocyte_drag_mult: 0.7,
+                plumocyte_rotation_resistance: 0.7,
                 stemocyte_signal_channel: 8,
                 stemocyte_weak_first: false,
                 stemocyte_outcomes: [-1; 5],
@@ -4763,7 +4764,7 @@ impl GpuScene {
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: self.adhesion_buffers.angular_velocities[buffer_index]
+                    resource: self.adhesion_buffers.angular_velocities[write_buffer]
                         .as_entire_binding(),
                 },
             ],
@@ -7278,15 +7279,17 @@ impl GpuScene {
 
         // Update light field system parameters
         if let Some(ref mut light_field) = self.light_field_system {
+            let base_photocyte_mass_rate =
+                effective_photocyte_mass_rate(editor_state.photocyte_mass_per_second);
             light_field.set_light_dir(editor_state.light_dir);
             light_field.set_max_steps(editor_state.light_field_max_steps);
             light_field.set_absorption_solid(editor_state.light_field_absorption_solid);
             light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
             light_field.set_mass_per_second(
-                effective_photocyte_mass_rate(editor_state.photocyte_mass_per_second)
-                    * photocyte_production_multiplier(effective_sun_intensity),
+                base_photocyte_mass_rate * photocyte_production_multiplier(effective_sun_intensity),
             );
+            light_field.set_geothermal_mass_per_second(base_photocyte_mass_rate);
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
             light_field.set_shadow_strength(editor_state.shadow_strength);

@@ -1240,6 +1240,7 @@ impl CellType {
                 mode.max_cell_size = 1.6;
                 mode.split_mass = 3.1;
                 mode.plumocyte_drag_mult = 0.7;
+                mode.plumocyte_rotation_resistance = 0.7;
             }
             CellType::Stemocyte => {
                 mode.nutrient_priority = 1.0;

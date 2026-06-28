@@ -63,8 +63,12 @@ pub struct PhotocyteParams {
     pub grid_origin_y: f32,
     pub grid_origin_z: f32,
     pub mass_per_second_full_light: f32,
+    pub geothermal_mass_per_second_full_light: f32,
     pub min_light_threshold: f32,
     pub _pad0: f32,
+    pub _pad1: f32,
+    pub _pad2: f32,
+    pub _pad3: f32,
 }
 
 /// Parameters for surface shadow sampling (used by cave and cell shaders)
@@ -172,6 +176,7 @@ pub struct LightFieldSystem {
     ambient_floor: f32,
     scattering_coefficient: f32,
     mass_per_second_full_light: f32,
+    geothermal_mass_per_second_full_light: f32,
     min_light_threshold: f32,
     shadow_strength: f32,
     shadow_enabled: bool,
@@ -1153,6 +1158,7 @@ impl LightFieldSystem {
             ambient_floor: 0.02,
             scattering_coefficient: 0.2,
             mass_per_second_full_light: 0.2,
+            geothermal_mass_per_second_full_light: 0.2,
             min_light_threshold: 0.05,
             shadow_strength: 0.7,
             shadow_enabled: true,
@@ -1365,9 +1371,14 @@ impl LightFieldSystem {
         self.ambient_floor = floor;
     }
 
-    /// Set mass gain rate for photocytes at full light
+    /// Set mass gain rate for photocytes at full sunlight
     pub fn set_mass_per_second(&mut self, rate: f32) {
         self.mass_per_second_full_light = rate;
+    }
+
+    /// Set mass gain rate for photocytes under geothermal light.
+    pub fn set_geothermal_mass_per_second(&mut self, rate: f32) {
+        self.geothermal_mass_per_second_full_light = rate;
     }
 
     /// Set minimum light threshold for photocyte gain
@@ -1699,8 +1710,12 @@ impl LightFieldSystem {
             grid_origin_y: self.grid_origin[1],
             grid_origin_z: self.grid_origin[2],
             mass_per_second_full_light: self.mass_per_second_full_light,
+            geothermal_mass_per_second_full_light: self.geothermal_mass_per_second_full_light,
             min_light_threshold: self.min_light_threshold,
             _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
         };
         queue.write_buffer(
             &self.photocyte_params_buffer,

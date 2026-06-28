@@ -611,22 +611,26 @@ impl CameraController {
                     }
                 }
             } else {
-                // FreeFly mode: yaw around world up to prevent roll accumulation,
-                // pitch around camera's local X axis.
-                let pitch = Quat::from_axis_angle(self.target_rotation * Vec3::X, -delta.y);
-                let free_yaw = Quat::from_axis_angle(self.up_direction, -delta.x);
+                if self.gravity_mode == 3 {
+                    // Radial FreeFly has no global up axis. Apply yaw/pitch
+                    // around the camera's current local basis so it stays true
+                    // 6DOF instead of inheriting the last axial gravity lock.
+                    let local_y = self.target_rotation * Vec3::Y;
+                    let local_x = self.target_rotation * Vec3::X;
+                    let yaw = Quat::from_axis_angle(local_y, -delta.x);
+                    let pitch = Quat::from_axis_angle(local_x, -delta.y);
+                    self.target_rotation = (yaw * pitch * self.target_rotation).normalize();
+                } else {
+                    // FreeFly mode: yaw around gravity up to prevent roll accumulation,
+                    // pitch around camera's local X axis.
+                    let pitch = Quat::from_axis_angle(self.target_rotation * Vec3::X, -delta.y);
+                    let free_yaw = Quat::from_axis_angle(self.up_direction, -delta.x);
 
-                self.target_rotation = (free_yaw * pitch) * self.target_rotation;
-                self.target_rotation = self.target_rotation.normalize();
+                    self.target_rotation = (free_yaw * pitch * self.target_rotation).normalize();
+                }
             }
         }
         self.accumulated_mouse_delta = Vec3::ZERO;
-
-        // Apply spring interpolation to rotation in free fly mode
-        if self.mode == CameraMode::FreeFly {
-            // Direct rotation - no spring damping for free fly
-            self.rotation = self.target_rotation;
-        }
 
         // 3. ROLL (Q/E) - Only in radial FreeFly mode
         if self.mode == CameraMode::FreeFly && self.gravity_mode == 3 {
@@ -643,6 +647,12 @@ impl CameraController {
                 let roll = Quat::from_axis_angle(roll_axis, roll_amount * self.roll_speed * dt);
                 self.target_rotation = (roll * self.target_rotation).normalize();
             }
+        }
+
+        // Apply direct rotation in FreeFly mode after all orientation inputs,
+        // including radial roll, so movement uses the final same-frame basis.
+        if self.mode == CameraMode::FreeFly {
+            self.rotation = self.target_rotation;
         }
 
         // 4. MOVEMENT (WASD + Space + C) - Only in FreeFly mode
@@ -682,5 +692,40 @@ impl CameraController {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quat_matches(a: Quat, b: Quat) -> bool {
+        // q and -q represent the same rotation.
+        a.dot(b).abs() > 0.9999
+    }
+
+    #[test]
+    fn radial_freefly_mouse_rotation_uses_local_quaternion_basis() {
+        let mut camera = CameraController::new();
+        camera.mode = CameraMode::FreeFly;
+        camera.gravity_mode = 3;
+        camera.up_direction = Vec3::Y;
+
+        let rolled_rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        camera.rotation = rolled_rotation;
+        camera.target_rotation = rolled_rotation;
+        camera.accumulated_mouse_delta = Vec3::new(100.0, 0.0, 0.0);
+
+        let yaw_delta = -100.0 * camera.mouse_sensitivity;
+        let local_y = rolled_rotation * Vec3::Y;
+        let expected_local_yaw =
+            (Quat::from_axis_angle(local_y, yaw_delta) * rolled_rotation).normalize();
+        let old_axis_locked_yaw =
+            (Quat::from_axis_angle(Vec3::Y, yaw_delta) * rolled_rotation).normalize();
+
+        camera.update(0.0);
+
+        assert!(quat_matches(camera.rotation, expected_local_yaw));
+        assert!(!quat_matches(camera.rotation, old_axis_locked_yaw));
     }
 }

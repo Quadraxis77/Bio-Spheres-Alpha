@@ -86,6 +86,12 @@ var<storage, read> ice_density: array<f32>;
 @group(0) @binding(8)
 var<storage, read> geothermal_glow: array<vec4<f32>>;
 
+// Full sunlight is 1.0. Photocytes gain 20 nutrients/sec at that level.
+// A default photocyte needs 50 nutrients/sec to replace itself
+// (split_mass 1.5 over split_interval 1.0), so vents are capped at 1.5x
+// replacement: 75 nutrients/sec, or 3.75 light units.
+const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
+
 // Per-voxel absorption coefficient for ice (liquid water uses 0.055).
 const ICE_ABSORPTION: f32 = 0.12;
 
@@ -331,7 +337,7 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let ice_amount_here = clamp(ice_density[idx], 0.0, 1.0);
     let ice_tint = mix(vec3<f32>(1.0), vec3<f32>(0.90, 0.88, 0.86), ice_amount_here * 0.18);
     let local_glow = geo.xyz * geo_tint * ice_tint;
-    let local_weight = clamp(geo.w, 0.0, 4.0);
+    let local_weight = clamp(geo.w, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
     light_field[idx] = max(intensity, local_weight);
     let sunlight_color = sun_color * ray_tint * voxel_tint;
     let resolved_color = select(sunlight_color, local_glow, geo.w > 0.001);

@@ -463,6 +463,20 @@ pub fn execute_gpu_physics_step(
             }
         }
 
+        // Stage 7.7: Final Plumocyte angular resistance after substep/cave corrections.
+        if features.has_plumocytes {
+            let output_index = (current_index + 1) % 3;
+            compute_pass.set_pipeline(&pipelines.plumocyte_rotation_damping);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.swim_force_force_accum[output_index],
+                &[],
+            );
+            compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        }
+
         // Stage 8: Mass accumulation (256 threads) - nutrient growth only.
         // Only default/Test cells auto-gain nutrients here; specialist
         // monocultures otherwise paid for a full all-cell pass that immediately
@@ -829,6 +843,20 @@ pub fn execute_gpu_mechanics_step(
                 compute_pass.set_bind_group(1, cave_renderer.collision_bind_group(), &[]);
                 compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
             }
+        }
+
+        // Stage 7.7: Final Plumocyte angular resistance after substep/cave corrections.
+        if features.has_plumocytes {
+            let output_index = (current_index + 1) % 3;
+            compute_pass.set_pipeline(&pipelines.plumocyte_rotation_damping);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(
+                1,
+                &cached_bind_groups.swim_force_force_accum[output_index],
+                &[],
+            );
+            compute_pass.set_bind_group(2, &cached_bind_groups.swim_force_cell_data, &[]);
+            compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
         // SKIP Stage 8: Mass accumulation (nutrient growth)

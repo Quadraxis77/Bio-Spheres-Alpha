@@ -432,6 +432,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plumocyte_drag_mult: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub plumocyte_rotation_resistance: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stemocyte_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stemocyte_weak_first: Option<bool>,
@@ -1008,6 +1010,10 @@ fn mode_to_serializable(
         siphon_signal_invert: diff_bool(mode.siphon_signal_invert, default.siphon_signal_invert),
         siphon_mode: diff_i32(mode.siphon_mode, default.siphon_mode),
         plumocyte_drag_mult: diff_f32(mode.plumocyte_drag_mult, default.plumocyte_drag_mult),
+        plumocyte_rotation_resistance: diff_f32(
+            mode.plumocyte_rotation_resistance,
+            default.plumocyte_rotation_resistance,
+        ),
         stemocyte_signal_channel: diff_i32(
             mode.stemocyte_signal_channel,
             default.stemocyte_signal_channel,
@@ -1178,6 +1184,7 @@ impl SerializableModeSettings {
             || self.siphon_signal_invert.is_some()
             || self.siphon_mode.is_some()
             || self.plumocyte_drag_mult.is_some()
+            || self.plumocyte_rotation_resistance.is_some()
             || self.stemocyte_signal_channel.is_some()
             || self.stemocyte_weak_first.is_some()
             || self.stemocyte_outcomes.is_some()
@@ -1555,6 +1562,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.plumocyte_drag_mult {
         mode.plumocyte_drag_mult = v;
+    }
+    if let Some(v) = ser.plumocyte_rotation_resistance {
+        mode.plumocyte_rotation_resistance = v;
     }
     if let Some(v) = ser.stemocyte_signal_channel {
         mode.stemocyte_signal_channel = v;

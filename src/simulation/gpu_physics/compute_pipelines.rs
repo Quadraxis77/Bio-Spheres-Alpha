@@ -193,8 +193,8 @@ pub struct CachedBindGroups {
     /// Position update force accum bind groups for each buffer index [0, 1, 2]
     pub position_update_force_accum: [wgpu::BindGroup; 3],
     /// Velocity update angular bind groups for each buffer index [0, 1, 2]
-    /// Each uses rotations[buffer_index] so angular velocity integration reads/writes
-    /// the same rotation buffer that physics is currently processing.
+    /// Each reads angular state from `buffer_index` and writes the frame output
+    /// state to `(buffer_index + 1) % 3`.
     pub velocity_update_angular: [wgpu::BindGroup; 3],
     /// Nutrient system bind group (same for all frames)
     pub nutrient_system: wgpu::BindGroup,
@@ -330,6 +330,9 @@ pub struct GpuPhysicsPipelines {
 
     // Swim force pipeline (applies thrust for Flagellocyte cells)
     pub swim_force: wgpu::ComputePipeline,
+
+    // Plumocyte final angular damping pipeline
+    pub plumocyte_rotation_damping: wgpu::ComputePipeline,
 
     // Buoyancy force pipeline (applies upward force for Buoyocyte cells)
     pub buoyancy_force: wgpu::ComputePipeline,
@@ -857,6 +860,18 @@ impl GpuPhysicsPipelines {
                 &swim_force_cell_data_layout,
             ],
             "Swim Force",
+        );
+
+        let plumocyte_rotation_damping = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/swim_force.wgsl"),
+            "plumocyte_rotation_damping_main",
+            &[
+                &physics_layout,
+                &swim_force_force_accum_layout,
+                &swim_force_cell_data_layout,
+            ],
+            "Plumocyte Rotation Damping",
         );
 
         // Buoyancy force pipeline (applies upward force for Buoyocyte cells)
@@ -1419,6 +1434,7 @@ impl GpuPhysicsPipelines {
             lifecycle_division_execute,
             adhesion_cleanup,
             swim_force,
+            plumocyte_rotation_damping,
             buoyancy_force,
             glueocyte_env_adhesion,
             glueocyte_cell_adhesion_create,
@@ -2416,8 +2432,8 @@ impl GpuPhysicsPipelines {
         ];
 
         // Velocity update angular bind groups - one per rotation buffer index.
-        // The shader reads/writes rotations[buffer_index] in-place, so we must
-        // bind the correct buffer for whichever index is active this frame.
+        // The shader reads angular state from the active input buffer and writes
+        // the frame's output buffer, matching position_update's triple-buffer flow.
         let velocity_update_angular = [
             self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers, 0),
             self.create_velocity_update_angular_bind_group(device, adhesion_buffers, buffers, 1),
@@ -5643,9 +5659,31 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 3: Angular velocities buffer (read-write)
+                // Binding 3: Angular velocities input (read-only)
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Rotations input (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Angular velocities output (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -5654,9 +5692,9 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 4: Rotations buffer (read-write)
+                // Binding 6: Rotations output (read-write)
                 wgpu::BindGroupLayoutEntry {
-                    binding: 4,
+                    binding: 6,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -5955,9 +5993,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Create velocity update angular bind group (Group 1 in velocity_update shader)
-    /// `buffer_index` selects which rotation buffer (0/1/2) the shader reads/writes.
-    /// Must match `current_index` at dispatch time so angular velocity integration
-    /// operates on the same rotation data that physics is processing this frame.
+    /// `buffer_index` selects the current input state; output is `(buffer_index + 1) % 3`.
     fn create_velocity_update_angular_bind_group(
         &self,
         device: &wgpu::Device,
@@ -5965,6 +6001,7 @@ impl GpuPhysicsPipelines {
         triple_buffers: &GpuTripleBufferSystem,
         buffer_index: usize,
     ) -> wgpu::BindGroup {
+        let output_index = (buffer_index + 1) % 3;
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Velocity Update Angular Bind Group"),
             layout: &self.velocity_update_angular_layout,
@@ -5988,6 +6025,15 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.angular_velocities[output_index]
+                        .as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: triple_buffers.rotations[output_index].as_entire_binding(),
                 },
             ],
         })
@@ -7329,7 +7375,7 @@ impl GpuPhysicsPipelines {
     }
 
     /// Create swim force force accumulation bind group layout (Group 1 in swim_force shader)
-    /// Contains force accumulators (x, y, z) and rotations buffer
+    /// Contains force/torque accumulators plus rotation state buffers.
     fn create_swim_force_force_accum_bind_group_layout(
         device: &wgpu::Device,
     ) -> wgpu::BindGroupLayout {
@@ -7375,6 +7421,50 @@ impl GpuPhysicsPipelines {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 4: Torque accumulation X (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 5: Torque accumulation Y (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 6: Torque accumulation Z (atomic i32)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Binding 7: Angular velocities buffer (read-write for Plumocyte damping)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -7609,6 +7699,22 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: triple_buffers.rotations[buffer_index].as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: adhesion_buffers.torque_accum_x.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.torque_accum_y.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: adhesion_buffers.torque_accum_z.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: adhesion_buffers.angular_velocities[buffer_index].as_entire_binding(),
                 },
             ],
         })

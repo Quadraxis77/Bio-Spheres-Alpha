@@ -2524,7 +2524,7 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync Plumocyte mode properties.
-    /// v15: [drag_mult, unused, unused, unused]
+    /// v15: [drag_mult, rotation_resistance, unused, unused]
     pub fn sync_plumocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2533,7 +2533,12 @@ impl GpuTripleBufferSystem {
         let mut v15: Vec<[f32; 4]> = Vec::new();
         for genome in genomes {
             for mode in &genome.modes {
-                v15.push([mode.plumocyte_drag_mult, 0.0, 0.0, 0.0]);
+                v15.push([
+                    mode.plumocyte_drag_mult,
+                    mode.plumocyte_rotation_resistance,
+                    0.0,
+                    0.0,
+                ]);
             }
         }
         if !v15.is_empty() {
@@ -2551,7 +2556,14 @@ impl GpuTripleBufferSystem {
         let v15: Vec<[f32; 4]> = genome
             .modes
             .iter()
-            .map(|mode| [mode.plumocyte_drag_mult, 0.0, 0.0, 0.0])
+            .map(|mode| {
+                [
+                    mode.plumocyte_drag_mult,
+                    mode.plumocyte_rotation_resistance,
+                    0.0,
+                    0.0,
+                ]
+            })
             .collect();
         if !v15.is_empty() {
             let offset = (global_start_index * 16) as u64;

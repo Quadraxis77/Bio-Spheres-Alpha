@@ -52,10 +52,16 @@ var<storage, read> torque_accum_y: array<i32>;
 var<storage, read> torque_accum_z: array<i32>;
 
 @group(1) @binding(3)
-var<storage, read_write> angular_velocities: array<vec4<f32>>;
+var<storage, read> angular_velocities_in: array<vec4<f32>>;
 
 @group(1) @binding(4)
-var<storage, read_write> rotations: array<vec4<f32>>;
+var<storage, read> rotations_in: array<vec4<f32>>;
+
+@group(1) @binding(5)
+var<storage, read_write> angular_velocities_out: array<vec4<f32>>;
+
+@group(1) @binding(6)
+var<storage, read_write> rotations_out: array<vec4<f32>>;
 
 const PI: f32 = 3.14159265359;
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -92,7 +98,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Skip dead cells - clear angular velocity so recycled slots start clean
     if (mass < 0.5) {
-        angular_velocities[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        angular_velocities_out[cell_idx] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        rotations_out[cell_idx] = rotations_in[cell_idx];
         return;
     }
 
@@ -115,7 +122,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Read current angular velocity
-    let ang_vel = angular_velocities[cell_idx].xyz;
+    let ang_vel = angular_velocities_in[cell_idx].xyz;
     
     // Apply angular damping: separate coefficient from linear damping so structures
     // can spin freely while still gradually losing rotational energy to drag.
@@ -128,7 +135,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let new_ang_vel = (ang_vel + angular_acceleration * params.delta_time) * angular_damping_factor;
     
     // Write updated angular velocity
-    angular_velocities[cell_idx] = vec4<f32>(new_ang_vel, 0.0);
+    angular_velocities_out[cell_idx] = vec4<f32>(new_ang_vel, 0.0);
     
     // Integrate rotation using angular velocity
     let ang_vel_mag = length(new_ang_vel);
@@ -143,10 +150,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let delta_rotation = vec4<f32>(axis * sin_half, cos_half);
         
         // Apply rotation: new_rot = delta_rot * current_rot
-        let current_rot = rotations[cell_idx];
+        let current_rot = rotations_in[cell_idx];
         let new_rot = quat_multiply(delta_rotation, current_rot);
         
         // Normalize to prevent drift
-        rotations[cell_idx] = normalize(new_rot);
+        rotations_out[cell_idx] = normalize(new_rot);
+    } else {
+        rotations_out[cell_idx] = rotations_in[cell_idx];
     }
 }

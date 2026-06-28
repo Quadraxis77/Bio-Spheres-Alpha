@@ -92,6 +92,18 @@ var<storage, read_write> force_accum_z: array<atomic<i32>>;
 @group(1) @binding(3)
 var<storage, read> rotations: array<vec4<f32>>;
 
+@group(1) @binding(4)
+var<storage, read_write> torque_accum_x: array<atomic<i32>>;
+
+@group(1) @binding(5)
+var<storage, read_write> torque_accum_y: array<atomic<i32>>;
+
+@group(1) @binding(6)
+var<storage, read_write> torque_accum_z: array<atomic<i32>>;
+
+@group(1) @binding(7)
+var<storage, read_write> angular_velocities: array<vec4<f32>>;
+
 // Cell data (group 2)
 @group(2) @binding(0)
 var<storage, read> mode_indices: array<u32>;
@@ -325,21 +337,41 @@ fn apply_plumocyte_force(cell_idx: u32, mode_idx: u32) {
     }
     let props = mode_properties_v15[mode_idx];
     let drag_mult = max(props.x, 0.0);
-    if (drag_mult <= 0.001) {
+    let rotation_resistance = max(props.y, 0.0);
+    if (drag_mult <= 0.001 && rotation_resistance <= 0.001) {
         return;
     }
 
-    let velocity = velocities_in[cell_idx].xyz;
-    let anti_gravity = anti_gravity_direction(positions_in[cell_idx].xyz);
-    let fall_speed = dot(velocity, -anti_gravity);
-    if (fall_speed <= 0.001) {
-        return;
+    if (drag_mult > 0.001) {
+        let velocity = velocities_in[cell_idx].xyz;
+        let anti_gravity = anti_gravity_direction(positions_in[cell_idx].xyz);
+        let fall_speed = dot(velocity, -anti_gravity);
+        if (fall_speed > 0.001) {
+            let drag = anti_gravity * fall_speed * drag_mult * 18.0;
+            atomicAdd(&force_accum_x[cell_idx], float_to_fixed(drag.x));
+            atomicAdd(&force_accum_y[cell_idx], float_to_fixed(drag.y));
+            atomicAdd(&force_accum_z[cell_idx], float_to_fixed(drag.z));
+        }
     }
 
-    let drag = anti_gravity * fall_speed * drag_mult * 18.0;
-    atomicAdd(&force_accum_x[cell_idx], float_to_fixed(drag.x));
-    atomicAdd(&force_accum_y[cell_idx], float_to_fixed(drag.y));
-    atomicAdd(&force_accum_z[cell_idx], float_to_fixed(drag.z));
+    if (rotation_resistance > 0.001 && cell_idx < arrayLength(&angular_velocities)) {
+        let omega = angular_velocities[cell_idx].xyz;
+        let spin_speed = length(omega);
+        if (spin_speed > 0.001) {
+            let torque = -omega * rotation_resistance * 12.0;
+            atomicAdd(&torque_accum_x[cell_idx], float_to_fixed(torque.x));
+            atomicAdd(&torque_accum_y[cell_idx], float_to_fixed(torque.y));
+            atomicAdd(&torque_accum_z[cell_idx], float_to_fixed(torque.z));
+        }
+    }
+}
+
+fn plumocyte_is_frozen(cell_idx: u32) -> bool {
+    return cell_idx < arrayLength(&cell_thermal_state) && cell_thermal_state[cell_idx] <= THERMAL_STATE_FROZEN;
+}
+
+fn plumocyte_rotation_retain(rotation_resistance: f32) -> f32 {
+    return exp(-rotation_resistance * 6.0 * max(params.delta_time, 0.0));
 }
 
 fn anti_gravity_direction(pos: vec3<f32>) -> vec3<f32> {
@@ -455,6 +487,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicAdd(&force_accum_x[cell_idx], float_to_fixed(swim_force.x));
     atomicAdd(&force_accum_y[cell_idx], float_to_fixed(swim_force.y));
     atomicAdd(&force_accum_z[cell_idx], float_to_fixed(swim_force.z));
+}
+
+// Final angular damping pass for Plumocytes. The main swim force pass contributes
+// damping torque before velocity_update, but adhesion/cave substeps can directly
+// rewrite angular velocity later in the frame. This pass runs after those
+// corrections so the user-facing setting remains effective in GPU scenes.
+@compute @workgroup_size(256)
+fn plumocyte_rotation_damping_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let cell_idx = global_id.x;
+    let cell_count = cell_count_buffer[0];
+    if (cell_idx >= cell_count) {
+        return;
+    }
+
+    let mode_idx = mode_indices[cell_idx];
+    if (mode_idx >= arrayLength(&mode_properties_v15)) {
+        return;
+    }
+    if (mode_cell_types[mode_idx] != CELL_TYPE_PLUMOCYTE || plumocyte_is_frozen(cell_idx)) {
+        return;
+    }
+
+    let rotation_resistance = max(mode_properties_v15[mode_idx].y, 0.0);
+    if (rotation_resistance <= 0.001 || cell_idx >= arrayLength(&angular_velocities)) {
+        return;
+    }
+
+    let retain = plumocyte_rotation_retain(rotation_resistance);
+    let omega = angular_velocities[cell_idx].xyz * retain;
+    angular_velocities[cell_idx] = vec4<f32>(omega, 0.0);
 }
 
 // Buoyancy pass - separate entry point so it runs for all cells regardless of swim force

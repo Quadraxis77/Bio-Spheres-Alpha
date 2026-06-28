@@ -166,7 +166,7 @@ impl Default for CaveParams {
             geothermal_top_margin: 2.0,
             geothermal_heat_output: 34.0,
             geothermal_heat_radius: 8.0,
-            geothermal_glow_strength: 2.8,
+            geothermal_glow_strength: 3.75,
             geothermal_glow_radius: 10.0,
             geothermal_glow_color: [1.0, 0.32, 0.055],
             isolated_chunk_cull_volume: DEFAULT_ISOLATED_CHUNK_CULL_VOLUME,
