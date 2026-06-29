@@ -61,7 +61,7 @@ var<storage, read_write> spatial_grid_cells: array<u32>;
 var<storage, read> stiffnesses: array<f32>;
 
 @group(1) @binding(5)
-var<storage, read> development_addresses: array<vec4<u32>>;
+var<storage, read> organism_labels: array<u32>;
 
 @group(1) @binding(6)
 var<storage, read_write> occupied_grid_cells: array<u32>;
@@ -77,9 +77,6 @@ var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
 
 @group(1) @binding(10)
 var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
-
-@group(1) @binding(11)
-var<storage, read> adhesion_counts: array<u32>;
 
 @group(2) @binding(0)
 var<storage, read_write> force_accum_x: array<atomic<i32>>;
@@ -126,7 +123,6 @@ const BOUNDARY_REDIRECT_FORCE: f32 = 15.0;
 const BOUNDARY_MAX_REDIRECT_FORCE: f32 = 250.0;
 const BOUNDARY_ALIGNMENT_TORQUE: f32 = 50.0;
 const INVALID_ORGANISM_LABEL: u32 = 0xFFFFFFFFu;
-const MIXED_ORGANISM_LABEL: u32 = 0xFFFFFFFEu;
 
 const FORWARD_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 13> = array<vec3<i32>, 13>(
     vec3<i32>(0, 0, 1),
@@ -142,16 +138,6 @@ const FORWARD_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 13> = array<vec3<i32>, 13>(
     vec3<i32>(1, 1, -1),
     vec3<i32>(1, 1, 0),
     vec3<i32>(1, 1, 1),
-);
-
-const OVERFLOW_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 7> = array<vec3<i32>, 7>(
-    vec3<i32>(0, 0, 0),
-    vec3<i32>(-1, 0, 0),
-    vec3<i32>(1, 0, 0),
-    vec3<i32>(0, -1, 0),
-    vec3<i32>(0, 1, 0),
-    vec3<i32>(0, 0, -1),
-    vec3<i32>(0, 0, 1),
 );
 
 fn calculate_radius_from_mass(mass: f32) -> f32 {
@@ -182,40 +168,14 @@ fn collision_sample_count(raw_count: u32) -> u32 {
 }
 
 fn organism_id(cell_idx: u32) -> u32 {
-    if (adhesion_counts[cell_idx] == 0u) {
-        return INVALID_ORGANISM_LABEL;
-    }
-    let id = development_addresses[cell_idx].x;
-    return select(id, INVALID_ORGANISM_LABEL, id == 0u);
+    return organism_labels[cell_idx];
 }
 
-fn bucket_uniform_organism_id(grid_idx: u32, count: u32) -> u32 {
-    if (count == 0u) {
-        return MIXED_ORGANISM_LABEL;
-    }
-
-    let base = grid_idx * MAX_CELLS_PER_GRID;
-    let first_cell = spatial_grid_cells[base];
-    let first_label = organism_id(first_cell);
-    if (first_label == INVALID_ORGANISM_LABEL) {
-        return MIXED_ORGANISM_LABEL;
-    }
-
-    for (var i = 1u; i < count; i++) {
-        let cell_idx = spatial_grid_cells[base + i];
-        if (organism_id(cell_idx) != first_label) {
-            return MIXED_ORGANISM_LABEL;
-        }
-    }
-
-    return first_label;
-}
-
-fn same_valid_organism(label_a: u32, label_b: u32) -> bool {
-    return label_a != MIXED_ORGANISM_LABEL &&
-           label_b != MIXED_ORGANISM_LABEL &&
-           label_a != INVALID_ORGANISM_LABEL &&
-           label_a == label_b;
+fn neighboring_grid_indices(grid_idx_a: u32, grid_idx_b: u32) -> bool {
+    let a = grid_index_to_coords(grid_idx_a, params.grid_resolution);
+    let b = grid_index_to_coords(grid_idx_b, params.grid_resolution);
+    let delta = abs(a - b);
+    return delta.x <= 1 && delta.y <= 1 && delta.z <= 1;
 }
 
 fn add_force(cell_idx: u32, force: vec3<f32>) {
@@ -453,33 +413,40 @@ fn process_neighbor_bucket(grid_idx_a: u32, count_a: u32, grid_idx_b: u32, count
 
 fn process_overflow_cell(cell_idx: u32, grid_idx: u32) {
     let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
-    let cell_organism_label = organism_id(cell_idx);
 
-    for (var n = 0u; n < 7u; n++) {
-        let offset = OVERFLOW_NEIGHBOR_OFFSETS_3D[n];
-        let nx = coords.x + offset.x;
-        let ny = coords.y + offset.y;
-        let nz = coords.z + offset.z;
-        if (nx < 0 || ny < 0 || nz < 0 ||
-            nx >= params.grid_resolution ||
-            ny >= params.grid_resolution ||
-            nz >= params.grid_resolution) {
-            continue;
-        }
+    for (var dz: i32 = -1; dz <= 1; dz = dz + 1) {
+        for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
+            for (var dx: i32 = -1; dx <= 1; dx = dx + 1) {
+                let nx = coords.x + dx;
+                let ny = coords.y + dy;
+                let nz = coords.z + dz;
+                if (nx < 0 || ny < 0 || nz < 0 ||
+                    nx >= params.grid_resolution ||
+                    ny >= params.grid_resolution ||
+                    nz >= params.grid_resolution) {
+                    continue;
+                }
 
-        let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
-        let neighbor_count = collision_sample_count(spatial_grid_counts[neighbor_grid_idx]);
-        if (neighbor_count == 0u) {
-            continue;
-        }
-        let neighbor_organism_label = bucket_uniform_organism_id(neighbor_grid_idx, neighbor_count);
-        if (same_valid_organism(cell_organism_label, neighbor_organism_label)) {
-            continue;
-        }
+                let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+                let neighbor_count = collision_sample_count(spatial_grid_counts[neighbor_grid_idx]);
+                if (neighbor_count == 0u) {
+                    continue;
+                }
 
-        let base = neighbor_grid_idx * MAX_CELLS_PER_GRID;
-        for (var i = 0u; i < neighbor_count; i++) {
-            resolve_cell_pair(cell_idx, spatial_grid_cells[base + i]);
+                let base = neighbor_grid_idx * MAX_CELLS_PER_GRID;
+                for (var i = 0u; i < neighbor_count; i++) {
+                    resolve_cell_pair(cell_idx, spatial_grid_cells[base + i]);
+                }
+            }
+        }
+    }
+}
+
+fn process_overflow_pairs(overflow_idx: u32, cell_idx: u32, grid_idx: u32, overflow_count: u32) {
+    for (var other_idx = overflow_idx + 1u; other_idx < overflow_count; other_idx++) {
+        let other_grid_idx = spatial_grid_overflow_grid_indices[other_idx];
+        if (neighboring_grid_indices(grid_idx, other_grid_idx)) {
+            resolve_cell_pair(cell_idx, spatial_grid_overflow_cells[other_idx]);
         }
     }
 }
@@ -503,10 +470,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let raw_count = spatial_grid_counts[grid_idx];
         let count = collision_sample_count(raw_count);
         if (count > 0u) {
-            let bucket_organism_label = bucket_uniform_organism_id(grid_idx, count);
-            if (bucket_organism_label == MIXED_ORGANISM_LABEL) {
-                process_same_bucket(grid_idx, count);
-            }
+            // Always enumerate candidate pairs. The per-pair resolver is the only
+            // safe place to suppress same-organism collision, because bucket-level
+            // labels can be stale or unrepresentative when buckets are crowded.
+            process_same_bucket(grid_idx, count);
 
             let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
             for (var n = 0u; n < 13u; n++) {
@@ -526,10 +493,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 if (neighbor_count == 0u) {
                     continue;
                 }
-                let neighbor_organism_label = bucket_uniform_organism_id(neighbor_grid_idx, neighbor_count);
-                if (same_valid_organism(bucket_organism_label, neighbor_organism_label)) {
-                    continue;
-                }
 
                 process_neighbor_bucket(grid_idx, count, neighbor_grid_idx, neighbor_count);
             }
@@ -538,10 +501,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let overflow_idx = dispatch_idx;
     let overflow_count = atomicLoad(&spatial_grid_overflow_count[0]);
-    if (overflow_idx < overflow_count && overflow_idx < params.cell_capacity) {
+    let capped_overflow_count = min(overflow_count, params.cell_capacity);
+    if (overflow_idx < capped_overflow_count) {
+        let overflow_cell = spatial_grid_overflow_cells[overflow_idx];
+        let overflow_grid_idx = spatial_grid_overflow_grid_indices[overflow_idx];
         process_overflow_cell(
-            spatial_grid_overflow_cells[overflow_idx],
-            spatial_grid_overflow_grid_indices[overflow_idx]
+            overflow_cell,
+            overflow_grid_idx
+        );
+        process_overflow_pairs(
+            overflow_idx,
+            overflow_cell,
+            overflow_grid_idx,
+            capped_overflow_count
         );
     }
 }

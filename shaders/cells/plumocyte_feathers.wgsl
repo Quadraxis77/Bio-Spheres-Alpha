@@ -23,6 +23,7 @@ struct VertexInput {
     @location(5) color: vec4<f32>,
     @location(6) feather_params: vec4<f32>,
     @location(7) frozen: f32,
+    @location(8) phase_offset: f32,
 }
 
 struct VertexOutput {
@@ -143,6 +144,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let brightness = clamp(in.feather_params.z, 0.0, 1.8);
     let stroke_speed = clamp(in.feather_params.w, 0.0, 8.0);
     let frozen = in.frozen >= 0.5;
+    let phase_offset = fract(in.phase_offset);
 
     let preview_down_world = vec3<f32>(0.0, -1.0, 0.0);
     let equator_normal = normalize(quat_rotate_inverse(in.rotation, preview_down_world));
@@ -155,7 +157,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let stroke_axis = equator_normal;
 
     let parity = f32(feather_index & 1u);
-    let phase = fract(select(camera.time * stroke_speed, 0.0, frozen) + parity * 0.5);
+    let phase = fract(select(camera.time * stroke_speed + phase_offset, 0.0, frozen) + parity * 0.5);
 
     let p = stroke_point(base_dir, side_dir, stroke_axis, line_kind, root_t, barb_side, t, phase, feather_length);
     let p_next = stroke_point(base_dir, side_dir, stroke_axis, line_kind, root_t, barb_side, min(t + 0.03, 1.0), phase, feather_length);

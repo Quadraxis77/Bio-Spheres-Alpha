@@ -385,7 +385,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (cell_type == CELL_TYPE_SIPHONOCYTE) {
         water_delta += siphon_intake_amount(cell_idx, mode_idx, dt, env);
     } else if (cell_type != CELL_TYPE_VASCULOCYTE && env.valid) {
-        var water_target_fraction = 0.45;
+        var water_target_fraction = 0.0;
         var water_exchange = 0.006;
         if (env.fluid_type == 1u) {
             water_target_fraction = env.fill_fraction;
@@ -410,9 +410,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         water_delta += water_exchange * (water_target_fraction * capacity - old_water) * dt;
     } else {
-        if (cell_type != CELL_TYPE_SIPHONOCYTE && cell_type != CELL_TYPE_VASCULOCYTE) {
-            water_delta += 0.015 * (capacity - old_water) * dt;
-        }
+        // Outside the simulated fluid volume there is no ambient water source.
+        // Cells should not rehydrate merely because they are in air or outside
+        // the water grid.
     }
     let env_exchange = select(0.04, 0.02, cell_type == CELL_TYPE_VASCULOCYTE);
     let env_temp = select(BASE_ENV_TEMP, env.temp_internal, env.valid);

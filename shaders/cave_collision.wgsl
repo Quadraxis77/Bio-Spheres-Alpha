@@ -105,6 +105,7 @@ struct CaveParams {
 @group(0) @binding(7) var<storage, read> angular_velocities: array<vec4<f32>>;
 
 @group(1) @binding(0) var<uniform> cave_params: CaveParams;
+@group(1) @binding(1) var<storage, read> solid_mask: array<u32>;
 
 // Constants
 const EPSILON: f32 = 0.0001;
@@ -251,14 +252,36 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     }
 }
 
+fn sample_collision_density(pos: vec3<f32>) -> f32 {
+    if (arrayLength(&solid_mask) <= 1u || cave_params.grid_resolution == 0u) {
+        return sample_cave_density(pos);
+    }
+
+    let diameter = cave_params.world_radius * 2.0;
+    let rel = (pos - cave_params.world_center + vec3<f32>(cave_params.world_radius)) / diameter;
+    if (any(rel < vec3<f32>(0.0)) || any(rel >= vec3<f32>(1.0))) {
+        return cave_params.threshold + 0.5;
+    }
+
+    let res = cave_params.grid_resolution;
+    let max_coord = i32(res) - 1;
+    let grid = clamp(vec3<i32>(floor(rel * f32(res))), vec3<i32>(0), vec3<i32>(max_coord));
+    let idx = u32(grid.x) + u32(grid.y) * res + u32(grid.z) * res * res;
+    if (idx >= arrayLength(&solid_mask)) {
+        return sample_cave_density(pos);
+    }
+
+    return select(cave_params.threshold - 0.5, cave_params.threshold + 0.5, solid_mask[idx] != 0u);
+}
+
 fn raw_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     let dx = vec3<f32>(h, 0.0, 0.0);
     let dy = vec3<f32>(0.0, h, 0.0);
     let dz = vec3<f32>(0.0, 0.0, h);
     
-    let grad_x = sample_cave_density(pos + dx) - sample_cave_density(pos - dx);
-    let grad_y = sample_cave_density(pos + dy) - sample_cave_density(pos - dy);
-    let grad_z = sample_cave_density(pos + dz) - sample_cave_density(pos - dz);
+    let grad_x = sample_collision_density(pos + dx) - sample_collision_density(pos - dx);
+    let grad_y = sample_collision_density(pos + dy) - sample_collision_density(pos - dy);
+    let grad_z = sample_collision_density(pos + dz) - sample_collision_density(pos - dz);
     
     return vec3<f32>(grad_x, grad_y, grad_z);
 }
@@ -304,7 +327,7 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
 }
 
 fn choose_denser_probe(current: CaveCollisionProbe, candidate_pos: vec3<f32>) -> CaveCollisionProbe {
-    let density = sample_cave_density(candidate_pos);
+    let density = sample_collision_density(candidate_pos);
     if (density > current.density) {
         return CaveCollisionProbe(density, candidate_pos);
     }
@@ -335,7 +358,7 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
     // Sample the center and six cardinal surface points. Center-only tests let
     // packed cells sit with their centers in the open voxel while their shells
     // overlap the wall, which looks like freezing on voxel boundaries.
-    let center_density = sample_cave_density(pos);
+    let center_density = sample_collision_density(pos);
     let surface_probe = probe_cell_surface(pos, radius, center_density);
 
     let radius_threshold = cave_params.threshold;

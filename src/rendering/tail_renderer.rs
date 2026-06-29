@@ -59,7 +59,8 @@ pub struct PlumageInstance {
     pub feather_brightness: f32,
     pub stroke_speed: f32,
     pub frozen: f32,
-    pub _pad: [f32; 3],
+    pub phase_offset: f32,
+    pub _pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -1063,6 +1064,11 @@ impl TailRenderer {
                 wgpu::VertexAttribute {
                     offset: 64,
                     shader_location: 7,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 68,
+                    shader_location: 8,
                     format: wgpu::VertexFormat::Float32,
                 },
             ],

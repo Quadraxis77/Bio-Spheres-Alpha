@@ -656,7 +656,8 @@ impl PreviewScene {
                 feather_brightness: visuals.param_c,
                 stroke_speed: visuals.param_d,
                 frozen: if frozen { 1.0 } else { 0.0 },
-                _pad: [0.0; 3],
+                phase_offset: ((i as f32) * 0.618_033_99).fract(),
+                _pad: [0.0; 2],
             });
         }
 

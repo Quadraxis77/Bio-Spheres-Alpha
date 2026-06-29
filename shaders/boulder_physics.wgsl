@@ -128,6 +128,7 @@ struct BoulderBuoyancyParams {
 
 // -- Group 2: Cave params ------------------------------------------------------
 @group(2) @binding(0) var<uniform> cave_params: CaveParams;
+@group(2) @binding(1) var<storage, read> solid_mask: array<u32>;
 
 // -- Constants -----------------------------------------------------------------
 const FIXED_POINT_SCALE: f32 = 1000.0;
@@ -208,11 +209,33 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     return cave_params.threshold - 0.5;
 }
 
+fn sample_collision_density(pos: vec3<f32>) -> f32 {
+    if (arrayLength(&solid_mask) <= 1u || cave_params.grid_resolution == 0u) {
+        return sample_cave_density(pos);
+    }
+
+    let diameter = cave_params.world_radius * 2.0;
+    let rel = (pos - cave_params.world_center + vec3<f32>(cave_params.world_radius)) / diameter;
+    if (any(rel < vec3<f32>(0.0)) || any(rel >= vec3<f32>(1.0))) {
+        return cave_params.threshold + 0.5;
+    }
+
+    let res = cave_params.grid_resolution;
+    let max_coord = i32(res) - 1;
+    let grid = clamp(vec3<i32>(floor(rel * f32(res))), vec3<i32>(0), vec3<i32>(max_coord));
+    let mask_idx = u32(grid.x) + u32(grid.y) * res + u32(grid.z) * res * res;
+    if (mask_idx >= arrayLength(&solid_mask)) {
+        return sample_cave_density(pos);
+    }
+
+    return select(cave_params.threshold - 0.5, cave_params.threshold + 0.5, solid_mask[mask_idx] != 0u);
+}
+
 fn sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
     let dx = vec3<f32>(h, 0.0, 0.0); let dy = vec3<f32>(0.0, h, 0.0); let dz = vec3<f32>(0.0, 0.0, h);
-    let gx = sample_cave_density(pos + dx) - sample_cave_density(pos - dx);
-    let gy = sample_cave_density(pos + dy) - sample_cave_density(pos - dy);
-    let gz = sample_cave_density(pos + dz) - sample_cave_density(pos - dz);
+    let gx = sample_collision_density(pos + dx) - sample_collision_density(pos - dx);
+    let gy = sample_collision_density(pos + dy) - sample_collision_density(pos - dy);
+    let gz = sample_collision_density(pos + dz) - sample_collision_density(pos - dz);
     let g = vec3<f32>(gx, gy, gz);
     let len = length(g);
     if (len < 0.0001) { return vec3<f32>(0.0, 1.0, 0.0); }
@@ -415,7 +438,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // -- Cave SDF collision ----------------------------------------------------
     if (cave_params.collision_enabled != 0u) {
-        let density = sample_cave_density(b.position);
+        let density = sample_collision_density(b.position);
         let open_threshold = cave_params.threshold - 0.5 - 0.2;
         if (density > open_threshold) {
             if (density > cave_params.threshold) {

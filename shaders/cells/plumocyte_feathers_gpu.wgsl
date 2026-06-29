@@ -182,6 +182,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     let brightness = clamp(instance.type_data_0.z, 0.0, 1.8);
     let stroke_speed = clamp(instance.type_data_0.w, 0.0, 8.0);
     let frozen = instance.type_data_1.x >= 0.5;
+    let phase_offset = fract(instance.type_data_1.y);
 
     let anti_gravity_world = anti_gravity_direction(instance.position);
     let equator_normal = normalize(quat_rotate_inverse(instance.rotation, anti_gravity_world));
@@ -194,7 +195,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     let stroke_axis = equator_normal;
 
     let parity = f32(feather_index & 1u);
-    let phase = fract(select(camera.time * stroke_speed, 0.0, frozen) + parity * 0.5);
+    let phase = fract(select(camera.time * stroke_speed + phase_offset, 0.0, frozen) + parity * 0.5);
 
     let p = stroke_point(base_dir, side_dir, stroke_axis, line_kind, root_t, barb_side, t, phase, feather_length);
     let p_next = stroke_point(base_dir, side_dir, stroke_axis, line_kind, root_t, barb_side, min(t + 0.03, 1.0), phase, feather_length);

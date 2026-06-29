@@ -277,6 +277,7 @@ pub struct CaveSystemRenderer {
     collision_bind_group: wgpu::BindGroup,
     collision_pipeline: wgpu::ComputePipeline,
     collision_layout: Arc<wgpu::BindGroupLayout>,
+    collision_solid_mask: wgpu::Buffer,
 
     // Shadow field bind group (set each frame from light field system)
     shadow_bind_group: Option<wgpu::BindGroup>,
@@ -648,32 +649,56 @@ impl CaveSystemRenderer {
             ],
         });
 
-        // Create collision bind group layout (simplified for SDF-based collision)
-        // Only needs cave params - no mesh data required
+        // Create collision bind group layout. The solid mask mirrors the cave mesh
+        // and geothermal vent carving; a 1-voxel dummy is bound until fluid buffers exist.
         let collision_layout = Arc::new(device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label: Some("Cave Collision Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
             },
         ));
 
-        // Create collision bind group (simplified - only cave params)
+        let collision_solid_mask = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Dummy Cave Collision Solid Mask"),
+            contents: bytemuck::cast_slice(&[0u32]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        // Create collision bind group
         let collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &collision_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: collision_solid_mask.as_entire_binding(),
+                },
+            ],
         });
 
         // Create collision compute shader (SDF-based)
@@ -729,6 +754,7 @@ impl CaveSystemRenderer {
             collision_bind_group,
             collision_pipeline,
             collision_layout,
+            collision_solid_mask,
             shadow_bind_group: None,
         }
     }
@@ -749,14 +775,21 @@ impl CaveSystemRenderer {
         // Update uniform buffer
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        // Recreate collision bind group (just params, no mesh data needed for SDF)
+        // Recreate collision bind group so it sees the updated params buffer while
+        // preserving the current solid-mask buffer binding.
         self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &self.collision_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.params_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.collision_solid_mask.as_entire_binding(),
+                },
+            ],
         });
 
         // Recreate rendering buffers if size changed
@@ -990,6 +1023,28 @@ impl CaveSystemRenderer {
     /// Get collision bind group for physics integration
     pub fn collision_bind_group(&self) -> &wgpu::BindGroup {
         &self.collision_bind_group
+    }
+
+    pub fn set_collision_solid_mask(
+        &mut self,
+        device: &wgpu::Device,
+        solid_mask: &wgpu::Buffer,
+    ) {
+        self.collision_solid_mask = solid_mask.clone();
+        self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cave Collision Bind Group"),
+            layout: &self.collision_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.collision_solid_mask.as_entire_binding(),
+                },
+            ],
+        });
     }
 
     /// Get cave params buffer for bind group creation (e.g. cilia force spatial group)

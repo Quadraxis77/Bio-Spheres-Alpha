@@ -732,6 +732,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         if (cell_type == 18u && idx < arrayLength(&cell_thermal_state)) {
             extra_x = select(0.0, 1.0, cell_thermal_state[idx] <= THERMAL_STATE_FROZEN);
+            extra_y = fract(f32(cell_id) * 0.61803398875);
         }
         instance.type_data_1 = vec4<f32>(extra_x, extra_y, f32(params.lod_debug_colors), f32(cell_type));
     }

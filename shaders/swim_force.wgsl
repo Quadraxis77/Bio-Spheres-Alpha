@@ -163,6 +163,7 @@ const CELL_TYPE_SIPHONOCYTE: u32 = 17u;
 const CELL_TYPE_PLUMOCYTE: u32 = 18u;
 const SIPHON_WATER_CAPACITY: f32 = 1.5;
 const SIPHON_MIN_IMPULSE_WATER: f32 = 0.01;
+const SIPHON_DRY_EFFICIENCY: f32 = 0.50;
 const STEAM_SAFE_FLOOR_TEMP: f32 = 115.0;
 const THERMAL_STATE_FROZEN: u32 = 1u;
 
@@ -277,9 +278,8 @@ fn apply_siphon_force(cell_idx: u32, mode_idx: u32) {
     }
 
     let water = clamp(cell_water[cell_idx], 0.0, SIPHON_WATER_CAPACITY);
-    if (water < SIPHON_MIN_IMPULSE_WATER) {
-        return;
-    }
+    let submerged = is_in_water(positions_in[cell_idx].xyz);
+    let can_spend_water = submerged && water >= SIPHON_MIN_IMPULSE_WATER;
 
     let rotation = rotations[cell_idx];
     let forward = quat_rotate(rotation, vec3<f32>(0.0, 0.0, 1.0));
@@ -290,38 +290,41 @@ fn apply_siphon_force(cell_idx: u32, mode_idx: u32) {
     var water_cost = expel_rate * dt;
     var impulse_mult = 1.0;
 
-    // Steam assist spends only excess heat above the safe floor and never cools
-    // below that floor. It changes internal reserves only; no steam voxels exist.
-    let heat = max(cell_heat_energy[cell_idx], 0.0);
-    let temp = temperature_for(heat, water);
-    var remaining_heat = heat;
-    if (temp > 130.0) {
-        let safe_heat = heat_for_temperature(STEAM_SAFE_FLOOR_TEMP, water);
-        let available_heat = max(heat - safe_heat, 0.0);
-        let heat_spend = min(available_heat, impulse * 6.0 * dt);
-        if (heat_spend > 0.0) {
-            remaining_heat = heat - heat_spend;
-            water_cost *= 0.55;
-            impulse_mult = 1.35;
+    var reserve_efficiency = SIPHON_DRY_EFFICIENCY;
+    if (can_spend_water) {
+        reserve_efficiency = 1.0;
+
+        // Steam assist spends only excess heat above the safe floor and never cools
+        // below that floor. It changes internal reserves only; no steam voxels exist.
+        let heat = max(cell_heat_energy[cell_idx], 0.0);
+        let temp = temperature_for(heat, water);
+        var remaining_heat = heat;
+        if (temp > 130.0) {
+            let safe_heat = heat_for_temperature(STEAM_SAFE_FLOOR_TEMP, water);
+            let available_heat = max(heat - safe_heat, 0.0);
+            let heat_spend = min(available_heat, impulse * 6.0 * dt);
+            if (heat_spend > 0.0) {
+                remaining_heat = heat - heat_spend;
+                water_cost *= 0.55;
+                impulse_mult = 1.35;
+            }
         }
+
+        let spent = min(water, water_cost);
+        reserve_efficiency = clamp(spent / max(water_cost, 0.001), SIPHON_DRY_EFFICIENCY, 1.0);
+        let remaining_water = water - spent;
+
+        // Expelled water carries its share of the cell's heat. Previously water
+        // mass was removed while nearly all heat stayed behind, so repeated siphon
+        // strokes concentrated temperature until the cell entered heat shock.
+        // Preserve the post-steam-assist temperature across the mass change.
+        let post_assist_temp = temperature_for(remaining_heat, water);
+        cell_water[cell_idx] = remaining_water;
+        cell_heat_energy[cell_idx] =
+            heat_for_temperature(post_assist_temp, remaining_water);
     }
 
-    let spent = min(water, water_cost);
-    if (spent <= 0.0) {
-        return;
-    }
-    let remaining_water = water - spent;
-
-    // Expelled water carries its share of the cell's heat. Previously water
-    // mass was removed while nearly all heat stayed behind, so repeated siphon
-    // strokes concentrated temperature until the cell entered heat shock.
-    // Preserve the post-steam-assist temperature across the mass change.
-    let post_assist_temp = temperature_for(remaining_heat, water);
-    cell_water[cell_idx] = remaining_water;
-    cell_heat_energy[cell_idx] =
-        heat_for_temperature(post_assist_temp, remaining_water);
-
-    let force_magnitude = impulse * 80.0 * impulse_mult * clamp(spent / max(water_cost, 0.001), 0.0, 1.0);
+    let force_magnitude = impulse * 80.0 * impulse_mult * reserve_efficiency;
     let force = forward * force_magnitude;
     atomicAdd(&force_accum_x[cell_idx], float_to_fixed(force.x));
     atomicAdd(&force_accum_y[cell_idx], float_to_fixed(force.y));
