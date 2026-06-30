@@ -300,8 +300,8 @@ pub struct GenomeEditorState {
     pub copy_into_dialog_open: bool,
     /// Source mode index for copy operation
     pub copy_into_source: usize,
-    /// Color picker state: (mode index, current color)
-    pub color_picker_state: Option<(usize, egui::ecolor::Hsva)>,
+    /// Color picker state: (mode index, current color, original RGB for cancel)
+    pub color_picker_state: Option<(usize, egui::ecolor::Hsva, (u8, u8, u8))>,
 
     // Quaternion ball state
     /// Whether quaternion ball snapping is enabled
@@ -508,6 +508,8 @@ pub struct GenomeEditorState {
     pub fluid_show_mesh: bool,
     /// Whether to enable continuous fluid spawning
     pub fluid_continuous_spawn: bool,
+    /// Whether to fill the world with water and skip dynamic fluid/weather simulation
+    pub fluid_static_water_world: bool,
 
     // Fluid mesh settings
     /// Iso level for surface extraction (0.0-1.0)
@@ -794,6 +796,12 @@ pub struct GenomeEditorState {
     /// Request to toggle water fill (fluid_continuous_spawn) from the rail button.
     /// Processed in end_frame after the dock renders so scene_manager is accessible.
     pub request_toggle_water: bool,
+    /// Request to clear fluid after dynamic water fill is toggled off.
+    /// Processed in app.rs where the GPU device/queue are available.
+    pub request_clear_fluid: bool,
+    /// Request to toggle static full-world water from the rail button.
+    /// Processed in end_frame after the dock renders so scene_manager is accessible.
+    pub request_toggle_static_water: bool,
 
     /// Request to take a screenshot of the current viewport.
     /// Processed in app.rs after the frame is presented.
@@ -1040,6 +1048,7 @@ impl GenomeEditorState {
             fluid_pressure_iterations,
             fluid_lateral_flow_probabilities,
             _fluid_continuous_spawn,
+            fluid_static_water_world,
             selected_fluid_type,
             nutrient_density,
             nutrient_epoch_duration,
@@ -1281,6 +1290,7 @@ impl GenomeEditorState {
             fluid_show_test_voxels: false,
             fluid_show_mesh: true,
             fluid_continuous_spawn: false, // Always start disabled by default
+            fluid_static_water_world,
             fluid_iso_level,
             fluid_ambient,
             fluid_diffuse,
@@ -1407,6 +1417,8 @@ impl GenomeEditorState {
             mode_graph_panel_location: None,
             procedural_genome_seed: None,
             request_toggle_water: false,
+            request_clear_fluid: false,
+            request_toggle_static_water: false,
             request_screenshot: false,
             request_gif_capture: false,
             gif_capture_save_path: None,
@@ -1571,6 +1583,7 @@ impl GenomeEditorState {
             self.fluid_pressure_iterations,
             self.fluid_lateral_flow_probabilities,
             self.fluid_continuous_spawn,
+            self.fluid_static_water_world,
             self.selected_fluid_type,
             self.nutrient_density,
             self.nutrient_epoch_duration,
@@ -1885,6 +1898,7 @@ impl GenomeEditorState {
         pressure_iterations: u32,
         lateral_flow_probabilities: [f32; 4],
         continuous_spawn: bool,
+        static_water_world: bool,
         selected_fluid_type: u32,
         nutrient_density: f32,
         nutrient_epoch_duration: f32,
@@ -1902,6 +1916,7 @@ impl GenomeEditorState {
             pressure_iterations: u32,
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
+            static_water_world: bool,
             selected_fluid_type: u32,
             nutrient_density: f32,
             nutrient_epoch_duration: f32,
@@ -1919,6 +1934,7 @@ impl GenomeEditorState {
             pressure_iterations,
             lateral_flow_probabilities,
             continuous_spawn,
+            static_water_world,
             selected_fluid_type,
             nutrient_density,
             nutrient_epoch_duration,
@@ -3360,6 +3376,7 @@ impl GenomeEditorState {
         u32,
         [f32; 4],
         bool,
+        bool,
         u32,
         f32,
         f32,
@@ -3377,6 +3394,8 @@ impl GenomeEditorState {
             pressure_iterations: u32,
             lateral_flow_probabilities: [f32; 4],
             continuous_spawn: bool,
+            #[serde(default)]
+            static_water_world: bool,
             selected_fluid_type: u32,
             #[serde(default)]
             #[allow(dead_code)]
@@ -3427,6 +3446,7 @@ impl GenomeEditorState {
                             settings.pressure_iterations,
                             settings.lateral_flow_probabilities,
                             settings.continuous_spawn,
+                            settings.static_water_world,
                             settings.selected_fluid_type,
                             settings.nutrient_density,
                             settings.nutrient_epoch_duration,
@@ -3454,6 +3474,7 @@ impl GenomeEditorState {
             0.05,
             10,
             [1.0, 0.8, 0.6, 0.9],
+            false,
             false,
             1,
             default_nutrient_density(),

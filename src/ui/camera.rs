@@ -126,7 +126,7 @@ impl CameraController {
             last_middle_click: None,
             world_radius: 200.0,
             move_speed: 15.0,
-            sprint_multiplier: 6.0, // Increased from 3.0 for faster shift movement
+            sprint_multiplier: 6.0, // Normal FreeFly run speed multiplier; Shift walks.
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
@@ -438,7 +438,7 @@ impl CameraController {
         }
     }
 
-    /// Handle mouse scroll for zooming in Orbit mode.
+    /// Handle mouse scroll for zooming in Orbit mode, or changing run speed in FreeFly mode.
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         let scroll_amount = match delta {
             MouseScrollDelta::LineDelta(_x, y) => y,
@@ -447,12 +447,17 @@ impl CameraController {
 
         if self.mode == CameraMode::Orbit {
             self.accumulated_scroll += scroll_amount;
+        } else if self.mode == CameraMode::FreeFly && scroll_amount.abs() > f32::EPSILON {
+            let factor = 1.12_f32.powf(scroll_amount);
+            self.sprint_multiplier = (self.sprint_multiplier * factor).clamp(1.0, 20.0);
+            log::info!("FreeFly run speed: {:.1}x", self.sprint_multiplier);
         }
     }
 
     /// Handle keyboard input
-    pub fn handle_keyboard(&mut self, event: &KeyEvent) {
+    pub fn handle_keyboard(&mut self, event: &KeyEvent) -> Option<CameraMode> {
         let pressed = event.state == ElementState::Pressed;
+        let mut mode_switch = None;
 
         if let PhysicalKey::Code(keycode) = event.physical_key {
             match keycode {
@@ -469,6 +474,7 @@ impl CameraController {
                     if pressed && !self.keys_pressed.tab {
                         self.toggle_mode();
                         log::info!("Camera mode switched to: {:?}", self.mode);
+                        mode_switch = Some(self.mode);
                     }
                     self.keys_pressed.tab = pressed;
                 }
@@ -493,6 +499,8 @@ impl CameraController {
                 _ => {}
             }
         }
+
+        mode_switch
     }
 
     /// Toggle between Orbit and FreeFly modes
@@ -657,10 +665,11 @@ impl CameraController {
 
         // 4. MOVEMENT (WASD + Space + C) - Only in FreeFly mode
         if self.mode == CameraMode::FreeFly {
-            let mut speed = self.move_speed * dt;
-            if self.keys_pressed.shift {
-                speed *= self.sprint_multiplier;
-            }
+            let speed = if self.keys_pressed.shift {
+                self.move_speed * dt
+            } else {
+                self.move_speed * self.sprint_multiplier * dt
+            };
 
             let mut move_vec = Vec3::ZERO;
 

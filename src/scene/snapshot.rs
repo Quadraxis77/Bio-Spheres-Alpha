@@ -175,6 +175,9 @@ pub struct GpuSceneSnapshot {
     pub fluid_type: u32,
     /// Whether continuous spawning was enabled.
     pub fluid_continuous_spawn: bool,
+    /// Whether static full-world water was enabled.
+    #[serde(default)]
+    pub fluid_static_water_world: bool,
 }
 
 impl GpuSceneSnapshot {

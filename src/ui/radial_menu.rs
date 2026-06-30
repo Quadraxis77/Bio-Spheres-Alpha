@@ -338,13 +338,17 @@ fn draw_arc_segment(
 
 /// Render a custom cursor overlay showing the active tool icon.
 /// Call this when a tool is active to display the tool icon near the cursor.
-pub fn show_tool_cursor(ctx: &egui::Context, state: &RadialMenuState) {
+pub fn show_tool_cursor(
+    ctx: &egui::Context,
+    state: &RadialMenuState,
+    fallback_pos: Option<Pos2>,
+) {
     // Don't show cursor overlay if no tool is active or menu is visible
     if state.active_tool == RadialTool::None || state.visible {
         return;
     }
 
-    if let Some(pos) = ctx.pointer_hover_pos() {
+    if let Some(pos) = ctx.pointer_hover_pos().or(fallback_pos) {
         // Use closed hand icon when actively dragging a cell
         let icon = if state.active_tool == RadialTool::Drag && state.dragging_cell.is_some() {
             "✊" // Closed hand when dragging

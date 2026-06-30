@@ -1290,7 +1290,12 @@ impl App {
                         && *button == MouseButton::Left
                         && *state == ElementState::Pressed
                     {
-                        // Click while menu is open selects the hovered tool
+                        // Click while menu is open selects the segment under the cursor.
+                        // Update hover from the raw pointer fallback first so a click
+                        // immediately after tapping Alt does not depend on a repaint.
+                        if let Some(pos) = self.ui.pointer_hover_pos() {
+                            self.editor_state.radial_menu.update_hover(pos);
+                        }
                         self.editor_state.radial_menu.close(true);
                         // Hide cursor if a tool is now active
                         let new_active_tool = self.editor_state.radial_menu.active_tool;
@@ -1535,10 +1540,14 @@ impl App {
             WindowEvent::MouseWheel { delta, .. } => {
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_scroll_input() {
-                    self.scene_manager
-                        .active_scene_mut()
-                        .camera_mut()
-                        .handle_scroll(*delta);
+                    let camera = self.scene_manager.active_scene_mut().camera_mut();
+                    let previous_sprint_multiplier = camera.sprint_multiplier;
+                    camera.handle_scroll(*delta);
+                    if (camera.sprint_multiplier - previous_sprint_multiplier).abs()
+                        > f32::EPSILON
+                    {
+                        self.ui.state.camera_sprint_multiplier = camera.sprint_multiplier;
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1553,7 +1562,7 @@ impl App {
 
                         if event.state == ElementState::Pressed && !menu.alt_held {
                             // Alt pressed - open menu at current cursor position
-                            if let Some(pos) = self.ui.ctx.pointer_hover_pos() {
+                            if let Some(pos) = self.ui.pointer_hover_pos() {
                                 menu.open(pos);
                             } else {
                                 // Fallback to center of window
@@ -1568,12 +1577,22 @@ impl App {
                             self.window.request_redraw();
                             return true;
                         } else if event.state == ElementState::Released && menu.alt_held {
-                            // Alt released - close menu and select hovered tool
-                            menu.close(true);
-                            // Hide cursor if a tool is now active
-                            let hide_cursor = self.editor_state.radial_menu.active_tool
-                                != crate::ui::radial_menu::RadialTool::None;
-                            self.window.set_cursor_visible(!hide_cursor);
+                            // Alt release still supports the fast radial gesture. If
+                            // no segment is hovered, keep the menu open so players
+                            // can tap Alt, move to an option, then click it.
+                            if let Some(pos) = self.ui.pointer_hover_pos() {
+                                menu.update_hover(pos);
+                            }
+
+                            if menu.hovered_segment.is_some() {
+                                menu.close(true);
+                                let hide_cursor = self.editor_state.radial_menu.active_tool
+                                    != crate::ui::radial_menu::RadialTool::None;
+                                self.window.set_cursor_visible(!hide_cursor);
+                            } else {
+                                menu.alt_held = false;
+                                self.window.set_cursor_visible(true);
+                            }
                             self.window.request_redraw();
                             return true;
                         }
@@ -1587,6 +1606,14 @@ impl App {
                                 log::info!("Drag cancelled by Escape key");
                                 self.scene_manager.clear_dragged_cell();
                                 menu.dragging_cell = None;
+                                self.window.request_redraw();
+                                return true;
+                            }
+                            if menu.visible {
+                                menu.close(false);
+                                let hide_cursor = menu.active_tool
+                                    != crate::ui::radial_menu::RadialTool::None;
+                                self.window.set_cursor_visible(!hide_cursor);
                                 self.window.request_redraw();
                                 return true;
                             }
@@ -1646,9 +1673,12 @@ impl App {
                 if !self.ui.wants_keyboard_input() {
                     let camera = self.scene_manager.active_scene_mut().camera_mut();
                     let previous_zoom_speed = camera.zoom_speed;
-                    camera.handle_keyboard(event);
+                    let mode_switch = camera.handle_keyboard(event);
                     if (camera.zoom_speed - previous_zoom_speed).abs() > f32::EPSILON {
                         self.ui.state.camera_scroll_sensitivity = camera.zoom_speed;
+                    }
+                    if let Some(mode) = mode_switch {
+                        self.ui.show_camera_mode_notification(mode);
                     }
                 }
             }
@@ -2711,6 +2741,10 @@ impl App {
             gpu_scene.constraint_iterations = self.ui.state.world_settings.constraint_iterations;
             gpu_scene.acceleration_damping = self.ui.state.world_settings.acceleration_damping;
             gpu_scene.water_viscosity = self.ui.state.world_settings.water_viscosity;
+            if let Some(simulator) = gpu_scene.fluid_simulator.as_ref() {
+                simulator.set_static_water_world(self.editor_state.fluid_static_water_world);
+                simulator.set_continuous_spawn(self.editor_state.fluid_continuous_spawn);
+            }
             gpu_scene.light_field_update_interval =
                 self.ui.state.world_settings.light_field_update_interval;
             gpu_scene.max_physics_steps_per_frame =
@@ -3586,11 +3620,6 @@ impl App {
                 }
             }
 
-            // In GPU mode, push physics parameter changes (stiffness, damping, rest length,
-            // break force, etc.) to the GPU settings buffers so existing cells pick them up
-            // immediately. update_genome only rewrites the per-mode settings arrays - it does
-            // not touch cell positions, velocities, mode_indices, or adhesion connections, so
-            // existing cells are unaffected structurally. New cells spawned after the edit
             output
         };
 
@@ -3600,6 +3629,20 @@ impl App {
         // Update split ring configuration for all scenes
         self.scene_manager
             .update_split_ring_config(&self.editor_state);
+
+        if self.editor_state.request_clear_fluid {
+            self.editor_state.request_clear_fluid = false;
+            if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Water Fill Toggle Off Clear Encoder"),
+                        });
+                gpu_scene.clear_fluid(&self.device, &self.queue, &mut encoder);
+                self.queue.submit(std::iter::once(encoder.finish()));
+                log::info!("Water fill toggled off; cleared fluid field");
+            }
+        }
 
         // Handle scene mode requests from UI panels
         if scene_request.is_requested() {

@@ -950,7 +950,7 @@ pub fn modes_list_items(
     initial_mode: &mut usize,
     width: f32,
     copy_into_mode: bool,
-    color_picker_state: &mut Option<(usize, egui::ecolor::Hsva)>,
+    color_picker_state: &mut Option<(usize, egui::ecolor::Hsva, (u8, u8, u8))>,
     renaming_mode: &mut Option<usize>,
     rename_buffer: &mut String,
 ) -> (
@@ -978,8 +978,9 @@ pub fn modes_list_items(
 
     // Handle color picker if open - take ownership to avoid borrowing issues
     let picker_state = color_picker_state.take();
-    if let Some((picker_index, mut hsva)) = picker_state {
+    if let Some((picker_index, mut hsva, original_color)) = picker_state {
         let mut should_close = false;
+        let mut should_revert = false;
 
         let window_response = egui::Window::new("Color Picker")
             .resizable(false)
@@ -998,11 +999,16 @@ pub fn modes_list_items(
                     picker_size,
                     egui::Layout::top_down(egui::Align::Center),
                     |ui| {
-                        egui::widgets::color_picker::color_picker_hsva_2d(
+                        let changed = egui::widgets::color_picker::color_picker_hsva_2d(
                             ui,
                             &mut hsva,
                             egui::widgets::color_picker::Alpha::Opaque,
                         );
+                        if changed {
+                            let egui_color = egui::Color32::from(hsva);
+                            let rgb_tuple = (egui_color.r(), egui_color.g(), egui_color.b());
+                            color_change = Some((picker_index, rgb_tuple));
+                        }
                     },
                 );
 
@@ -1025,9 +1031,6 @@ pub fn modes_list_items(
                         .add_sized([button_width, 24.0], egui::Button::new("OK"))
                         .clicked()
                     {
-                        let egui_color = egui::Color32::from(hsva);
-                        let rgb_tuple = (egui_color.r(), egui_color.g(), egui_color.b());
-                        color_change = Some((picker_index, rgb_tuple));
                         should_close = true;
                     }
 
@@ -1035,14 +1038,19 @@ pub fn modes_list_items(
                         .add_sized([button_width, 24.0], egui::Button::new("Cancel"))
                         .clicked()
                     {
+                        should_revert = true;
                         should_close = true;
                     }
                 });
             });
 
+        if should_revert {
+            color_change = Some((picker_index, original_color));
+        }
+
         // Keep the picker open unless explicitly closed or window was closed
         if !should_close && window_response.is_some() {
-            *color_picker_state = Some((picker_index, hsva));
+            *color_picker_state = Some((picker_index, hsva, original_color));
         }
     }
 
@@ -1296,7 +1304,7 @@ pub fn modes_list_items(
                 // Handle right-click for color picker
                 if button_response.secondary_clicked() {
                     let hsva = egui::ecolor::Hsva::from(color);
-                    *color_picker_state = Some((index, hsva));
+                    *color_picker_state = Some((index, hsva, *rgb_color));
                 }
 
                 // Handle drag start - drag_started() already implies the threshold was crossed,

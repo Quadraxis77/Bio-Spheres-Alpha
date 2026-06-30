@@ -375,8 +375,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         final_color += vec3<f32>(0.0, 0.4, 0.6) * sss * sampled_light_strength;
     }
 
-    // Alpha: waterline/above = normal (boosted by reflection); below = very transparent.
-    let surface_alpha = clamp(alpha + params.reflection, alpha, 1.0);
+    // Alpha: waterline/above follows the user transparency setting exactly.
+    // Reflection changes color/specular response, not coverage/opacity.
+    let surface_alpha = alpha;
     let final_alpha = mix(surface_alpha, params.waterline_alpha, submerged);
 
     // WBOIT weight function (McGuire & Bavoil 2013)

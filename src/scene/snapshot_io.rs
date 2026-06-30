@@ -1397,7 +1397,14 @@ impl GpuScene {
 
         // -- Fluid / water state -----------------------------------------------
         let fluid_active = self.fluid_simulator.is_some();
-        let (fluid_voxels, nutrient_voxels, fluid_time, fluid_type, fluid_continuous_spawn) =
+        let (
+            fluid_voxels,
+            nutrient_voxels,
+            fluid_time,
+            fluid_type,
+            fluid_continuous_spawn,
+            fluid_static_water_world,
+        ) =
             if let Some(ref sim) = self.fluid_simulator {
                 log::info!("[Snapshot] Reading back fluid voxels (2 × 8 MB)…");
                 let (fv, nv) = sim.snapshot_voxels(device, queue);
@@ -1407,9 +1414,10 @@ impl GpuScene {
                     sim.time(),
                     sim.get_fluid_type(),
                     sim.is_continuous_spawn_enabled(),
+                    sim.is_static_water_world_enabled(),
                 )
             } else {
-                (Vec::new(), Vec::new(), 0.0, 1, false)
+                (Vec::new(), Vec::new(), 0.0, 1, false, false)
             };
 
         log::info!(
@@ -1482,6 +1490,7 @@ impl GpuScene {
             fluid_time,
             fluid_type,
             fluid_continuous_spawn,
+            fluid_static_water_world,
         })
     }
 
@@ -1727,6 +1736,7 @@ impl GpuScene {
                 sim.set_time(snapshot.fluid_time);
                 sim.set_fluid_type(snapshot.fluid_type);
                 sim.set_continuous_spawn(snapshot.fluid_continuous_spawn);
+                sim.set_static_water_world(snapshot.fluid_static_water_world);
                 log::info!(
                     "[Snapshot] Fluid voxels restored ({} voxels).",
                     snapshot.fluid_voxels.len()

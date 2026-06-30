@@ -5506,6 +5506,51 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     );
     ui.add_space(4.0);
 
+    let static_water_active = context.editor_state.fluid_static_water_world;
+    let static_label = if static_water_active {
+        "▣  Static Water World: ON"
+    } else {
+        "▣  Static Water World: OFF"
+    };
+    let static_fill = if static_water_active {
+        egui::Color32::from_rgba_unmultiplied(
+            p.accent_primary.r(),
+            p.accent_primary.g(),
+            p.accent_primary.b(),
+            40,
+        )
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let static_stroke = if static_water_active {
+        p.accent_primary
+    } else {
+        p.border_normal
+    };
+    if ui
+        .add(
+            egui::Button::new(egui::RichText::new(static_label).color(if static_water_active {
+                p.accent_primary
+            } else {
+                p.text_secondary
+            }))
+            .fill(static_fill)
+            .stroke(egui::Stroke::new(1.0, static_stroke)),
+        )
+        .on_hover_text("Fill all in-bounds non-solid space with water and skip dynamic fluid/weather physics")
+        .clicked()
+    {
+        context.editor_state.request_toggle_static_water = true;
+    }
+    ui.label(
+        egui::RichText::new(
+            "Creates an aquatic world without moving water simulation. Cell buoyancy and water detection still use the filled water field.",
+        )
+        .small()
+        .color(p.text_dim),
+    );
+    ui.add_space(4.0);
+
     // === Nutrients ===
     ui.separator();
     ui.heading("Nutrients");
@@ -8160,13 +8205,11 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     ui.label(format!("Mode: {:?}", camera.mode));
     ui.label(format!("Distance: {:.1}", camera.distance));
 
-    ui.label("Move Speed:").on_hover_text(
-        "Camera movement speed in FreeFly mode. Higher values let you traverse the world faster",
-    );
+    ui.label("Walk Speed:")
+        .on_hover_text("Camera movement speed while holding Shift in FreeFly mode");
     ui.add(egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
-    ui.label("Sprint Multiplier:").on_hover_text(
-        "Speed multiplier applied while holding Shift in FreeFly mode. Adjust with Shift+Scroll while flying",
-    );
+    ui.label("Run Speed:")
+        .on_hover_text("Normal FreeFly speed multiplier. Adjust with the scroll wheel while flying");
     let sprint_response = ui.add(
         egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 1.0..=20.0)
             .custom_formatter(|value, _| format!("{value:.1}x")),
@@ -8179,9 +8222,8 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     if sprint_multiplier_changed {
         camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
     }
-    ui.label("Zoom Speed:").on_hover_text(
-        "How fast scrolling zooms the camera in Orbit mode. Adjust with Shift+Scroll while orbiting",
-    );
+    ui.label("Zoom Speed:")
+        .on_hover_text("How fast scrolling zooms the camera in Orbit mode");
     let zoom_response = ui.add(
         egui::Slider::new(&mut ui_state.camera_scroll_sensitivity, 0.01..=2.0)
             .logarithmic(true)
@@ -8451,7 +8493,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     .editor_state
                     .color_picker_state
                     .take()
-                    .and_then(|(idx, hsva)| remap_surviving_index(idx).map(|idx| (idx, hsva)));
+                    .and_then(|(idx, hsva, original)| {
+                        remap_surviving_index(idx).map(|idx| (idx, hsva, original))
+                    });
 
                 selected_index = context.editor_state.selected_mode_index;
                 initial_mode = context.genome.initial_mode.max(0) as usize;
@@ -13849,76 +13893,72 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label(egui::RichText::new("Solo cells (0 connections) drain at this rate. Gradient: 1 conn = partial, 3+ = normal").small());
     }
 
-    if state.show_advanced_options {
-        ui.add_space(12.0);
+    ui.add_space(12.0);
 
-        // Mutation section
-        ui.heading("Mutation");
-        ui.separator();
+    // Mutation section
+    ui.heading("Mutation");
+    ui.separator();
 
-        ui.label("Radiation Level:")
-            .on_hover_text("Probability that each child cell mutates during division. 0 = no mutations. Uses a logarithmic scale for fine control at low values. Higher radiation drives faster evolution but may destabilize organisms");
+    ui.label("Radiation Level:")
+        .on_hover_text("Probability that each child cell mutates during division. 0 = no mutations. Uses a logarithmic scale for fine control at low values. Higher radiation drives faster evolution but may destabilize organisms");
 
-        // Logarithmic slider: position 0.0 = exactly 0.0 (off)
-        // position > 0.0 maps to [0.00001, 1.0] over 5 decades for fine low-end control
-        const EPSILON: f32 = 0.0001;
-        const DECADES: f64 = 5.0; // 10^-5 to 10^0
+    // Logarithmic slider: position 0.0 = exactly 0.0 (off)
+    // position > 0.0 maps to [0.00001, 1.0] over 5 decades for fine low-end control
+    const EPSILON: f32 = 0.0001;
+    const DECADES: f64 = 5.0; // 10^-5 to 10^0
 
-        let mut log_slider = if world.radiation_level <= 0.0 {
-            0.0f32
-        } else {
-            // Map [1e-5, 1.0] -> [0.0, 1.0]
-            let normalized = (world.radiation_level.log10() as f64 + DECADES) / DECADES;
-            normalized.clamp(0.0, 1.0) as f32
-        };
+    let mut log_slider = if world.radiation_level <= 0.0 {
+        0.0f32
+    } else {
+        // Map [1e-5, 1.0] -> [0.0, 1.0]
+        let normalized = (world.radiation_level.log10() as f64 + DECADES) / DECADES;
+        normalized.clamp(0.0, 1.0) as f32
+    };
 
-        let response = ui.add(
-            egui::Slider::new(&mut log_slider, 0.0..=1.0)
-                .custom_formatter(|value, _| {
-                    if value < EPSILON as f64 {
-                        "0.0000".to_string()
+    let response = ui.add(
+        egui::Slider::new(&mut log_slider, 0.0..=1.0)
+            .custom_formatter(|value, _| {
+                if value < EPSILON as f64 {
+                    "0.0000".to_string()
+                } else {
+                    let radiation = 10_f64.powf(value * DECADES - DECADES);
+                    if radiation < 0.001 {
+                        format!("{:.5}", radiation)
+                    } else if radiation < 0.01 {
+                        format!("{:.4}", radiation)
                     } else {
-                        let radiation = 10_f64.powf(value * DECADES - DECADES);
-                        if radiation < 0.001 {
-                            format!("{:.5}", radiation)
-                        } else if radiation < 0.01 {
-                            format!("{:.4}", radiation)
-                        } else {
-                            format!("{:.3}", radiation)
-                        }
+                        format!("{:.3}", radiation)
+                    }
+                }
+            })
+            .custom_parser(|s| {
+                s.parse::<f64>().ok().and_then(|v| {
+                    if v <= 0.0 {
+                        Some(0.0)
+                    } else if v <= 1.0 {
+                        Some(((v.log10() + DECADES) / DECADES).clamp(0.0, 1.0))
+                    } else {
+                        None
                     }
                 })
-                .custom_parser(|s| {
-                    s.parse::<f64>().ok().and_then(|v| {
-                        if v <= 0.0 {
-                            Some(0.0)
-                        } else if v <= 1.0 {
-                            Some(((v.log10() + DECADES) / DECADES).clamp(0.0, 1.0))
-                        } else {
-                            None
-                        }
-                    })
-                }),
-        );
+            }),
+    );
 
-        if response.changed() {
-            world.radiation_level = if log_slider < EPSILON {
-                0.0
-            } else {
-                10_f32
-                    .powf(log_slider * DECADES as f32 - DECADES as f32)
-                    .clamp(0.0, 1.0)
-            };
-        }
+    if response.changed() {
+        world.radiation_level = if log_slider < EPSILON {
+            0.0
+        } else {
+            10_f32
+                .powf(log_slider * DECADES as f32 - DECADES as f32)
+                .clamp(0.0, 1.0)
+        };
+    }
 
-        ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, logarithmic scale for fine control)").small());
+    ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, logarithmic scale for fine control)").small());
 
-        ui.add_space(4.0);
-        ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
-            .on_hover_text(
-                "When checked, mutations make small color nudges instead of full re-rolls",
-            );
-    } // end advanced biology/mutation
+    ui.add_space(4.0);
+    ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
+        .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
 
     ui.add_space(12.0);
 }

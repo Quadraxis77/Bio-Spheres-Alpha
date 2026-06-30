@@ -136,6 +136,23 @@ pub fn palette() -> ActivePalette {
     ACTIVE_PALETTE.with(|cell| *cell.borrow())
 }
 
+const CAMERA_MODE_NOTICE_LIFETIME_SECS: f32 = 0.85;
+
+struct CameraModeNotification {
+    text: String,
+    age: f32,
+}
+
+impl CameraModeNotification {
+    fn alpha(&self) -> f32 {
+        (1.0 - self.age / CAMERA_MODE_NOTICE_LIFETIME_SECS).clamp(0.0, 1.0)
+    }
+
+    fn is_expired(&self) -> bool {
+        self.age >= CAMERA_MODE_NOTICE_LIFETIME_SECS
+    }
+}
+
 pub struct UiSystem {
     /// egui context for immediate mode UI
     pub ctx: egui::Context,
@@ -147,6 +164,9 @@ pub struct UiSystem {
     pub state: GlobalUiState,
     /// Viewport rectangle for mouse filtering (set during rendering)
     pub viewport_rect: Option<egui::Rect>,
+    /// Last raw pointer position converted to egui points. Used when egui has
+    /// no hover position but winit is still reporting cursor events.
+    last_pointer_pos: Option<egui::Pos2>,
     /// Last applied UI scale for change detection
     last_scale: f32,
     /// Original style values for scaling
@@ -168,6 +188,8 @@ pub struct UiSystem {
     /// Toast notification queue - short messages shown in the bottom-right corner.
     /// Also lives here to avoid being wiped by the GlobalUiState clone.
     pub toasts: Vec<crate::ui::toast::Toast>,
+    /// Short-lived center-screen HUD cue for camera mode changes.
+    camera_mode_notification: Option<CameraModeNotification>,
     /// App icon texture used as the brand glyph in the top bar.
     app_icon: Option<egui::TextureHandle>,
     /// Loading animation GIF frames (user-provided, shown during GIF/save operations).
@@ -271,6 +293,7 @@ impl UiSystem {
             renderer,
             state,
             viewport_rect: None,
+            last_pointer_pos: None,
             last_scale: 1.0,
             original_spacing: None,
             original_text_styles: None,
@@ -281,6 +304,7 @@ impl UiSystem {
             last_custom_theme: crate::ui::types::CustomThemePalette::default(),
             genome_browser: crate::ui::genome_browser::GenomeBrowserState::default(),
             toasts: Vec::new(),
+            camera_mode_notification: None,
             app_icon,
             loading_gif_frames,
             loading_gif_frame: 0,
@@ -288,6 +312,70 @@ impl UiSystem {
             field_report_director: crate::field_report::FieldReportDirector::default(),
             last_report_scan_frame: None,
         }
+    }
+
+    pub fn show_camera_mode_notification(&mut self, mode: crate::ui::camera::CameraMode) {
+        let text = match mode {
+            crate::ui::camera::CameraMode::Orbit => "ORBIT CAMERA",
+            crate::ui::camera::CameraMode::FreeFly => "FREE FLY CAMERA",
+        };
+        self.camera_mode_notification = Some(CameraModeNotification {
+            text: text.to_string(),
+            age: 0.0,
+        });
+        self.ctx.request_repaint();
+    }
+
+    fn tick_and_render_camera_mode_notification(&mut self, dt: f32) {
+        let Some(notification) = self.camera_mode_notification.as_mut() else {
+            return;
+        };
+
+        notification.age += dt;
+        if notification.is_expired() {
+            self.camera_mode_notification = None;
+            return;
+        }
+
+        let alpha = notification.alpha();
+        let p = palette();
+        #[allow(deprecated)]
+        let screen = self.ctx.screen_rect();
+        let center = screen.center();
+        let rect = egui::Rect::from_center_size(center, egui::vec2(238.0, 42.0));
+        let scale_alpha = |color: egui::Color32, factor: f32| {
+            egui::Color32::from_rgba_unmultiplied(
+                color.r(),
+                color.g(),
+                color.b(),
+                (alpha * factor * 255.0).round().clamp(0.0, 255.0) as u8,
+            )
+        };
+        let painter = self.ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("camera_mode_center_notification"),
+        ));
+
+        painter.rect_filled(
+            rect,
+            egui::CornerRadius::same(5),
+            scale_alpha(p.bg_panel, 0.72),
+        );
+        painter.rect_stroke(
+            rect,
+            egui::CornerRadius::same(5),
+            egui::Stroke::new(1.0, scale_alpha(p.accent_primary, 0.8)),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &notification.text,
+            egui::FontId::proportional(18.0),
+            scale_alpha(p.text_primary, 1.0),
+        );
+
+        self.ctx.request_repaint();
     }
 
     /// Handle a winit window event.
@@ -299,7 +387,27 @@ impl UiSystem {
         window: &Window,
         event: &WindowEvent,
     ) -> egui_winit::EventResponse {
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                let scale = window.scale_factor() as f32;
+                self.last_pointer_pos = Some(egui::pos2(
+                    position.x as f32 / scale,
+                    position.y as f32 / scale,
+                ));
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.last_pointer_pos = None;
+            }
+            _ => {}
+        }
+
         self.winit_state.on_window_event(window, event)
+    }
+
+    /// Current pointer position in egui points, falling back to the latest raw
+    /// winit cursor event when egui has temporarily lost hover state.
+    pub fn pointer_hover_pos(&self) -> Option<egui::Pos2> {
+        self.ctx.pointer_hover_pos().or(self.last_pointer_pos)
     }
 
     /// Check if egui wants pointer (mouse) input.
@@ -314,7 +422,7 @@ impl UiSystem {
 
         // Check if pointer is over viewport - if so, camera should get input
         if let Some(viewport) = self.viewport_rect {
-            if let Some(pos) = self.ctx.pointer_hover_pos() {
+            if let Some(pos) = self.pointer_hover_pos() {
                 if viewport.contains(pos) {
                     return false;
                 }
@@ -1380,17 +1488,24 @@ impl UiSystem {
                         });
                     });
 
-                    // Centered water/air rolling-average temperature readout with a
-                    // F/C unit toggle between the two values. Drawn as an overlay so
+                    // Centered climate readout with a F/C unit toggle between
+                    // the temperature values. Drawn as an overlay so
                     // it stays centered on the bar regardless of how much space the
                     // left- and right-flowing status fields consume.
-                    let (live_avg_water_temp_c, live_avg_air_temp_c) = scene_manager
-                        .gpu_scene()
-                        .and_then(|s| s.fluid_simulator.as_ref())
-                        .map(|sim| (sim.avg_water_temp_c(), sim.avg_air_temp_c()))
-                        .unwrap_or((0.0, 0.0));
+                    let (live_avg_water_temp_c, live_avg_air_temp_c, live_avg_humidity) =
+                        scene_manager
+                            .gpu_scene()
+                            .and_then(|s| s.fluid_simulator.as_ref())
+                            .map(|sim| {
+                                (
+                                    sim.avg_water_temp_c(),
+                                    sim.avg_air_temp_c(),
+                                    sim.avg_humidity(),
+                                )
+                            })
+                            .unwrap_or((0.0, 0.0, 0.0));
 
-                    let group_size = egui::vec2(220.0, bar_rect.height());
+                    let group_size = egui::vec2(322.0, bar_rect.height());
                     let group_rect = egui::Rect::from_center_size(
                         egui::pos2(bar_rect.center().x, bar_rect.center().y),
                         group_size,
@@ -1467,6 +1582,28 @@ impl UiSystem {
                                                 .strong()
                                                 .size(11.5)
                                                 .color(p.text_primary),
+                                        );
+                                    },
+                                );
+
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(field_width, ui.available_height()),
+                                    egui::Layout::top_down(egui::Align::Center),
+                                    |ui| {
+                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                        ui.label(
+                                            egui::RichText::new("AVG HUMIDITY")
+                                                .size(8.5)
+                                                .color(theme::TEXT_DIM),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{:.0}%",
+                                                live_avg_humidity * 100.0
+                                            ))
+                                            .strong()
+                                            .size(11.5)
+                                            .color(p.status_ok),
                                         );
                                     },
                                 );
@@ -2396,10 +2533,32 @@ impl UiSystem {
         // Handle water fill toggle request (GPU mode rail button)
         if editor_state.request_toggle_water {
             editor_state.request_toggle_water = false;
+            let was_continuous_spawn = editor_state.fluid_continuous_spawn;
             editor_state.fluid_continuous_spawn = !editor_state.fluid_continuous_spawn;
+            if editor_state.fluid_continuous_spawn {
+                editor_state.fluid_static_water_world = false;
+            } else if was_continuous_spawn {
+                editor_state.request_clear_fluid = true;
+            }
             if let Some(gpu_scene) = scene_manager.gpu_scene_mut() {
                 if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
                     simulator.set_continuous_spawn(editor_state.fluid_continuous_spawn);
+                    simulator.set_static_water_world(editor_state.fluid_static_water_world);
+                }
+            }
+            editor_state.save_fluid_settings();
+        }
+
+        if editor_state.request_toggle_static_water {
+            editor_state.request_toggle_static_water = false;
+            editor_state.fluid_static_water_world = !editor_state.fluid_static_water_world;
+            if editor_state.fluid_static_water_world {
+                editor_state.fluid_continuous_spawn = false;
+            }
+            if let Some(gpu_scene) = scene_manager.gpu_scene_mut() {
+                if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
+                    simulator.set_continuous_spawn(editor_state.fluid_continuous_spawn);
+                    simulator.set_static_water_world(editor_state.fluid_static_water_world);
                 }
             }
             editor_state.save_fluid_settings();
@@ -2414,7 +2573,11 @@ impl UiSystem {
             // Only show the tool cursor icon when the pointer is over the viewport,
             // not over a panel - over panels the system cursor is visible instead.
             if !self.wants_pointer_input() {
-                crate::ui::radial_menu::show_tool_cursor(&self.ctx, &editor_state.radial_menu);
+                crate::ui::radial_menu::show_tool_cursor(
+                    &self.ctx,
+                    &editor_state.radial_menu,
+                    self.pointer_hover_pos(),
+                );
             }
 
             // Check for low FPS and show warning dialog
@@ -2563,6 +2726,7 @@ impl UiSystem {
         // -- Toast notifications -----------------------------------------------
         crate::ui::toast::tick_toasts(&mut self.toasts, 1.0 / 60.0);
         crate::ui::toast::render_toasts(&self.ctx, &self.toasts);
+        self.tick_and_render_camera_mode_notification(1.0 / 60.0);
 
         // -- Loading GIF overlay (shown during GIF capture) --------------------
         if editor_state.gif_capture.is_some() && !self.loading_gif_frames.is_empty() {
@@ -2825,8 +2989,8 @@ fn show_windows_menu(
     }
 
     ui.add_space(6.0);
-    ui.label("Sprint Multiplier:")
-        .on_hover_text("Speed multiplier applied while holding Shift in FreeFly camera mode. Double-click the slider to reset.");
+    ui.label("Run Speed:")
+        .on_hover_text("Normal FreeFly speed multiplier. Use the scroll wheel in FreeFly mode to adjust it; hold Shift to walk.");
     let sprint_response = ui.add(
         egui::Slider::new(&mut state.camera_sprint_multiplier, 1.0..=20.0)
             .custom_formatter(|value, _| format!("{value:.1}x")),
@@ -3549,6 +3713,17 @@ fn render_side_rail(
             let water_active = editor_state.fluid_continuous_spawn;
             if rail_button_toggle(ui, "🌊", "Toggle Water Fill", water_active, &p) {
                 editor_state.request_toggle_water = true;
+            }
+
+            let static_water_active = editor_state.fluid_static_water_world;
+            if rail_button_toggle(
+                ui,
+                "▣",
+                "Static Water World (fill world, disable dynamic water physics)",
+                static_water_active,
+                &p,
+            ) {
+                editor_state.request_toggle_static_water = true;
             }
 
             // Screenshot

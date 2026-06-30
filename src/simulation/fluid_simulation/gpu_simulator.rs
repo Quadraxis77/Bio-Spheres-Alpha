@@ -166,6 +166,11 @@ pub struct GpuFluidSimulator {
     // Continuous spawning control
     continuous_spawn_enabled: std::cell::Cell<bool>,
 
+    // Static water world control. Keeps filled water authoritative for
+    // rendering/cell buoyancy while skipping dynamic fluid/weather passes.
+    static_water_world_enabled: std::cell::Cell<bool>,
+    static_water_world_needs_fill: std::cell::Cell<bool>,
+
     // Fluid type control (0=Empty, 1=Water, 2=Lava, 3=Steam)
     fluid_type: std::cell::Cell<u32>,
 
@@ -203,11 +208,12 @@ pub struct GpuFluidSimulator {
     /// Vapor fog density pass (repurposed humidity diffusion). Massless but
     /// climate-active: the light field attenuates sunlight through it.
     diffuse_humidity_pipeline: wgpu::ComputePipeline,
-    /// Dormant: condensation now happens only via steam-on-surface contact;
-    /// this pass is not dispatched. Kept for possible future use.
-    #[allow(dead_code)]
+    /// Weather condensation pass: consumes built-up humidity into patterned
+    /// rain/snow bursts during storm windows.
     condense_humidity_pipeline: wgpu::ComputePipeline,
     init_sphere_pipeline: wgpu::ComputePipeline,
+    fill_world_water_pipeline: wgpu::ComputePipeline,
+    static_water_phase_pipeline: wgpu::ComputePipeline,
     spawn_continuous_pipeline: wgpu::ComputePipeline,
     clear_pipeline: wgpu::ComputePipeline,
 
@@ -271,7 +277,7 @@ pub struct GpuFluidSimulator {
     /// Whether simulation is paused
     pub paused: bool,
 
-    // -- Rolling-average temperature readback --
+    // -- Rolling-average climate readback --
     temp_stats_buffer: wgpu::Buffer,
     temp_stats_staging_buffer: wgpu::Buffer,
     temp_stats_copy_pending: std::cell::Cell<bool>,
@@ -281,6 +287,8 @@ pub struct GpuFluidSimulator {
     avg_water_temp_c: std::cell::Cell<f32>,
     /// Exponential moving average of air (empty-voxel) temperature, in Celsius.
     avg_air_temp_c: std::cell::Cell<f32>,
+    /// Exponential moving average of atmospheric humidity, normalized 0.0..1.0.
+    avg_humidity: std::cell::Cell<f32>,
 }
 
 impl GpuFluidSimulator {
@@ -367,10 +375,10 @@ impl GpuFluidSimulator {
             mapped_at_creation: false,
         });
 
-        // Temperature accumulator: 4 atomic u32 slots (16 bytes), cleared and
+        // Climate accumulator: 6 atomic u32 slots (24 bytes), cleared and
         // accumulated each tick by update_temperature, then copied to a small
         // staging buffer for async CPU readback to drive the rolling averages.
-        const TEMP_STATS_SIZE: u64 = 4 * std::mem::size_of::<u32>() as u64;
+        const TEMP_STATS_SIZE: u64 = 6 * std::mem::size_of::<u32>() as u64;
         let temp_stats_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Temperature Stats Buffer"),
             size: TEMP_STATS_SIZE,
@@ -605,6 +613,26 @@ impl GpuFluidSimulator {
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some("fluid_init_sphere"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let fill_world_water_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Fill World Water Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("fluid_fill_world_water"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let static_water_phase_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Static Water Phase Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("fluid_static_water_phase"),
                 compilation_options: Default::default(),
                 cache: None,
             });
@@ -1072,11 +1100,15 @@ impl GpuFluidSimulator {
             world_center,
             time: std::cell::Cell::new(0.0),
             continuous_spawn_enabled: std::cell::Cell::new(false),
+            static_water_world_enabled: std::cell::Cell::new(false),
+            static_water_world_needs_fill: std::cell::Cell::new(false),
             swap_pipeline,
             update_temperature_pipeline,
             diffuse_humidity_pipeline,
             condense_humidity_pipeline,
             init_sphere_pipeline,
+            fill_world_water_pipeline,
+            static_water_phase_pipeline,
             spawn_continuous_pipeline,
             clear_pipeline,
             extract_pipeline,
@@ -1122,6 +1154,7 @@ impl GpuFluidSimulator {
             temp_stats_map_receiver: std::cell::RefCell::new(None),
             avg_water_temp_c: std::cell::Cell::new(0.0),
             avg_air_temp_c: std::cell::Cell::new(0.0),
+            avg_humidity: std::cell::Cell::new(0.0),
         }
     }
 
@@ -1271,6 +1304,33 @@ impl GpuFluidSimulator {
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
     }
 
+    /// Fill the entire in-bounds, non-solid world volume with static water.
+    pub fn fill_world_with_water(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        self.update_params(
+            queue,
+            0,
+            0.0,
+            9.8,
+            [false, true, false],
+            [1.0, 0.8, 0.6, 0.9],
+        );
+        let bind_group = self.create_bind_group(device);
+        let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Fluid Fill World Water"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.fill_world_water_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+    }
+
     /// Continuously spawn water at the top of the world
     pub fn spawn_continuous(
         &self,
@@ -1317,29 +1377,53 @@ impl GpuFluidSimulator {
         let bind_group = self.create_bind_group(device);
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Fluid Clear"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&self.clear_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Fluid Clear"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.clear_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+
+        encoder.clear_buffer(&self.humidity_buffer, 0, None);
+        encoder.clear_buffer(&self.phase_debt_buffer, 0, None);
+        encoder.clear_buffer(&self.water_velocity_buffer, 0, None);
+        encoder.clear_buffer(&self.water_bitfield_buffer, 0, None);
+        encoder.clear_buffer(&self.ice_bitfield_buffer, 0, None);
+        self.avg_humidity.set(0.0);
+        self.climate_tick_counter.set(0);
     }
 
     /// Set continuous spawning enabled/disabled
     pub fn set_continuous_spawn(&self, enabled: bool) {
-        self.continuous_spawn_enabled.set(enabled);
         // Reset the epoch clock when water fill starts so the user always gets
         // a fresh nutrient epoch rather than landing mid-epoch (which could mean
         // nutrients despawn within seconds of the water being added).
-        if enabled {
+        if enabled && !self.continuous_spawn_enabled.get() {
             self.time.set(0.0);
         }
+        self.continuous_spawn_enabled.set(enabled);
     }
 
     /// Get continuous spawning enabled state
     pub fn is_continuous_spawn_enabled(&self) -> bool {
         self.continuous_spawn_enabled.get()
+    }
+
+    /// Set static water world mode. The current filled water state remains
+    /// authoritative for rendering and cell buoyancy, but dynamic fluid/weather
+    /// simulation is skipped.
+    pub fn set_static_water_world(&self, enabled: bool) {
+        if enabled && !self.static_water_world_enabled.get() {
+            self.static_water_world_needs_fill.set(true);
+        }
+        self.static_water_world_enabled.set(enabled);
+    }
+
+    pub fn is_static_water_world_enabled(&self) -> bool {
+        self.static_water_world_enabled.get()
     }
 
     /// Set fluid type (0=Empty, 1=Water, 2=Lava, 3=Steam)
@@ -1476,7 +1560,7 @@ impl GpuFluidSimulator {
         const NUM_FLUID_SUB_STEPS: u32 = 4;
 
         // Spawn continuous water once per frame (only on first sub-step)
-        if self.continuous_spawn_enabled.get() {
+        if self.continuous_spawn_enabled.get() && !self.static_water_world_enabled.get() {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Fluid Spawn Continuous Pass"),
                 timestamp_writes: None,
@@ -1486,17 +1570,71 @@ impl GpuFluidSimulator {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
-        // Climate passes (thermal conduction, humidity diffusion/condensation)
-        // run every Nth tick - climate evolves over seconds, so spreading the
-        // 128^3 passes across ticks costs nothing visually. The shader
-        // compensates by scaling its per-pass rates by the same interval
-        // (CLIMATE_TICK_INTERVAL in fluid_sim.wgsl - keep them in sync).
+        // Climate passes run every Nth tick. Static water uses only the
+        // temperature phase plus water/ice transitions; dynamic mode also runs
+        // vapor/weather and motion below.
         const CLIMATE_TICK_INTERVAL: u32 = 4;
         let climate_tick = self.climate_tick_counter.get().wrapping_add(1);
         self.climate_tick_counter.set(climate_tick);
         let climate_phase = climate_tick % CLIMATE_TICK_INTERVAL;
         let run_temperature = climate_phase == 0;
+
+        if self.static_water_world_enabled.get() {
+            if self.static_water_world_needs_fill.replace(false) {
+                let bind_group = self.create_bind_group(_device);
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Fluid Fill Static Water World"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.fill_world_water_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+            }
+
+            if run_temperature {
+                encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Static Water Update Temperature Pass"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&self.update_temperature_pipeline);
+                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                    pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+                }
+                if !self.temp_stats_copy_pending.get()
+                    && self.temp_stats_map_receiver.borrow().is_none()
+                {
+                    encoder.copy_buffer_to_buffer(
+                        &self.temp_stats_buffer,
+                        0,
+                        &self.temp_stats_staging_buffer,
+                        0,
+                        self.temp_stats_buffer.size(),
+                    );
+                    self.temp_stats_copy_pending.set(true);
+                }
+            }
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Static Water Ice Melt Phase Pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.static_water_phase_pipeline);
+                pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+            }
+            return;
+        }
+
+        // Climate passes (thermal conduction, humidity diffusion/condensation)
+        // run every Nth tick - climate evolves over seconds, so spreading the
+        // 128^3 passes across ticks costs nothing visually. The shader
+        // compensates by scaling its per-pass rates by the same interval
+        // (CLIMATE_TICK_INTERVAL in fluid_sim.wgsl - keep them in sync).
         let run_vapor_fog = climate_phase == CLIMATE_TICK_INTERVAL / 2;
+        let run_weather_condensation = climate_phase == CLIMATE_TICK_INTERVAL - 1;
 
         if run_temperature {
             // Thermal pass: conduction over the temperature field + solar
@@ -1535,8 +1673,7 @@ impl GpuFluidSimulator {
             // decays). Carries no moisture mass, but it is climate-active:
             // the light field attenuates sun rays through it, so vapor
             // clouds shade and cool the world below (a self-stabilizing
-            // cloud-albedo feedback). The condense pass is intentionally NOT
-            // dispatched - moisture stays in tangible phases.
+            // cloud-albedo feedback).
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Vapor Fog Density Pass"),
@@ -1546,6 +1683,20 @@ impl GpuFluidSimulator {
                 pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
+        }
+
+        if run_weather_condensation {
+            // Weather pass: converts built-up humidity into patterned rain or
+            // snow during storm bands. Most dry cells exit after one humidity
+            // load, so dispatching this as a separate climate phase keeps the
+            // cost predictable while letting vapor accumulate between bursts.
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Weather Condensation Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.condense_humidity_pipeline);
+            pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
         // Multi-pass fluid simulation with alternating checker phase
@@ -1852,7 +2003,7 @@ impl GpuFluidSimulator {
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
     }
 
-    /// Polls the async readback of the rolling temperature accumulator and,
+    /// Polls the async readback of the rolling climate accumulator and,
     /// once mapped, blends the snapshot into the exponential moving averages.
     pub fn poll_temperature_stats(&self, device: &wgpu::Device) {
         if self.temp_stats_copy_pending.get() && self.temp_stats_map_receiver.borrow().is_none() {
@@ -1883,6 +2034,7 @@ impl GpuFluidSimulator {
                         // water readout lag so far behind it was misleading).
                         const WATER_EMA_RATE: f32 = 0.2;
                         const AIR_EMA_RATE: f32 = 0.2;
+                        const HUMIDITY_EMA_RATE: f32 = 0.2;
 
                         if stats[1] > 0 {
                             let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;
@@ -1895,6 +2047,12 @@ impl GpuFluidSimulator {
                             let prev = self.avg_air_temp_c.get();
                             self.avg_air_temp_c
                                 .set(prev + (avg_c - prev) * AIR_EMA_RATE);
+                        }
+                        if stats.len() >= 6 && stats[5] > 0 {
+                            let avg = (stats[4] as f32 / stats[5] as f32) / 255.0;
+                            let prev = self.avg_humidity.get();
+                            self.avg_humidity
+                                .set(prev + (avg - prev) * HUMIDITY_EMA_RATE);
                         }
                     }
                     self.temp_stats_staging_buffer.unmap();
@@ -1920,6 +2078,11 @@ impl GpuFluidSimulator {
     /// Rolling average air (empty-voxel) temperature, in Celsius.
     pub fn avg_air_temp_c(&self) -> f32 {
         self.avg_air_temp_c.get()
+    }
+
+    /// Rolling average atmospheric humidity, normalized 0.0..1.0.
+    pub fn avg_humidity(&self) -> f32 {
+        self.avg_humidity.get()
     }
 }
 

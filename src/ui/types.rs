@@ -631,7 +631,7 @@ fn default_optimal_cell_temp() -> u32 {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct OrganismSkinSettings {
     /// Whether organism skin rendering is enabled
-    #[serde(default = "default_true")]
+    #[serde(default = "default_organism_skin_enabled")]
     pub enabled: bool,
 
     /// Grid resolution (kept for serialization compat, unused by shrink-wrap)
@@ -771,6 +771,10 @@ fn default_camera_scroll_sensitivity() -> f32 {
 
 fn default_field_report_interval_seconds() -> f32 {
     crate::scene::lineage::LINEAGE_CAPTURE_INTERVAL_SECONDS
+}
+
+fn default_organism_skin_enabled() -> bool {
+    false
 }
 
 fn default_true() -> bool {
@@ -974,7 +978,7 @@ pub struct GlobalUiState {
     #[serde(default = "default_horizontal_fov_degrees")]
     pub horizontal_fov_degrees: f32,
 
-    /// FreeFly sprint multiplier shared by preview and GPU scenes.
+    /// FreeFly run speed multiplier shared by preview and GPU scenes.
     #[serde(default = "default_camera_sprint_multiplier")]
     pub camera_sprint_multiplier: f32,
 

@@ -74,9 +74,11 @@ struct ExtractParams {
 @group(0) @binding(1) var<storage, read_write> voxels: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read> solid_mask: array<u32>;
 @group(0) @binding(3) var<storage, read_write> water_velocity: array<atomic<u32>>;
-// Rolling-average accumulator: [water_temp_sum, water_count, air_temp_sum, air_count].
+// Rolling-average accumulator:
+// [water_temp_sum, water_count, air_temp_sum, air_count, humidity_sum, humidity_count].
 // Temperatures are stored as round(celsius) + 50 (range 0..200) to keep sums
-// safely within u32 range without needing 64-bit atomics.
+// safely within u32 range without needing 64-bit atomics. Humidity is stored
+// as 0..255 units from the atmospheric humidity field.
 @group(0) @binding(4) var<storage, read_write> temp_stats: array<atomic<u32>>;
 // Light field intensity per voxel: 0.0 = fully shadowed, 1.0 = fully lit.
 // Same 128^3 grid/indexing as `voxels`. Written by LightFieldSystem one frame
@@ -259,7 +261,7 @@ const LATENT_VAPOR_NEIGHBOR_COOL_C: f32 = 3.0;
 const LATENT_VAPOR_CONDENSE_WARM_C: f32 = 3.0;
 // Water at/above boiling converts to steam with this per-tick probability
 // regardless of air contact - no superheated liquid pools.
-const BOIL_PROBABILITY: f32 = 0.5;
+const BOIL_PROBABILITY: f32 = 0.20;
 // Slider value at which the rates above apply unscaled. The global Thermal
 // Inertia slider scales conduction and solar forcing together: each -1 below
 // the anchor doubles the speed of all heat flow, each +1 above halves it.
@@ -300,8 +302,10 @@ fn conductivity(fluid_type: u32, solid: bool) -> f32 {
 fn is_thermally_mobile(fluid_type: u32, solid: bool) -> bool {
     return !solid && (fluid_type == 0u || fluid_type == 1u || fluid_type == 3u);
 }
-const NATURAL_VAPORIZATION_RATE: f32 = 0.15;  // base per-tick chance scalar once warm enough to evaporate
-const NATURAL_CONDENSATION_RATE: f32 = 0.15;  // base per-tick chance scalar once cool enough to condense
+const NATURAL_VAPORIZATION_RATE: f32 = 0.004;  // base per-tick chance scalar once warm enough to evaporate
+const NATURAL_CONDENSATION_RATE: f32 = 0.04;  // base per-tick chance scalar once cool enough to condense
+const PRECIP_BUILDUP_EXCESS: f32 = 80.0;
+const PRECIP_BURST_EXCESS: f32 = 180.0;
 
 const DARKNESS_PENALTY_MAX_C: f32 = 8.0; // unlit voxels run at most this much colder than baseline; at sun brightness 3, even fully shadowed air remains temperate (~70°F)
 
@@ -310,10 +314,9 @@ const HUMIDITY_FIXED_POINT: f32 = 256.0;     // fixed-point scale for the humidi
 const HUMIDITY_CAPACITY_BASE: f32 = 20.0;    // air can hold at least this much humidity (0-255 scale) regardless of temperature
 const HUMIDITY_CAPACITY_TEMP_SCALE: f32 = 0.45; // additional capacity per degree of the 0-255 temperature scale
 // One full voxel of water (or steam/ice/snow - all phases are 1:1 by volume)
-// is worth exactly this much atmospheric humidity (0-255 scale). Every
-// humidity<->voxel conversion pays this price, so total moisture is conserved:
-// steam dissolves into HUMIDITY_PER_VOXEL of humidity, and condensation must
-// consume HUMIDITY_PER_VOXEL to spawn a full droplet.
+// is worth this much atmospheric humidity (0-255 scale) when a storm spends
+// local vapor buildup. Humidity gates precipitation timing, but the actual
+// conserved water volume stays in tangible water/ice/steam/snow voxels.
 // NOTE: the humidity field is a fog-density field derived from the steam
 // actually present in the scene - it carries no moisture mass (water
 // evaporates to steam; steam rises and condenses back on surfaces), but it
@@ -322,20 +325,20 @@ const HUMIDITY_CAPACITY_TEMP_SCALE: f32 = 0.45; // additional capacity per degre
 // transmittance), so vapor clouds shade and cool the world beneath them.
 // That closes a self-stabilizing cloud-albedo loop: evaporation -> clouds ->
 // shading -> cooling -> less evaporation. Steam voxels saturate their cell,
-// the density diffuses outward and decays. The condense pass is no longer
-// dispatched (its machinery is kept compiled for future use).
-const HUMIDITY_PER_VOXEL: f32 = 64.0;
+// the density diffuses outward and decays, then cool supersaturated pockets
+// can condense existing steam into rain or snow.
+const HUMIDITY_PER_VOXEL: f32 = 96.0;
 // Fog density (0-255 scale) a steam voxel pins its own cell to.
-const VAPOR_FOG_SATURATION: f32 = 200.0;
+const VAPOR_FOG_SATURATION: f32 = 120.0;
 // Fraction of a cell's fog density lost per climate pass once the steam that
 // fed it is gone - fog halos linger briefly, then dissipate.
-const VAPOR_FOG_DECAY_RATE: f32 = 0.06;
+const VAPOR_FOG_DECAY_RATE: f32 = 0.22;
 // Margin above capacity (0-255 scale) before a voxel tries to nucleate a
 // droplet. Small on purpose: the voxel only needs to be locally
 // oversaturated - the full HUMIDITY_PER_VOXEL cost is gathered from itself
 // plus its neighbors, so condensation fires once a REGION saturates rather
 // than requiring one cell to hoard an entire voxel's worth on its own.
-const CONDENSE_TRIGGER_MARGIN: f32 = 4.0;
+const CONDENSE_TRIGGER_MARGIN: f32 = 20.0;
 
 // Baseline air temperature, derived from overall sun brightness (0 = dark,
 // 3 = comfortable max, >3 = extreme heat). This is the "reference" temperature
@@ -451,6 +454,31 @@ fn swap_field_temp(idx_a: u32, idx_b: u32) {
 // Maximum humidity (0-255 scale) air at this temperature can hold before it condenses.
 fn humidity_capacity(temp_c: f32) -> f32 {
     return HUMIDITY_CAPACITY_BASE + temperature_0_255(temp_c) * HUMIDITY_CAPACITY_TEMP_SCALE;
+}
+
+fn airflow_nucleation_strength(gid: vec3<u32>) -> f32 {
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+    let primary = sin(world_pos.x * 0.035 + world_pos.z * 0.022 + params.time * 0.32);
+    let secondary = sin(world_pos.x * -0.018 + world_pos.y * 0.026 + world_pos.z * 0.031 - params.time * 0.19);
+    let band = primary * 0.65 + secondary * 0.35;
+    return mix(0.35, 1.0, smoothstep(0.18, 0.82, band));
+}
+
+fn precipitation_strength(gid: vec3<u32>, humidity_val: f32, capacity: f32) -> f32 {
+    let excess = max(humidity_val - capacity, 0.0);
+    let saturation = humidity_val / max(capacity, 1.0);
+    let temp_c = field_temp_c(grid_index(gid.x, gid.y, gid.z));
+    let excess_buildup = smoothstep(PRECIP_BUILDUP_EXCESS, PRECIP_BURST_EXCESS, excess);
+    let saturation_buildup = smoothstep(1.05, 1.75, saturation);
+    let cooling_buildup = 1.0 - smoothstep(EVAPORATION_BRISK_C, BOILING_POINT_C, temp_c);
+    return excess_buildup * saturation_buildup * cooling_buildup * airflow_nucleation_strength(gid);
+}
+
+fn local_saturation(gid: vec3<u32>, temp_c: f32) -> f32 {
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let humidity_val = f32(atomicLoad(&humidity[idx])) / HUMIDITY_FIXED_POINT;
+    let capacity = max(humidity_capacity(temp_c), 1.0);
+    return saturate(humidity_val / capacity);
 }
 
 // Check if a grid position is solid based on the solid mask
@@ -619,6 +647,16 @@ fn hash_position(pos: vec3<u32>) -> u32 {
     return (pos.x * 73856093u ^ pos.y * 19349663u ^ pos.z * 83492791u) & 0xFFFFFFFFu;
 }
 
+fn random_unit(seed: u32) -> f32 {
+    var x = seed;
+    x = x ^ (x >> 16u);
+    x = x * 0x7FEB352Du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846CA68Bu;
+    x = x ^ (x >> 16u);
+    return f32(x & 0x00FFFFFFu) * (1.0 / 16777216.0);
+}
+
 // Enhanced dispersion for steam - makes steam spread out more like a gas
 fn get_steam_dispersion_bias(gid: vec3<u32>, direction: u32) -> f32 {
     // Steam naturally wants to disperse and fill available space
@@ -716,7 +754,22 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
     // evaporation floor - that threshold only governs whether liquid water
     // passively evaporates, not whether vapor condenses back. Uses the
     // steam's own field temperature, not the light-driven ambient.
-    if field_temp_c(grid_index(gid.x, gid.y, gid.z)) >= BOILING_POINT_C {
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let temp_c = field_temp_c(idx);
+    if temp_c >= BOILING_POINT_C {
+        return false;
+    }
+
+    let humidity_val = f32(atomicLoad(&humidity[idx])) / HUMIDITY_FIXED_POINT;
+    let capacity = humidity_capacity(temp_c);
+    let weather_strength = precipitation_strength(gid, humidity_val, capacity);
+    let surface_dew = smoothstep(
+        CONDENSE_TRIGGER_MARGIN,
+        PRECIP_BUILDUP_EXCESS,
+        humidity_val - capacity
+    ) * 0.12;
+    let condense_strength = max(surface_dew, weather_strength);
+    if condense_strength <= 0.001 {
         return false;
     }
 
@@ -725,7 +778,8 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
     let time_hash = u32(params.time * 1000.0);
     let combined_hash = pos_hash ^ time_hash;
 
-    return (combined_hash & 255u) < u32(NATURAL_CONDENSATION_RATE * 255.0);
+    let chance = min(NATURAL_CONDENSATION_RATE * condense_strength, 1.0);
+    return random_unit(combined_hash) < chance;
 }
 
 
@@ -1096,13 +1150,28 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let conductive_t_self = clamp(t_self + self_delta_c, TEMP_MIN_C, TEMP_MAX_C);
 
-    // Rolling-average stats: slots 0/1 = water phases, 2/3 = air.
+    // Rolling-average stats: slots 0/1 = water phases, 2/3 = air,
+    // 4/5 = atmospheric humidity across empty air and steam.
     if fluid_type == 1u || fluid_type == 2u || fluid_type == 4u {
         atomicAdd(&temp_stats[0], u32(round(t_self) + 50.0));
         atomicAdd(&temp_stats[1], 1u);
     } else if fluid_type == 0u && !solid_self {
         atomicAdd(&temp_stats[2], u32(round(t_self) + 50.0));
         atomicAdd(&temp_stats[3], 1u);
+    }
+    if !solid_self && (fluid_type == 0u || fluid_type == 1u || fluid_type == 3u || fluid_type == 4u) {
+        var humidity_units = clamp(
+            round(f32(atomicLoad(&humidity[idx])) / HUMIDITY_FIXED_POINT),
+            0.0,
+            255.0
+        );
+        // Tangible vapor/precipitation means local air is saturated even if
+        // the diffuse fog field has not caught up yet.
+        if fluid_type == 1u || fluid_type == 3u || fluid_type == 4u {
+            humidity_units = 255.0;
+        }
+        atomicAdd(&temp_stats[4], u32(humidity_units));
+        atomicAdd(&temp_stats[5], 1u);
     }
 
     // "Up" for buoyancy: opposite the local gravity (radial-safe).
@@ -1287,10 +1356,9 @@ fn take_humidity(idx: u32, want: u32) -> u32 {
     return want;
 }
 
-// Condense excess atmospheric humidity once it exceeds the temperature-driven
-// capacity: a fraction of the excess is consumed each tick and turned into
-// dense fog (Steam), a dew/rain droplet (Water), or snow, depending on how far
-// over capacity the voxel is and how cold it is.
+// Condense steam inside cool saturated vapor pockets. Humidity is used as the
+// buildup trigger, but precipitation converts an existing steam voxel into
+// water/snow so total water volume is conserved.
 @compute @workgroup_size(4, 4, 4)
 fn condense_humidity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = params.grid_resolution;
@@ -1317,18 +1385,20 @@ fn condense_humidity(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let state = atomicLoad(&voxels[idx]);
-    if get_fluid_type(state) != 0u {
-        return; // Only empty/air voxels accumulate and condense humidity
+    if get_fluid_type(state) != 3u {
+        return; // Weather precipitation converts existing steam, never empty air.
     }
 
-    // Nucleation trigger: this voxel only needs to be locally oversaturated
-    // by a small margin. The full droplet cost is gathered from the
-    // surrounding region below - requiring one cell to hoard an entire
-    // HUMIDITY_PER_VOXEL on its own would never fire, because diffusion
-    // spreads moisture out as fast as steam dissolves it in.
+    // Nucleation trigger: this steam voxel needs local vapor buildup before
+    // it can condense into a falling rain/snow voxel.
     let temp_c = field_temp_c(idx);
     let capacity = humidity_capacity(temp_c);
     if humidity_val < capacity + CONDENSE_TRIGGER_MARGIN {
+        return;
+    }
+
+    let precip_strength = precipitation_strength(gid, humidity_val, capacity);
+    if precip_strength <= 0.001 {
         return;
     }
 
@@ -1338,24 +1408,14 @@ fn condense_humidity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pos_hash = hash_position(gid);
     let time_hash = u32(params.time * 1000.0);
     let combined_hash = pos_hash ^ time_hash;
-    let condense_chance = min(NATURAL_CONDENSATION_RATE * CLIMATE_TICK_INTERVAL, 1.0);
-    if (combined_hash & 255u) >= u32(condense_chance * 255.0) {
+    let condense_chance = min(NATURAL_CONDENSATION_RATE * CLIMATE_TICK_INTERVAL * precip_strength * 0.45, 1.0);
+    if random_unit(combined_hash) >= condense_chance {
         return;
     }
 
-    // Vapor only condenses ON something - a cave wall, rock, or the world
-    // sphere itself. No mid-air droplets: oversaturated open-air humidity
-    // just keeps diffusing until it reaches a surface (steam likewise only
-    // condenses on contact, see should_condense_steam).
-    if !touches_condensation_surface(gid) {
-        return;
-    }
-
-    // Gather exactly HUMIDITY_PER_VOXEL from this voxel plus its 6 neighbors.
-    // Every droplet is paid for in full - total moisture is conserved, and
-    // evaporated volume condenses back once the air saturates. A saturated
-    // region holds ~capacity per voxel, so 7 cells comfortably fund one
-    // droplet; an undersaturated region can't, and the attempt is refunded.
+    // Drain a local humidity budget so the same cloud band has to rebuild
+    // before it can keep raining, but do not treat humidity itself as water
+    // volume. The conserved voxel is the steam cell converted below.
     let cost_fp = u32(HUMIDITY_PER_VOXEL * HUMIDITY_FIXED_POINT);
     var gathered = take_humidity(idx, cost_fp);
     let res_i = i32(res);
@@ -1383,9 +1443,9 @@ fn condense_humidity(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // A full droplet of dew (warm) or snow (cold). The condensate inherits
-    // this voxel's field temperature automatically - the temp_field entry is
-    // untouched by the phase change.
+    // A full steam voxel becomes one full rain/snow voxel. The condensate
+    // inherits this voxel's field temperature automatically - the temp_field
+    // entry is untouched by the phase change.
     var new_state = (65535u << 16u) | 1u;
     if temp_c < FREEZE_POINT_C {
         new_state = (65535u << 16u) | 4u;
@@ -1705,7 +1765,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         // point instead of superheating.
         if fluid_type == 1u && temp_c >= BOILING_POINT_C && in_contact_with_air(gid) {
             let boil_hash = (hash_position(gid) * 0x85EBCA6Bu) ^ u32(params.time * 1000.0);
-            if (boil_hash & 255u) < u32(BOIL_PROBABILITY * 255.0) {
+            if random_unit(boil_hash) < BOIL_PROBABILITY {
                 let new_state = (65535u << 16u) | 3u;
                 let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
                 if result.exchanged {
@@ -1726,11 +1786,15 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         if fluid_type == 1u && settled && in_contact_with_air(gid) {
             if temp_c > EVAPORATION_FLOOR_C {
                 let warmth = saturate((temp_c - EVAPORATION_FLOOR_C) / (EVAPORATION_BRISK_C - EVAPORATION_FLOOR_C));
-                let rate = NATURAL_VAPORIZATION_RATE * pow(warmth, EVAPORATION_CURVE_POWER);
+                let saturation = local_saturation(gid, temp_c);
+                let humidity_room = 1.0 - smoothstep(0.55, 0.88, saturation);
+                let rate = NATURAL_VAPORIZATION_RATE
+                    * pow(warmth, EVAPORATION_CURVE_POWER)
+                    * humidity_room;
                 let pos_hash = hash_position(gid);
                 let time_hash = u32(params.time * 1000.0);
                 let combined_hash = pos_hash ^ time_hash;
-                if (combined_hash & 255u) < u32(rate * 255.0) {
+                if random_unit(combined_hash) < rate {
                     // Steam carries no tracked temperature - clear the field.
                     // 1:1 phase change: one voxel of water becomes one voxel
                     // of steam, nothing else. Moisture enters the humidity
@@ -2395,6 +2459,98 @@ fn fluid_init_sphere(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else {
         atomicStore(&voxels[idx], 0u);
     }
+}
+
+// Fill every in-bounds, non-solid voxel with water. Used by the static water
+// world option, where water is an environmental medium rather than a dynamic
+// fluid simulation.
+@compute @workgroup_size(4, 4, 4)
+fn fluid_fill_world_water(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = params.grid_resolution;
+
+    if gid.x >= res || gid.y >= res || gid.z >= res {
+        return;
+    }
+
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+
+    if is_in_bounds(world_pos) && !is_solid(gid.x, gid.y, gid.z) {
+        atomicStore(&voxels[idx], (65535u << 16u) | 1u);
+        atomicStore(&temp_field[idx], encode_field_temp(ambient_temp_c(idx)));
+    } else {
+        atomicStore(&voxels[idx], 0u);
+        atomicStore(&temp_field[idx], 0u);
+    }
+}
+
+// Static water world phase changes: allow water <-> ice transitions from
+// local temperature while keeping dynamic fluid movement/weather disabled.
+@compute @workgroup_size(4, 4, 4)
+fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = params.grid_resolution;
+
+    if gid.x >= res || gid.y >= res || gid.z >= res {
+        return;
+    }
+
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let world_pos = grid_to_world(gid.x, gid.y, gid.z);
+
+    if !is_in_bounds(world_pos) || is_solid(gid.x, gid.y, gid.z) {
+        atomicStore(&voxels[idx], 0u);
+        atomicStore(&temp_field[idx], 0u);
+        phase_debt[idx] = 0.0;
+        return;
+    }
+
+    let state = atomicLoad(&voxels[idx]);
+    let fluid_type = get_fluid_type(state);
+    if fluid_type != 1u && fluid_type != 2u {
+        phase_debt[idx] = phase_debt[idx] * PHASE_DEBT_DECAY;
+        return;
+    }
+
+    let temp_c = field_temp_c(idx);
+    var debt = phase_debt[idx];
+
+    if fluid_type == 1u {
+        let freeze_threshold = temperature_from_0_255_u32(params.freeze_threshold);
+        if temp_c < freeze_threshold {
+            debt += (freeze_threshold - temp_c) * params.freeze_rate;
+        } else {
+            debt *= PHASE_DEBT_DECAY;
+        }
+
+        if debt >= PHASE_DEBT_THRESHOLD {
+            let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
+            let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+            if result.exchanged {
+                phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
+                atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
+                return;
+            }
+        }
+    } else {
+        let melt_threshold = temperature_from_0_255_u32(params.melt_threshold);
+        if temp_c > melt_threshold {
+            debt += (temp_c - melt_threshold) * params.melt_rate;
+        } else {
+            debt *= PHASE_DEBT_DECAY;
+        }
+
+        if debt >= PHASE_DEBT_THRESHOLD {
+            let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
+            let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
+            if result.exchanged {
+                phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
+                atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
+                return;
+            }
+        }
+    }
+
+    phase_debt[idx] = debt;
 }
 
 // Continuous water spawn function
