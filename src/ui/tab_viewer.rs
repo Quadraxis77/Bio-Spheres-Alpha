@@ -8252,6 +8252,81 @@ fn render_lighting_settings(ui: &mut Ui) {
     // TODO: Implement lighting settings
 }
 
+fn categorized_cell_types(
+) -> &'static [(&'static str, &'static [crate::cell::types::CellType])] {
+    use crate::cell::types::CellType;
+
+    const GENERAL: &[CellType] = &[
+        CellType::Test,
+        CellType::Flagellocyte,
+        CellType::Ciliocyte,
+        CellType::Myocyte,
+        CellType::Buoyocyte,
+        CellType::Plumocyte,
+    ];
+    const METABOLISM: &[CellType] = &[
+        CellType::Phagocyte,
+        CellType::Photocyte,
+        CellType::Lipocyte,
+        CellType::Vasculocyte,
+        CellType::Siphonocyte,
+        CellType::Devorocyte,
+    ];
+    const CONTROL: &[CellType] = &[
+        CellType::Oculocyte,
+        CellType::Cognocyte,
+        CellType::Memorocyte,
+        CellType::Luminocyte,
+        CellType::Glueocyte,
+    ];
+    const DEVELOPMENT: &[CellType] = &[
+        CellType::Embryocyte,
+        CellType::Gametocyte,
+        CellType::Stemocyte,
+    ];
+
+    &[
+        ("Body & Motion", GENERAL),
+        ("Feeding & Transport", METABOLISM),
+        ("Sensing & Control", CONTROL),
+        ("Development", DEVELOPMENT),
+    ]
+}
+
+fn render_cell_type_category_header(ui: &mut Ui, label: &str) {
+    ui.add_space(3.0);
+    ui.label(
+        egui::RichText::new(label)
+            .size(10.0)
+            .strong()
+            .color(palette().text_secondary),
+    );
+    ui.separator();
+}
+
+fn render_categorized_cell_type_menu(
+    ui: &mut Ui,
+    selected_index: usize,
+    mut on_select: impl FnMut(crate::cell::types::CellType),
+) {
+    for (category, types) in categorized_cell_types() {
+        render_cell_type_category_header(ui, category);
+        for &cell_type in *types {
+            let selected = selected_index == cell_type.to_index() as usize;
+            let item_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
+            let response = ui
+                .add_sized(
+                    [ui.available_width(), item_h],
+                    egui::Button::new(cell_type.name()).selected(selected),
+                )
+                .on_hover_text(cell_type.tooltip());
+            if response.clicked() {
+                on_select(cell_type);
+            }
+        }
+    }
+}
+
 /// Render the Modes panel with full functionality.
 fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
@@ -8287,20 +8362,12 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             )
             .width(ui.available_width())
             .show_ui(ui, |ui| {
-                let item_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
-                for ct in cell_types.iter() {
-                    let selected =
-                        context.genome.modes[selected_index].cell_type == ct.to_index() as i32;
-                    let resp = ui
-                        .add_sized(
-                            [ui.available_width(), item_h],
-                            egui::Button::new(ct.name()).selected(selected),
-                        )
-                        .on_hover_text(ct.tooltip());
-                    if resp.clicked() {
+                let current_type = context.genome.modes[selected_index].cell_type.max(0) as usize;
+                render_categorized_cell_type_menu(ui, current_type, |ct| {
+                    if cell_types.contains(&ct) {
                         context.genome.modes[selected_index].cell_type = ct.to_index() as i32;
                     }
-                }
+                });
             });
         // Propagate cell type change to all selected modes.
         // Don't rely on combo_resp.response.changed() - it reflects the button widget,
@@ -12651,13 +12718,9 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 egui::ComboBox::from_id_salt("cell_type_visuals_selector")
                     .selected_text(selected_name)
                     .show_ui(ui, |ui| {
-                        for (i, cell_type) in cell_types.iter().enumerate() {
-                            ui.selectable_value(
-                                &mut context.editor_state.selected_cell_type,
-                                i,
-                                cell_type.name()
-                            );
-                        }
+                        render_categorized_cell_type_menu(ui, selected, |cell_type| {
+                            context.editor_state.selected_cell_type = cell_type.to_index() as usize;
+                        });
                     });
             });
 

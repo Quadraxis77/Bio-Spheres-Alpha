@@ -114,6 +114,22 @@ impl RadialMenuState {
         self.hovered_segment = None;
     }
 
+    /// Close after a mouse click selection while the physical Alt key may
+    /// still be held. Keeps the Alt latch set so key-repeat cannot reopen the
+    /// menu until the real key release arrives.
+    pub fn close_from_click_while_alt_held(&mut self) {
+        if let Some(idx) = self.hovered_segment {
+            let tools = RadialTool::all_tools();
+            if idx < tools.len() {
+                self.active_tool = tools[idx];
+            }
+        } else {
+            self.active_tool = RadialTool::None;
+        }
+        self.visible = false;
+        self.hovered_segment = None;
+    }
+
     /// Update hovered segment based on mouse position.
     pub fn update_hover(&mut self, mouse_pos: Pos2) {
         if !self.visible {

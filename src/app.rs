@@ -1296,7 +1296,9 @@ impl App {
                         if let Some(pos) = self.ui.pointer_hover_pos() {
                             self.editor_state.radial_menu.update_hover(pos);
                         }
-                        self.editor_state.radial_menu.close(true);
+                        self.editor_state
+                            .radial_menu
+                            .close_from_click_while_alt_held();
                         // Hide cursor if a tool is now active
                         let new_active_tool = self.editor_state.radial_menu.active_tool;
                         let hide_cursor =
@@ -1577,22 +1579,19 @@ impl App {
                             self.window.request_redraw();
                             return true;
                         } else if event.state == ElementState::Released && menu.alt_held {
-                            // Alt release still supports the fast radial gesture. If
-                            // no segment is hovered, keep the menu open so players
-                            // can tap Alt, move to an option, then click it.
-                            if let Some(pos) = self.ui.pointer_hover_pos() {
-                                menu.update_hover(pos);
-                            }
-
-                            if menu.hovered_segment.is_some() {
+                            // Alt release closes the radial gesture menu. Players
+                            // who tap Alt can still click options while it is open.
+                            if menu.visible {
+                                if let Some(pos) = self.ui.pointer_hover_pos() {
+                                    menu.update_hover(pos);
+                                }
                                 menu.close(true);
-                                let hide_cursor = self.editor_state.radial_menu.active_tool
-                                    != crate::ui::radial_menu::RadialTool::None;
-                                self.window.set_cursor_visible(!hide_cursor);
                             } else {
                                 menu.alt_held = false;
-                                self.window.set_cursor_visible(true);
                             }
+                            let hide_cursor = self.editor_state.radial_menu.active_tool
+                                != crate::ui::radial_menu::RadialTool::None;
+                            self.window.set_cursor_visible(!hide_cursor);
                             self.window.request_redraw();
                             return true;
                         }

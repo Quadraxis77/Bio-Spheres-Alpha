@@ -2533,12 +2533,9 @@ impl UiSystem {
         // Handle water fill toggle request (GPU mode rail button)
         if editor_state.request_toggle_water {
             editor_state.request_toggle_water = false;
-            let was_continuous_spawn = editor_state.fluid_continuous_spawn;
             editor_state.fluid_continuous_spawn = !editor_state.fluid_continuous_spawn;
             if editor_state.fluid_continuous_spawn {
                 editor_state.fluid_static_water_world = false;
-            } else if was_continuous_spawn {
-                editor_state.request_clear_fluid = true;
             }
             if let Some(gpu_scene) = scene_manager.gpu_scene_mut() {
                 if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
@@ -2551,9 +2548,12 @@ impl UiSystem {
 
         if editor_state.request_toggle_static_water {
             editor_state.request_toggle_static_water = false;
+            let was_static_water_world = editor_state.fluid_static_water_world;
             editor_state.fluid_static_water_world = !editor_state.fluid_static_water_world;
             if editor_state.fluid_static_water_world {
                 editor_state.fluid_continuous_spawn = false;
+            } else if was_static_water_world {
+                editor_state.request_clear_fluid = true;
             }
             if let Some(gpu_scene) = scene_manager.gpu_scene_mut() {
                 if let Some(ref mut simulator) = gpu_scene.fluid_simulator {
