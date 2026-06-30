@@ -225,6 +225,13 @@ const WATER_DENSITY_INVERSION_C: f32 = 4.0;
 // occlusion), divided by the phase's thermal mass - air responds in under a
 // second, water and rock proportionally slower.
 const SOLAR_COUPLING: f32 = 0.004;
+// Geothermal vents are localized heat sources, not ambient light. Water and
+// ice in the source field should respond strongly enough to melt/boil instead
+// of waiting for weak air conduction from the plume.
+const GEOTHERMAL_COUPLING_AIR: f32 = 0.14;
+const GEOTHERMAL_COUPLING_WATER: f32 = 0.18;
+const GEOTHERMAL_COUPLING_ICE: f32 = 0.22;
+const GEOTHERMAL_COUPLING_SOLID: f32 = 0.08;
 // Radiation is asymmetric: sunlight adds heat only where light reaches, and
 // shadow never injects cold - shadowed voxels just bleed heat radiatively at
 // a fraction of the full solar coupling. Caves get their temperature the
@@ -1074,7 +1081,15 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
     if geothermal_c > 0.0 {
         let geothermal_target_c = min(ambient_temp_c(idx) + geothermal_c, TEMP_MAX_C);
         if geothermal_target_c > t_self {
-            let geothermal_coupling = min(0.08 * rate_scale / m_self, 0.35);
+            var geothermal_strength = GEOTHERMAL_COUPLING_AIR;
+            if solid_self {
+                geothermal_strength = GEOTHERMAL_COUPLING_SOLID;
+            } else if fluid_type == 1u {
+                geothermal_strength = GEOTHERMAL_COUPLING_WATER;
+            } else if fluid_type == 2u || fluid_type == 4u {
+                geothermal_strength = GEOTHERMAL_COUPLING_ICE;
+            }
+            let geothermal_coupling = min(geothermal_strength * rate_scale / m_self, 0.65);
             self_delta_c += (geothermal_target_c - t_self) * geothermal_coupling;
         }
     }

@@ -661,6 +661,34 @@ pub fn apply_to_solid_mask(
                 spec.axis
             };
             let source_radius = (spec.width / 2).max(1);
+            let contact_radius = source_radius + 2;
+
+            // Contact heat around the vent mouth warms nearby water/ice even
+            // when they sit beside the opening rather than directly in the
+            // narrow emitted plume.
+            for dx in -contact_radius..=contact_radius {
+                for dy in -contact_radius..=contact_radius {
+                    for dz in -contact_radius..=contact_radius {
+                        let offset = IVec3::new(dx, dy, dz);
+                        let dist = Vec3::new(dx as f32, dy as f32, dz as f32).length();
+                        if dist > contact_radius as f32 + 0.25 {
+                            continue;
+                        }
+
+                        let q = p + offset;
+                        if !in_bounds(q, res as i32) || solid[idx(q, res)] {
+                            continue;
+                        }
+
+                        let falloff = (1.0 - dist / contact_radius.max(1) as f32)
+                            .max(0.0)
+                            .powf(1.15);
+                        let heat_value = params.geothermal_heat_output * falloff * 0.75;
+                        let i = idx(q, res);
+                        heat[i] = heat[i].max(heat_value);
+                    }
+                }
+            }
 
             for h in 0..=spec.heat_radius {
                 let axial_t = h as f32 / spec.heat_radius.max(1) as f32;

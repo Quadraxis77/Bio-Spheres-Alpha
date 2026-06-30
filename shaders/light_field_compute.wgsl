@@ -145,6 +145,98 @@ fn is_inside_sphere(gx: f32, gy: f32, gz: f32) -> bool {
     return (dx * dx + dy * dy + dz * dz) <= (half * half);
 }
 
+fn geothermal_strength_at(x: i32, y: i32, z: i32) -> f32 {
+    if (!is_in_bounds(x, y, z)) {
+        return 0.0;
+    }
+    let idx = grid_to_index(u32(x), u32(y), u32(z));
+    return geothermal_glow[idx].w;
+}
+
+fn geothermal_source_dir(gx: u32, gy: u32, gz: u32) -> vec3<f32> {
+    let x = i32(gx);
+    let y = i32(gy);
+    let z = i32(gz);
+    let grad = vec3<f32>(
+        geothermal_strength_at(x + 1, y, z) - geothermal_strength_at(x - 1, y, z),
+        geothermal_strength_at(x, y + 1, z) - geothermal_strength_at(x, y - 1, z),
+        geothermal_strength_at(x, y, z + 1) - geothermal_strength_at(x, y, z - 1),
+    );
+
+    let len_sq = dot(grad, grad);
+    if (len_sq <= 0.000001) {
+        return vec3<f32>(0.0);
+    }
+    return grad * inverseSqrt(len_sq);
+}
+
+fn geothermal_transmittance(gx: u32, gy: u32, gz: u32, local_strength: f32) -> f32 {
+    let source_dir = geothermal_source_dir(gx, gy, gz);
+    if (dot(source_dir, source_dir) <= 0.000001) {
+        return 1.0;
+    }
+
+    var pos = vec3<f32>(f32(gx) + 0.5, f32(gy) + 0.5, f32(gz) + 0.5);
+    let step = source_dir * params.step_size;
+    var transmittance = 1.0;
+    var consecutive_solid = 0u;
+    var strongest_seen = local_strength;
+
+    for (var i = 0u; i < params.max_steps; i++) {
+        pos += step;
+
+        let ix = i32(floor(pos.x));
+        let iy = i32(floor(pos.y));
+        let iz = i32(floor(pos.z));
+
+        if (!is_in_bounds(ix, iy, iz) || !is_inside_sphere(pos.x, pos.y, pos.z)) {
+            break;
+        }
+
+        let sample_idx = grid_to_index(u32(ix), u32(iy), u32(iz));
+        let sample_strength = geothermal_glow[sample_idx].w;
+        if (sample_strength <= 0.001 && strongest_seen > local_strength * 1.1) {
+            break;
+        }
+        strongest_seen = max(strongest_seen, sample_strength);
+
+        let solid_here = solid_mask[sample_idx] != 0u && !is_near_sphere_boundary(pos.x, pos.y, pos.z);
+        if (solid_here) {
+            consecutive_solid += 1u;
+            if (consecutive_solid >= 2u) {
+                let x = params.absorption_solid;
+                transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+            }
+        } else {
+            consecutive_solid = 0u;
+        }
+
+        let cells = cell_occupancy[sample_idx];
+        if (cells > 0u) {
+            let x = params.absorption_cell * f32(cells);
+            transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+        }
+
+        let water_amount = clamp(water_density[sample_idx], 0.0, 1.0);
+        if (water_amount > 0.01) {
+            let x = 0.055 * water_amount * params.step_size;
+            transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+        }
+
+        let ice_amount = clamp(ice_density[sample_idx], 0.0, 1.0);
+        if (ice_amount > 0.01) {
+            let x = ICE_ABSORPTION * ice_amount * params.step_size;
+            transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+        }
+
+        if (transmittance < 0.05) {
+            return 0.0;
+        }
+    }
+
+    return transmittance;
+}
+
 // Check if a grid-space position is near the sphere boundary (outer shell)
 // Solids in this zone are the world boundary, not interior cave walls
 fn is_near_sphere_boundary(gx: f32, gy: f32, gz: f32) -> bool {
@@ -336,12 +428,14 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let geo_tint = mix(vec3<f32>(1.0), vec3<f32>(0.92, 0.86, 0.78), submerged * 0.22);
     let ice_amount_here = clamp(ice_density[idx], 0.0, 1.0);
     let ice_tint = mix(vec3<f32>(1.0), vec3<f32>(0.90, 0.88, 0.86), ice_amount_here * 0.18);
-    let local_glow = geo.xyz * geo_tint * ice_tint;
-    let local_weight = clamp(geo.w, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
+    let geo_transmittance = geothermal_transmittance(grid_pos.x, grid_pos.y, grid_pos.z, geo.w);
+    let local_glow = geo.xyz * geo_tint * ice_tint * geo_transmittance;
+    let local_weight = clamp(geo.w * geo_transmittance, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
     light_field[idx] = max(intensity, local_weight);
     let sunlight_color = sun_color * ray_tint * voxel_tint;
-    let resolved_color = select(sunlight_color, local_glow, geo.w > 0.001);
-    light_color_field[idx] = vec4<f32>(resolved_color, geo.w);
+    let use_local_glow = local_weight > 0.001 && local_weight >= intensity;
+    let resolved_color = select(sunlight_color, local_glow, use_local_glow);
+    light_color_field[idx] = vec4<f32>(resolved_color, select(0.0, local_weight, use_local_glow));
 }
 
 // === Cell Occupancy Grid Builder ===
