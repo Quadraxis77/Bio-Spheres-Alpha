@@ -2643,44 +2643,44 @@ impl GenomeEditorState {
 
         // Return defaults
         (
-            0.5,
-            100.0,
+            0.62,
+            250.0,
             2u32,
             0.5,
             1.0,
-            0.0,
-            12345u32,
+            0.015,
+            1664u32,
             128u32,
-            crate::rendering::cave_system::DEFAULT_ISOLATED_CHUNK_CULL_VOLUME,
-            crate::rendering::cave_system::DEFAULT_MESH_SMOOTHING_ITERATIONS,
-            crate::rendering::cave_system::DEFAULT_MESH_SMOOTHING_FACTOR,
-            false,
+            1_000_000.0,
+            2u32,
+            1.0,
             true,
-            10u32,
-            0u32,
-            false,
-            9.0,
-            2.0,
+            true,
+            15u32,
+            1u32,
+            true,
+            3.0,
+            2.75,
             5.0,
             4.0,
-            2.0,
-            34.0,
+            3.4,
+            118.5,
+            32.0,
             8.0,
-            3.75,
-            10.0,
-            [1.0, 0.32, 0.055],
+            16.1,
+            [1.0, 0.31999987, 0.055000007],
             0,
-            [0.105, 0.100, 0.092],
+            [0.105, 0.099999994, 0.092],
             [0.150, 0.165, 0.160],
-            [0.235, 0.205, 0.155],
+            [0.235, 0.20499997, 0.155],
             [0.330, 0.300, 0.225],
-            0.075,
-            1.85,
-            0.28,
-            0.22,
-            0.09,
-            0.17,
-            0.28,
+            0.023,
+            1.12,
+            0.44,
+            0.055,
+            0.071,
+            0.368,
+            0.215,
             0.65,
             0.045,
             0.48,
@@ -2688,7 +2688,7 @@ impl GenomeEditorState {
             0.7,
             0.3,
             32.0,
-            0.05,
+            0.0245,
             std::f32::consts::TAU,
             22.0,
             13.0,
@@ -2704,8 +2704,78 @@ impl GenomeEditorState {
             0.98,
             0.0,
             0.0,
-            CaveAppearanceVisualSettings::layered_shale(),
-            CaveAppearanceVisualSettings::lava_tubes(),
+            CaveAppearanceVisualSettings {
+                dark_color: [0.105, 0.099999994, 0.092],
+                cool_color: [0.15, 0.165, 0.16],
+                warm_color: [0.235, 0.20499997, 0.155],
+                pale_color: [0.33, 0.3, 0.225],
+                layer_scale: 0.023,
+                warp_strength: 1.12,
+                fine_band_strength: 0.44,
+                cool_mottle_strength: 0.055,
+                grain_strength: 0.071,
+                patch_contrast: 0.368,
+                seam_darkening: 0.215,
+                wall_line_strength: 0.65,
+                min_color: 0.045,
+                max_color: 0.48,
+                ambient_strength: 0.08,
+                diffuse_strength: 0.7,
+                specular_strength: 0.3,
+                specular_power: 32.0,
+                texture_scale: 0.0245,
+                coarse_frequency: std::f32::consts::TAU,
+                fine_frequency: 22.0,
+                seam_frequency: 13.0,
+                fine_noise_scale: 0.045,
+                fine_noise_strength: 4.0,
+                seam_noise_scale: 0.035,
+                seam_noise_strength: 2.5,
+                coarse_band_low: -0.35,
+                coarse_band_high: 0.55,
+                fine_band_low: 0.35,
+                fine_band_high: 0.92,
+                seam_low: 0.82,
+                seam_high: 0.98,
+                geometry_conform: 0.0,
+                parallax_depth: 0.0,
+            },
+            CaveAppearanceVisualSettings {
+                dark_color: [0.014, 0.013000001, 0.012],
+                cool_color: [0.000055348148, 0.0010541112, 0.0015241166],
+                warm_color: [0.21, 0.077999994, 0.029999997],
+                pale_color: [1.0, 0.28499973, 0.035000026],
+                layer_scale: 0.08,
+                warp_strength: 2.35,
+                fine_band_strength: 0.34,
+                cool_mottle_strength: 0.58,
+                grain_strength: 0.13,
+                patch_contrast: 0.12,
+                seam_darkening: 0.62,
+                wall_line_strength: 0.72,
+                min_color: 0.0,
+                max_color: 0.79,
+                ambient_strength: 0.06,
+                diffuse_strength: 0.001,
+                specular_strength: 0.0,
+                specular_power: 48.0,
+                texture_scale: 0.071,
+                coarse_frequency: 2.5,
+                fine_frequency: 13.5,
+                seam_frequency: 19.5,
+                fine_noise_scale: 0.11,
+                fine_noise_strength: 4.6,
+                seam_noise_scale: 0.042,
+                seam_noise_strength: 5.4,
+                coarse_band_low: 0.16,
+                coarse_band_high: 0.78,
+                fine_band_low: 0.24,
+                fine_band_high: 0.88,
+                seam_low: 0.16,
+                seam_high: 0.48,
+                geometry_conform: 0.165,
+                parallax_depth: 4.0,
+            },
             true,
             0.15,
             0.3,
@@ -2725,7 +2795,7 @@ impl GenomeEditorState {
             5.0,
             [0.06, 0.12, 0.04],
             [0.20, 0.38, 0.10],
-            true,
+            false,
             32u32,
             10_000.0f32,
             4.0f32,
@@ -3305,64 +3375,59 @@ impl GenomeEditorState {
 
         // Return defaults
         (
-            [0.0, 1.0, 0.0],   // light_dir
-            true,              // show_volumetric_fog
-            0.15,              // fog_density
-            20,                // fog_steps
-            [1.0, 0.95, 0.95], // light_color
-            2.6,               // light_intensity
-            [0.4, 0.5, 0.6],   // fog_color
-            0.5,               // fog_scattering_anisotropy
-            0.13,              // fog_absorption
-            1.35,              // fog_height_density
-            0.002,             // fog_height_falloff
-            90,                // light_field_max_steps
-            1.5,               // light_field_step_size
-            20.0,              // light_field_absorption_solid
-            5.0,               // light_field_absorption_cell
-            0.02,              // light_field_ambient_floor
-            // Sun settings
-            true,            // show_sun
-            [0.6, 0.4, 0.2], // sun_color
-            0.05,            // sun_angular_radius
-            15.0,            // sun_intensity
-            false,           // sun_rotation_enabled
-            [0.0, 1.0, 0.0], // sun_rotation_axis
-            0.0,             // sun_orbit_angle
-            0.0,             // sun_rotation_speed
-            false,           // sun_cycle_enabled
-            0.0,             // sun_cycle_min
-            15.0,            // sun_cycle_max
-            120.0,           // sun_cycle_period
-            0.25,            // sun_night_ratio
-            // Shadow settings
-            true, // shadow_enabled
-            0.7,  // shadow_strength
-            0.8,  // shadow_quality
-            // Caustic settings
-            0.5, // caustic_intensity
-            8.0, // caustic_scale
-            1.0, // caustic_speed
-            // Photocyte settings
-            0.2,  // photocyte_mass_per_second (scales with brightness and occupied-voxel light)
-            0.05, // photocyte_min_light_threshold
-            // Luminocyte bloom
-            true,  // luminocyte_bloom_enabled
-            0.02,  // luminocyte_bloom_radius
-            0.4,   // fog_water_wave_strength
-            0.15,  // fog_water_wave_scale
-            true,  // fog_smooth_light_field
-            1.5,   // fog_composite_blur
-            false, // show_dof
-            50.0,  // dof_focal_distance
-            30.0,  // dof_focal_range
-            8.0,   // dof_max_blur_radius
-            1.0,   // dof_blur_strength
-            1.0,   // pp_contrast
-            false, // pp_adapt_enabled
-            0.05,  // pp_adapt_speed
-            0.1,   // pp_adapt_min
-            8.0,   // pp_adapt_max
+            [-0.057902984, 0.00000004363805, -0.9983222],
+            true,
+            0.0,
+            20,
+            [1.0, 0.95, 0.95],
+            0.3,
+            [0.4, 0.49999997, 0.6],
+            0.5,
+            0.13,
+            1.35,
+            0.002,
+            90,
+            1.5,
+            20.0,
+            5.0,
+            0.02,
+            true,
+            [0.8307159, 0.7089912, 0.48764104],
+            0.05,
+            1.8,
+            true,
+            [0.0, -1.0, -0.00000004371139],
+            176.68054,
+            0.017453292,
+            false,
+            0.0,
+            15.0,
+            120.0,
+            0.0,
+            true,
+            0.7,
+            0.8,
+            0.5,
+            0.5,
+            0.6,
+            0.2,
+            0.05,
+            true,
+            0.02,
+            0.4,
+            0.15,
+            true,
+            1.5,
+            false,
+            50.0,
+            30.0,
+            8.0,
+            1.0,
+            1.0,
+            false,
+            0.05,
+            0.1,
+            8.0,
         )
     }
 
@@ -3621,20 +3686,20 @@ impl GenomeEditorState {
                 Self {
                     iso_level: 0.05,
                     ambient: 0.15,
-                    diffuse: 0.6,
-                    specular: 0.8,
-                    shininess: 64.0,
-                    fresnel: 0.5,
-                    fresnel_power: 3.0,
-                    reflection: 0.3,
-                    alpha: 0.25,
-                    rim: 0.5,
-                    wave_height: 0.8,
-                    wave_speed: 1.0,
-                    noise_scale: 0.5,
-                    noise_octaves: 3.0,
-                    noise_lacunarity: 2.0,
-                    noise_persistence: 0.5,
+                    diffuse: 0.18,
+                    specular: 0.0,
+                    shininess: 3.0,
+                    fresnel: 1.2,
+                    fresnel_power: 6.3,
+                    reflection: 1.0,
+                    alpha: 0.13,
+                    rim: 0.7,
+                    wave_height: 3.0,
+                    wave_speed: 2.0,
+                    noise_scale: 0.06,
+                    noise_octaves: 1.0,
+                    noise_lacunarity: 2.6,
+                    noise_persistence: 1.0,
                 }
             }
         }
@@ -3719,13 +3784,13 @@ impl GenomeEditorState {
             fn default() -> Self {
                 Self {
                     show_sun: true,
-                    sun_color: [1.0, 1.0, 0.85],
-                    sun_angular_radius: 0.025,
-                    sun_intensity: 10.0,
-                    sun_rotation_enabled: false,
-                    sun_rotation_axis: [0.0, 1.0, 0.0],
-                    sun_orbit_angle: 0.0,
-                    sun_rotation_speed: 0.0,
+                    sun_color: [0.8307159, 0.7089912, 0.48764104],
+                    sun_angular_radius: 0.05,
+                    sun_intensity: 1.8,
+                    sun_rotation_enabled: true,
+                    sun_rotation_axis: [0.0, -1.0, -0.00000004371139],
+                    sun_orbit_angle: 176.68054,
+                    sun_rotation_speed: 0.017453292,
                 }
             }
         }

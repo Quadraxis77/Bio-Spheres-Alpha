@@ -470,49 +470,49 @@ pub struct IceAppearanceSettings {
 impl Default for IceAppearanceSettings {
     fn default() -> Self {
         Self {
-            facet_scale: default_ice_facet_scale(),
-            displacement_strength: default_ice_displacement_strength(),
-            facet_diffuse: default_ice_facet_diffuse(),
-            glint_shininess: default_ice_glint_shininess(),
-            glint_strength: default_ice_glint_strength(),
-            alpha: default_ice_alpha(),
-            reflection_brightness: default_ice_reflection_brightness(),
-            fresnel_reflection: default_ice_fresnel_reflection(),
-            surface_color: default_ice_surface_color(),
-            deep_color: default_ice_deep_color(),
+            facet_scale: 0.05263158,
+            displacement_strength: 0.15,
+            facet_diffuse: 0.4,
+            glint_shininess: 64.0,
+            glint_strength: 3.0,
+            alpha: 0.9,
+            reflection_brightness: 0.8,
+            fresnel_reflection: 0.38,
+            surface_color: [0.6862745, 0.6862745, 0.6862745],
+            deep_color: [0.4235294, 0.9254902, 1.0],
         }
     }
 }
 
 fn default_ice_facet_scale() -> f32 {
-    0.02
+    0.05263158
 }
 fn default_ice_displacement_strength() -> f32 {
-    0.9
+    0.15
 }
 fn default_ice_facet_diffuse() -> f32 {
-    0.2
+    0.4
 }
 fn default_ice_glint_shininess() -> f32 {
     64.0
 }
 fn default_ice_glint_strength() -> f32 {
-    1.0
+    3.0
 }
 fn default_ice_alpha() -> f32 {
-    0.82
+    0.9
 }
 fn default_ice_reflection_brightness() -> f32 {
-    1.0
+    0.8
 }
 fn default_ice_fresnel_reflection() -> f32 {
-    0.35
+    0.38
 }
 fn default_ice_surface_color() -> [f32; 3] {
-    [0.80, 0.90, 1.00]
+    [0.6862745, 0.6862745, 0.6862745]
 }
 fn default_ice_deep_color() -> [f32; 3] {
-    [0.25, 0.45, 0.75]
+    [0.4235294, 0.9254902, 1.0]
 }
 
 /// Climate/weather simulation tunables - humidity diffusion and

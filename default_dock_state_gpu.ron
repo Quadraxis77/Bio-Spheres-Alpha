@@ -13,7 +13,7 @@
                             y: 708.28125,
                         ),
                     ),
-                    fraction: 0.8501132,
+                    fraction: 0.84653413,
                     fully_collapsed: false,
                     collapsed_leaf_count: 0,
                     absolute_size_left: None,
@@ -25,11 +25,11 @@
                             y: 43.0,
                         ),
                         max: (
-                            x: 1671.4286,
+                            x: 1664.5714,
                             y: 708.28125,
                         ),
                     ),
-                    fraction: 0.16439992,
+                    fraction: 0.20060658,
                     fully_collapsed: false,
                     collapsed_leaf_count: 0,
                     absolute_size_left: None,
@@ -37,7 +37,7 @@
                 Vertical((
                     rect: (
                         min: (
-                            x: 1676.5714,
+                            x: 1669.7142,
                             y: 43.0,
                         ),
                         max: (
@@ -57,11 +57,11 @@
                             y: 43.0,
                         ),
                         max: (
-                            x: 309.7143,
+                            x: 366.85715,
                             y: 708.28125,
                         ),
                     ),
-                    fraction: 0.38962814,
+                    fraction: 0.46779042,
                     fully_collapsed: false,
                     collapsed_leaf_count: 0,
                     absolute_size_left: None,
@@ -69,21 +69,21 @@
                 Leaf((
                     rect: (
                         min: (
-                            x: 314.2857,
+                            x: 372.0,
                             y: 43.0,
                         ),
                         max: (
-                            x: 1671.4286,
+                            x: 1664.5714,
                             y: 708.28125,
                         ),
                     ),
                     viewport: (
                         min: (
-                            x: 314.28125,
+                            x: 372.0,
                             y: 43.0,
                         ),
                         max: (
-                            x: 1671.4375,
+                            x: 1664.5625,
                             y: 708.28125,
                         ),
                     ),
@@ -97,7 +97,7 @@
                 Leaf((
                     rect: (
                         min: (
-                            x: 1676.5714,
+                            x: 1669.7142,
                             y: 43.0,
                         ),
                         max: (
@@ -107,7 +107,7 @@
                     ),
                     viewport: (
                         min: (
-                            x: 1676.5625,
+                            x: 1669.7188,
                             y: 43.0,
                         ),
                         max: (
@@ -126,7 +126,7 @@
                 Leaf((
                     rect: (
                         min: (
-                            x: 1676.5714,
+                            x: 1669.7142,
                             y: 151.42857,
                         ),
                         max: (
@@ -136,7 +136,7 @@
                     ),
                     viewport: (
                         min: (
-                            x: 1676.5625,
+                            x: 1669.7188,
                             y: 177.4375,
                         ),
                         max: (
@@ -159,25 +159,25 @@
                             y: 43.0,
                         ),
                         max: (
-                            x: 309.7143,
-                            y: 300.0,
+                            x: 366.85715,
+                            y: 352.0,
                         ),
                     ),
                     viewport: (
                         min: (
                             x: 45.0,
-                            y: 76.5,
+                            y: 69.0,
                         ),
                         max: (
-                            x: 309.71875,
-                            y: 300.0,
+                            x: 366.84375,
+                            y: 352.0,
                         ),
                     ),
                     tabs: [
                         WorldSettings,
                         LightSettings,
                     ],
-                    active: (0),
+                    active: (1),
                     scroll: 0.0,
                     collapsed: false,
                 )),
@@ -185,20 +185,20 @@
                     rect: (
                         min: (
                             x: 45.0,
-                            y: 304.57144,
+                            y: 356.57144,
                         ),
                         max: (
-                            x: 309.7143,
+                            x: 366.85715,
                             y: 708.28125,
                         ),
                     ),
                     viewport: (
                         min: (
                             x: 45.0,
-                            y: 330.5625,
+                            y: 382.5625,
                         ),
                         max: (
-                            x: 309.71875,
+                            x: 366.84375,
                             y: 708.28125,
                         ),
                     ),
@@ -206,7 +206,7 @@
                         CaveSystem,
                         FluidSettings,
                     ],
-                    active: (1),
+                    active: (0),
                     scroll: 0.0,
                     collapsed: false,
                 )),
@@ -233,11 +233,10 @@
                 Empty,
                 Empty,
             ],
-            focused_node: Some((7)),
+            focused_node: Some((5)),
             collapsed: false,
             collapsed_leaf_count: 0,
         )),
-        Empty,
     ],
     focused_surface: Some((0)),
     translations: (
