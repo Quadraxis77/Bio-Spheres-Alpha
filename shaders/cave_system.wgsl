@@ -43,6 +43,7 @@ struct CaveParams {
     mesh_smoothing_iterations: u32,
     mesh_smoothing_factor: f32,
     mesh_smooth_normals: u32,
+    flat_ground_enabled: u32,
     appearance: u32,
     rock_dark_r: f32,
     rock_dark_g: f32,
@@ -437,6 +438,47 @@ fn lava_surface_uv(world_pos: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     return world_pos.xy;
 }
 
+fn flat_ground_surface_height(world_pos: vec3<f32>) -> f32 {
+    let base_height = cave_params.world_center.y - cave_params.world_radius / 3.0;
+    let phase = f32(cave_params.seed) * 0.013;
+    let amplitude = clamp(cave_params.world_radius * 0.008, 0.75, 2.4);
+
+    let swell = sin(world_pos.x * 0.045 + phase) * 0.65
+              + sin(world_pos.z * 0.038 - phase * 0.7) * 0.45
+              + sin((world_pos.x + world_pos.z) * 0.025 + phase * 0.31) * 0.35;
+    let ripples = sin(world_pos.x * 0.18 + world_pos.z * 0.07 + swell * 0.4 + phase * 1.7) * 0.22;
+
+    return base_height + (swell / 1.45 + ripples) * amplitude;
+}
+
+fn is_flat_ground_top(world_pos: vec3<f32>, normal: vec3<f32>) -> bool {
+    if (cave_params.flat_ground_enabled == 0u) {
+        return false;
+    }
+
+    let floor_y = flat_ground_surface_height(world_pos);
+    let cell = (cave_params.world_radius + 3.0) * 2.0 / f32(max(cave_params.grid_resolution, 1u));
+    return abs(world_pos.y - floor_y) <= cell * 2.5 && abs(normal.y) > 0.45;
+}
+
+fn sandy_floor_color(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let uv = world_pos.xz * 0.045;
+    let dune = noise(uv * 0.42 + vec2<f32>(7.0, 19.0));
+    let grains = noise(uv * 4.5 + vec2<f32>(31.0, 3.0));
+    let ripple = sin((world_pos.x * 0.11 + world_pos.z * 0.055) + dune * 2.0) * 0.5 + 0.5;
+
+    let wet_sand = vec3<f32>(0.34, 0.285, 0.205);
+    let pale_sand = vec3<f32>(0.72, 0.64, 0.45);
+    let shell_fleck = vec3<f32>(0.86, 0.80, 0.62);
+    var color = mix(wet_sand, pale_sand, 0.45 + dune * 0.35);
+    color = mix(color, shell_fleck, smoothstep(0.78, 0.96, grains) * 0.18);
+    color *= 0.86 + ripple * 0.12;
+    color += vec3<f32>((grains - 0.5) * 0.045);
+
+    let flatness = smoothstep(0.35, 0.95, normal.y);
+    return clamp(color * (0.82 + flatness * 0.18), vec3<f32>(0.08), vec3<f32>(0.9));
+}
+
 fn lava_plate_edge(uv: vec2<f32>) -> f32 {
     let cell = floor(uv);
     let local = fract(uv);
@@ -713,7 +755,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var ao = 0.5 + 0.5 * texture_value;
     
     var final_base_color: vec3<f32>;
-    if (cave_params.appearance == 1u) {
+    let is_sand_floor = is_flat_ground_top(in.world_position, N);
+    if (is_sand_floor) {
+        final_base_color = sandy_floor_color(in.world_position, N);
+    } else if (cave_params.appearance == 1u) {
         final_base_color = lava_tube_color(in.world_position, N, texture_value);
     } else {
         final_base_color = layered_rock_color(in.world_position, N, texture_value);
@@ -724,7 +769,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let cam_dist = length(camera.camera_pos - in.world_position);
     let moss_amount = sample_moss_density(moss_sample_pos);
 
-    var specular_strength = 1.0;
+    var specular_strength = select(1.0, 0.18, is_sand_floor);
     if (moss_amount > 0.01) {
         let base_uv = get_triplanar_uv(in.world_position, N);
 

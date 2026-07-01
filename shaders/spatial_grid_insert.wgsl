@@ -76,6 +76,10 @@ var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
 @group(1) @binding(10)
 var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
 
+// Death flags for biologically-plausible overcrowding cull.
+@group(1) @binding(11)
+var<storage, read_write> death_flags: array<u32>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
 
 @compute @workgroup_size(256)
@@ -89,6 +93,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get this cell's grid index (pre-computed in spatial_grid_assign)
     let grid_idx = cell_grid_indices[cell_idx];
+
+    if (death_flags[cell_idx] != 0u) {
+        return;
+    }
     
     // Atomically get a slot in this grid cell
     let slot = atomicAdd(&spatial_grid_counts[grid_idx], 1u);
@@ -97,10 +105,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let grid_base_offset = grid_idx * MAX_CELLS_PER_GRID;
         spatial_grid_cells[grid_base_offset + slot] = cell_idx;
     } else {
-        let overflow_slot = atomicAdd(&spatial_grid_overflow_count[0], 1u);
-        if (overflow_slot < params.cell_capacity) {
-            spatial_grid_overflow_cells[overflow_slot] = cell_idx;
-            spatial_grid_overflow_grid_indices[overflow_slot] = grid_idx;
-        }
+        death_flags[cell_idx] = 1u;
     }
 }

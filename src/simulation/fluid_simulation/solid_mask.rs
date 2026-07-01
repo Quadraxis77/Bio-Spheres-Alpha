@@ -3,7 +3,7 @@
 //! This module generates a solid mask that treats the entire cave volume as solid.
 //! It uses the exact same noise function and cave settings to replicate the cave volume.
 
-use crate::rendering::cave_system::CaveParams;
+use crate::rendering::cave_system::{flat_ground_surface_height, CaveParams};
 use glam::Vec3;
 
 /// Solid mask generator for fluid system
@@ -185,6 +185,10 @@ impl SolidMaskGenerator {
         // Outside or exactly at extended sphere boundary = solid
         // Use >= instead of > to ensure boundary points are solid, creating flat caps at poles
         if sphere_sdf >= 0.0 {
+            return true;
+        }
+
+        if params.flat_ground_enabled != 0 && pos.y <= flat_ground_surface_height(pos, params) {
             return true;
         }
 

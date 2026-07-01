@@ -94,6 +94,9 @@ pub struct CaveParams {
     /// 1 = average normals across shared vertices for soft lighting, 0 = flat
     /// triangle normals.
     pub mesh_smooth_normals: u32,
+    /// Fill the lower third of the world sphere with solid cave wall, forming
+    /// a flat top surface that can render as sandy ocean floor.
+    pub flat_ground_enabled: u32,
 
     /// Cave appearance preset index. 0 = Layered Shale, 1 = Lava Tubes.
     pub appearance: u32,
@@ -173,6 +176,7 @@ impl Default for CaveParams {
             mesh_smoothing_iterations: DEFAULT_MESH_SMOOTHING_ITERATIONS,
             mesh_smoothing_factor: DEFAULT_MESH_SMOOTHING_FACTOR,
             mesh_smooth_normals: 0,
+            flat_ground_enabled: 0,
             appearance: 0,
             rock_dark_color: [0.105, 0.100, 0.092],
             rock_layer_scale: 0.075,
@@ -211,6 +215,32 @@ impl Default for CaveParams {
             _padding: [0.0; 123],
         }
     }
+}
+
+pub fn flat_ground_surface_height(pos: Vec3, params: &CaveParams) -> f32 {
+    let base_height = params.world_center[1] - params.world_radius / 3.0;
+    let phase = params.seed as f32 * 0.013;
+    let amplitude = (params.world_radius * 0.008).clamp(0.75, 2.4);
+
+    let swell = (pos.x * 0.045 + phase).sin() * 0.65
+        + (pos.z * 0.038 - phase * 0.7).sin() * 0.45
+        + ((pos.x + pos.z) * 0.025 + phase * 0.31).sin() * 0.35;
+    let ripples = (pos.x * 0.18 + pos.z * 0.07 + swell * 0.4 + phase * 1.7).sin() * 0.22;
+
+    base_height + (swell / 1.45 + ripples) * amplitude
+}
+
+fn flat_ground_density(pos: Vec3, params: &CaveParams) -> Option<f32> {
+    if params.flat_ground_enabled == 0 {
+        return None;
+    }
+
+    let depth = flat_ground_surface_height(pos, params) - pos.y;
+    if depth < 0.0 {
+        return None;
+    }
+
+    Some(params.threshold + (depth / params.scale.max(0.001)).clamp(0.0, 0.5))
 }
 
 /// Vertex data for cave mesh (rendering)
@@ -1128,6 +1158,10 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
             return 1.0;
         }
 
+        if let Some(density) = flat_ground_density(p, params) {
+            return density;
+        }
+
         // Domain warp
         let warp_scale = params.scale * 0.5;
         let warp_strength = params.smoothness * params.scale;
@@ -1996,6 +2030,10 @@ impl CaveSystemRenderer {
         // Use >= instead of > to ensure boundary points are solid, creating flat caps at poles
         if sphere_sdf >= 0.0 {
             return 1.0;
+        }
+
+        if let Some(density) = flat_ground_density(pos, params) {
+            return density;
         }
 
         // Apply domain warping for organic shapes

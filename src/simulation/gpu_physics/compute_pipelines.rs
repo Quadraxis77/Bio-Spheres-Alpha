@@ -1631,6 +1631,10 @@ impl GpuPhysicsPipelines {
                     binding: 10,
                     resource: buffers.spatial_grid_overflow_count.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: buffers.death_flags.as_entire_binding(),
+                },
             ],
         });
 
@@ -3298,6 +3302,10 @@ impl GpuPhysicsPipelines {
                     binding: 10,
                     resource: buffers.spatial_grid_overflow_count.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: buffers.death_flags.as_entire_binding(),
+                },
             ],
         })
     }
@@ -3559,6 +3567,17 @@ impl GpuPhysicsPipelines {
                 // Overflow side-list count
                 wgpu::BindGroupLayoutEntry {
                     binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Death flags - spatial grid build marks cells that exceed bucket capacity
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -5516,6 +5535,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 11: Death flags (read-write - collision culls impossible overcrowding)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -5890,6 +5920,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: force_accum_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: triple_buffers.death_flags.as_entire_binding(),
                 },
             ],
         })

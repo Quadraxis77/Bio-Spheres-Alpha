@@ -84,10 +84,11 @@ fn spawn_new(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos_mass = position_and_mass[cell_idx];
     let pos  = pos_mass.xyz;
     let mass = pos_mass.w;
-    if mass <= 0.0 { return; }
 
     // Radius from mass: r = cbrt(3*mass / (4*pi))
-    let radius = pow(mass * 0.23873241463, 0.33333333333);
+    // Some death paths, including overcrowding culls, zero mass before this
+    // extractor runs. Still emit a visible burst for the alive->dead transition.
+    let radius = max(pow(max(mass, 0.001) * 0.23873241463, 0.33333333333), 0.35);
 
     // More fragments than before - they're small and subtle so we need density
     let num_particles = 10u;

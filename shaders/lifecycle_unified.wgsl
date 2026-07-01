@@ -373,9 +373,12 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     
-    let should_die = is_dead || apoptosis_triggered;
+    // Other GPU passes can pre-mark a live cell for removal. Treat that as a
+    // new death until this pass has zeroed its mass and pushed the slot.
+    let externally_marked_dead = was_dead && positions_in[cell_idx].w >= 0.5;
+    let should_die = is_dead || apoptosis_triggered || externally_marked_dead;
     
-    if (should_die && !was_dead) {
+    if ((should_die && !was_dead) || externally_marked_dead) {
         // Newly dead cell - push slot to ring buffer for recycling
         death_flags[cell_idx] = 1u;
         push_free_slot(cell_idx);

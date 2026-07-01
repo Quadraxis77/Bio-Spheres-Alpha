@@ -3726,6 +3726,19 @@ fn render_side_rail(
                 editor_state.request_toggle_static_water = true;
             }
 
+            let flat_ground_active = editor_state.cave_flat_ground_enabled;
+            if rail_button_toggle(
+                ui,
+                "_",
+                "Flat Ground (fill lower third with sandy ocean floor)",
+                flat_ground_active,
+                &p,
+            ) {
+                editor_state.cave_flat_ground_enabled = !flat_ground_active;
+                editor_state.cave_params_dirty = true;
+                editor_state.save_cave_settings();
+            }
+
             // Screenshot
             if rail_button(ui, "📷", "Take Screenshot", &p) {
                 editor_state.request_screenshot = true;
