@@ -1132,8 +1132,10 @@ pub fn modes_list_items(
                     *renaming_mode = None;
                     rename_buffer.clear();
                 }
-                // Handle clicking outside to cancel rename (don't save)
+                // Commit when the editor loses focus, matching normal inline rename behavior.
+                // Escape remains the explicit cancel path.
                 else if text_response.lost_focus() {
+                    rename_completed = Some((index, rename_buffer.clone()));
                     *renaming_mode = None;
                     rename_buffer.clear();
                 }

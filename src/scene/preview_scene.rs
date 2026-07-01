@@ -133,6 +133,16 @@ impl PreviewScene {
             self.state.clear_checkpoints();
             self.state.update_initial_state(&self.genome, &self.config);
             self.state.seek_to_time(self.state.display_time);
+        } else {
+            self.sync_display_metadata(new_genome);
+        }
+    }
+
+    fn sync_display_metadata(&mut self, new_genome: &Genome) {
+        self.genome.name = new_genome.name.clone();
+        for (mode, new_mode) in self.genome.modes.iter_mut().zip(&new_genome.modes) {
+            mode.name = new_mode.name.clone();
+            mode.default_name = new_mode.default_name.clone();
         }
     }
 

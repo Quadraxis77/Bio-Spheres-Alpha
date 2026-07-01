@@ -2944,8 +2944,23 @@ impl App {
                     // Preserve the name the user has typed - it's display-only and
                     // must not be overwritten by the scene sync every frame.
                     let preserved_name = self.working_genome.name.clone();
+                    let preserved_mode_names: Vec<(String, String)> = self
+                        .working_genome
+                        .modes
+                        .iter()
+                        .map(|mode| (mode.name.clone(), mode.default_name.clone()))
+                        .collect();
                     self.working_genome = preview_scene.genome.clone();
                     self.working_genome.name = preserved_name;
+                    for (mode, (name, default_name)) in self
+                        .working_genome
+                        .modes
+                        .iter_mut()
+                        .zip(preserved_mode_names)
+                    {
+                        mode.name = name;
+                        mode.default_name = default_name;
+                    }
 
                     // One-way sync: read simulation's actual time for progress bar display only
                     // Never write back to time_value - the slider is purely user-driven
