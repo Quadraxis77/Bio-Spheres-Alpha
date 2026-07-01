@@ -8487,7 +8487,9 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
             .iter()
             .filter(|&&idx| idx < context.genome.modes.len() && idx != initial_mode)
             .count();
-        let can_remove = removable_selected_count > 0;
+        let now = ui.input(|i| i.time);
+        let delete_cooling_down = now < context.editor_state.mode_delete_cooldown_until;
+        let can_remove = removable_selected_count > 0 && !delete_cooling_down;
         let remove_btn = ui.add_enabled(
             can_remove,
             egui::Button::new("−").min_size(egui::Vec2::new(20.0, 0.0)),
@@ -8499,49 +8501,64 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                 } else {
                     format!("Remove {} selected modes", removable_selected_count)
                 }
+            } else if delete_cooling_down {
+                "Remove paused briefly to prevent accidental double-delete".to_string()
             } else {
                 "Select a non-initial mode to remove".to_string()
             })
             .clicked()
         {
             let old_selected = context.editor_state.selected_mode_index;
-            let old_selection = context.editor_state.selected_mode_indices.clone();
             let removed = context
                 .genome
                 .remove_modes_except_initial(&context.editor_state.selected_mode_indices);
 
             if !removed.is_empty() {
                 let removed_before = |idx: usize| removed.iter().filter(|&&r| r < idx).count();
-                context.editor_state.selected_mode_indices = old_selection
-                    .iter()
-                    .copied()
-                    .filter(|idx| !removed.contains(idx))
-                    .map(|idx| idx - removed_before(idx))
-                    .filter(|&idx| idx < context.genome.modes.len())
-                    .collect();
+                let old_len = context.genome.modes.len() + removed.len();
+                let was_removed = |idx: usize| removed.binary_search(&idx).is_ok();
+                let nearest_surviving_selection = |preferred_old_idx: usize| -> usize {
+                    let len_after = context.genome.modes.len();
+                    if len_after == 0 {
+                        return 0;
+                    }
 
-                context.editor_state.selected_mode_index = if removed.contains(&old_selected) {
+                    for old_idx in preferred_old_idx..old_len {
+                        if !was_removed(old_idx) {
+                            let remapped = old_idx - removed_before(old_idx);
+                            if remapped < len_after {
+                                return remapped;
+                            }
+                        }
+                    }
+
+                    for old_idx in (0..preferred_old_idx).rev() {
+                        if !was_removed(old_idx) {
+                            let remapped = old_idx - removed_before(old_idx);
+                            if remapped < len_after {
+                                return remapped;
+                            }
+                        }
+                    }
+
                     context.genome.initial_mode.max(0) as usize
+                };
+                context.editor_state.selected_mode_index = if was_removed(old_selected) {
+                    let preferred = removed
+                        .iter()
+                        .copied()
+                        .filter(|&idx| idx >= old_selected)
+                        .min()
+                        .unwrap_or(old_selected);
+                    nearest_surviving_selection(preferred)
                 } else {
                     old_selected - removed_before(old_selected)
                 }
                 .min(context.genome.modes.len().saturating_sub(1));
 
-                if context.editor_state.selected_mode_indices.is_empty() {
-                    context.editor_state.selected_mode_indices =
-                        vec![context.editor_state.selected_mode_index];
-                } else if !context
-                    .editor_state
-                    .selected_mode_indices
-                    .contains(&context.editor_state.selected_mode_index)
-                {
-                    context
-                        .editor_state
-                        .selected_mode_indices
-                        .push(context.editor_state.selected_mode_index);
-                    context.editor_state.selected_mode_indices.sort_unstable();
-                    context.editor_state.selected_mode_indices.dedup();
-                }
+                context.editor_state.selected_mode_indices =
+                    vec![context.editor_state.selected_mode_index];
+                context.editor_state.mode_delete_cooldown_until = now + 0.30;
 
                 let remap_surviving_index = |idx: usize| {
                     if removed.contains(&idx) {

@@ -533,11 +533,15 @@ impl Genome {
 
         for (i, mode) in self.modes.iter().enumerate() {
             // Build a per-mode default that matches the load baseline exactly:
+            // each mode starts with its generated label (`M 1`, `M 2`, ...),
             // child_a and child_b default to self-referencing (mode_number = i).
             // This ensures child mode numbers are written correctly even when they
             // point to mode 0 (which would otherwise match the global default and
             // be silently omitted, then revert to self-referencing on load).
             let mut default_mode = ModeSettings::default();
+            let mode_name = format!("M {}", i + 1);
+            default_mode.name = mode_name.clone();
+            default_mode.default_name = mode_name;
             default_mode.child_a.mode_number = i as i32;
             default_mode.child_b.mode_number = i as i32;
 
@@ -1888,6 +1892,30 @@ modified_modes:
 
         assert_eq!(loaded.modes.len(), 5);
         assert_eq!(loaded.modes[1].name, "Changed");
+    }
+
+    #[test]
+    fn default_mode_labels_are_not_serialized_as_custom_names() {
+        let genome = Genome::new_with_mode_count(3);
+        let yaml = genome.to_yaml_string().unwrap();
+
+        assert!(!yaml.contains("name: M 1"));
+        assert!(!yaml.contains("name: M 2"));
+        assert!(!yaml.contains("name: M 3"));
+    }
+
+    #[test]
+    fn custom_mode_names_round_trip_against_generated_labels() {
+        let mut genome = Genome::new_with_mode_count(3);
+        genome.modes[1].name = "Arm Sweep".to_string();
+
+        let yaml = genome.to_yaml_string().unwrap();
+        assert!(yaml.contains("name: Arm Sweep"));
+
+        let loaded = Genome::from_yaml_string(&yaml).unwrap();
+        assert_eq!(loaded.modes[0].name, "M 1");
+        assert_eq!(loaded.modes[1].name, "Arm Sweep");
+        assert_eq!(loaded.modes[2].name, "M 3");
     }
 
     #[test]

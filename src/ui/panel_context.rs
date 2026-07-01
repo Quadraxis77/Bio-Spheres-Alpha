@@ -296,6 +296,8 @@ pub struct GenomeEditorState {
     /// All currently selected mode indices (for multi-select editing).
     /// Always contains `selected_mode_index` as one of its entries.
     pub selected_mode_indices: Vec<usize>,
+    /// Briefly suppresses mode deletion after a delete, preventing double-click bounce.
+    pub mode_delete_cooldown_until: f64,
     /// Whether the "copy into" dialog is open
     pub copy_into_dialog_open: bool,
     /// Source mode index for copy operation
@@ -1140,6 +1142,7 @@ impl GenomeEditorState {
             rename_buffer: String::new(),
             selected_mode_index: 0,
             selected_mode_indices: vec![0],
+            mode_delete_cooldown_until: 0.0,
             copy_into_dialog_open: false,
             copy_into_source: 0,
             color_picker_state: None,
