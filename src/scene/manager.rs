@@ -312,6 +312,10 @@ impl SceneManager {
             surface_nets.set_initial_params(queue, editor_state);
         }
 
+        if gpu_scene.fluid_simulator.is_some() {
+            gpu_scene.rewire_transferred_fluid_system(device, queue, config.format);
+        }
+
         // Sync lighting and fog from current editor state so reset doesn't revert visuals
         gpu_scene.apply_light_params_from_editor(editor_state);
 

@@ -3698,6 +3698,15 @@ impl App {
                                     label: Some("Fluid Reset Encoder"),
                                 });
                         gpu_scene.reset_fluid(&self.device, &self.queue, &mut encoder);
+                        if let Some(simulator) = gpu_scene.fluid_simulator.as_ref() {
+                            simulator.set_fluid_type(self.editor_state.selected_fluid_type);
+                            simulator.set_static_water_world(false);
+                            simulator.set_continuous_spawn(false);
+                            simulator
+                                .set_static_water_world(self.editor_state.fluid_static_water_world);
+                            simulator
+                                .set_continuous_spawn(self.editor_state.fluid_continuous_spawn);
+                        }
                         self.queue.submit(std::iter::once(encoder.finish()));
 
                         // Reapply saved cave settings after reset

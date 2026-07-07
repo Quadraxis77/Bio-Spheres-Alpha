@@ -1001,6 +1001,7 @@ impl GpuScene {
         self.current_frame = 0;
         self.last_light_field_update_frame = None;
         self.light_field_needs_update = true;
+        self.fluid_mesh_extract_counter = 0;
         self.paused = false;
         self.first_frame = true;
         self.dragged_cell_index = u32::MAX;
@@ -5804,43 +5805,8 @@ impl GpuScene {
         // Start with empty fluid - no initial sphere spawn
         // Fluid will only appear when continuous spawning is enabled
 
-        // Rebuild signal sense world data bind group with real buffers from fluid simulator
-        {
-            let light_buf = self
-                .light_field_system
-                .as_ref()
-                .map(|lfs| lfs.light_field_buffer())
-                .unwrap_or(&self.signal_sense_dummy_light_buffer);
-            let light_color_buf = self
-                .light_field_system
-                .as_ref()
-                .map(|lfs| lfs.light_color_field_buffer())
-                .unwrap_or(&self.signal_sense_dummy_light_color_buffer);
-            let density_buf = self
-                .gpu_surface_nets
-                .as_ref()
-                .map(|sn| sn.density_buffer())
-                .unwrap_or(&self.signal_sense_dummy_density_buffer);
-            self.cached_bind_groups.signal_sense_world_data = self
-                .gpu_physics_pipelines
-                .create_signal_sense_world_data_bind_group(
-                    device,
-                    &self.signal_sense_world_params_buffer,
-                    simulator.nutrient_voxels_buffer(),
-                    light_buf,
-                    light_color_buf,
-                    simulator.solid_mask_buffer(),
-                    density_buf,
-                    self.boulder_system
-                        .as_ref()
-                        .map(|bs| &bs.buffers.boulder_state),
-                    self.boulder_system
-                        .as_ref()
-                        .map(|bs| &bs.buffers.boulder_count),
-                );
-        }
-
         self.fluid_simulator = Some(simulator);
+        self.rebuild_signal_sense_world_data_bind_group(device);
         self.show_gpu_density_mesh = true;
 
         // Initialize steam particle renderer
@@ -5868,6 +5834,117 @@ impl GpuScene {
         self.initialize_moss_system(device);
 
         log::info!("GPU fluid simulator initialized with solid mask, water bitfield, and nutrient particles for cell buoyancy");
+    }
+
+    /// Reconnect render and physics resources after a GPU scene recreation moves
+    /// an existing fluid simulator into a newly allocated scene.
+    pub fn rewire_transferred_fluid_system(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+    ) {
+        let Some(ref simulator) = self.fluid_simulator else {
+            return;
+        };
+        simulator.invalidate_surface_nets_extract_cache();
+
+        self.cached_bind_groups.update_water_buffers(
+            device,
+            &self.gpu_physics_pipelines,
+            &self.adhesion_buffers,
+            &self.gpu_triple_buffers,
+            simulator.water_grid_params_buffer(),
+            simulator.water_bitfield_buffer(),
+            simulator.water_velocity_buffer(),
+            simulator.ice_bitfield_buffer(),
+            simulator.current_state_buffer(),
+            simulator.temperature_field_buffer(),
+            simulator.geothermal_heat_buffer(),
+        );
+
+        if self.boulder_system.is_some() {
+            let boulder_bufs = self.boulder_system.as_ref().map(|bs| &bs.buffers);
+            self.cached_bind_groups.boulder_physics_buffers = self
+                .gpu_physics_pipelines
+                .create_boulder_physics_buffers_bind_group(
+                    device,
+                    boulder_bufs,
+                    Some(simulator.water_grid_params_buffer()),
+                    Some(simulator.water_bitfield_buffer()),
+                );
+
+            if let Some(ref mut bs) = self.boulder_system {
+                bs.bubble_compute_bg = Some(bs.bubbles.create_compute_bind_group(
+                    device,
+                    &bs.buffers,
+                    simulator.water_grid_params_buffer(),
+                    simulator.water_bitfield_buffer(),
+                ));
+            }
+        }
+
+        self.rebuild_signal_sense_world_data_bind_group(device);
+
+        self.steam_extract_bind_group = None;
+        self.water_extract_bind_group = None;
+        self.nutrient_extract_bind_group = None;
+        self.env_camera_bind_group_steam = None;
+        self.env_camera_bind_group_water = None;
+        self.env_camera_bind_group_nutrient = None;
+
+        self.initialize_steam_particle_renderer(device, surface_format);
+        self.initialize_water_particle_renderer(device, surface_format);
+        self.initialize_nutrient_particle_renderer(device, queue, surface_format);
+
+        self.show_gpu_density_mesh = true;
+        self.water_shadow_bind_group_set = false;
+        self.fluid_mesh_extract_counter = 0;
+    }
+
+    fn rebuild_signal_sense_world_data_bind_group(&mut self, device: &wgpu::Device) {
+        let nutrient_buf = self
+            .fluid_simulator
+            .as_ref()
+            .map(|fs| fs.nutrient_voxels_buffer())
+            .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
+        let light_buf = self
+            .light_field_system
+            .as_ref()
+            .map(|lfs| lfs.light_field_buffer())
+            .unwrap_or(&self.signal_sense_dummy_light_buffer);
+        let light_color_buf = self
+            .light_field_system
+            .as_ref()
+            .map(|lfs| lfs.light_color_field_buffer())
+            .unwrap_or(&self.signal_sense_dummy_light_color_buffer);
+        let solid_buf = self
+            .fluid_simulator
+            .as_ref()
+            .map(|fs| fs.solid_mask_buffer())
+            .unwrap_or(&self.signal_sense_dummy_solid_buffer);
+        let density_buf = self
+            .gpu_surface_nets
+            .as_ref()
+            .map(|sn| sn.density_buffer())
+            .unwrap_or(&self.signal_sense_dummy_density_buffer);
+        self.cached_bind_groups.signal_sense_world_data = self
+            .gpu_physics_pipelines
+            .create_signal_sense_world_data_bind_group(
+                device,
+                &self.signal_sense_world_params_buffer,
+                nutrient_buf,
+                light_buf,
+                light_color_buf,
+                solid_buf,
+                density_buf,
+                self.boulder_system
+                    .as_ref()
+                    .map(|bs| &bs.buffers.boulder_state),
+                self.boulder_system
+                    .as_ref()
+                    .map(|bs| &bs.buffers.boulder_count),
+            );
     }
 
     /// Initialize the phagocyte nutrient consumption system
@@ -6732,6 +6809,7 @@ impl GpuScene {
         encoder: &mut wgpu::CommandEncoder,
     ) {
         if let Some(ref mut simulator) = self.fluid_simulator {
+            simulator.paused = false;
             simulator.clear(device, queue, encoder);
             // Removed automatic sphere generation - fluid stays empty after reset
         }

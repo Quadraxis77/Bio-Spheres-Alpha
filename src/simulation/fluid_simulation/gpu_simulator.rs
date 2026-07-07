@@ -1807,7 +1807,9 @@ impl GpuFluidSimulator {
             bytemuck::cast_slice(&[extract_params]),
         );
 
-        // Lazily create and cache the extract bind group (buffers never change after init)
+        // Lazily create and cache the extract bind group. The target buffers are
+        // owned by the surface-nets renderer, so scene recreation must invalidate
+        // this cache before extracting into a new renderer.
         let mut cached = self.cached_extract_bind_group.borrow_mut();
         if cached.is_none() {
             *cached = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1852,6 +1854,12 @@ impl GpuFluidSimulator {
         pass.set_pipeline(&self.extract_pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+    }
+
+    /// Drop the cached surface-nets extract bind group so the next extraction
+    /// binds the current renderer's density buffers.
+    pub fn invalidate_surface_nets_extract_cache(&self) {
+        *self.cached_extract_bind_group.borrow_mut() = None;
     }
 
     /// Update the water bitfield from current voxel state
