@@ -106,6 +106,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let grid_base_offset = grid_idx * MAX_CELLS_PER_GRID;
         spatial_grid_cells[grid_base_offset + slot] = cell_idx;
     } else {
-        death_flags[cell_idx] = 1u;
+        let overflow_slot = atomicAdd(&spatial_grid_overflow_count[0], 1u);
+        if (overflow_slot < params.cell_capacity) {
+            spatial_grid_overflow_cells[overflow_slot] = cell_idx;
+            spatial_grid_overflow_grid_indices[overflow_slot] = grid_idx;
+        }
     }
 }

@@ -134,8 +134,10 @@ struct GpuBoulder {
 @group(2) @binding(9) var<storage, read> boulder_count: array<u32>;
 @group(2) @binding(10) var<storage, read_write> boulder_force_accum: array<atomic<i32>>;
 @group(2) @binding(11) var<storage, read_write> death_flags: array<u32>;
+@group(2) @binding(12) var<storage, read> cell_adhesion_indices: array<i32>;
 
 const MAX_CELLS_PER_GRID: u32 = 16u;
+const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const FRICTION_COEFF: f32 = 0.3;
 const BOUNDARY_REDIRECT_FORCE: f32 = 15.0;
@@ -258,8 +260,22 @@ fn live_cell(cell_idx: u32) -> bool {
     return cell_idx < cell_count_buffer[0] && death_flags[cell_idx] == 0u && positions_in[cell_idx].w >= 0.5;
 }
 
+fn has_adhesion_connection(cell_idx: u32) -> bool {
+    let base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        if (cell_adhesion_indices[base + i] >= 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn cull_overcrowded_overflow_cell(cell_idx: u32, grid_idx: u32) -> bool {
     if (spatial_grid_counts[grid_idx] <= OVERCROWD_BUCKET_THRESHOLD) {
+        return false;
+    }
+
+    if (has_adhesion_connection(cell_idx)) {
         return false;
     }
 

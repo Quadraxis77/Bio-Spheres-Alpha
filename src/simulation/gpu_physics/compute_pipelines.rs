@@ -5546,6 +5546,17 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
+                // Binding 12: Cell adhesion indices (read-only - bonded cells are exempt from density culling)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -5924,6 +5935,10 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 11,
                     resource: triple_buffers.death_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: adhesion_buffers.cell_adhesion_indices.as_entire_binding(),
                 },
             ],
         })
