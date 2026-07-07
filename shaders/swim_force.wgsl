@@ -172,7 +172,7 @@ fn float_to_fixed(v: f32) -> i32 {
     return i32(v * FIXED_POINT_SCALE);
 }
 
-fn is_in_water(world_pos: vec3<f32>) -> bool {
+fn water_voxel_at(world_pos: vec3<f32>) -> bool {
     let res = water_params.grid_resolution;
     if (res == 0u) {
         return false;
@@ -200,6 +200,23 @@ fn is_in_water(world_pos: vec3<f32>) -> bool {
 
     let bits = water_bitfield[bitfield_idx];
     return (bits & (1u << bit_index)) != 0u;
+}
+
+fn is_in_water(world_pos: vec3<f32>) -> bool {
+    if (water_voxel_at(world_pos)) {
+        return true;
+    }
+
+    let boundary_radius = params.world_size * 0.5;
+    let dist_from_center = length(world_pos);
+    if (dist_from_center > 0.0001 &&
+        dist_from_center >= boundary_radius - water_params.cell_size * 2.0 &&
+        dist_from_center <= boundary_radius + water_params.cell_size) {
+        let inward_pos = world_pos - (world_pos / dist_from_center) * water_params.cell_size;
+        return water_voxel_at(inward_pos);
+    }
+
+    return false;
 }
 
 // Rotate a vector by a quaternion

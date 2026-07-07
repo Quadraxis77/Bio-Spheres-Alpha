@@ -298,18 +298,25 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        // Stage 4: Collision detection
-        compute_pass.set_pipeline(&pipelines.collision_detection);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.set_bind_group(
-            2,
-            &cached_bind_groups.collision_force_accum[current_index],
-            &[],
-        );
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
-
-        // Stage 5: Adhesion physics
+        // Stage 4: Collision detection — per-pair parallel dispatch.
+        // Pass B (intra-bucket pairs) needs one thread per (bucket, pair).
+        // Worst-case: capacity/16 buckets * 120 pairs each.
+        // Dispatch the larger of that bound and cell_workgroups so Pass A (per-cell
+        // boundary forces) and Pass C (cross-bucket neighbors) are also fully covered.
+        {
+            let max_buckets = (triple_buffers.capacity + 15) / 16;
+            let pair_threads = max_buckets * 120; // 120 = MAX_CELLS_PER_GRID*(MAX_CELLS_PER_GRID-1)/2
+            let collision_workgroups = ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+            compute_pass.set_pipeline(&pipelines.collision_detection);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+            compute_pass.set_bind_group(
+                2,
+                &cached_bind_groups.collision_force_accum[current_index],
+                &[],
+            );
+            compute_pass.dispatch_workgroups(collision_workgroups, 1, 1);
+        }
         if has_adhesion_bonds {
             compute_pass.set_pipeline(&pipelines.adhesion_physics);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
@@ -696,16 +703,21 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        // Stage 4: Collision detection
-        compute_pass.set_pipeline(&pipelines.collision_detection);
-        compute_pass.set_bind_group(0, physics_bind_group, &[]);
-        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-        compute_pass.set_bind_group(
-            2,
-            &cached_bind_groups.collision_force_accum[current_index],
-            &[],
-        );
-        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+        // Stage 4: Collision detection — per-pair parallel dispatch.
+        {
+            let max_buckets = (triple_buffers.capacity + 15) / 16;
+            let pair_threads = max_buckets * 120;
+            let collision_workgroups = ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+            compute_pass.set_pipeline(&pipelines.collision_detection);
+            compute_pass.set_bind_group(0, physics_bind_group, &[]);
+            compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+            compute_pass.set_bind_group(
+                2,
+                &cached_bind_groups.collision_force_accum[current_index],
+                &[],
+            );
+            compute_pass.dispatch_workgroups(collision_workgroups, 1, 1);
+        }
 
         // Stage 5: Adhesion physics
         if has_adhesion_bonds {

@@ -137,10 +137,11 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
 }
 
-// Check if a world position is inside water using the compressed bitfield
-// Returns true if the cell is in a water voxel
-fn is_in_water(world_pos: vec3<f32>) -> bool {
+fn water_voxel_at(world_pos: vec3<f32>) -> bool {
     let res = water_params.grid_resolution;
+    if (res == 0u) {
+        return false;
+    }
 
     // Convert world position to grid coordinates
     let grid_pos = vec3<f32>(
@@ -171,6 +172,26 @@ fn is_in_water(world_pos: vec3<f32>) -> bool {
     // Read the u32 containing this voxel and extract the bit
     let bits = water_bitfield[bitfield_idx];
     return (bits & (1u << bit_index)) != 0u;
+}
+
+// Check if a world position is inside water using the compressed bitfield.
+// Near the world sphere, the solid boundary can leave a one-voxel dry shell;
+// sample one voxel inward so cells pressed against the shell still see water.
+fn is_in_water(world_pos: vec3<f32>) -> bool {
+    if (water_voxel_at(world_pos)) {
+        return true;
+    }
+
+    let boundary_radius = params.world_size * 0.5;
+    let dist_from_center = length(world_pos);
+    if (dist_from_center > 0.0001 &&
+        dist_from_center >= boundary_radius - water_params.cell_size * 2.0 &&
+        dist_from_center <= boundary_radius + water_params.cell_size) {
+        let inward_pos = world_pos - (world_pos / dist_from_center) * water_params.cell_size;
+        return water_voxel_at(inward_pos);
+    }
+
+    return false;
 }
 
 // Check if a world position is inside ice using the compressed bitfield.

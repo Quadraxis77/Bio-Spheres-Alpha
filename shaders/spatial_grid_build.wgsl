@@ -93,6 +93,7 @@ var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
 var<storage, read_write> death_flags: array<u32>;
 
 const MAX_CELLS_PER_GRID: u32 = 16u;
+const OCCUPATION_CELL_CULL_THRESHOLD: u32 = 16u;
 
 fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32, grid_resolution: i32) -> u32 {
     let grid_pos = (pos + world_size * 0.5) / grid_cell_size;
@@ -133,7 +134,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             occupied_grid_cells[occupied_slot] = grid_idx;
         }
     }
-    if (slot < MAX_CELLS_PER_GRID) {
+    if (slot < OCCUPATION_CELL_CULL_THRESHOLD) {
         spatial_grid_cells[grid_idx * MAX_CELLS_PER_GRID + slot] = cell_idx;
     } else {
         death_flags[cell_idx] = 1u;

@@ -81,6 +81,7 @@ var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
 var<storage, read_write> death_flags: array<u32>;
 
 const MAX_CELLS_PER_GRID: u32 = 16u;
+const OCCUPATION_CELL_CULL_THRESHOLD: u32 = 16u;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -101,7 +102,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Atomically get a slot in this grid cell
     let slot = atomicAdd(&spatial_grid_counts[grid_idx], 1u);
 
-    if (slot < MAX_CELLS_PER_GRID) {
+    if (slot < OCCUPATION_CELL_CULL_THRESHOLD) {
         let grid_base_offset = grid_idx * MAX_CELLS_PER_GRID;
         spatial_grid_cells[grid_base_offset + slot] = cell_idx;
     } else {

@@ -45,54 +45,27 @@ struct CaveParams {
     collision_stiffness: f32,
     collision_damping: f32,
     substeps: u32,
-    _padding: f32,
-    // Padding to 256 bytes (16-byte aligned)
-    _padding2: vec4<f32>,
-    _padding3: vec4<f32>,
-    _padding4: vec4<f32>,
-    _padding5: vec4<f32>,
-    _padding6: vec4<f32>,
-    _padding7: vec4<f32>,
-    _padding8: vec4<f32>,
-    _padding9: vec4<f32>,
-    _padding10: vec4<f32>,
-    _padding11: vec4<f32>,
-    _padding12: vec4<f32>,
-    _padding13: vec4<f32>,
-    _padding14: vec4<f32>,
-    _padding15: vec4<f32>,
-    _padding16: vec4<f32>,
-    _padding17: vec4<f32>,
-    _padding18: vec4<f32>,
-    _padding19: vec4<f32>,
-    _padding20: vec4<f32>,
-    _padding21: vec4<f32>,
-    _padding22: vec4<f32>,
-    _padding23: vec4<f32>,
-    _padding24: vec4<f32>,
-    _padding25: vec4<f32>,
-    _padding26: vec4<f32>,
-    _padding27: vec4<f32>,
-    _padding28: vec4<f32>,
-    _padding29: vec4<f32>,
-    _padding30: vec4<f32>,
-    _padding31: vec4<f32>,
-    _padding32: vec4<f32>,
-    _padding33: vec4<f32>,
-    _padding34: vec4<f32>,
-    _padding35: vec4<f32>,
-    _padding36: vec4<f32>,
-    _padding37: vec4<f32>,
-    _padding38: vec4<f32>,
-    _padding39: vec4<f32>,
-    _padding40: vec4<f32>,
-    _padding41: vec4<f32>,
-    _padding42: vec4<f32>,
-    _padding43: vec4<f32>,
-    _padding44: vec4<f32>,
-    _padding45: vec4<f32>,
-    _padding46: vec4<f32>,
-    _padding47: vec4<f32>,
+    geothermal_enabled: u32,
+    geothermal_count: u32,
+    geothermal_placement_mode: u32,
+    geothermal_lower_hemisphere: u32,
+    geothermal_gravity_mode: u32,
+    geothermal_gravity: f32,
+    geothermal_length: f32,
+    geothermal_width: f32,
+    geothermal_depth: f32,
+    geothermal_back_margin: f32,
+    geothermal_top_margin: f32,
+    geothermal_heat_output: f32,
+    geothermal_heat_radius: f32,
+    geothermal_glow_strength: f32,
+    geothermal_glow_radius: f32,
+    geothermal_glow_color: vec3<f32>,
+    isolated_chunk_cull_volume: f32,
+    mesh_smoothing_iterations: u32,
+    mesh_smoothing_factor: f32,
+    mesh_smooth_normals: u32,
+    flat_ground_enabled: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: PhysicsParams;
@@ -113,15 +86,10 @@ const FIXED_POINT_SCALE: f32 = 1000.0;
 const ROLLING_CONTACT_FRICTION: f32 = 0.18;
 const CAVE_RESTITUTION: f32 = 0.08;
 const CAVE_RESTING_SPEED: f32 = 2.0;
-const CAVE_MAX_CORRECTION_PER_STEP: f32 = 0.35;
-const CAVE_CONTACT_SLOP: f32 = 0.04;
-const CAVE_POSITION_CORRECTION_FRACTION: f32 = 0.35;
-const CAVE_SURFACE_PROBE_SCALE: f32 = 0.9;
-
-struct CaveCollisionProbe {
-    density: f32,
-    position: vec3<f32>,
-}
+const CAVE_MAX_CORRECTION_PER_STEP: f32 = 0.18;
+const CAVE_CONTACT_SLOP: f32 = 0.12;
+const CAVE_POSITION_CORRECTION_FRACTION: f32 = 0.22;
+const CAVE_REST_SPEED: f32 = 0.08;
 
 // Hash function for single random value at integer coordinates (no gradients)
 fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
@@ -219,15 +187,46 @@ fn warp_domain(pos: vec3<f32>) -> vec3<f32> {
     );
 }
 
+fn flat_ground_surface_height(pos: vec3<f32>) -> f32 {
+    let base_height = cave_params.world_center.y - cave_params.world_radius / 3.0;
+    let phase = f32(cave_params.seed) * 0.013;
+    let amplitude = clamp(cave_params.world_radius * 0.008, 0.75, 2.4);
+
+    let swell = sin(pos.x * 0.045 + phase) * 0.65
+        + sin(pos.z * 0.038 - phase * 0.7) * 0.45
+        + sin((pos.x + pos.z) * 0.025 + phase * 0.31) * 0.35;
+    let ripples = sin(pos.x * 0.18 + pos.z * 0.07 + swell * 0.4 + phase * 1.7) * 0.22;
+
+    return base_height + (swell / 1.45 + ripples) * amplitude;
+}
+
+fn flat_ground_density(pos: vec3<f32>) -> f32 {
+    if (cave_params.flat_ground_enabled == 0u) {
+        return -1.0;
+    }
+
+    let depth = flat_ground_surface_height(pos) - pos.y;
+    if (depth < 0.0) {
+        return -1.0;
+    }
+
+    return cave_params.threshold + clamp(depth / max(cave_params.scale, 0.001), 0.0, 0.5);
+}
+
 // Sample cave density using value noise with domain warping
 fn sample_cave_density(pos: vec3<f32>) -> f32 {
     // Distance from world center (spherical constraint)
     let dist_from_center = length(pos - cave_params.world_center);
-    let sphere_sdf = dist_from_center - cave_params.world_radius;
+    let sphere_sdf = dist_from_center - (cave_params.world_radius + 3.0);
 
     // Outside sphere = solid (high density)
-    if (sphere_sdf > 0.0) {
+    if (sphere_sdf >= 0.0) {
         return 1.0;
+    }
+
+    let ground_density = flat_ground_density(pos);
+    if (ground_density >= 0.0) {
+        return ground_density;
     }
 
     // Apply domain warping for organic shapes
@@ -253,25 +252,7 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
 }
 
 fn sample_collision_density(pos: vec3<f32>) -> f32 {
-    if (arrayLength(&solid_mask) <= 1u || cave_params.grid_resolution == 0u) {
-        return sample_cave_density(pos);
-    }
-
-    let diameter = cave_params.world_radius * 2.0;
-    let rel = (pos - cave_params.world_center + vec3<f32>(cave_params.world_radius)) / diameter;
-    if (any(rel < vec3<f32>(0.0)) || any(rel >= vec3<f32>(1.0))) {
-        return cave_params.threshold + 0.5;
-    }
-
-    let res = cave_params.grid_resolution;
-    let max_coord = i32(res) - 1;
-    let grid = clamp(vec3<i32>(floor(rel * f32(res))), vec3<i32>(0), vec3<i32>(max_coord));
-    let idx = u32(grid.x) + u32(grid.y) * res + u32(grid.z) * res * res;
-    if (idx >= arrayLength(&solid_mask)) {
-        return sample_cave_density(pos);
-    }
-
-    return select(cave_params.threshold - 0.5, cave_params.threshold + 0.5, solid_mask[idx] != 0u);
+    return sample_cave_density(pos);
 }
 
 fn raw_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
@@ -326,62 +307,51 @@ fn calculate_radius_from_mass(mass: f32) -> f32 {
     return clamp(mass, 0.5, 2.0);
 }
 
-fn choose_denser_probe(current: CaveCollisionProbe, candidate_pos: vec3<f32>) -> CaveCollisionProbe {
-    let density = sample_collision_density(candidate_pos);
-    if (density > current.density) {
-        return CaveCollisionProbe(density, candidate_pos);
+fn estimate_penetration_depth(pos: vec3<f32>, radius: f32, density_overlap: f32, center_is_solid: bool) -> f32 {
+    let h = max(radius * 0.5, 0.25);
+    let grad_len = length(raw_sdf_gradient(pos, h));
+
+    if (grad_len > 0.0001) {
+        let density_per_world_unit = grad_len / (2.0 * h);
+        let estimated_depth = density_overlap / max(density_per_world_unit, 0.0001);
+        let max_surface_depth = max(radius * 0.65, 0.25);
+        let max_center_depth = max(radius, 0.5);
+        return min(estimated_depth, select(max_surface_depth, max_center_depth, center_is_solid));
     }
-    return current;
+
+    return select(0.0, radius * 0.25, center_is_solid);
 }
 
-fn probe_cell_surface(pos: vec3<f32>, radius: f32, center_density: f32) -> CaveCollisionProbe {
-    var probe = CaveCollisionProbe(center_density, pos);
-    let sample_dist = max(radius * CAVE_SURFACE_PROBE_SCALE, 0.35);
-    probe = choose_denser_probe(probe, pos + vec3<f32>( sample_dist, 0.0, 0.0));
-    probe = choose_denser_probe(probe, pos + vec3<f32>(-sample_dist, 0.0, 0.0));
-    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0,  sample_dist, 0.0));
-    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0, -sample_dist, 0.0));
-    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0, 0.0,  sample_dist));
-    probe = choose_denser_probe(probe, pos + vec3<f32>(0.0, 0.0, -sample_dist));
-    return probe;
-}
-
-// Apply position-based collision - directly moves cells out of solid rock into cave tunnels
-// Uses XPBD-style position correction so adhesion substeps can't pull cells through walls
-// Optimized: probe the cell surface once so a cell whose center is in open
-// space still collides when its radius overlaps a solid cave voxel.
+// Apply position-based collision - directly moves cells out of solid rock into cave tunnels.
+// Center-based contact avoids preemptively pushing cells away while their center
+// is still in open space, which otherwise makes them stand off from the surface.
 fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) {
     if (cave_params.collision_enabled == 0u) {
         return;
     }
 
-    // Sample the center and six cardinal surface points. Center-only tests let
-    // packed cells sit with their centers in the open voxel while their shells
-    // overlap the wall, which looks like freezing on voxel boundaries.
     let center_density = sample_collision_density(pos);
-    let surface_probe = probe_cell_surface(pos, radius, center_density);
-
     let radius_threshold = cave_params.threshold;
 
-    // If the center or any surface probe is solid, push the whole cell back
-    // toward lower density. This is intentionally radius-aware; cave density is
-    // not a true SDF, so the surface hit is our best cheap overlap estimate.
-    if (surface_probe.density > radius_threshold) {
+    if (center_density > radius_threshold) {
         // Compute gradient pointing toward lower density (into open cave space)
-        let normal = -compute_sdf_gradient(surface_probe.position, radius);  // Points into cave (away from wall)
+        let normal = -compute_sdf_gradient(pos, radius);  // Points into cave (away from wall)
 
-        // Penetration estimate. If only a surface probe is solid, move by the
-        // local density overlap without a radius-sized minimum; otherwise cells
-        // get visibly popped away from shallow cave contact instead of settling.
-        let density_penetration = (surface_probe.density - radius_threshold) * cave_params.scale;
-        let center_is_solid = center_density > radius_threshold;
-        let penetration = select(
-            max(density_penetration, 0.02),
-            max(density_penetration, radius * 0.2),
-            center_is_solid
+        // Penetration estimate. Cave density is a smooth scalar field, not a
+        // true SDF, so estimate world-space depth from local density gradient
+        // instead of scaling by cave scale or a voxel size.
+        let density_overlap = center_density - radius_threshold;
+        let penetration = estimate_penetration_depth(
+            pos,
+            radius,
+            density_overlap,
+            true
         );
 
-        if (penetration > 0.0) {
+        var vel = velocities[cell_idx].xyz;
+        let vel_into_wall = dot(vel, -normal);
+
+        if (penetration > CAVE_CONTACT_SLOP) {
             // Soft depenetration. Cave density is not a true signed-distance
             // field, so `penetration + radius` behaves like a teleport near
             // high-gradient/voxelized walls. Leave a small contact slop and
@@ -393,19 +363,19 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
             let correction = normal * correction_distance;
             let corrected_pos = pos + correction;
             positions[cell_idx] = vec4<f32>(corrected_pos, positions[cell_idx].w);
+        }
 
-            // Redirect a small fraction of inward speed into open space. Merely
-            // zeroing it creates a stable immobilized state when thrust or an
-            // adhesion continues pressing the cell into the wall.
-            var vel = velocities[cell_idx].xyz;
-            let vel_into_wall = dot(vel, -normal);
-            if (vel_into_wall > 0.0) {
-                let inward_removal = clamp(cave_params.collision_damping, 0.0, 1.0);
-                let restitution = select(0.0, CAVE_RESTITUTION, vel_into_wall > CAVE_RESTING_SPEED);
-                let redirected_speed = vel_into_wall * (inward_removal + restitution);
-                vel = vel + normal * redirected_speed;
-            }
+        // Redirect inward speed into open space. For resting-speed contact,
+        // remove the normal component without restitution so the cell does not
+        // bounce between neighboring interpolated occupancy values.
+        if (vel_into_wall > 0.0) {
+            let inward_removal = clamp(cave_params.collision_damping, 0.0, 1.0);
+            let restitution = select(0.0, CAVE_RESTITUTION, vel_into_wall > CAVE_RESTING_SPEED);
+            let redirected_speed = vel_into_wall * (inward_removal + restitution);
+            vel = vel + normal * redirected_speed;
+        }
 
+        if (penetration > 0.0 || vel_into_wall > 0.0) {
             // Rolling / sliding friction against the cave wall. The cave wall is
             // stationary, so contact-point slip should spin the cell instead of
             // only damping linear tangent velocity.
@@ -433,7 +403,7 @@ fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: 
             // compounds into severe wall friction.
             let vel_normal_comp = dot(vel, normal);
             let vel_tangent = vel - normal * vel_normal_comp;
-            let vel_normal_out = max(vel_normal_comp, 0.0);
+            let vel_normal_out = select(max(vel_normal_comp, 0.0), 0.0, abs(vel_normal_comp) < CAVE_REST_SPEED);
             vel = normal * vel_normal_out + vel_tangent;
             velocities[cell_idx] = vec4<f32>(vel, velocities[cell_idx].w);
         }
