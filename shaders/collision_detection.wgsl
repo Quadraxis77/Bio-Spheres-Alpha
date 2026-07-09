@@ -284,7 +284,11 @@ fn cull_overcrowded_overflow_cell(cell_idx: u32, grid_idx: u32) -> bool {
 }
 
 fn should_collide(a_idx: u32, b_idx: u32) -> bool {
-    return true;
+    let a_organism_id = organism_id(a_idx);
+    let b_organism_id = organism_id(b_idx);
+    return !(a_organism_id != INVALID_ORGANISM_LABEL &&
+             b_organism_id != INVALID_ORGANISM_LABEL &&
+             a_organism_id == b_organism_id);
 }
 
 fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
