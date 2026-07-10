@@ -358,7 +358,7 @@ impl OrganismLabelSystem {
     /// Used by the follow camera to skip CoM updates on frames where labels are
     /// temporarily reset to each cell's own index.
     pub fn is_reset_frame(&self) -> bool {
-        false
+    self.debug_frame % 60 == 0
     }
 
     pub fn encode_frame(
@@ -379,7 +379,7 @@ impl OrganismLabelSystem {
         // very long chains: a 100k-cell chain can never reconverge before the next
         // reset, so every cell appears to be a different organism for collision.
         // New/dead cells are still stamped by hook_labels; avoid global resets here.
-        let is_reset_frame = false;
+        let is_reset_frame = self.debug_frame % 60 == 0;
         const SIZE_PERIOD: u32 = 4;
         let update_sizes = !is_reset_frame && (self.debug_frame % SIZE_PERIOD == 0);
 
@@ -448,7 +448,7 @@ impl OrganismLabelSystem {
     pub fn prepare_frame(&self, queue: &wgpu::Queue) {
         // debug_frame hasn't been incremented yet (encode_frame does that), so the
         // next frame number is debug_frame + 1.
-        let is_reset = false;
+        let is_reset = (self.debug_frame + 1) % 60 == 0;
 
         // LabelState layout (32 bytes):
         //   [_pad0(0), _pad1(4), _pad2(8), _pad3(12), run_init(16), run_hc(20), _pad4(24), _pad5(28)]
