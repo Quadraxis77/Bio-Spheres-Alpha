@@ -59,11 +59,11 @@ impl SolidMaskGenerator {
 
                     // Calculate world position of grid point
                     let world_pos = grid_origin
-                        + Vec3::new(
-                            x as f32 * cell_size,
-                            y as f32 * cell_size,
-                            z as f32 * cell_size,
-                        );
+                    + (Vec3::new(
+                        x as f32,
+                        y as f32,
+                        z as f32,
+                    ) + Vec3::splat(0.5)) * cell_size;
 
                     // Use cave generation logic to determine if this is solid
                     solid[voxel_index] = self.is_solid_cave_volume(world_pos, cave_params);
@@ -152,13 +152,43 @@ impl SolidMaskGenerator {
             }
         }
 
-        let fields = crate::simulation::fluid_simulation::geothermal_vents::apply_to_solid_mask(
+                let fields = crate::simulation::fluid_simulation::geothermal_vents::apply_to_solid_mask(
             &mut solid_mask,
             cave_params,
             self.world_center,
             self.world_radius,
             grid_size,
         );
+
+        // Erode only the fluid collision mask after vent generation.
+        let original = solid_mask.clone();
+
+        for z in 1..grid_size - 1 {
+            for y in 1..grid_size - 1 {
+                for x in 1..grid_size - 1 {
+                    let i = x + y * grid_size + z * grid_size * grid_size;
+
+                    if original[i] == 1 {
+                        let neighbors = [
+                            (x - 1, y, z),
+                            (x + 1, y, z),
+                            (x, y - 1, z),
+                            (x, y + 1, z),
+                            (x, y, z - 1),
+                            (x, y, z + 1),
+                        ];
+
+                        if neighbors.iter().any(|&(nx, ny, nz)| {
+                            let ni =
+                                nx + ny * grid_size + nz * grid_size * grid_size;
+                            original[ni] == 0
+                        }) {
+                            solid_mask[i] = 0;
+                        }
+                    }
+                }
+            }
+        }
 
         (solid_mask, fields)
     }

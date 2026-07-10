@@ -166,18 +166,81 @@ fn is_locally_flat(
     radius: i32,
     res: usize,
 ) -> bool {
-    const MIN_DOT: f32 = 0.6;
-    for &(ta, bb) in &[(radius, 0), (-radius, 0), (0, radius), (0, -radius)] {
+    const MIN_DOT: f32 = 0.35;
+
+    let mut valid = 0;
+    let mut total = 0;
+
+    for &(ta, bb) in &[
+        (radius, 0),
+        (-radius, 0),
+        (0, radius),
+        (0, -radius),
+        (radius / 2, radius / 2),
+        (-radius / 2, radius / 2),
+        (radius / 2, -radius / 2),
+        (-radius / 2, -radius / 2),
+    ] {
         let q = p + tangent * ta + bitangent * bb;
+
+        total += 1;
+
         if !is_solid(solid, q, res) {
-            return false;
+            continue;
         }
-        match local_outward_axis(solid, q, res, 2) {
-            Some(local_axis) if local_axis.dot(axis) >= MIN_DOT => {}
-            _ => return false,
+
+        if let Some(local_axis) = local_outward_axis(solid, q, res, 2) {
+            if local_axis.dot(axis) >= MIN_DOT {
+                valid += 1;
+            }
         }
     }
-    true
+
+    // Allow some erosion damage while still avoiding sharp corners.
+    valid >= (total * 5) / 8
+}
+
+/// Undoes a 1-voxel erosion of the solid mask so surface detection, normal
+/// estimation, and placement geometry in this file behave exactly as they
+/// did before the mask started being eroded upstream. A voxel becomes solid
+/// in the output if it was solid in `solid`, or if it has a solid neighbor.
+///
+/// Uses 6-connectivity (face neighbors only) to match a standard "erode by
+/// removing any voxel touching a non-solid face neighbor" pass. If your
+/// erosion pass instead checks all 26 neighbors (including diagonals),
+/// change `FACE_NEIGHBORS` below to the full 3x3x3 offset set minus the
+/// center -- otherwise corners/edges will be under-restored by this
+/// compensation and vent placement will still drift slightly from the old
+/// appearance near sharp features.
+fn dilate_solid(solid: &[bool], res: usize) -> Vec<bool> {
+    const FACE_NEIGHBORS: [IVec3; 6] = [
+        IVec3::X, IVec3::NEG_X,
+        IVec3::Y, IVec3::NEG_Y,
+        IVec3::Z, IVec3::NEG_Z,
+    ];
+
+    let res_i = res as i32;
+    let in_grid = |p: IVec3| p.x >= 0 && p.y >= 0 && p.z >= 0
+        && p.x < res_i && p.y < res_i && p.z < res_i;
+
+    let mut out = vec![false; solid.len()];
+    for z in 0..res_i {
+        for y in 0..res_i {
+            for x in 0..res_i {
+                let p = IVec3::new(x, y, z);
+                let i = idx(p, res);
+                if solid[i] {
+                    out[i] = true;
+                    continue;
+                }
+                out[i] = FACE_NEIGHBORS.iter().any(|&d| {
+                    let q = p + d;
+                    in_grid(q) && solid[idx(q, res)]
+                });
+            }
+        }
+    }
+    out
 }
 
 fn gravity_down_dir(params: &CaveParams) -> Option<Vec3> {
@@ -436,6 +499,7 @@ pub(crate) fn stack_voxels(
     let top_outer = spec.width.max(2);
     let base_outer = (spec.width + 2).max(top_outer + 1);
     let inner = (spec.width / 2).max(1);
+    let wall_thickness = 2;
     let grid_center = Vec3::splat(res as f32 * 0.5);
     let sphere_radius = res as f32 * 0.5 - 1.0;
     let tangent = Vec3::new(
@@ -487,51 +551,75 @@ pub(crate) fn stack_voxels(
                 }
 
                 let col_origin = if spec.placement_mode == 0 {
-                    // Each footprint sample is projected onto the sphere
-                    // before the stack rises inward, so the flared base
-                    // follows the curved boundary instead of cutting a flat
-                    // plane through it.
-                    (base_f + lateral - grid_center)
-                        .try_normalize()
-                        .unwrap_or(radial_out)
-                        * sphere_radius
-                        + grid_center
-                } else {
-                    // Cave-wall stacks mold their base to the local wall: walk
-                    // along the cardinal normal (a precise, single-axis step
-                    // per voxel) to find where this column actually crosses
-                    // the rock surface, so the base neither floats over a
-                    // recess (overhang) nor buries into a bulge. The stack
-                    // then grows away from this molded point along the
-                    // angled `stack_axis`.
-                    let flat = base_f + lateral;
-                    let shift = surface_shift(solid, flat, normal_vec, res, 3);
-                    flat + normal_vec * shift
-                };
+    (base_f + lateral - grid_center)
+        .try_normalize()
+        .unwrap_or(radial_out)
+        * sphere_radius
+        + grid_center
+} else {
+    let flat = base_f + lateral;
 
-                for h in 0..=spec.depth {
-                    let height_t = h as f32 / spec.depth.max(1) as f32;
-                    let outer = (base_outer as f32 * (1.0 - height_t) + top_outer as f32 * height_t)
+    // Find the actual rock boundary for this individual footprint column.
+    // The old fixed 3 voxel search allowed some columns to start in air after
+    // erosion compensation. Expand the search so the flange follows the wall.
+    let shift = surface_shift(solid, flat, normal_vec, res, 6);
+
+    let mut origin = flat + normal_vec * shift;
+
+    // Pull the base slightly into the rock so marching cubes has overlapping
+    // material instead of a floating seam.
+    origin -= normal_vec * 0.35;
+
+    origin
+};
+
+                                for h in 0..=spec.depth {
+                    let blend_depth = 4.min(spec.depth);
+
+                    let height_t = if h <= blend_depth {
+                        let t = h as f32 / blend_depth.max(1) as f32;
+                        t * t * (3.0 - 2.0 * t)
+                    } else {
+                        1.0
+                    };
+
+                    let outer = (base_outer as f32 * (1.0 - height_t)
+                        + top_outer as f32 * height_t)
                         .round()
                         .max(top_outer as f32) as i32;
+
                     if radial_len > outer as f32 + 0.25 {
                         continue;
                     }
 
-                    let p = round_vec3(col_origin + stack_axis * h as f32);
-
-                    if h == 0 {
-                        push_unique(&mut walls, p);
-                    } else if radial_len <= inner as f32 + 0.25 {
-                        push_unique(&mut core, p);
-                        if h == spec.depth {
-                            push_unique(&mut openings, p);
-                        } else if h <= 1 {
-                            push_unique(&mut glow_sources, p);
-                        }
+                    let blend_offset = if h < blend_depth {
+                        -stack_axis * ((blend_depth - h) as f32 * 0.2)
                     } else {
-                        push_unique(&mut walls, p);
-                    }
+                        Vec3::ZERO
+                    };
+
+                    let center = round_vec3(col_origin + stack_axis * h as f32);
+
+for ox in -1..=1 {
+    for oy in -1..=1 {
+        for oz in -1..=1 {
+            let p = center + IVec3::new(ox, oy, oz);
+
+            if h == 0 {
+                push_unique(&mut walls, p);
+            } else if radial_len <= inner as f32 + 0.25 {
+                push_unique(&mut core, p);
+                if h == spec.depth {
+                    push_unique(&mut openings, p);
+                } else if h <= 1 {
+                    push_unique(&mut glow_sources, p);
+                }
+            } else {
+                push_unique(&mut walls, p);
+            }
+        }
+    }
+}
                 }
             }
         }
@@ -564,8 +652,10 @@ pub fn carve_density_grid(density: &mut [Vec<Vec<f32>>], params: &CaveParams, th
         world_center,
         world_radius,
     );
-    let solid_canonical = solid_mask_gen.build_solid_array(params);
-
+    let solid_canonical = dilate_solid(
+        &solid_mask_gen.build_solid_array(params),
+        res_canonical,
+    );
     let cell_size_canonical = world_radius * 2.0 / res_canonical as f32;
     let origin_canonical = world_center - Vec3::splat(world_radius);
 
@@ -620,8 +710,10 @@ pub fn apply_to_solid_mask(
 ) -> GeothermalFields {
     let mut heat = vec![0.0f32; solid_mask.len()];
     let mut glow = vec![[0.0f32; 4]; solid_mask.len()];
-    let mut solid: Vec<bool> = solid_mask.iter().map(|&v| v != 0).collect();
-    let specs = generate_specs(&solid, res, params, params.seed ^ 0xCE11_5EED);
+
+    let solid_raw: Vec<bool> = solid_mask.iter().map(|&v| v != 0).collect();
+let mut solid = dilate_solid(&solid_raw, res);
+let specs = generate_specs(&solid, res, params, params.seed ^ 0xCE11_5EED);
 
     for spec in specs {
         let (walls, core, openings, glow_sources) = stack_voxels(spec, params.seed, &solid, res);
