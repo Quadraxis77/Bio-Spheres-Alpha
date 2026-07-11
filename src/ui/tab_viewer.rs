@@ -6831,7 +6831,7 @@ fn render_light_settings_organized(
                     .step_by(0.1)
                     .fixed_decimals(1),
                 )
-                .on_hover_text("Controls how fast climate changes: 0=arcade (fast), 3=stable, 4=very stable (recommended), 5=planetary (slow)")
+                .on_hover_text("Controls heat flow and water/ice phase inertia: 0=arcade (fast), 3=stable, 4=very stable (recommended), 5=planetary (slow)")
                 .changed()
             {
                 changed = true;

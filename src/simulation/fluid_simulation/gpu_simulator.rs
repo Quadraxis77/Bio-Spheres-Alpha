@@ -62,7 +62,7 @@ pub struct GpuFluidParams {
     // Overall sun brightness driving the thermal model's baseline air temperature
     // (0 = dark, 3 = comfortable max, >3 = extreme heat). Mirrors editor_state.sun_intensity.
     pub sun_brightness: f32,
-    // Thermal inertia (0.0-5.0 scale): controls how fast climate changes
+    // Thermal inertia (0.0-5.0 scale): controls heat flow and phase-change resistance
     pub thermal_inertia: f32,
 
     // ---- Climate thresholds (0-255 internal scale) ----
@@ -84,7 +84,7 @@ pub struct GpuFluidParams {
     pub snow_melt_rate: f32,
     // Snow compaction debt rate (debt units per tick per degree below freeze threshold) - sustained cold packs snow into ice.
     pub snow_compact_rate: f32,
-    pub _pad_climate: f32,
+    pub climate_phase: u32,
 }
 
 /// Extract params (must match shader)
@@ -349,7 +349,7 @@ impl GpuFluidSimulator {
             melt_rate: DEFAULT_MELT_RATE,
             snow_melt_rate: DEFAULT_SNOW_MELT_RATE,
             snow_compact_rate: DEFAULT_SNOW_COMPACT_RATE,
-            _pad_climate: 0.0,
+            climate_phase: 0,
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1213,6 +1213,7 @@ impl GpuFluidSimulator {
         &self,
         queue: &wgpu::Queue,
         direction: u32,
+        climate_phase: u32,
         time: f32,
         gravity_magnitude: f32,
         gravity_dir: [bool; 3],
@@ -1271,7 +1272,7 @@ impl GpuFluidSimulator {
             melt_rate: self.melt_rate.get(),
             snow_melt_rate: self.snow_melt_rate.get(),
             snow_compact_rate: self.snow_compact_rate.get(),
-            _pad_climate: 0.0,
+            climate_phase,
         };
 
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
@@ -1286,6 +1287,7 @@ impl GpuFluidSimulator {
     ) {
         self.update_params(
             queue,
+            0,
             0,
             0.0,
             9.8,
@@ -1313,6 +1315,7 @@ impl GpuFluidSimulator {
     ) {
         self.update_params(
             queue,
+            0,
             0,
             0.0,
             9.8,
@@ -1342,6 +1345,7 @@ impl GpuFluidSimulator {
         self.update_params(
             queue,
             0,
+            0,
             time,
             9.8,
             [false, true, false],
@@ -1368,6 +1372,7 @@ impl GpuFluidSimulator {
     ) {
         self.update_params(
             queue,
+            0,
             0,
             0.0,
             9.8,
@@ -1452,7 +1457,7 @@ impl GpuFluidSimulator {
         self.sun_brightness.set(brightness);
     }
 
-    /// Set thermal inertia (0-5 scale): controls how fast climate changes
+    /// Set thermal inertia (0-5 scale): controls heat flow and water/ice phase resistance
     pub fn set_thermal_inertia(&self, inertia: f32) {
         self.thermal_inertia.set(inertia);
     }
@@ -1542,10 +1547,20 @@ impl GpuFluidSimulator {
 
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
 
+        // Climate passes run every Nth tick. Static water uses only the
+        // temperature phase plus water/ice transitions; dynamic mode also runs
+        // vapor/weather and motion below.
+        const CLIMATE_TICK_INTERVAL: u32 = 4;
+        let climate_tick = self.climate_tick_counter.get().wrapping_add(1);
+        self.climate_tick_counter.set(climate_tick);
+        let climate_phase = climate_tick % CLIMATE_TICK_INTERVAL;
+        let run_temperature = climate_phase == 0;
+
         // Update parameters for GPU (required for shader logic) - sub_step starts at 0
         self.update_params(
             queue,
             3,
+            climate_phase,
             current_time,
             gravity_magnitude,
             gravity_dir,
@@ -1555,7 +1570,7 @@ impl GpuFluidSimulator {
         // Clear water velocity field before simulation (DMA zero-fill)
         encoder.clear_buffer(&self.water_velocity_buffer, 0, None);
 
-        // Byte offset of sub_step field in GpuFluidParams (20 fields x 4 bytes each, last field)
+        // Byte offset of sub_step field in GpuFluidParams.
         const SUB_STEP_OFFSET: u64 = 76;
         const NUM_FLUID_SUB_STEPS: u32 = 4;
 
@@ -1569,15 +1584,6 @@ impl GpuFluidSimulator {
             pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
-
-        // Climate passes run every Nth tick. Static water uses only the
-        // temperature phase plus water/ice transitions; dynamic mode also runs
-        // vapor/weather and motion below.
-        const CLIMATE_TICK_INTERVAL: u32 = 4;
-        let climate_tick = self.climate_tick_counter.get().wrapping_add(1);
-        self.climate_tick_counter.set(climate_tick);
-        let climate_phase = climate_tick % CLIMATE_TICK_INTERVAL;
-        let run_temperature = climate_phase == 0;
 
         if self.static_water_world_enabled.get() {
             if self.static_water_world_needs_fill.replace(false) {
@@ -1614,16 +1620,16 @@ impl GpuFluidSimulator {
                     );
                     self.temp_stats_copy_pending.set(true);
                 }
-            }
 
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Static Water Ice Melt Phase Pass"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&self.static_water_phase_pipeline);
-                pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
-                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Static Water Ice Melt Phase Pass"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&self.static_water_phase_pipeline);
+                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                    pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+                }
             }
             return;
         }

@@ -523,7 +523,7 @@ pub struct ClimateSettings {
     #[serde(default = "default_humidity_diffusion_rate")]
     pub humidity_diffusion_rate: f32,
 
-    /// Global thermal inertia (0-5): how fast all heat flow runs.
+    /// Global thermal inertia (0-5): heat flow speed plus water/ice phase resistance.
     /// 0 = arcade (fast), 4 = very stable (recommended), 5 = planetary (slow)
     #[serde(default = "default_thermal_inertia")]
     pub thermal_inertia: f32,

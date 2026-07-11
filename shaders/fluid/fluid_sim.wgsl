@@ -38,7 +38,7 @@ struct FluidParams {
     // Overall sun brightness driving the thermal model's baseline air temperature
     // (0 = dark, 3 = comfortable max, >3 = extreme heat).
     sun_brightness: f32,
-    // Thermal inertia (0.0-5.0 scale): controls how fast climate changes
+    // Thermal inertia (0.0-5.0 scale): controls heat flow and phase-change resistance
     thermal_inertia: f32,
 
     // ---- Climate thresholds (0-255 internal scale) ----
@@ -60,7 +60,9 @@ struct FluidParams {
     snow_melt_rate: f32,
     // Snow compaction debt rate (debt units per tick per degree below freeze threshold) - sustained cold packs snow into ice.
     snow_compact_rate: f32,
-    _pad_climate: f32,
+    // Current climate phase from the CPU scheduler. Phase changes only accrue
+    // debt on phase 0, the same tick that updates temperature.
+    climate_phase: u32,
 }
 
 struct ExtractParams {
@@ -173,7 +175,7 @@ const FREEZE_POINT_C: f32 = 0.0;
 const FREEZE_HYSTERESIS_C: f32 = 2.0;      // water freezes below (FREEZE_POINT - this); ice melts above (FREEZE_POINT + this) - prevents flicker at the boundary
 const PHASE_DEBT_THRESHOLD: f32 = 100.0;   // accumulated freeze/melt debt required to flip water<->ice
 const PHASE_DEBT_DECAY: f32 = 0.90;        // per-tick decay applied to phase debt while not past the threshold
-const DEEP_FREEZE_MARGIN_C: f32 = 10.0;    // low/normal-inertia surface water this far below freezing can ice over immediately
+const DEEP_FREEZE_MARGIN_C: f32 = 10.0;    // low-inertia surface water this far below freezing can ice over immediately
 // Sheet-first freezing: extra freeze-debt rate per adjacent lateral ice
 // crystal (surface sheet racing outward), and the rate multiplier for water
 // thickening the sheet from below. Spread >> thicken keeps pools freezing as
@@ -266,22 +268,30 @@ const LATENT_VAPOR_CONDENSE_WARM_C: f32 = 3.0;
 // Water at/above boiling converts to steam with this per-tick probability
 // regardless of air contact - no superheated liquid pools.
 const BOIL_PROBABILITY: f32 = 0.20;
-// Slider value at which the rates above apply unscaled. The global Thermal
-// Inertia slider scales conduction and solar forcing together: each -1 below
-// the anchor doubles the speed of all heat flow, each +1 above halves it.
-const THERMAL_INERTIA_ANCHOR: f32 = 4.0;
-
-fn water_phase_inertia_scale() -> f32 {
-    // Water has the strongest latent-heat inertia. High thermal inertia should
-    // make liquid water resist freezing for a long time even after it crosses
-    // the threshold, while low inertia still allows quick ice formation.
-    return clamp(exp2((THERMAL_INERTIA_ANCHOR - params.thermal_inertia) * 2.0), 0.03, 8.0);
+fn thermal_inertia_fraction() -> f32 {
+    return clamp(params.thermal_inertia / 5.0, 0.0, 1.0);
 }
 
-fn ice_phase_inertia_scale() -> f32 {
-    // Existing ice/snow still responds to inertia, just less dramatically than
-    // liquid water. This keeps high-inertia ice from becoming totally static.
-    return clamp(exp2((THERMAL_INERTIA_ANCHOR - params.thermal_inertia) * 0.7), 0.2, 4.0);
+fn heat_flow_rate_scale() -> f32 {
+    // Smooth, bounded response for the whole 0..5 slider. The old exp2 curve
+    // made values below max accelerate climate so hard that phase inertia
+    // never had a chance to matter.
+    let fastness = pow(1.0 - thermal_inertia_fraction(), 1.4);
+    return mix(0.12, 2.0, fastness);
+}
+
+fn water_phase_threshold() -> f32 {
+    // Water should have real latent inertia across the useful slider range:
+    // 0 stays responsive, 3-4 resists snap-freezing, 5 is very slow.
+    let inertia = pow(thermal_inertia_fraction(), 2.2);
+    return PHASE_DEBT_THRESHOLD * mix(1.0, 80.0, inertia);
+}
+
+fn ice_phase_threshold() -> f32 {
+    // Existing ice/snow should still melt/freeze noticeably, just without
+    // flickering instantly when the brightness slider changes.
+    let inertia = pow(thermal_inertia_fraction(), 1.6);
+    return PHASE_DEBT_THRESHOLD * mix(1.0, 12.0, inertia);
 }
 
 // The climate passes (update_temperature, diffuse_humidity, condense_humidity)
@@ -433,21 +443,6 @@ fn global_climate_exchange_strength(fluid_type: u32, solid: bool, mobile: bool) 
         return GLOBAL_CLIMATE_EXCHANGE_WATER;
     }
     return GLOBAL_CLIMATE_EXCHANGE_WATER;
-}
-
-fn sunlit_melt_pressure_c(idx: u32, melt_threshold: f32) -> f32 {
-    // Direct sunlight should help melt exposed ice before the stored ice
-    // temperature fully catches up. This uses the local light-field target, so
-    // shadowed ice still waits for conduction instead of melting from the
-    // global sun slider.
-    return max(ambient_temp_c(idx) - melt_threshold, 0.0);
-}
-
-fn meltwater_start_temp_c(idx: u32) -> f32 {
-    // Melted ice should not always restart at exactly 0 C under hot sun; that
-    // makes it immediately eligible to freeze again. Keep only a little local
-    // warmth so melting feels stable without erasing latent-heat behavior.
-    return clamp(ambient_temp_c(idx), FREEZE_POINT_C, FREEZE_POINT_C + 4.0);
 }
 
 // Map a Celsius temperature onto the spec's 0-255 scale.
@@ -1230,7 +1225,7 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
     let m_self = thermal_mass(fluid_type, solid_self);
     let k_self = conductivity(fluid_type, solid_self);
     let mobile_self = is_thermally_mobile(fluid_type, solid_self);
-    let rate_scale = exp2(THERMAL_INERTIA_ANCHOR - params.thermal_inertia) * CLIMATE_TICK_INTERVAL;
+    let rate_scale = heat_flow_rate_scale() * CLIMATE_TICK_INTERVAL;
 
     // All of this voxel's own temperature changes (solar + every conduction
     // outflow) accumulate here and land in a single atomic at the end -
@@ -1865,7 +1860,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // --- Deep freeze: SURFACE water far below the freeze threshold
-        // can ice over immediately at low/normal inertia (no debt/sub_step gating).
+        // can ice over immediately only at low inertia (no debt/sub_step gating).
         // The phase-debt accumulator below tracks debt per grid cell, but
         // spreading water keeps moving to new cells each tick and never
         // accumulates enough debt there - so low-inertia meltwater pooling in
@@ -1878,7 +1873,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         // however cold the water is. High thermal inertia disables this fast
         // path so water still transitions to ice slowly through phase debt.
         if fluid_type == 1u && freeze_rate_mult >= 1.0
-            && water_phase_inertia_scale() >= 0.75
+            && params.thermal_inertia <= 0.75
             && temp_c < FREEZE_POINT_C - FREEZE_HYSTERESIS_C - DEEP_FREEZE_MARGIN_C {
             let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
@@ -1886,6 +1881,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // Latent heat of fusion: freezing releases heat, pinning the
                 // new ice at the freeze point; the warmth conducts outward
                 // and slows neighboring freezes.
+                phase_debt[idx] = 0.0;
                 atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
                 return;
             }
@@ -1961,7 +1957,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         // excursions across the boundary much less effect than sustained
         // cold/heat, on top of the existing hysteresis gap. Gated to sub_step 0
         // so debt accumulates once per tick rather than once per sub-step.
-        if params.sub_step == 0u {
+        if params.sub_step == 0u && params.climate_phase == 0u {
             var debt = phase_debt[idx];
             // Freeze debt only accrues for sheet-eligible water (see
             // freeze_rate_mult above): surface water, or water directly
@@ -1973,16 +1969,15 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if temp_c < freeze_threshold && local_freeze_target_c < freeze_threshold {
                     debt += (freeze_threshold - temp_c)
                         * params.freeze_rate
-                        * freeze_rate_mult
-                        * water_phase_inertia_scale();
+                        * freeze_rate_mult;
                 } else {
                     debt *= PHASE_DEBT_DECAY;
                 }
-                if debt >= PHASE_DEBT_THRESHOLD {
+                if debt >= water_phase_threshold() {
                     let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
                     let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
                     if result.exchanged {
-                        phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
+                        phase_debt[idx] = 0.0;
                         // Latent heat of fusion: freezing releases heat.
                         atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
                         return;
@@ -1991,25 +1986,21 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 phase_debt[idx] = debt;
             } else if fluid_type == 2u {
                 let melt_threshold = temperature_from_0_255_u32(params.melt_threshold);
-                let melt_pressure_c = max(temp_c - melt_threshold, sunlit_melt_pressure_c(idx, melt_threshold));
-                if melt_pressure_c > 0.0 {
-                    debt += melt_pressure_c
-                        * params.melt_rate
-                        * max(ice_phase_inertia_scale(), 1.0);
+                if temp_c > melt_threshold {
+                    debt += (temp_c - melt_threshold)
+                        * params.melt_rate;
                 } else {
                     debt *= PHASE_DEBT_DECAY;
                 }
-                if debt >= PHASE_DEBT_THRESHOLD {
+                if debt >= ice_phase_threshold() {
                     let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
                     let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
                     if result.exchanged {
-                        phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
+                        phase_debt[idx] = 0.0;
                         // Latent heat of fusion: melting absorbs the warmth
                         // that drove it - meltwater starts at the freeze
-                        // point and chills its surroundings by conduction,
-                        // while strong local sun can keep it a little above
-                        // immediate refreeze.
-                        atomicStore(&temp_field[idx], encode_field_temp(meltwater_start_temp_c(idx)));
+                        // point and chills its surroundings by conduction.
+                        atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
                         return;
                     }
                 }
@@ -2660,38 +2651,35 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
         let local_freeze_target_c = ambient_temp_c(idx);
         if temp_c < freeze_threshold && local_freeze_target_c < freeze_threshold {
             debt += (freeze_threshold - temp_c)
-                * params.freeze_rate
-                * water_phase_inertia_scale();
+                * params.freeze_rate;
         } else {
             debt *= PHASE_DEBT_DECAY;
         }
 
-        if debt >= PHASE_DEBT_THRESHOLD {
+        if debt >= water_phase_threshold() {
             let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
-                phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
+                phase_debt[idx] = 0.0;
                 atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
                 return;
             }
         }
     } else {
         let melt_threshold = temperature_from_0_255_u32(params.melt_threshold);
-        let melt_pressure_c = max(temp_c - melt_threshold, sunlit_melt_pressure_c(idx, melt_threshold));
-        if melt_pressure_c > 0.0 {
-            debt += melt_pressure_c
-                * params.melt_rate
-                * max(ice_phase_inertia_scale(), 1.0);
+        if temp_c > melt_threshold {
+            debt += (temp_c - melt_threshold)
+                * params.melt_rate;
         } else {
             debt *= PHASE_DEBT_DECAY;
         }
 
-        if debt >= PHASE_DEBT_THRESHOLD {
+        if debt >= ice_phase_threshold() {
             let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
-                phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
-                atomicStore(&temp_field[idx], encode_field_temp(meltwater_start_temp_c(idx)));
+                phase_debt[idx] = 0.0;
+                atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
                 return;
             }
         }
