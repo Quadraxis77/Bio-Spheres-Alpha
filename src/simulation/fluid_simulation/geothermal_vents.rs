@@ -499,7 +499,6 @@ pub(crate) fn stack_voxels(
     let top_outer = spec.width.max(2);
     let base_outer = (spec.width + 2).max(top_outer + 1);
     let inner = (spec.width / 2).max(1);
-    let wall_thickness = 2;
     let grid_center = Vec3::splat(res as f32 * 0.5);
     let sphere_radius = res as f32 * 0.5 - 1.0;
     let tangent = Vec3::new(
@@ -591,12 +590,6 @@ pub(crate) fn stack_voxels(
                     if radial_len > outer as f32 + 0.25 {
                         continue;
                     }
-
-                    let blend_offset = if h < blend_depth {
-                        -stack_axis * ((blend_depth - h) as f32 * 0.2)
-                    } else {
-                        Vec3::ZERO
-                    };
 
                     let center = round_vec3(col_origin + stack_axis * h as f32);
 

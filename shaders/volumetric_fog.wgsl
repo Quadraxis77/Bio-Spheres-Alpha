@@ -143,7 +143,7 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
 
-// Returns full vec4: rgb = light color, w = luminocyte emitter weight (0 = sun, >0 = local emitter)
+// Returns full vec4: rgb = light color, w = local emitter weight (0 = sun, >0 = vent/luminocyte)
 fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
     let fallback = vec4<f32>(fog_params.light_color_r, fog_params.light_color_g, fog_params.light_color_b, 0.0);
     let uvw = world_to_light_uvw(world_pos);
@@ -334,17 +334,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let effective_density = density + water_amount * 0.6;
 
         // In-scattered light: light that scatters toward camera at this point.
-        // Luminocyte-lit voxels (w > 0) use isotropic phase - their light radiates in
+        // Local emitter-lit voxels (w > 0) use isotropic phase - their light radiates in
         // all directions, so the sun angle must not create dark "beam" shadows.
         var sample_color = vec3<f32>(0.0);
         if (light_intensity > 0.0 && fog_params.light_intensity > 0.0 && effective_density > 0.0) {
             let light_color_full = sample_light_color_field_full(light_sample_pos);
             var local_light_color = light_color_full.rgb;
-            let is_luminocyte_lit = light_color_full.w > 0.0;
+            let local_emitter_weight = light_color_full.w;
+            let is_local_emitter_lit = local_emitter_weight > 0.0;
             let phase = select(
                 mix(isotropic_phase, directed_phase, fog_params.scattering_anisotropy),
                 isotropic_phase,
-                is_luminocyte_lit,
+                is_local_emitter_lit,
             );
 
             if (water_amount > 0.01) {
@@ -352,6 +353,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // Water is a participating medium - it scatters light forward but absorbs
                 // red and green faster than blue, producing the characteristic deep-water color.
                 // light_color_field already carries ray-march tint; this adds per-voxel scattering tint.
+                // Local emitters have already been resolved into light_color_field, so keep
+                // thermal vent orange and luminocyte colors intact instead of re-blueing them.
                 let r_abs = water_amount * 2.2;
                 let g_abs = water_amount * 0.55;
                 let water_scatter_tint = vec3<f32>(
@@ -359,7 +362,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     1.0 / (1.0 + g_abs + g_abs * g_abs * 0.5),
                     1.0,
                 );
-                local_light_color *= water_scatter_tint;
+                let local_emitter_blend = smoothstep(0.001, 0.05, local_emitter_weight);
+                local_light_color *= mix(water_scatter_tint, vec3<f32>(1.0), local_emitter_blend);
             }
 
             sample_color = local_light_color * light_intensity * phase * fog_params.light_intensity;

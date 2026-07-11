@@ -127,8 +127,8 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
 
-fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
-    let fallback = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
+    let fallback = vec4<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b, 0.0);
     if (shadow_params.shadow_enabled == 0u) {
         return fallback;
     }
@@ -140,7 +140,7 @@ fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     if (sample.w <= 0.0001) {
         return fallback;
     }
-    return sample.rgb;
+    return sample;
 }
 // --- 3D Perlin noise implementation ---
 
@@ -314,7 +314,9 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let shadow_sample_pos = in.world_position + normal * offset_distance;
     let light_value = sample_light_field(shadow_sample_pos);
     let shadow = mix(1.0, light_value, shadow_params.shadow_strength);
-    let sun_color = sample_light_color_field(shadow_sample_pos);
+    let light_color_sample = sample_light_color_field_full(shadow_sample_pos);
+    let sun_color = light_color_sample.rgb;
+    let local_emitter_blend = smoothstep(0.001, 0.05, light_color_sample.w);
     let sampled_light = sun_color * shadow;
     let sampled_light_strength = clamp(max(max(sampled_light.r, sampled_light.g), sampled_light.b), 0.0, 1.0);
     
@@ -337,7 +339,12 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let ambient_light = select(params.ambient, 0.0, ft == 1u);
     let direct_light = diffuse * shadow;
     let lighting = ambient_light + direct_light;
-    var final_color = base_color * sun_color * lighting;
+    let lit_base_color = select(
+        base_color,
+        mix(base_color, vec3<f32>(1.0), local_emitter_blend),
+        ft == 1u,
+    );
+    var final_color = lit_base_color * sun_color * lighting;
     
     // Add specular (also shadowed - no specular highlight in shadow)
     final_color += sun_color * specular * shadow;
@@ -366,13 +373,14 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     final_color = mix(final_color, boosted_env, reflection_contrib);
 
     // Rim light: suppressed below waterline.
-    let rim_color = mix(vec3<f32>(0.7, 0.85, 1.0), base_color, 0.5);
+    let rim_color = mix(mix(vec3<f32>(0.7, 0.85, 1.0), base_color, 0.5), sun_color, local_emitter_blend);
     final_color += rim_color * rim * sampled_light_strength * (1.0 - submerged);
 
     // Subsurface scattering (water only, attenuated by shadow).
     if ft == 1u {
         let sss = pow(max(dot(view_dir, -light_dir), 0.0), 2.0) * 0.15;
-        final_color += vec3<f32>(0.0, 0.4, 0.6) * sss * sampled_light_strength;
+        let sss_color = mix(vec3<f32>(0.0, 0.4, 0.6), sun_color, local_emitter_blend);
+        final_color += sss_color * sss * sampled_light_strength;
     }
 
     // Alpha: waterline/above follows the user transparency setting exactly.

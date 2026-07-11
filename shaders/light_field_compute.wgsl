@@ -433,9 +433,9 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let local_weight = clamp(geo.w * geo_transmittance, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
     light_field[idx] = max(intensity, local_weight);
     let sunlight_color = sun_color * ray_tint * voxel_tint;
-    let use_local_glow = local_weight > 0.001 && local_weight >= intensity;
-    let resolved_color = select(sunlight_color, local_glow, use_local_glow);
-    light_color_field[idx] = vec4<f32>(resolved_color, select(0.0, local_weight, use_local_glow));
+    let local_blend = local_weight / max(intensity + local_weight, 0.001);
+    let resolved_color = mix(sunlight_color, local_glow, local_blend);
+    light_color_field[idx] = vec4<f32>(resolved_color, local_weight);
 }
 
 // === Cell Occupancy Grid Builder ===

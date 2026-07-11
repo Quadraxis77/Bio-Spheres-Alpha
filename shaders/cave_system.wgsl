@@ -175,22 +175,6 @@ fn sample_light_field_lod(world_pos: vec3<f32>) -> f32 {
     return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
 
-fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
-    let fallback = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
-    if (shadow_params.shadow_enabled == 0u) {
-        return fallback;
-    }
-    let uvw = world_to_light_uvw(world_pos);
-    if (!light_uvw_in_bounds(uvw)) {
-        return fallback;
-    }
-    let sample = textureSampleLevel(light_color_field_tex, light_field_sampler, uvw, 0.0);
-    if (sample.w <= 0.0001) {
-        return fallback;
-    }
-    return sample.rgb;
-}
-
 fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
     let fallback = vec4<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b, 0.0);
     if (shadow_params.shadow_enabled == 0u) {
@@ -201,6 +185,38 @@ fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
         return fallback;
     }
     return textureSampleLevel(light_color_field_tex, light_field_sampler, uvw, 0.0);
+}
+
+fn local_light_sample_clamped(world_pos: vec3<f32>, grid_min: vec3<f32>, grid_max: vec3<f32>) -> vec4<f32> {
+    return sample_light_color_field_full(clamp(world_pos, grid_min, grid_max));
+}
+
+fn smooth_local_light_sample(world_pos: vec3<f32>, normal: vec3<f32>, grid_min: vec3<f32>, grid_max: vec3<f32>) -> vec4<f32> {
+    let step_size = shadow_params.cell_size;
+    let helper = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(normal.y) < 0.9);
+    let tangent = normalize(cross(helper, normal));
+    let bitangent = normalize(cross(normal, tangent));
+
+    var sample_sum = local_light_sample_clamped(world_pos, grid_min, grid_max) * 0.28;
+    sample_sum += local_light_sample_clamped(world_pos + normal * (step_size * 0.65), grid_min, grid_max) * 0.16;
+    sample_sum += local_light_sample_clamped(world_pos - normal * (step_size * 0.65), grid_min, grid_max) * 0.16;
+    sample_sum += local_light_sample_clamped(world_pos + tangent * step_size, grid_min, grid_max) * 0.10;
+    sample_sum += local_light_sample_clamped(world_pos - tangent * step_size, grid_min, grid_max) * 0.10;
+    sample_sum += local_light_sample_clamped(world_pos + bitangent * step_size, grid_min, grid_max) * 0.10;
+    sample_sum += local_light_sample_clamped(world_pos - bitangent * step_size, grid_min, grid_max) * 0.10;
+
+    return sample_sum;
+}
+
+fn local_light_gradient(world_pos: vec3<f32>, grid_min: vec3<f32>, grid_max: vec3<f32>) -> vec3<f32> {
+    let step_size = shadow_params.cell_size * 1.5;
+    let wxp = local_light_sample_clamped(world_pos + vec3<f32>(step_size, 0.0, 0.0), grid_min, grid_max).w;
+    let wxn = local_light_sample_clamped(world_pos - vec3<f32>(step_size, 0.0, 0.0), grid_min, grid_max).w;
+    let wyp = local_light_sample_clamped(world_pos + vec3<f32>(0.0, step_size, 0.0), grid_min, grid_max).w;
+    let wyn = local_light_sample_clamped(world_pos - vec3<f32>(0.0, step_size, 0.0), grid_min, grid_max).w;
+    let wzp = local_light_sample_clamped(world_pos + vec3<f32>(0.0, 0.0, step_size), grid_min, grid_max).w;
+    let wzn = local_light_sample_clamped(world_pos - vec3<f32>(0.0, 0.0, step_size), grid_min, grid_max).w;
+    return vec3<f32>(wxp - wxn, wyp - wyn, wzp - wzn);
 }
 
 @vertex
@@ -857,20 +873,32 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var shadow = 1.0;
     var raw_light_visibility = 1.0;
     var local_light_weight = 0.0;
+    var local_light_direction = N;
     var sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
+    var vent_light_intensity = 0.0;
     if (all(in.world_position >= grid_min) && all(in.world_position <= grid_max)) {
         let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
         let raw_light = sample_light_field_lod(clamped_pos);
-        let light_color_sample = sample_light_color_field_full(clamped_pos);
+        let light_color_sample = smooth_local_light_sample(in.world_position, N, grid_min, grid_max);
         shadow = mix(1.0, raw_light, shadow_params.shadow_strength);
-        sun_color = sample_light_color_field(clamped_pos);
-        raw_light_visibility = raw_light;
         local_light_weight = light_color_sample.w;
+        vent_light_intensity = 1.0 - exp(-local_light_weight * 0.9);
+        let vent_gradient = local_light_gradient(in.world_position, grid_min, grid_max);
+        local_light_direction = normalize(select(N, vent_gradient, dot(vent_gradient, vent_gradient) > 0.00001));
+        raw_light_visibility = raw_light;
     }
     // Ambient scales with sun_color so cave walls go pitch black when sun is off.
     let ambient = sun_color * cave_params.rock_ambient_strength * ao;
     var final_color = final_base_color * (ambient + sun_color * diffuse * cave_params.rock_diffuse_strength * shadow)
         + sun_color * vec3<f32>(specular * cave_params.rock_specular_strength * shadow);
+    let vent_color = max(cave_params.geothermal_glow_color, vec3<f32>(0.0));
+    let vent_wrap = clamp(dot(N, local_light_direction) * 0.45 + 0.55, 0.0, 1.0);
+    let vent_surface_breakup = mix(0.72, 1.18, noise(in.world_position.xz * 0.18 + vec2<f32>(shadow_params.time * 0.04, 17.0)))
+        * mix(0.84, 1.10, texture_value);
+    let vent_detail = clamp(vent_surface_breakup * (0.35 + 0.65 * ao), 0.0, 1.35);
+    let vent_diffuse = vent_light_intensity * vent_wrap * vent_detail;
+    final_color += final_base_color * vent_color * vent_diffuse * 0.95;
+    final_color += vent_color * specular * vent_light_intensity * cave_params.rock_specular_strength * 0.22;
     
     // Apply underwater caustics on lit surfaces
     let water_check_pos = in.world_position + N * shadow_params.cell_size * 1.5;
