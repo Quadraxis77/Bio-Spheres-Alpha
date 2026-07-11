@@ -599,6 +599,8 @@ pub struct GenomeEditorState {
     pub light_field_absorption_cell: f32,
     /// Ambient light floor
     pub light_field_ambient_floor: f32,
+    /// Water sunlight attenuation multiplier
+    pub water_light_attenuation: f32,
     /// Photocyte mass gain rate at full light
     pub photocyte_mass_per_second: f32,
     /// Photocyte minimum light threshold
@@ -1078,6 +1080,7 @@ impl GenomeEditorState {
             light_field_absorption_solid,
             light_field_absorption_cell,
             light_field_ambient_floor,
+            water_light_attenuation,
             show_sun,
             sun_color,
             sun_angular_radius,
@@ -1337,6 +1340,7 @@ impl GenomeEditorState {
             light_field_absorption_solid,
             light_field_absorption_cell,
             light_field_ambient_floor,
+            water_light_attenuation,
             photocyte_mass_per_second,
             photocyte_min_light_threshold,
             light_params_dirty: true,
@@ -2843,6 +2847,7 @@ impl GenomeEditorState {
             self.light_field_absorption_solid,
             self.light_field_absorption_cell,
             self.light_field_ambient_floor,
+            self.water_light_attenuation,
             // Sun settings
             self.show_sun,
             self.sun_color,
@@ -2907,6 +2912,7 @@ impl GenomeEditorState {
         light_field_absorption_solid: f32,
         light_field_absorption_cell: f32,
         light_field_ambient_floor: f32,
+        water_light_attenuation: f32,
         // Sun settings
         show_sun: bool,
         sun_color: [f32; 3],
@@ -2968,6 +2974,7 @@ impl GenomeEditorState {
             light_field_absorption_solid: f32,
             light_field_absorption_cell: f32,
             light_field_ambient_floor: f32,
+            water_light_attenuation: f32,
             // Sun settings
             show_sun: bool,
             sun_color: [f32; 3],
@@ -3028,6 +3035,7 @@ impl GenomeEditorState {
             light_field_absorption_solid,
             light_field_absorption_cell,
             light_field_ambient_floor,
+            water_light_attenuation,
             // Sun settings
             show_sun,
             sun_color,
@@ -3096,7 +3104,8 @@ impl GenomeEditorState {
         f32,
         f32,
         f32,
-        f32, // lf_max_steps, step_size, absorb_solid, absorb_cell, ambient_floor
+        f32,
+        f32, // lf_max_steps, step_size, absorb_solid, absorb_cell, ambient_floor, water_atten
         bool,
         [f32; 3],
         f32,
@@ -3153,6 +3162,8 @@ impl GenomeEditorState {
             light_field_absorption_solid: f32,
             light_field_absorption_cell: f32,
             light_field_ambient_floor: f32,
+            #[serde(default = "default_water_light_attenuation")]
+            water_light_attenuation: f32,
             // Sun settings - add #[serde(default)] for backward compatibility
             #[serde(default)]
             show_sun: bool,
@@ -3234,13 +3245,16 @@ impl GenomeEditorState {
             true
         }
         fn default_shadow_strength() -> f32 {
-            0.7
+            1.0
         }
         fn default_shadow_quality() -> f32 {
             0.8
         }
         fn default_caustic_intensity() -> f32 {
             0.5
+        }
+        fn default_water_light_attenuation() -> f32 {
+            1.0
         }
         fn default_caustic_scale() -> f32 {
             8.0
@@ -3333,6 +3347,7 @@ impl GenomeEditorState {
                                 s.light_field_absorption_solid,
                                 s.light_field_absorption_cell,
                                 s.light_field_ambient_floor,
+                                s.water_light_attenuation,
                                 // Sun settings
                                 s.show_sun,
                                 s.sun_color,
@@ -3405,7 +3420,8 @@ impl GenomeEditorState {
             1.5,
             20.0,
             5.0,
-            0.02,
+            0.0,
+            1.0,
             true,
             [0.8307159, 0.7089912, 0.48764104],
             0.05,
@@ -3420,7 +3436,7 @@ impl GenomeEditorState {
             120.0,
             0.0,
             true,
-            0.7,
+            1.0,
             0.8,
             0.5,
             0.5,

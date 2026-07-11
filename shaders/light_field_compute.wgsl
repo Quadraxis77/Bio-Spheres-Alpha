@@ -33,7 +33,7 @@ struct LightFieldParams {
     sun_color_r: f32,
     sun_color_g: f32,
     sun_color_b: f32,
-    _pad0: f32,
+    water_light_attenuation: f32,
 }
 
 // Group 0: Parameters
@@ -287,12 +287,20 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
 
         let sample_idx = grid_to_index(u32(ix), u32(iy), u32(iz));
 
-        // Check solid (cave walls) - require consecutive solid hits to filter
-        // out scattered noise voxels. Real cave walls are many voxels thick.
-        let solid_here = solid_mask[sample_idx] != 0u && !is_near_sphere_boundary(pos.x, pos.y, pos.z);
+        // Check solid (cave walls and the outer sphere shell). Boundary-shell
+        // solids must still occlude sunlight; otherwise rays can leak through
+        // the floor/edge of the world sphere and create a false lit rim when
+        // the sun is below the sphere. Empty boundary openings remain passable.
+        let solid_here = solid_mask[sample_idx] != 0u;
         if (solid_here) {
+            let boundary_shell_solid = is_near_sphere_boundary(pos.x, pos.y, pos.z);
+            if (boundary_shell_solid) {
+                transmittance = 0.0;
+                break;
+            }
+
             consecutive_solid += 1u;
-            // Only apply absorption after 2+ consecutive solid voxels (actual wall)
+            // Only apply absorption after 2+ consecutive interior solid voxels (actual wall)
             if (consecutive_solid >= 2u) {
                 // Fast exp approximation: exp(-x) ~= 1 / (1 + x + x^2/2)
                 let x = params.absorption_solid;
@@ -312,9 +320,9 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
 
         let water_amount = clamp(water_density[sample_idx], 0.0, 1.0);
         if (water_amount > 0.01) {
-            // Water transmits light, but not like empty air. It gently absorbs
-            // and scatters across each shared voxel rather than acting as a wall.
-            let x = 0.055 * water_amount * params.step_size;
+            // Sunlight loses energy quickly with depth, but still fades
+            // continuously so caustics weaken instead of ending abruptly.
+            let x = 0.115 * params.water_light_attenuation * water_amount * params.step_size;
             transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
             // Accumulate water column for downstream chromatic tinting
             water_column += water_amount * params.step_size;
@@ -408,20 +416,21 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let sun_color = vec3<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b);
 
-    // Chromatic absorption: water filters out red then green as light travels through it,
-    // leaving a progressively bluer tint the more water the ray traversed.
+    // Chromatic absorption: water filters out red then green first, then
+    // attenuates blue at depth so deep water becomes genuinely darker.
     // Uses the same fast exp approximation as transmittance: 1/(1 + x + x²/2).
-    let wc = water_column;
-    let r_abs = wc * 2.8;
-    let g_abs = wc * 0.65;
+    let wc = water_column * params.water_light_attenuation;
+    let r_abs = wc * 4.4;
+    let g_abs = wc * 1.35;
+    let b_abs = wc * 0.28;
     let r_atten = 1.0 / (1.0 + r_abs + r_abs * r_abs * 0.5);
     let g_atten = 1.0 / (1.0 + g_abs + g_abs * g_abs * 0.5);
-    // Blue travels freely through water (attenuation ≈ 0)
-    let ray_tint = vec3<f32>(r_atten, g_atten, 1.0);
+    let b_atten = 1.0 / (1.0 + b_abs + b_abs * b_abs * 0.5);
+    let ray_tint = vec3<f32>(r_atten, g_atten, b_atten);
 
     // Additional tint for voxels that are themselves submerged
     let voxel_water = clamp(water_density[idx], 0.0, 1.0);
-    let voxel_tint = mix(vec3<f32>(1.0), vec3<f32>(0.70, 0.92, 1.10), voxel_water * 0.45);
+    let voxel_tint = mix(vec3<f32>(1.0), vec3<f32>(0.56, 0.76, 0.90), voxel_water * 0.55);
 
     let geo = geothermal_glow[idx];
     let submerged = smoothstep(0.35, 0.85, voxel_water);

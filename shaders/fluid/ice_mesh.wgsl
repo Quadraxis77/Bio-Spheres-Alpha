@@ -143,6 +143,51 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     }
     return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
+
+fn apply_shadow_contrast(raw_light: f32) -> f32 {
+    return max(raw_light, 1.0 - shadow_params.shadow_strength);
+}
+
+fn sample_light_field_clamped(world_pos: vec3<f32>) -> f32 {
+    let grid_size = shadow_params.cell_size * f32(shadow_params.grid_resolution);
+    let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
+    let grid_max = grid_min + vec3<f32>(grid_size);
+    return sample_light_field(clamp(world_pos, grid_min, grid_max));
+}
+
+fn sample_sun_shadow_soft(world_pos: vec3<f32>) -> f32 {
+    let light_axis = normalize(vec3<f32>(
+        shadow_params.light_dir_x,
+        shadow_params.light_dir_y,
+        shadow_params.light_dir_z,
+    ));
+    let helper = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(light_axis.y) > 0.9);
+    let tangent = normalize(cross(helper, light_axis));
+    let bitangent = normalize(cross(light_axis, tangent));
+    let inner_radius = shadow_params.cell_size * mix(0.85, 2.35, shadow_params.shadow_quality);
+    let outer_radius = shadow_params.cell_size * mix(1.90, 4.75, shadow_params.shadow_quality);
+    let inner_diag = inner_radius * 0.70710678;
+    let outer_diag = outer_radius * 0.70710678;
+
+    var light_sum = sample_light_field_clamped(world_pos) * 0.18;
+    light_sum += sample_light_field_clamped(world_pos + tangent * inner_radius) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos - tangent * inner_radius) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos + bitangent * inner_radius) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos - bitangent * inner_radius) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos + tangent * inner_diag + bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos - tangent * inner_diag + bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos + tangent * inner_diag - bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos - tangent * inner_diag - bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos + tangent * outer_radius) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos - tangent * outer_radius) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos + bitangent * outer_radius) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos - bitangent * outer_radius) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos + tangent * outer_diag + bitangent * outer_diag) * 0.035;
+    light_sum += sample_light_field_clamped(world_pos - tangent * outer_diag + bitangent * outer_diag) * 0.035;
+    light_sum += sample_light_field_clamped(world_pos + tangent * outer_diag - bitangent * outer_diag) * 0.035;
+    light_sum += sample_light_field_clamped(world_pos - tangent * outer_diag - bitangent * outer_diag) * 0.035;
+    return light_sum;
+}
 // Crystal facet field: world space is partitioned into irregular Voronoi
 // regions ("crystal faces"). Each region gets its own flat plane, and
 // vertices are displaced (along the smooth surface normal) onto that plane -
@@ -343,8 +388,8 @@ fn shade_ice(in: VertexOutput) -> ShadeResult {
 
     // Shadow field sample, offset along the normal to avoid self-shadowing.
     let shadow_sample_pos = in.world_position + smooth_normal * shadow_params.cell_size * 2.0;
-    let light_value = sample_light_field(shadow_sample_pos);
-    let shadow = mix(1.0, light_value, shadow_params.shadow_strength);
+    let light_value = sample_sun_shadow_soft(shadow_sample_pos);
+    let shadow = apply_shadow_contrast(light_value);
     let sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
 
     // Body color: continuous across the surface (smooth normal) - pale

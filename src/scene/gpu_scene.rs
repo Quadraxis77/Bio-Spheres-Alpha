@@ -7375,6 +7375,7 @@ impl GpuScene {
             light_field.set_absorption_solid(editor_state.light_field_absorption_solid);
             light_field.set_absorption_cell(editor_state.light_field_absorption_cell);
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
+            light_field.set_water_light_attenuation(editor_state.water_light_attenuation);
             light_field.set_mass_per_second(
                 base_photocyte_mass_rate * photocyte_production_multiplier(effective_sun_intensity),
             );

@@ -6180,6 +6180,72 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             context.editor_state.save_fluid_render_settings();
         }
 
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Underwater Light");
+        ui.add_space(4.0);
+        ui.label("Sunlight Attenuation:")
+            .on_hover_text("How quickly sunlight darkens with water depth. Higher values simulate deeper water where sunlight cannot reach.");
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.water_light_attenuation, 0.1..=20.0)
+                    .logarithmic(true)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
+            context.editor_state.light_params_dirty = true;
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                    light_field.set_water_light_attenuation(
+                        context.editor_state.water_light_attenuation,
+                    );
+                }
+            }
+            context.editor_state.save_light_settings();
+        }
+
+        ui.add_space(4.0);
+        ui.label("Ambient Spread:")
+            .on_hover_text("Minimum indirect light in shadowed or deep-water areas. Set to 0 for truly black depths; raise it for scattered ambient light.");
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.light_field_ambient_floor, 0.0..=0.2)
+                    .step_by(0.001)
+                    .fixed_decimals(3),
+            )
+            .changed()
+        {
+            context.editor_state.light_params_dirty = true;
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                    light_field.set_ambient_floor(context.editor_state.light_field_ambient_floor);
+                }
+            }
+            context.editor_state.save_light_settings();
+        }
+
+        ui.add_space(4.0);
+        ui.label("Shadow Depth:")
+            .on_hover_text("How dark unlit regions are allowed to become. Lit and partially sun-penetrated areas are preserved; set to 1.0 for pitch-black shadows.");
+        if ui
+            .add(
+                egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            )
+            .changed()
+        {
+            context.editor_state.light_params_dirty = true;
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                    light_field.set_shadow_strength(context.editor_state.shadow_strength);
+                }
+            }
+            context.editor_state.save_light_settings();
+        }
+
         // === Caustics ===
         ui.add_space(8.0);
         ui.separator();

@@ -176,10 +176,6 @@ fn sample_water_density_fog(world_pos: vec3<f32>) -> f32 {
     return clamp(water_density_field[idx], 0.0, 1.0);
 }
 
-// Solid detection threshold: solid voxels have light_field = 0.0,
-// non-solid always have >= ambient_floor (0.02). Using 0.01 as threshold.
-const SOLID_LIGHT_THRESHOLD: f32 = 0.01;
-
 // Ray-sphere intersection. Returns (t_near, t_far) or (-1, -1) if no hit.
 // Sphere centered at origin with given radius.
 fn intersect_sphere(ray_origin: vec3<f32>, ray_dir: vec3<f32>, radius: f32) -> vec2<f32> {
@@ -355,12 +351,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // light_color_field already carries ray-march tint; this adds per-voxel scattering tint.
                 // Local emitters have already been resolved into light_color_field, so keep
                 // thermal vent orange and luminocyte colors intact instead of re-blueing them.
-                let r_abs = water_amount * 2.2;
-                let g_abs = water_amount * 0.55;
+                let r_abs = water_amount * 3.2;
+                let g_abs = water_amount * 1.05;
+                let b_abs = water_amount * 0.22;
                 let water_scatter_tint = vec3<f32>(
                     1.0 / (1.0 + r_abs + r_abs * r_abs * 0.5),
                     1.0 / (1.0 + g_abs + g_abs * g_abs * 0.5),
-                    1.0,
+                    1.0 / (1.0 + b_abs + b_abs * b_abs * 0.5),
                 );
                 let local_emitter_blend = smoothstep(0.001, 0.05, local_emitter_weight);
                 local_light_color *= mix(water_scatter_tint, vec3<f32>(1.0), local_emitter_blend);

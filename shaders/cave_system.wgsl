@@ -187,6 +187,49 @@ fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
     return textureSampleLevel(light_color_field_tex, light_field_sampler, uvw, 0.0);
 }
 
+fn apply_shadow_contrast(raw_light: f32) -> f32 {
+    return max(raw_light, 1.0 - shadow_params.shadow_strength);
+}
+
+fn sample_light_field_clamped(world_pos: vec3<f32>, grid_min: vec3<f32>, grid_max: vec3<f32>) -> f32 {
+    return sample_light_field_lod(clamp(world_pos, grid_min, grid_max));
+}
+
+fn sample_sun_shadow_soft(world_pos: vec3<f32>, grid_min: vec3<f32>, grid_max: vec3<f32>) -> f32 {
+    let light_axis = normalize(vec3<f32>(
+        shadow_params.light_dir_x,
+        shadow_params.light_dir_y,
+        shadow_params.light_dir_z,
+    ));
+    let helper = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(light_axis.y) > 0.9);
+    let tangent = normalize(cross(helper, light_axis));
+    let bitangent = normalize(cross(light_axis, tangent));
+    let inner_radius = shadow_params.cell_size * mix(0.85, 2.35, shadow_params.shadow_quality);
+    let outer_radius = shadow_params.cell_size * mix(1.90, 4.75, shadow_params.shadow_quality);
+    let inner_diag = inner_radius * 0.70710678;
+    let outer_diag = outer_radius * 0.70710678;
+
+    var light_sum = sample_light_field_clamped(world_pos, grid_min, grid_max) * 0.18;
+    light_sum += sample_light_field_clamped(world_pos + tangent * inner_radius, grid_min, grid_max) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos - tangent * inner_radius, grid_min, grid_max) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos + bitangent * inner_radius, grid_min, grid_max) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos - bitangent * inner_radius, grid_min, grid_max) * 0.065;
+    light_sum += sample_light_field_clamped(world_pos + tangent * inner_diag + bitangent * inner_diag, grid_min, grid_max) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos - tangent * inner_diag + bitangent * inner_diag, grid_min, grid_max) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos + tangent * inner_diag - bitangent * inner_diag, grid_min, grid_max) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos - tangent * inner_diag - bitangent * inner_diag, grid_min, grid_max) * 0.055;
+    light_sum += sample_light_field_clamped(world_pos + tangent * outer_radius, grid_min, grid_max) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos - tangent * outer_radius, grid_min, grid_max) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos + bitangent * outer_radius, grid_min, grid_max) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos - bitangent * outer_radius, grid_min, grid_max) * 0.040;
+    light_sum += sample_light_field_clamped(world_pos + tangent * outer_diag + bitangent * outer_diag, grid_min, grid_max) * 0.035;
+    light_sum += sample_light_field_clamped(world_pos - tangent * outer_diag + bitangent * outer_diag, grid_min, grid_max) * 0.035;
+    light_sum += sample_light_field_clamped(world_pos + tangent * outer_diag - bitangent * outer_diag, grid_min, grid_max) * 0.035;
+    light_sum += sample_light_field_clamped(world_pos - tangent * outer_diag - bitangent * outer_diag, grid_min, grid_max) * 0.035;
+
+    return light_sum;
+}
+
 fn local_light_sample_clamped(world_pos: vec3<f32>, grid_min: vec3<f32>, grid_max: vec3<f32>) -> vec4<f32> {
     return sample_light_color_field_full(clamp(world_pos, grid_min, grid_max));
 }
@@ -878,17 +921,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var vent_light_intensity = 0.0;
     if (all(in.world_position >= grid_min) && all(in.world_position <= grid_max)) {
         let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
-        let raw_light = sample_light_field_lod(clamped_pos);
+        let raw_light = sample_sun_shadow_soft(clamped_pos, grid_min, grid_max);
         let light_color_sample = smooth_local_light_sample(in.world_position, N, grid_min, grid_max);
-        shadow = mix(1.0, raw_light, shadow_params.shadow_strength);
+        shadow = apply_shadow_contrast(raw_light);
         local_light_weight = light_color_sample.w;
         vent_light_intensity = 1.0 - exp(-local_light_weight * 0.9);
         let vent_gradient = local_light_gradient(in.world_position, grid_min, grid_max);
         local_light_direction = normalize(select(N, vent_gradient, dot(vent_gradient, vent_gradient) > 0.00001));
         raw_light_visibility = raw_light;
     }
-    // Ambient scales with sun_color so cave walls go pitch black when sun is off.
-    let ambient = sun_color * cave_params.rock_ambient_strength * ao;
+    // Ambient follows the light field so deep/shadowed water can go fully dark
+    // when the ambient floor is set to zero.
+    let ambient_visibility = clamp(raw_light_visibility, 0.0, 1.0);
+    let ambient = sun_color * cave_params.rock_ambient_strength * ao * ambient_visibility;
     var final_color = final_base_color * (ambient + sun_color * diffuse * cave_params.rock_diffuse_strength * shadow)
         + sun_color * vec3<f32>(specular * cave_params.rock_specular_strength * shadow);
     let vent_color = max(cave_params.geothermal_glow_color, vec3<f32>(0.0));
@@ -903,13 +948,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply underwater caustics on lit surfaces
     let water_check_pos = in.world_position + N * shadow_params.cell_size * 1.5;
     let density = sample_water_density(water_check_pos);
-    let direct_sun_visibility = raw_light_visibility - local_light_weight;
-    let direct_sun_caustics = direct_sun_visibility > 0.35 && diffuse > 0.001;
-    if (shadow_params.caustic_intensity > 0.0 && direct_sun_caustics && density > 0.01) {
+    let direct_sun_visibility = clamp(raw_light_visibility - local_light_weight, 0.0, 1.0);
+    let water_presence = smoothstep(0.0, 0.28, density);
+    let sun_penetration = smoothstep(0.02, 0.78, direct_sun_visibility);
+    let surface_facing = smoothstep(0.0, 0.25, diffuse);
+    let caustic_strength = water_presence * sun_penetration * direct_sun_visibility * surface_facing;
+    if (shadow_params.caustic_intensity > 0.0 && caustic_strength > 0.0001) {
         let caustic = caustic_pattern(in.world_position, N, shadow_params.time);
-        let density_fade = smoothstep(0.0, 0.5, density);
         let caustic_tint = sun_color * vec3<f32>(0.7, 0.85, 1.0);
-        final_color += caustic_tint * caustic * shadow_params.caustic_intensity * direct_sun_visibility * density_fade * 0.5;
+        final_color += caustic_tint * caustic * shadow_params.caustic_intensity * caustic_strength * 0.55;
     }
     
     // Completely opaque walls

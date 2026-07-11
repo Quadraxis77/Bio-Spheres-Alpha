@@ -98,6 +98,10 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     }
     return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
+
+fn apply_shadow_contrast(raw_light: f32) -> f32 {
+    return max(raw_light, 1.0 - shadow_params.shadow_strength);
+}
 struct InstanceInput {
     @location(0) position: vec3<f32>,
     @location(1) radius: f32,
@@ -1146,7 +1150,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         );
         let grid_max = grid_min + vec3<f32>(grid_size);
         let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
-        let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
+        let shadow = apply_shadow_contrast(sample_light_field(clamped_pos));
         let local_light_color = sample_light_color_field(clamped_pos);
 
         let ndotl = max(dot(world_normal_front, -light_dir), 0.0);
@@ -1599,7 +1603,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
     let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
     let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
-    let shadow = mix(1.0, sample_light_field(clamped_pos), shadow_params.shadow_strength);
+    let shadow = apply_shadow_contrast(sample_light_field(clamped_pos));
     let local_light_color = sample_light_color_field(clamped_pos);
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);
     let front_diffuse = front_ndotl * local_light_color * shadow;

@@ -76,6 +76,32 @@ fn grid_index(x: u32, y: u32, z: u32) -> u32 {
     return x + y * res + z * res * res;
 }
 
+fn neighboring_water_count(gid: vec3<u32>) -> u32 {
+    let res = params.grid_resolution;
+    let offsets = array<vec3<i32>, 6>(
+        vec3<i32>(1, 0, 0),
+        vec3<i32>(-1, 0, 0),
+        vec3<i32>(0, 1, 0),
+        vec3<i32>(0, -1, 0),
+        vec3<i32>(0, 0, 1),
+        vec3<i32>(0, 0, -1)
+    );
+
+    var count = 0u;
+    for (var i = 0u; i < 6u; i++) {
+        let nx = i32(gid.x) + offsets[i].x;
+        let ny = i32(gid.y) + offsets[i].y;
+        let nz = i32(gid.z) + offsets[i].z;
+        if nx >= 0 && nx < i32(res) && ny >= 0 && ny < i32(res) && nz >= 0 && nz < i32(res) {
+            let n_idx = grid_index(u32(nx), u32(ny), u32(nz));
+            if (fluid_state[n_idx] & 0x7u) == 1u {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let res = params.grid_resolution;
@@ -90,6 +116,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Fluid type is stored in lower 16 bits
     let fluid_type = state & 0x7u;
+
+    // A steam voxel trapped inside water is a simulation bubble, not visible
+    // above-surface vapor. Surface steam generally has water below it, while
+    // submerged steam is surrounded by water or dense water surface field.
+    if fluid_type == 3u && (water_density[idx] > 0.55 || neighboring_water_count(global_id) >= 4u) {
+        return;
+    }
 
     let geo = geothermal_glow[idx];
     let underwater_stack = geo.w > 0.10 && water_density[idx] > 0.35;

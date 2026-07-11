@@ -36,7 +36,7 @@ pub struct LightFieldParams {
     pub sun_color_r: f32,
     pub sun_color_g: f32,
     pub sun_color_b: f32,
-    pub _pad0: f32,
+    pub water_light_attenuation: f32,
 }
 
 /// Parameters for cell occupancy grid builder
@@ -175,6 +175,7 @@ pub struct LightFieldSystem {
     absorption_cell: f32,
     ambient_floor: f32,
     scattering_coefficient: f32,
+    water_light_attenuation: f32,
     mass_per_second_full_light: f32,
     geothermal_mass_per_second_full_light: f32,
     min_light_threshold: f32,
@@ -1155,12 +1156,13 @@ impl LightFieldSystem {
             step_size: 2.0,
             absorption_solid: 8.0,
             absorption_cell: 10.0,
-            ambient_floor: 0.02,
+            ambient_floor: 0.0,
             scattering_coefficient: 0.2,
+            water_light_attenuation: 1.0,
             mass_per_second_full_light: 0.2,
             geothermal_mass_per_second_full_light: 0.2,
             min_light_threshold: 0.05,
-            shadow_strength: 0.7,
+            shadow_strength: 1.0,
             shadow_enabled: true,
             shadow_quality: 0.8,
             caustic_intensity: 0.5,
@@ -1653,6 +1655,11 @@ impl LightFieldSystem {
         self.scattering_coefficient = coeff;
     }
 
+    /// Set water sunlight attenuation multiplier.
+    pub fn set_water_light_attenuation(&mut self, attenuation: f32) {
+        self.water_light_attenuation = attenuation.clamp(0.1, 20.0);
+    }
+
     /// Update params and write to GPU
     pub fn update_light_field_params(&self, queue: &wgpu::Queue, time: f32) {
         let params = LightFieldParams {
@@ -1675,7 +1682,7 @@ impl LightFieldSystem {
             sun_color_r: self.sun_color[0],
             sun_color_g: self.sun_color[1],
             sun_color_b: self.sun_color[2],
-            _pad0: 0.0,
+            water_light_attenuation: self.water_light_attenuation,
         };
         queue.write_buffer(
             &self.light_field_params_buffer,

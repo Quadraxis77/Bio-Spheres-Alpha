@@ -160,17 +160,20 @@ fn get_fluid_type(state: u32) -> u32 {
 // Comfortable sun brightness spans 0 (dark) to 3 (bright); above 3 is extreme heat.
 const COMFORTABLE_BRIGHTNESS_MAX: f32 = 3.0;
 const DARK_BASELINE_C: f32 = -10.0;        // sun_brightness = 0 reference; well below freezing
+const TEMPERATE_AVERAGE_C: f32 = 18.0;     // sun_brightness = 3 average world climate
+const DIRECT_SUN_WARMING_C: f32 = 12.0;    // local sunlight bonus at brightness 3
+const FULL_SHADOW_COOLING_C: f32 = 4.0;    // local shadow offset at brightness 3
 const EVAPORATION_FLOOR_C: f32 = 15.6;     // 60°F - dark-voxel floor; no passive evaporation below this
 const BOILING_POINT_C: f32 = 100.0;        // steam stays vapor at/above this; condensation possible at any cooler ambient
 const SNOW_FALL_PROBABILITY: f32 = 0.04;   // snow drifts down far slower than water/rain
 const EVAPORATION_BRISK_C: f32 = 29.4;     // ~85°F - brightness 3 reference; "decent rainfall" territory
-const EXTREME_HEAT_SLOPE_C: f32 = 25.0;    // °C added per unit of brightness above the comfortable ceiling
+const EXTREME_HEAT_SLOPE_C: f32 = 15.0;    // °C added per unit of brightness above the comfortable ceiling
 const EVAPORATION_CURVE_POWER: f32 = 2.5;  // shapes the floor->brisk evaporation ramp (gentle at the low end)
 const FREEZE_POINT_C: f32 = 0.0;
 const FREEZE_HYSTERESIS_C: f32 = 2.0;      // water freezes below (FREEZE_POINT - this); ice melts above (FREEZE_POINT + this) - prevents flicker at the boundary
 const PHASE_DEBT_THRESHOLD: f32 = 100.0;   // accumulated freeze/melt debt required to flip water<->ice
 const PHASE_DEBT_DECAY: f32 = 0.90;        // per-tick decay applied to phase debt while not past the threshold
-const DEEP_FREEZE_MARGIN_C: f32 = 10.0;    // water this far below the freeze threshold ices over immediately
+const DEEP_FREEZE_MARGIN_C: f32 = 10.0;    // low/normal-inertia surface water this far below freezing can ice over immediately
 // Sheet-first freezing: extra freeze-debt rate per adjacent lateral ice
 // crystal (surface sheet racing outward), and the rate multiplier for water
 // thickening the sheet from below. Spread >> thicken keeps pools freezing as
@@ -224,9 +227,9 @@ const WATER_BUOYANCY_MAX_PROBABILITY: f32 = 0.9;
 const WATER_DENSITY_INVERSION_C: f32 = 4.0;
 // Solar forcing: every medium absorbs sunlight in proportion to its actual
 // local light level (the biosphere is transparent; the light field handles
-// occlusion), divided by the phase's thermal mass - air responds in under a
-// second, water and rock proportionally slower.
-const SOLAR_COUPLING: f32 = 0.004;
+// occlusion), divided by the phase's thermal mass - air responds quickly,
+// water/ice respond more slowly but still visibly over time.
+const SOLAR_COUPLING: f32 = 0.018;
 // Geothermal vents are localized heat sources, not ambient light. Water and
 // ice in the source field should respond strongly enough to melt/boil instead
 // of waiting for weak air conduction from the plume.
@@ -234,16 +237,17 @@ const GEOTHERMAL_COUPLING_AIR: f32 = 0.14;
 const GEOTHERMAL_COUPLING_WATER: f32 = 0.18;
 const GEOTHERMAL_COUPLING_ICE: f32 = 0.22;
 const GEOTHERMAL_COUPLING_SOLID: f32 = 0.08;
-// Radiation is asymmetric: sunlight adds heat only where light reaches, and
-// shadow never injects cold - shadowed voxels just bleed heat radiatively at
-// a fraction of the full solar coupling. Caves get their temperature the
-// physical way, by slow conduction through rock, not from an ambient anchor.
-// Air and steam radiate much better than dense media (thin media shed heat
-// readily), so the atmosphere can actually cool when the sun dims while rock
-// and water act as thermal flywheels - this keeps the heat/cool asymmetry
-// from ratcheting the climate hotter over repeated bright/dim cycles.
-const DARK_RADIATIVE_FRACTION_DENSE: f32 = 0.1;
+// Radiation is asymmetric: sunlight adds heat only where light reaches, while
+// shadowed voxels bleed toward the dark local sky temperature. Dense media
+// still have thermal inertia, but water and ice need enough exchange to make
+// sun/shadow climate gradients visible instead of averaging back to the
+// global sun slider.
+const DARK_RADIATIVE_FRACTION_DENSE: f32 = 0.35;
 const DARK_RADIATIVE_FRACTION_AIR: f32 = 0.5;
+const DARK_RADIATIVE_FRACTION_WATER: f32 = 0.12;
+const GLOBAL_CLIMATE_EXCHANGE_WATER: f32 = 0.12;
+const GLOBAL_CLIMATE_EXCHANGE_ICE: f32 = 0.16;
+const GLOBAL_CLIMATE_EXCHANGE_AIR: f32 = 0.35;
 
 // ---- Latent heat (simplified) ----
 // Fusion (water<->ice/snow) pins the flipping voxel at the freeze point:
@@ -266,6 +270,19 @@ const BOIL_PROBABILITY: f32 = 0.20;
 // Inertia slider scales conduction and solar forcing together: each -1 below
 // the anchor doubles the speed of all heat flow, each +1 above halves it.
 const THERMAL_INERTIA_ANCHOR: f32 = 4.0;
+
+fn water_phase_inertia_scale() -> f32 {
+    // Water has the strongest latent-heat inertia. High thermal inertia should
+    // make liquid water resist freezing for a long time even after it crosses
+    // the threshold, while low inertia still allows quick ice formation.
+    return clamp(exp2((THERMAL_INERTIA_ANCHOR - params.thermal_inertia) * 2.0), 0.03, 8.0);
+}
+
+fn ice_phase_inertia_scale() -> f32 {
+    // Existing ice/snow still responds to inertia, just less dramatically than
+    // liquid water. This keeps high-inertia ice from becoming totally static.
+    return clamp(exp2((THERMAL_INERTIA_ANCHOR - params.thermal_inertia) * 0.7), 0.2, 4.0);
+}
 
 // The climate passes (update_temperature, diffuse_humidity, condense_humidity)
 // run every Nth physics tick instead of every tick - climate evolves over
@@ -307,8 +324,6 @@ const NATURAL_CONDENSATION_RATE: f32 = 0.04;  // base per-tick chance scalar onc
 const PRECIP_BUILDUP_EXCESS: f32 = 80.0;
 const PRECIP_BURST_EXCESS: f32 = 180.0;
 
-const DARKNESS_PENALTY_MAX_C: f32 = 8.0; // unlit voxels run at most this much colder than baseline; at sun brightness 3, even fully shadowed air remains temperate (~70°F)
-
 // ---- Humidity model constants (see CLIMATE_SPEC) ----
 const HUMIDITY_FIXED_POINT: f32 = 256.0;     // fixed-point scale for the humidity buffer (stored = value * 256)
 const HUMIDITY_CAPACITY_BASE: f32 = 20.0;    // air can hold at least this much humidity (0-255 scale) regardless of temperature
@@ -340,40 +355,99 @@ const VAPOR_FOG_DECAY_RATE: f32 = 0.22;
 // than requiring one cell to hoard an entire voxel's worth on its own.
 const CONDENSE_TRIGGER_MARGIN: f32 = 20.0;
 
-// Baseline air temperature, derived from overall sun brightness (0 = dark,
-// 3 = comfortable max, >3 = extreme heat). This is the "reference" temperature
-// for fully-lit conditions; individual voxels then sit at-or-below this based
-// on their own local light level (see ambient_temp_c).
-// TODO: drive `sun_brightness` from the actual sun/light-field intensity once
-// that's available in this pass — exposed as a pure function for now so the
-// mapping is correct and ready to wire up.
-fn baseline_air_temp_c(sun_brightness: f32) -> f32 {
+// Average world air temperature, derived from overall sun brightness. At the
+// default brightness of 3 the world should be temperate even in shade; local
+// direct sunlight then adds warmth on top of this average.
+fn average_air_temp_c(sun_brightness: f32) -> f32 {
     if sun_brightness <= COMFORTABLE_BRIGHTNESS_MAX {
-        return mix(DARK_BASELINE_C, EVAPORATION_BRISK_C, saturate(sun_brightness / COMFORTABLE_BRIGHTNESS_MAX));
+        return mix(DARK_BASELINE_C, TEMPERATE_AVERAGE_C, saturate(sun_brightness / COMFORTABLE_BRIGHTNESS_MAX));
     }
     let excess = sun_brightness - COMFORTABLE_BRIGHTNESS_MAX;
-    return EVAPORATION_BRISK_C + excess * EXTREME_HEAT_SLOPE_C;
+    return TEMPERATE_AVERAGE_C + excess * EXTREME_HEAT_SLOPE_C;
 }
 
-// Real per-voxel light intensity from the light field (0.0 = fully shadowed,
-// 1.0 = fully lit), scaled by overall sun brightness to match the
-// baseline_air_temp_c reference scale (0 = dark, 3 = comfortable max).
-// One frame stale relative to the fluid step (fluid runs before the light
-// field pass each frame) - same lag already accepted for moss growth.
-fn local_brightness_from_field(light_idx: u32) -> f32 {
-    return light_field[light_idx] * params.sun_brightness;
+fn sunlight_scale() -> f32 {
+    return max(params.sun_brightness, 0.0) / COMFORTABLE_BRIGHTNESS_MAX;
 }
 
-// Per-voxel ambient air temperature: starts from the brightness-derived
-// baseline, then voxels that receive less local light run cooler — clamped
-// to at most DARKNESS_PENALTY_MAX_C below baseline.
+fn local_light_fraction(light_idx: u32) -> f32 {
+    return saturate(light_field[light_idx]);
+}
+
+// Per-voxel ambient temperature starts from the global climate and is nudged
+// by local sun/shadow. This lets brightness 3 stay temperate overall while
+// still allowing prolonged low-sun darkness to freeze and direct sunlight to
+// melt ice quickly.
 fn ambient_temp_c(light_idx: u32) -> f32 {
-    let baseline_c = baseline_air_temp_c(params.sun_brightness);
+    let lit = local_light_fraction(light_idx);
+    let sun_scale = sunlight_scale();
+    let average_c = average_air_temp_c(params.sun_brightness);
+    let direct_warm_c = lit * DIRECT_SUN_WARMING_C * sun_scale;
+    let shadow_cool_c = (1.0 - lit) * FULL_SHADOW_COOLING_C * min(sun_scale, 1.0);
+    return average_c + direct_warm_c - shadow_cool_c;
+}
 
-    let local_brightness = local_brightness_from_field(light_idx);
-    let brightness_scale = max(params.sun_brightness, 0.001);
-    let darkness = saturate(1.0 - local_brightness / brightness_scale);
-    return baseline_c - darkness * DARKNESS_PENALTY_MAX_C;
+fn solar_absorption_strength(fluid_type: u32, solid: bool) -> f32 {
+    if solid {
+        // Rock should be a thermal flywheel, not a sun-powered heater.
+        return 0.0;
+    }
+    switch fluid_type {
+        case 1u: { return 1.15; } // water absorbs direct sun well
+        case 2u: { return 1.05; } // ice still warms under strong direct sun
+        case 4u: { return 0.45; } // snow is the most reflective phase
+        case 3u: { return 1.2; }  // steam responds quickly
+        default: { return 1.0; }
+    }
+}
+
+fn shadow_radiation_strength(fluid_type: u32, solid: bool, mobile: bool) -> f32 {
+    if solid {
+        return 0.0;
+    }
+    if mobile && fluid_type != 1u {
+        return DARK_RADIATIVE_FRACTION_AIR;
+    }
+    if fluid_type == 2u || fluid_type == 4u {
+        return 0.28;
+    }
+    if fluid_type == 1u {
+        // Water should cool in shadow, but not so fast that locally warm
+        // currents cannot advect/conduct heat into unlit pockets.
+        return DARK_RADIATIVE_FRACTION_WATER;
+    }
+    return DARK_RADIATIVE_FRACTION_DENSE;
+}
+
+fn global_climate_exchange_strength(fluid_type: u32, solid: bool, mobile: bool) -> f32 {
+    if solid {
+        return 0.0;
+    }
+    if mobile && fluid_type != 1u {
+        return GLOBAL_CLIMATE_EXCHANGE_AIR;
+    }
+    if fluid_type == 2u || fluid_type == 4u {
+        return GLOBAL_CLIMATE_EXCHANGE_ICE;
+    }
+    if fluid_type == 1u {
+        return GLOBAL_CLIMATE_EXCHANGE_WATER;
+    }
+    return GLOBAL_CLIMATE_EXCHANGE_WATER;
+}
+
+fn sunlit_melt_pressure_c(idx: u32, melt_threshold: f32) -> f32 {
+    // Direct sunlight should help melt exposed ice before the stored ice
+    // temperature fully catches up. This uses the local light-field target, so
+    // shadowed ice still waits for conduction instead of melting from the
+    // global sun slider.
+    return max(ambient_temp_c(idx) - melt_threshold, 0.0);
+}
+
+fn meltwater_start_temp_c(idx: u32) -> f32 {
+    // Melted ice should not always restart at exactly 0 C under hot sun; that
+    // makes it immediately eligible to freeze again. Keep only a little local
+    // warmth so melting feels stable without erasing latent-heat behavior.
+    return clamp(ambient_temp_c(idx), FREEZE_POINT_C, FREEZE_POINT_C + 4.0);
 }
 
 // Map a Celsius temperature onto the spec's 0-255 scale.
@@ -705,6 +779,67 @@ fn in_contact_with_air(gid: vec3<u32>) -> bool {
         }
     }
     return false;
+}
+
+const INVALID_VOXEL_INDEX: u32 = 0xFFFFFFFFu;
+
+// Return the empty air cell immediately above this water voxel, using the
+// local gravity direction. Evaporation/boiling should spawn vapor into this
+// air cell, not replace the water voxel itself, otherwise the first visible
+// steam particle appears underwater.
+fn surface_air_index(gid: vec3<u32>) -> u32 {
+    let res = params.grid_resolution;
+    let grav = get_effective_gravity(gid);
+    let up = get_offset(gravity_dir_to_index(grav) ^ 1u);
+    let ax = i32(gid.x) + up.x;
+    let ay = i32(gid.y) + up.y;
+    let az = i32(gid.z) + up.z;
+
+    if ax < 0 || ax >= i32(res) || ay < 0 || ay >= i32(res) || az < 0 || az >= i32(res) {
+        return INVALID_VOXEL_INDEX;
+    }
+
+    let ux = u32(ax);
+    let uy = u32(ay);
+    let uz = u32(az);
+    if is_solid(ux, uy, uz) {
+        return INVALID_VOXEL_INDEX;
+    }
+
+    let air_idx = grid_index(ux, uy, uz);
+    if get_fluid_type(atomicLoad(&voxels[air_idx])) != 0u {
+        return INVALID_VOXEL_INDEX;
+    }
+
+    return air_idx;
+}
+
+fn vaporize_into_surface_air(source_idx: u32, source_state: u32, air_idx: u32, temp_c: f32) -> bool {
+    if air_idx == INVALID_VOXEL_INDEX {
+        return false;
+    }
+
+    let air_state = atomicLoad(&voxels[air_idx]);
+    if get_fluid_type(air_state) != 0u {
+        return false;
+    }
+
+    let claim_air = atomicCompareExchangeWeak(&voxels[air_idx], air_state, 0xFFFFFFFFu);
+    if !claim_air.exchanged {
+        return false;
+    }
+
+    let claim_water = atomicCompareExchangeWeak(&voxels[source_idx], source_state, 0xFFFFFFFFu);
+    if !claim_water.exchanged {
+        atomicStore(&voxels[air_idx], air_state);
+        return false;
+    }
+
+    atomicStore(&voxels[source_idx], 0u);
+    atomicStore(&temp_field[source_idx], 0u);
+    atomicStore(&voxels[air_idx], (65535u << 16u) | 3u);
+    atomicStore(&temp_field[air_idx], encode_field_temp(temp_c));
+    return true;
 }
 
 // Vapor needs a surface to condense onto: near the world-sphere boundary or
@@ -1102,30 +1237,25 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
     // one nudge instead of up to seven.
     var self_delta_c = 0.0;
 
-    // Solar forcing: the biosphere is transparent, so every medium absorbs
-    // sunlight - but radiation only ever ADDS heat where light actually
-    // reaches, and only ever REMOVES heat elsewhere. A fully shadowed voxel
-    // gets zero warming and just bleeds heat slowly (DARK_RADIATIVE_FRACTION
-    // of the solar rate), so shade is the absence of heating, never an
-    // injection of cold - cave walls don't radiate warmth or chill, their
-    // temperature comes from conduction alone.
+    // Climate forcing: the global sun brightness sets the average climate,
+    // while the local light field adds direct-sun heating or shade cooling.
+    // Direct sun is the fast path; shade still exchanges with the temperate
+    // average instead of behaving like global darkness.
     {
         let ambient_c = ambient_temp_c(idx);
         let delta = ambient_c - t_self;
-        // Cooling: radiative heat loss - thin media (air/steam) shed heat
-        // readily, dense media barely radiate and rely on conduction.
-        var strength = DARK_RADIATIVE_FRACTION_DENSE;
-        if mobile_self && fluid_type != 1u {
-            strength = DARK_RADIATIVE_FRACTION_AIR;
-        }
+        // Cooling: radiative heat loss toward the local dark/light target.
+        // Thin media shed heat readily; water and ice now cool strongly
+        // enough that shaded pools do not stay pinned to the global sun
+        // brightness.
+        var strength = shadow_radiation_strength(fluid_type, solid_self, mobile_self);
         if delta > 0.0 {
-            // Warming: proportional to actual local light - no light, no
-            // heat. Solids absorb NO solar heat at all: rock is a thermal
-            // flywheel that takes its temperature from the air and water
-            // touching it, never a heat source above its surroundings.
-            // (Sun-warmed rock used to act as a stove, simmering adjacent
-            // water into steady steam plumes off every lit rock face.)
-            strength = select(saturate(light_field[idx]), 0.0, solid_self);
+            // Warming can come from the global temperate climate even in
+            // shade, plus faster direct sunlight where the light field reaches.
+            // Solids remain passive thermal flywheels.
+            let direct_sun_strength = local_light_fraction(idx) * solar_absorption_strength(fluid_type, solid_self);
+            let climate_strength = global_climate_exchange_strength(fluid_type, solid_self, mobile_self);
+            strength = max(climate_strength, direct_sun_strength);
         }
         let coupling = min(SOLAR_COUPLING * strength * rate_scale / m_self, 0.25);
         self_delta_c += delta * coupling;
@@ -1148,7 +1278,10 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    let conductive_t_self = clamp(t_self + self_delta_c, TEMP_MIN_C, TEMP_MAX_C);
+    // Conduction should carry warmth into shadow. Apply same-tick solar
+    // warming before the neighbor solve, but do not let local radiative
+    // cooling consume the heat before it can spread.
+    let conductive_t_self = clamp(t_self + max(self_delta_c, 0.0), TEMP_MIN_C, TEMP_MAX_C);
 
     // Rolling-average stats: slots 0/1 = water phases, 2/3 = air,
     // 4/5 = atmospheric humidity across empty air and steam.
@@ -1732,18 +1865,20 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // --- Deep freeze: SURFACE water far below the freeze threshold
-        // ices over immediately, every sub-step (no debt/sub_step gating).
+        // can ice over immediately at low/normal inertia (no debt/sub_step gating).
         // The phase-debt accumulator below tracks debt per grid cell, but
         // spreading water keeps moving to new cells each tick and never
-        // accumulates enough debt there - so meltwater pooling in truly
-        // cold regions would stay liquid almost indefinitely without this.
+        // accumulates enough debt there - so low-inertia meltwater pooling in
+        // truly cold regions would stay liquid almost indefinitely without this.
         // Strictly surface-only (mult >= 1 means air contact): if submerged
         // water were allowed an instant flip, an arctic-cold pool would
         // freeze downward one voxel per sub-step - exactly as fast as the
         // sheet spreads - growing a hemisphere instead of a disc. Submerged
         // sheet-thickening ALWAYS goes through the slow debt path below,
-        // however cold the water is.
+        // however cold the water is. High thermal inertia disables this fast
+        // path so water still transitions to ice slowly through phase debt.
         if fluid_type == 1u && freeze_rate_mult >= 1.0
+            && water_phase_inertia_scale() >= 0.75
             && temp_c < FREEZE_POINT_C - FREEZE_HYSTERESIS_C - DEEP_FREEZE_MARGIN_C {
             let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
@@ -1763,12 +1898,12 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         // consuming the pool top-down. The latent heat pulled from
         // neighboring water keeps a heated pool pinned near the boiling
         // point instead of superheating.
-        if fluid_type == 1u && temp_c >= BOILING_POINT_C && in_contact_with_air(gid) {
+        let vapor_air_idx = surface_air_index(gid);
+
+        if fluid_type == 1u && temp_c >= BOILING_POINT_C && vapor_air_idx != INVALID_VOXEL_INDEX {
             let boil_hash = (hash_position(gid) * 0x85EBCA6Bu) ^ u32(params.time * 1000.0);
             if random_unit(boil_hash) < BOIL_PROBABILITY {
-                let new_state = (65535u << 16u) | 3u;
-                let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
-                if result.exchanged {
+                if vaporize_into_surface_air(idx, state, vapor_air_idx, temp_c) {
                     cool_water_neighbors(gid, LATENT_VAPOR_NEIGHBOR_COOL_C);
                     return;
                 }
@@ -1781,9 +1916,9 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         // curve that stays nearly imperceptible just above the floor and
         // climbs toward saturation as the water approaches the brisk/boiling
         // reference. Also requires the voxel to actually be in contact with
-        // air (steam needs somewhere to go) - water buried deep in a pool
-        // doesn't spontaneously vaporize.
-        if fluid_type == 1u && settled && in_contact_with_air(gid) {
+        // air directly above the local surface (steam needs somewhere to go)
+        // - water buried deep in a pool doesn't spontaneously vaporize.
+        if fluid_type == 1u && settled && vapor_air_idx != INVALID_VOXEL_INDEX {
             if temp_c > EVAPORATION_FLOOR_C {
                 let warmth = saturate((temp_c - EVAPORATION_FLOOR_C) / (EVAPORATION_BRISK_C - EVAPORATION_FLOOR_C));
                 let saturation = local_saturation(gid, temp_c);
@@ -1795,14 +1930,11 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let time_hash = u32(params.time * 1000.0);
                 let combined_hash = pos_hash ^ time_hash;
                 if random_unit(combined_hash) < rate {
-                    // Steam carries no tracked temperature - clear the field.
                     // 1:1 phase change: one voxel of water becomes one voxel
-                    // of steam, nothing else. Moisture enters the humidity
-                    // field only when steam later dissolves (paying
-                    // HUMIDITY_PER_VOXEL for the whole voxel).
-                    let new_state = (65535u << 16u) | 3u;
-                    let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
-                    if result.exchanged {
+                    // of steam in the air cell above the surface. Moisture
+                    // enters the humidity field only when steam later
+                    // dissolves (paying HUMIDITY_PER_VOXEL for the whole voxel).
+                    if vaporize_into_surface_air(idx, state, vapor_air_idx, temp_c) {
                         // Latent heat of vaporization: evaporative cooling -
                         // the departing vapor takes heat from the pool.
                         cool_water_neighbors(gid, LATENT_VAPOR_NEIGHBOR_COOL_C);
@@ -1837,8 +1969,12 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             // accumulate debt.
             if fluid_type == 1u && freeze_rate_mult > 0.0 {
                 let freeze_threshold = temperature_from_0_255_u32(params.freeze_threshold);
-                if temp_c < freeze_threshold {
-                    debt += (freeze_threshold - temp_c) * params.freeze_rate * freeze_rate_mult;
+                let local_freeze_target_c = ambient_temp_c(idx);
+                if temp_c < freeze_threshold && local_freeze_target_c < freeze_threshold {
+                    debt += (freeze_threshold - temp_c)
+                        * params.freeze_rate
+                        * freeze_rate_mult
+                        * water_phase_inertia_scale();
                 } else {
                     debt *= PHASE_DEBT_DECAY;
                 }
@@ -1855,8 +1991,11 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 phase_debt[idx] = debt;
             } else if fluid_type == 2u {
                 let melt_threshold = temperature_from_0_255_u32(params.melt_threshold);
-                if temp_c > melt_threshold {
-                    debt += (temp_c - melt_threshold) * params.melt_rate;
+                let melt_pressure_c = max(temp_c - melt_threshold, sunlit_melt_pressure_c(idx, melt_threshold));
+                if melt_pressure_c > 0.0 {
+                    debt += melt_pressure_c
+                        * params.melt_rate
+                        * max(ice_phase_inertia_scale(), 1.0);
                 } else {
                     debt *= PHASE_DEBT_DECAY;
                 }
@@ -1867,8 +2006,10 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                         phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
                         // Latent heat of fusion: melting absorbs the warmth
                         // that drove it - meltwater starts at the freeze
-                        // point and chills its surroundings by conduction.
-                        atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
+                        // point and chills its surroundings by conduction,
+                        // while strong local sun can keep it a little above
+                        // immediate refreeze.
+                        atomicStore(&temp_field[idx], encode_field_temp(meltwater_start_temp_c(idx)));
                         return;
                     }
                 }
@@ -2516,8 +2657,11 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if fluid_type == 1u {
         let freeze_threshold = temperature_from_0_255_u32(params.freeze_threshold);
-        if temp_c < freeze_threshold {
-            debt += (freeze_threshold - temp_c) * params.freeze_rate;
+        let local_freeze_target_c = ambient_temp_c(idx);
+        if temp_c < freeze_threshold && local_freeze_target_c < freeze_threshold {
+            debt += (freeze_threshold - temp_c)
+                * params.freeze_rate
+                * water_phase_inertia_scale();
         } else {
             debt *= PHASE_DEBT_DECAY;
         }
@@ -2533,8 +2677,11 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     } else {
         let melt_threshold = temperature_from_0_255_u32(params.melt_threshold);
-        if temp_c > melt_threshold {
-            debt += (temp_c - melt_threshold) * params.melt_rate;
+        let melt_pressure_c = max(temp_c - melt_threshold, sunlit_melt_pressure_c(idx, melt_threshold));
+        if melt_pressure_c > 0.0 {
+            debt += melt_pressure_c
+                * params.melt_rate
+                * max(ice_phase_inertia_scale(), 1.0);
         } else {
             debt *= PHASE_DEBT_DECAY;
         }
@@ -2544,7 +2691,7 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
                 phase_debt[idx] = debt - PHASE_DEBT_THRESHOLD;
-                atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
+                atomicStore(&temp_field[idx], encode_field_temp(meltwater_start_temp_c(idx)));
                 return;
             }
         }
