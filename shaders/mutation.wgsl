@@ -41,7 +41,7 @@ struct MutationParams {
     param_table_size: u32,
     // Total number of active modes across all genomes (flat buffer extent)
     total_mode_count: u32,
-    // Maximum modes per genome (for bounds checking cloned genome)
+    // Maximum modes per genome (player-authored upper bound for append mutations)
     max_modes_per_genome: u32,
     // Genome ring buffer capacity
     genome_ring_capacity: u32,
@@ -125,6 +125,7 @@ var<storage, read_write> genome_free_ring: array<u32>;
 // Per-genome metadata:
 // genome_meta[genome_id] = vec4<u32>(mode_count, base_mode_offset, initial_mode_local, parent_genome_id)
 // .z = initial_mode as a local (0-based) mode index within the genome
+// For free recycled slots (mode_count == 0), .z stores the reusable mode range capacity.
 // Note: ref_count is tracked separately in genome_ref_counts for atomic access
 @group(0) @binding(4)
 var<storage, read_write> genome_meta: array<vec4<u32>>;
@@ -373,6 +374,13 @@ fn allocate_genome_slot() -> u32 {
 
     // Couldn't find a free slot in 64 attempts - give up for this frame.
     return 0xFFFFFFFFu;
+}
+
+fn recycle_unused_genome_slot(genome_id: u32, base_offset: u32, mode_capacity: u32) {
+    genome_meta[genome_id] = vec4<u32>(0u, base_offset, mode_capacity, 0u);
+    let tail = atomicAdd(&genome_ring_state[1], 1u);
+    let ring_idx = tail % mutation_params.genome_ring_capacity;
+    genome_free_ring[ring_idx] = genome_id;
 }
 
 // ============================================================
@@ -1673,7 +1681,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Pick the mutation before reserving mode storage so MODE_APPEND can claim
-    // the extra slot it will write.
+    // the extra slot it will write in this newly cloned genome.
     let param_idx = select_param(candidate_idx, 200u);
     let selected_entry = vulnerability_table[param_idx];
     let appends_mode = selected_entry.buffer_id == 14u
@@ -1687,29 +1695,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Allocate mode data range for the new genome. GPU-mutated genomes reserve
-    // a full max_modes_per_genome block so later MODE_APPEND mutations can use
-    // the whole range even when the current mode_count is still small.
+    // Allocate only the mode range this cloned genome actually writes.
+    // Future MODE_APPEND mutations also clone into a new genome, so reserving a
+    // full player-sized block here burns through the physical mode pool and
+    // causes mutation to stop after a small early burst.
     let recycled_base_offset = genome_meta[new_genome_id].y;
+    let recycled_mode_capacity = genome_meta[new_genome_id].z;
     let recycled_block_valid =
         recycled_base_offset > 0u
-        && recycled_base_offset + mutation_params.max_modes_per_genome <= mutation_params.total_mode_count;
+        && recycled_mode_capacity >= reserved_mode_count
+        && recycled_base_offset + reserved_mode_count <= mutation_params.total_mode_count;
 
     var new_base_offset = recycled_base_offset;
     if (!recycled_block_valid) {
         var allocated = false;
         for (var attempt = 0u; attempt < 100u; attempt++) {
             let current_offset = atomicLoad(&genome_ring_state[3]);
-            if (current_offset + mutation_params.max_modes_per_genome > mutation_params.total_mode_count) {
+            if (current_offset + reserved_mode_count > mutation_params.total_mode_count) {
                 atomicAdd(&mutation_log_count[TELEMETRY_MODE_BLOCK_ALLOC_FAILED], 1u);
+                recycle_unused_genome_slot(new_genome_id, recycled_base_offset, recycled_mode_capacity);
                 return;
             }
 
-            // Try to atomically claim a full genome block.
+            // Try to atomically claim the compact range needed by this clone.
             let old_offset = atomicCompareExchangeWeak(
                 &genome_ring_state[3],
                 current_offset,
-                current_offset + mutation_params.max_modes_per_genome
+                current_offset + reserved_mode_count
             ).old_value;
             if (old_offset == current_offset) {
                 new_base_offset = current_offset;
@@ -1720,12 +1732,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         if (!allocated) {
             atomicAdd(&mutation_log_count[TELEMETRY_MODE_BLOCK_ALLOC_FAILED], 1u);
+            recycle_unused_genome_slot(new_genome_id, recycled_base_offset, recycled_mode_capacity);
             return;
         }
     }
 
     if (new_base_offset + reserved_mode_count > mutation_params.total_mode_count) {
         atomicAdd(&mutation_log_count[TELEMETRY_MODE_BLOCK_ALLOC_FAILED], 1u);
+        recycle_unused_genome_slot(new_genome_id, recycled_base_offset, recycled_mode_capacity);
         return;
     }
 
@@ -1746,6 +1760,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let applied_param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u, new_genome_id, param_idx);
     if (applied_param_idx == MUTATION_NOOP) {
         atomicSub(&genome_ref_counts[new_genome_id], 1u);
+        recycle_unused_genome_slot(new_genome_id, new_base_offset, reserved_mode_count);
         atomicAdd(&mutation_log_count[TELEMETRY_MUTATION_NOOP], 1u);
         return;
     }

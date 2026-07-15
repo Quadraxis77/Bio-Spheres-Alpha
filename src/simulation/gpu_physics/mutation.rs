@@ -28,22 +28,31 @@ const MUTATION_TELEMETRY_COUNTERS: u32 = 16;
 /// every live cell can own a distinct GPU-mutated genome slot.
 pub const GENOME_RING_CAPACITY: u32 = 200_000;
 
-/// Maximum modes across all GPU-mutated genomes.
+/// Maximum logical modes across all GPU-mutated genomes.
 ///
-/// The pool is sized for one full `MAX_MODES` block per possible live cell.
+/// The logical ceiling still allows every possible live cell to own a full
+/// player-sized genome, but physical mode buffers start smaller and grow on
+/// demand. GPU mutation allocates compact per-genome ranges, so one-mode cell
+/// type transitions no longer consume a whole `MAX_MODES` block.
 /// Public so adhesion_buffers can be sized to match, preventing out-of-bounds reads in
 /// adhesion_physics.wgsl when mutated cells have mode_index values beyond the original genome range.
 pub const MAX_TOTAL_MODES: u32 = GENOME_RING_CAPACITY * crate::genome::MAX_MODES as u32;
 
-/// Initial physical mode-pool allocation.
+/// Maximum physical mode-pool allocation.
 ///
-/// The logical mutation address space spans `MAX_TOTAL_MODES`, but allocating that whole
-/// range up front freezes the GPU scene before any cells exist. Start small and let the
-/// existing growth path expand pools when CPU-synced genomes require more space.
-pub const INITIAL_MODE_POOL_MODES: u64 = 16_384;
+/// Keep the available GPU mode pool large enough for sustained mutation without
+/// allocating the full logical genome x player-mode address space.
+/// Genomes are shared by genome ID, and GPU mutation allocates compact per-genome
+/// ranges, so this pool scales with distinct live genomes instead of reserving
+/// one full player-sized genome block per organism.
+pub const AVAILABLE_MODE_POOL_MODES: u64 = 2_000_000;
 
 pub fn initial_mode_pool_capacity() -> u64 {
-    INITIAL_MODE_POOL_MODES.min(MAX_TOTAL_MODES as u64)
+    AVAILABLE_MODE_POOL_MODES
+}
+
+pub fn available_mode_pool_capacity() -> u64 {
+    AVAILABLE_MODE_POOL_MODES
 }
 
 /// Run genome GC every N frames to avoid race conditions with mutations
@@ -3274,14 +3283,14 @@ impl MutationSystem {
         println!(
             "  [3] next_mode_offset: {} / {} ({:.1}%)",
             values[3],
-            MAX_TOTAL_MODES,
-            (values[3] as f32 / MAX_TOTAL_MODES as f32) * 100.0
+            AVAILABLE_MODE_POOL_MODES,
+            (values[3] as f32 / AVAILABLE_MODE_POOL_MODES as f32) * 100.0
         );
         println!(
             "  [4] max_active_mode_offset: {} / {} ({:.1}%)",
             values[4],
-            MAX_TOTAL_MODES,
-            (values[4] as f32 / MAX_TOTAL_MODES as f32) * 100.0
+            AVAILABLE_MODE_POOL_MODES,
+            (values[4] as f32 / AVAILABLE_MODE_POOL_MODES as f32) * 100.0
         );
 
         drop(data);
@@ -3306,7 +3315,10 @@ impl MutationSystem {
 
 #[cfg(test)]
 mod tests {
-    use super::{buffer_id, data_type, MutationSystem};
+    use super::{
+        available_mode_pool_capacity, buffer_id, data_type, initial_mode_pool_capacity,
+        MutationSystem,
+    };
 
     #[test]
     fn default_vulnerability_table_prefers_existing_mode_mutations() {
@@ -3389,5 +3401,19 @@ mod tests {
                 cell_type.name()
             );
         }
+    }
+
+    #[test]
+    fn available_mode_pool_is_two_million_modes() {
+        assert_eq!(
+            available_mode_pool_capacity(),
+            2_000_000,
+            "available mode pool should be fixed at two million modes"
+        );
+        assert_eq!(
+            initial_mode_pool_capacity(),
+            available_mode_pool_capacity(),
+            "physical mode buffers should expose the available pool immediately"
+        );
     }
 }

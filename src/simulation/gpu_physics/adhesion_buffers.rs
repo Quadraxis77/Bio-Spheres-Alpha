@@ -311,10 +311,17 @@ impl AdhesionBuffers {
         device: &wgpu::Device,
         total_modes: u64,
     ) -> bool {
-        use crate::simulation::gpu_physics::mutation::MAX_TOTAL_MODES;
-        let hard_cap = MAX_TOTAL_MODES as u64;
+        let hard_cap = crate::simulation::gpu_physics::mutation::available_mode_pool_capacity();
 
         if total_modes <= self.adhesion_mode_pool_capacity {
+            return false;
+        }
+        if total_modes > hard_cap {
+            log::warn!(
+                "Adhesion mode pool request exceeds available pool: requested {} modes, cap {} modes",
+                total_modes,
+                hard_cap
+            );
             return false;
         }
 

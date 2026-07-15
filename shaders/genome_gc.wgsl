@@ -6,10 +6,10 @@
 //
 // Mode Buffer Recycling Strategy:
 // The mode offset counter (genome_ring_state[3]) grows monotonically as mutations
-// allocate new mode ranges. To prevent exhaustion, we periodically compact:
-// 1. Find the highest active genome's end offset
+// allocate new compact mode ranges. To prevent exhaustion, we periodically compact:
+// 1. Find the highest active genome's current end offset
 // 2. Store it in genome_ring_state[4] (temporary storage)
-// 3. CPU reads this value and resets genome_ring_state[3] after GC completes
+// 3. Reset genome_ring_state[3] to that value after GC completes
 //
 // This reclaims all trailing unused mode buffer space.
 
@@ -24,7 +24,8 @@ var<storage, read_write> genome_free_ring: array<u32>;
 @group(0) @binding(2)
 var<storage, read_write> genome_ref_counts: array<atomic<u32>>;
 
-// Genome metadata: vec4<u32>(mode_count, base_mode_offset, ref_count_copy, flags)
+// Genome metadata: vec4<u32>(mode_count, base_mode_offset, initial_mode_local, parent_genome_id)
+// For free recycled slots (mode_count == 0), .z stores reusable mode range capacity.
 @group(0) @binding(3)
 var<storage, read_write> genome_meta: array<vec4<u32>>;
 
@@ -63,16 +64,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     if (ref_count == 0u && mode_count > 0u) {
         // Genome is unused - recycle it.
-        // Preserve base_mode_offset so the mutation shader can reuse the existing
-        // mode range instead of allocating new space from next_mode_offset.
-        // Set mode_count = 0 as the "free slot" sentinel; base_mode_offset stays.
-        genome_meta[genome_id] = vec4<u32>(0u, base_offset, 0u, 0u);
+        // Preserve base_mode_offset and the current range size so the mutation
+        // shader can reuse the range only when the next clone fits.
+        // Set mode_count = 0 as the "free slot" sentinel.
+        genome_meta[genome_id] = vec4<u32>(0u, base_offset, mode_count, 0u);
         push_free_genome(genome_id);
     } else if (ref_count > 0u && mode_count > 0u) {
-        // Active genome - track the end of its whole reserved block for mode
-        // buffer compaction. GPU-mutated genomes can append up to this block
-        // size even when their current mode_count is small.
-        let end_offset = base_offset + max(mode_count, gc_params.max_modes_per_genome);
+        // Active genome - track the end of its current compact mode range.
+        // MODE_APPEND mutations clone into a fresh range with one extra mode, so
+        // active genomes do not need hidden spare capacity after their live modes.
+        let end_offset = base_offset + mode_count;
         atomicMax(&genome_ring_state[4], end_offset);
     }
 }

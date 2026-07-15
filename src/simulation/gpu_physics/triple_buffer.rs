@@ -423,7 +423,7 @@ pub struct GpuTripleBufferSystem {
     pub capacity: u32,
 
     /// Current allocated size of all mode pool sub-buffers (in number of modes).
-    /// Starts small and can grow toward MAX_TOTAL_MODES as genome data expands.
+    /// Sized to the available GPU mode pool.
     /// All mode sub-buffers (genome_mode_data_v*, mode_properties_v*, signal_settings_v*,
     /// child_mode_indices, flags, oculocyte_params, regulation_params, etc.) are always
     /// exactly this many modes in size.
@@ -1668,18 +1668,25 @@ impl GpuTripleBufferSystem {
     /// Grow all mode pool sub-buffers if the current pool is too small for `total_modes`.
     ///
     /// Call this before any sync that writes genome data to the GPU. The pool doubles
-    /// until it fits `total_modes`, capped at `MAX_TOTAL_MODES`.
+    /// until it fits `total_modes`, capped at the available mode pool.
     /// All existing GPU data is lost on resize - callers must re-sync everything
     /// after calling this (which they do anyway, since this is called at sync time).
     ///
     /// Returns `true` if the pool was grown (bind groups that reference mode buffers
     /// must be rebuilt by the caller).
     pub fn grow_mode_pool_if_needed(&mut self, device: &wgpu::Device, total_modes: u64) -> bool {
-        use crate::simulation::gpu_physics::mutation::MAX_TOTAL_MODES;
-        let hard_cap = MAX_TOTAL_MODES as u64;
+        let hard_cap = crate::simulation::gpu_physics::mutation::available_mode_pool_capacity();
 
         if total_modes <= self.mode_pool_capacity {
             return false; // Already large enough
+        }
+        if total_modes > hard_cap {
+            log::warn!(
+                "Mode pool request exceeds available pool: requested {} modes, cap {} modes",
+                total_modes,
+                hard_cap
+            );
+            return false;
         }
 
         // Double until we fit, capped at the hard limit

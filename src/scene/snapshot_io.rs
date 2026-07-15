@@ -768,8 +768,8 @@ fn sampled_mutation_is_meaningful(
 impl GpuScene {
     pub fn maybe_capture_lineage_interval(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
     ) -> Result<bool, SnapshotError> {
         let interval = self.lineage_capture_interval_seconds;
         if self.current_time < interval {
@@ -783,10 +783,10 @@ impl GpuScene {
             .unwrap_or(true);
 
         if due {
-            // Periodic captures use the same report-grade population scan as
-            // the Lineage Viewer refresh button. This keeps lineage snapshots,
-            // field-report telemetry, and report cadence on one schedule.
-            self.scan_lineage_for_viewer(device, queue)?;
+            // Automatic interval refreshes must not block the render/simulation
+            // frame. The explicit Lineage Viewer refresh still performs the full
+            // report-grade scan when the user asks for it.
+            self.scan_lineage_for_viewer_nonblocking()?;
             Ok(true)
         } else {
             Ok(false)

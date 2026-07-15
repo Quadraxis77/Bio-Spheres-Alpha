@@ -2512,10 +2512,12 @@ impl App {
                     self.editor_state.cave_params_dirty = false;
                 }
 
-                if let Err(err) =
-                    gpu_scene.maybe_capture_lineage_interval(&self.device, &self.queue)
-                {
-                    log::warn!("Periodic lineage capture failed: {err}");
+                if self.ui.state.field_reports_enabled {
+                    if let Err(err) =
+                        gpu_scene.maybe_capture_lineage_interval(&self.device, &self.queue)
+                    {
+                        log::warn!("Periodic lineage capture failed: {err}");
+                    }
                 }
 
                 self.editor_state.update_orbit_ring_opacity(dt);
