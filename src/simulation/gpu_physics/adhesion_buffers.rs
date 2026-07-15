@@ -36,7 +36,6 @@ pub struct AdhesionBuffers {
     pub cell_adhesion_indices: wgpu::Buffer,
 
     /// Per-mode adhesion settings split into 3 x vec4 sub-buffers (16 bytes each).
-    /// Split to stay under wgpu's 256 MB/buffer limit at 8M modes x 16 bytes = 128 MB each.
     /// v0: [can_break, break_force, rest_length, linear_spring_stiffness]
     /// v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
     /// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding]
@@ -110,7 +109,7 @@ pub struct AdhesionBuffers {
     pub signal_flags_seed: wgpu::Buffer,
 
     /// Current allocated size of the adhesion settings mode pool (in number of modes).
-    /// Starts at 16K and doubles on demand up to MAX_TOTAL_MODES.
+    /// Matches the physical mutation mode pool so GPU-mutated mode indices remain in range.
     pub adhesion_mode_pool_capacity: u64,
 }
 
@@ -135,22 +134,23 @@ impl AdhesionBuffers {
         );
 
         // Per-mode adhesion settings split into 3 x vec4 sub-buffers (16 bytes each).
-        // Start with the same initial pool size as triple_buffer.rs (16K modes).
-        // grow_adhesion_mode_pool_if_needed() doubles the pool on demand up to MAX_TOTAL_MODES.
-        const INITIAL_MODE_POOL_SIZE: u64 = 16_384;
+        // Match the triple-buffer mode pool without preallocating the full logical
+        // mutation range at startup.
+        let initial_mode_pool_size =
+            crate::simulation::gpu_physics::mutation::initial_mode_pool_capacity();
         let adhesion_settings_v0 = Self::create_storage_buffer(
             device,
-            INITIAL_MODE_POOL_SIZE * 16,
+            initial_mode_pool_size * 16,
             "Adhesion Settings V0",
         );
         let adhesion_settings_v1 = Self::create_storage_buffer(
             device,
-            INITIAL_MODE_POOL_SIZE * 16,
+            initial_mode_pool_size * 16,
             "Adhesion Settings V1",
         );
         let adhesion_settings_v2 = Self::create_storage_buffer(
             device,
-            INITIAL_MODE_POOL_SIZE * 16,
+            initial_mode_pool_size * 16,
             "Adhesion Settings V2",
         );
 
@@ -247,7 +247,7 @@ impl AdhesionBuffers {
             signal_flags_next,
             signal_flags_forward,
             signal_flags_seed,
-            adhesion_mode_pool_capacity: INITIAL_MODE_POOL_SIZE,
+            adhesion_mode_pool_capacity: initial_mode_pool_size,
         }
     }
 

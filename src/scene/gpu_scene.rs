@@ -616,10 +616,9 @@ impl GpuScene {
             bytemuck::cast_slice(&next_id),
         );
 
-        // Create adhesion buffer system with split sub-buffers (3 x 128 MB) to stay under
-        // wgpu's 256 MB/buffer limit. The mutation shader writes adhesion settings for all
-        // 8M possible mode slots; splitting into 3 x vec4 sub-buffers matches the pattern
-        // used by mode_properties_v0..v4 in triple_buffer.rs.
+        // Create adhesion buffer system with split sub-buffers. The mutation shader writes
+        // adhesion settings for the full per-cell mutated-genome mode pool; splitting into
+        // 3 x vec4 sub-buffers matches the mode_properties_v0..v4 pattern.
         let mut adhesion_buffers = AdhesionBuffers::new(device, capacity);
 
         // Initialize adhesion buffers with default values
@@ -1344,7 +1343,7 @@ impl GpuScene {
         )?;
 
         // adhesion_settings: read from split sub-buffers (v0/v1/v2), each 16 bytes per mode.
-        // All 8M mode slots are covered so no bounds check needed.
+        // All mode-pool slots are covered so no bounds check needed.
         let adhesion_settings_raw: Vec<
             crate::simulation::gpu_physics::adhesion::GpuAdhesionSettings,
         > = {
@@ -2127,7 +2126,13 @@ impl GpuScene {
         // Runs after division execute so division_flags and division_slot_assignments are set.
         if division_pipeline_ran {
             if let Some(mutation_system) = &mut self.mutation_system {
-                mutation_system.dispatch(device, encoder, queue, self.current_frame as u32);
+                mutation_system.dispatch(
+                    device,
+                    encoder,
+                    queue,
+                    self.current_frame as u32,
+                    self.gpu_triple_buffers.mode_pool_capacity as u32,
+                );
             }
         }
 
@@ -2563,47 +2568,6 @@ impl GpuScene {
             0,
             u32_copy_size,
         );
-
-        // Copy mode properties v0 only (16 bytes/mode) - needed for swim_force -> tail_speed
-        // (swim_force is index 6, in v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low])
-        // instance_builder.mode_properties_buffer() now holds only v1 (swim_force sub-buffer)
-        let total_modes: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
-        let mode_properties_v1_copy_size = (total_modes * 16) as u64;
-        if mode_properties_v1_copy_size > 0 {
-            encoder.copy_buffer_to_buffer(
-                &self.gpu_triple_buffers.mode_properties_v1,
-                0,
-                self.instance_builder.mode_properties_buffer(),
-                0,
-                mode_properties_v1_copy_size,
-            );
-        }
-
-        // Copy mode properties v5 (16 bytes/mode) - needed for cilia_speed -> ciliocyte visual animation
-        // v5: [cilia_speed, cilia_push_bonded, cilia_use_signal, cilia_signal_channel]
-        let mode_properties_v5_copy_size = (total_modes * 16) as u64;
-        if mode_properties_v5_copy_size > 0 {
-            encoder.copy_buffer_to_buffer(
-                &self.gpu_triple_buffers.mode_properties_v5,
-                0,
-                self.instance_builder.mode_properties_v5_buffer(),
-                0,
-                mode_properties_v5_copy_size,
-            );
-        }
-
-        // Copy mode cell types (1 u32 per mode = 4 bytes) - critical for correct cell type rendering
-        // This ensures the InstanceBuilder has the same mode_cell_types as GpuTripleBufferSystem
-        let mode_cell_types_copy_size = (total_modes * 4) as u64;
-        if mode_cell_types_copy_size > 0 {
-            encoder.copy_buffer_to_buffer(
-                &self.gpu_triple_buffers.mode_cell_types,
-                0,
-                self.instance_builder.mode_cell_types_buffer(),
-                0,
-                mode_cell_types_copy_size,
-            );
-        }
 
         // Clear dirty flags since we just copied from GPU
         self.instance_builder.clear_positions_dirty();
@@ -8450,7 +8414,10 @@ impl Scene for GpuScene {
             &self.gpu_triple_buffers.cell_count_buffer,
             &self.gpu_triple_buffers.death_flags,
             &self.adhesion_buffers.signal_flags,
+            Some(&self.gpu_triple_buffers.mode_properties_v1),
             &self.gpu_triple_buffers.mode_properties_v7,
+            Some(&self.gpu_triple_buffers.mode_properties_v5),
+            Some(&self.gpu_triple_buffers.mode_cell_types),
             self.lod_scale_factor,
             self.lod_threshold_low,
             self.lod_threshold_medium,

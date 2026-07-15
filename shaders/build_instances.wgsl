@@ -516,8 +516,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     instance.color = vec4<f32>(color, 1.0);  // Always fully opaque
     instance.visual_params = vec4<f32>(specular_strength, specular_power, fresnel_strength, emissive);
     
-    // Rotation: Cells with texture atlas get randomized orientation, others use physics rotation
-    let behavior = type_behaviors[cell_type];
+    // Rotation: Cells with texture atlas get randomized orientation, others use physics rotation.
+    // Mutation should keep cell_type in range, but clamp before indexing behavior tables so a
+    // corrupt/stale mode never builds a featureless instance from an out-of-bounds read.
+    let behavior_cell_type = select(cell_type, 0u, cell_type >= params.cell_type_count);
+    let behavior = type_behaviors[behavior_cell_type];
     if (behavior.uses_texture_atlas != 0u) {
         // Texture atlas cells: use random quaternion based on cell_id for varied appearance
         instance.rotation = random_quaternion(cell_id);

@@ -313,7 +313,7 @@ pub struct GpuTripleBufferSystem {
     /// Updated by division shader, read by all other shaders
     pub cell_count_buffer: wgpu::Buffer,
 
-    /// Genome mode data buffers for division (split into 5 vec4 sub-buffers to stay under wgpu 256 MB/buffer limit)
+    /// Genome mode data buffers for division (split into 5 vec4 sub-buffers)
     /// Combined layout per mode: [child_a_orientation (v0), child_b_orientation (v1),
     ///                            child_a_split_orientation (v2), child_b_split_orientation (v3),
     ///                            split_rotation_quat XYZW (v4)]
@@ -353,7 +353,7 @@ pub struct GpuTripleBufferSystem {
     /// Stores whether Child B should inherit adhesions when max_splits is reached
     pub child_b_after_split_keep_adhesion_flags: wgpu::Buffer,
 
-    /// Mode properties buffers (split into 5 vec4 sub-buffers to stay under wgpu 256 MB/buffer limit)
+    /// Mode properties buffers (split into 5 vec4 sub-buffers)
     /// v0: [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
     /// v1: [split_mass, nutrient_priority, swim_force, prioritize_when_low]
     /// v2: [max_splits, split_ratio, flagellocyte_signal_channel, flagellocyte_speed_a]
@@ -423,7 +423,7 @@ pub struct GpuTripleBufferSystem {
     pub capacity: u32,
 
     /// Current allocated size of all mode pool sub-buffers (in number of modes).
-    /// Starts at INITIAL_MODE_POOL_SIZE and doubles on demand up to MAX_TOTAL_MODES.
+    /// Starts small and can grow toward MAX_TOTAL_MODES as genome data expands.
     /// All mode sub-buffers (genome_mode_data_v*, mode_properties_v*, signal_settings_v*,
     /// child_mode_indices, flags, oculocyte_params, regulation_params, etc.) are always
     /// exactly this many modes in size.
@@ -740,13 +740,9 @@ impl GpuTripleBufferSystem {
             mapped_at_creation: false,
         });
 
-        // Mode pool: start small and grow on demand via grow_mode_pool_if_needed().
-        // Initial size covers ~200 genomes x 80 modes = 16K modes (~26 MB total across all
-        // sub-buffers), vs the old fixed 8M allocation (~4.8 GB).
-        // The pool doubles when sync_genome_mode_data detects it is too small, up to
-        // MAX_TOTAL_MODES (8_000_000) which is the hard cap used by the mutation ring buffer.
-        const INITIAL_MODE_POOL_SIZE: u64 = 16_384;
-        let max_modes = INITIAL_MODE_POOL_SIZE;
+        // Mode pool: keep startup allocation small. The mutation system's logical
+        // range is much larger, but physically allocating it here stalls the scene.
+        let max_modes = crate::simulation::gpu_physics::mutation::initial_mode_pool_capacity();
         let genome_mode_data_v0 =
             Self::create_storage_buffer(device, max_modes * 16, "Genome Mode Data V0");
         let genome_mode_data_v1 =
@@ -1672,7 +1668,7 @@ impl GpuTripleBufferSystem {
     /// Grow all mode pool sub-buffers if the current pool is too small for `total_modes`.
     ///
     /// Call this before any sync that writes genome data to the GPU. The pool doubles
-    /// until it fits `total_modes`, capped at `MAX_TOTAL_MODES` (8,000,000).
+    /// until it fits `total_modes`, capped at `MAX_TOTAL_MODES`.
     /// All existing GPU data is lost on resize - callers must re-sync everything
     /// after calling this (which they do anyway, since this is called at sync time).
     ///

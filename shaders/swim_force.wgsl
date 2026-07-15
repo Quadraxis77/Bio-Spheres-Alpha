@@ -429,7 +429,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get mode index first, then derive cell type from mode
     let mode_idx = mode_indices[cell_idx];
-    if (mode_idx >= arrayLength(&mode_properties_v1)) {
+    if (mode_idx >= arrayLength(&mode_cell_types) || mode_idx >= arrayLength(&mode_properties_v1)) {
         return;
     }
     
@@ -522,7 +522,7 @@ fn plumocyte_rotation_damping_main(@builtin(global_invocation_id) global_id: vec
     }
 
     let mode_idx = mode_indices[cell_idx];
-    if (mode_idx >= arrayLength(&mode_properties_v15)) {
+    if (mode_idx >= arrayLength(&mode_cell_types) || mode_idx >= arrayLength(&mode_properties_v15)) {
         return;
     }
     if (mode_cell_types[mode_idx] != CELL_TYPE_PLUMOCYTE || plumocyte_is_frozen(cell_idx)) {
@@ -547,7 +547,7 @@ fn buoyancy_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (cell_idx >= cell_count) { return; }
 
     let mode_idx = mode_indices[cell_idx];
-    if (mode_idx >= arrayLength(&mode_properties_v4)) { return; }
+    if (mode_idx >= arrayLength(&mode_cell_types) || mode_idx >= arrayLength(&mode_properties_v4)) { return; }
 
     let cell_type = mode_cell_types[mode_idx];
     let behavior = type_behaviors[cell_type];

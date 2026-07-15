@@ -31,7 +31,7 @@ var<storage, read_write> genome_meta: array<vec4<u32>>;
 struct GCParams {
     genome_capacity: u32,
     genome_ring_capacity: u32,
-    _pad0: u32,
+    max_modes_per_genome: u32,
     _pad1: u32,
 }
 
@@ -69,8 +69,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         genome_meta[genome_id] = vec4<u32>(0u, base_offset, 0u, 0u);
         push_free_genome(genome_id);
     } else if (ref_count > 0u && mode_count > 0u) {
-        // Active genome - track its end offset for mode buffer compaction
-        let end_offset = base_offset + mode_count;
+        // Active genome - track the end of its whole reserved block for mode
+        // buffer compaction. GPU-mutated genomes can append up to this block
+        // size even when their current mode_count is small.
+        let end_offset = base_offset + max(mode_count, gc_params.max_modes_per_genome);
         atomicMax(&genome_ring_state[4], end_offset);
     }
 }

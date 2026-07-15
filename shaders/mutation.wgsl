@@ -47,6 +47,11 @@ struct MutationParams {
     genome_ring_capacity: u32,
     // When 1, the automatic color side-effect nudges each channel slightly instead of full re-roll
     subtle_color_mutation: u32,
+    // Bit N enables CellType N for cell-type specialization. Bit 0/Test is ignored.
+    cell_type_gene_pool_mask: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 // Per-parameter mutation descriptor.
@@ -150,7 +155,7 @@ var<storage, read_write> mode_indices: array<u32>;
 var<storage, read_write> cell_types: array<u32>;
 
 // Group 2: Genome mode buffers (read_write for cloning + mutation)
-// mode_properties split into 5 vec4 sub-buffers (16 bytes/mode each, max 8M modes = 128 MB each)
+// mode_properties split into 5 vec4 sub-buffers (16 bytes/mode each)
 @group(2) @binding(0)
 var<storage, read_write> mode_properties_v0: array<vec4<f32>>; // [nutrient_gain_rate, max_cell_size, membrane_stiffness, split_interval]
 @group(2) @binding(1)
@@ -255,6 +260,27 @@ var<storage, read_write> signal_settings_v4: array<vec4<f32>>;
 @group(2) @binding(29)
 var<storage, read_write> regulation_params_buf: array<vec4<u32>>;
 
+const MUTATION_NOOP: u32 = 0xFFFFFFFFu;
+
+const TELEMETRY_LOG_COUNT: u32 = 0u;
+const TELEMETRY_CANDIDATE_OVERFLOW: u32 = 1u;
+const TELEMETRY_GENOME_ALLOC_FAILED: u32 = 2u;
+const TELEMETRY_MODE_BLOCK_ALLOC_FAILED: u32 = 3u;
+const TELEMETRY_MUTATION_NOOP: u32 = 4u;
+const TELEMETRY_APPLIED_BASE: u32 = 8u;
+
+const FAMILY_PHYSIOLOGY: u32 = 0u;
+const FAMILY_ADHESION_MECHANICS: u32 = 1u;
+const FAMILY_CELL_TYPE: u32 = 2u;
+const FAMILY_DEVELOPMENT_GRAPH: u32 = 3u;
+const FAMILY_SIGNAL: u32 = 4u;
+const FAMILY_ORIENTATION_BODY_PLAN: u32 = 5u;
+const FAMILY_GENOME_STRUCTURE: u32 = 6u;
+const FAMILY_VISUAL: u32 = 7u;
+
+const CELL_TYPE_MAX_REGISTERED: u32 = 19u;
+const MAX_EVOLVED_SPLITS: f32 = 5.0;
+
 // ============================================================
 // Hash-based PRNG (PCG-style)
 // ============================================================
@@ -326,9 +352,8 @@ fn allocate_genome_slot() -> u32 {
     // After GC resets next_genome_id to user_genome_count, some IDs in the range
     // may belong to genomes still referenced by living cells. Blindly returning
     // those IDs would cause the caller to overwrite their genome_meta (corrupting
-    // the active genome) and allocate a fresh mode range from next_mode_offset
-    // instead of reusing the recycled one - leaking mode buffer space until
-    // next_mode_offset hits MAX_TOTAL_MODES and all mutations silently stop.
+    // the active genome). Free IDs may still have a preserved base offset; the
+    // caller reuses that full genome block instead of leaking mode-buffer space.
     for (var attempt = 0u; attempt < 64u; attempt++) {
         let new_id = atomicAdd(&genome_ring_state[2], 1u);
         if (new_id >= mutation_params.genome_ring_capacity) {
@@ -438,33 +463,98 @@ fn snap_quaternion(cell_id: u32, salt: u32) -> vec4<f32> {
 }
 
 // ============================================================
-// Weighted random parameter selection
+// Family-first mutation selection
 // ============================================================
 
-// Select a parameter index from the vulnerability table using weighted random.
-// Uses the cumulative weight approach: generate random in [0, total_weight),
-// then walk the table until cumulative weight exceeds the random value.
-fn select_param(cell_id: u32, salt: u32) -> u32 {
-    // First pass: compute total weight
+fn mutation_family(entry: MutationParamEntry) -> u32 {
+    if (entry.buffer_id == 1u) { return FAMILY_CELL_TYPE; }
+    if (entry.buffer_id == 2u || entry.buffer_id == 10u || entry.buffer_id == 14u) {
+        if (entry.buffer_id == 14u) { return FAMILY_GENOME_STRUCTURE; }
+        return FAMILY_DEVELOPMENT_GRAPH;
+    }
+    if (entry.buffer_id == 12u || entry.buffer_id == 13u) { return FAMILY_SIGNAL; }
+    if (entry.buffer_id == 6u) { return FAMILY_ORIENTATION_BODY_PLAN; }
+    if (entry.buffer_id == 3u || entry.buffer_id == 4u || entry.buffer_id == 5u || entry.buffer_id == 7u || entry.buffer_id == 11u) {
+        return FAMILY_ADHESION_MECHANICS;
+    }
+    if (entry.buffer_id == 9u) { return FAMILY_VISUAL; }
+    return FAMILY_PHYSIOLOGY;
+}
+
+fn family_budget(family: u32) -> f32 {
+    switch (family) {
+        case FAMILY_PHYSIOLOGY: { return 26.0; }
+        case FAMILY_ADHESION_MECHANICS: { return 20.0; }
+        case FAMILY_ORIENTATION_BODY_PLAN: { return 18.0; }
+        case FAMILY_DEVELOPMENT_GRAPH: { return 12.0; }
+        case FAMILY_SIGNAL: { return 10.0; }
+        case FAMILY_CELL_TYPE: { return 6.0; }
+        case FAMILY_GENOME_STRUCTURE: { return 5.0; }
+        default: { return 3.0; }
+    }
+}
+
+fn select_family(cell_id: u32, salt: u32) -> u32 {
+    let total = 26.0 + 20.0 + 18.0 + 12.0 + 10.0 + 6.0 + 5.0 + 3.0;
+    var threshold = rng_f32(cell_id, salt) * total;
+    for (var family = 0u; family <= FAMILY_VISUAL; family++) {
+        threshold -= family_budget(family);
+        if (threshold <= 0.0) { return family; }
+    }
+    return FAMILY_PHYSIOLOGY;
+}
+
+fn select_param_from_family(cell_id: u32, salt: u32, family: u32) -> u32 {
     var total_weight: f32 = 0.0;
     let table_size = mutation_params.param_table_size;
     for (var i = 0u; i < table_size; i++) {
-        total_weight += vulnerability_table[i].weight;
+        let entry = vulnerability_table[i];
+        if (mutation_family(entry) == family) {
+            total_weight += entry.weight;
+        }
     }
 
     if (total_weight <= 0.0) {
-        return 0u;
+        return MUTATION_NOOP;
     }
 
     let threshold = rng_f32(cell_id, salt) * total_weight;
     var cumulative: f32 = 0.0;
     for (var i = 0u; i < table_size; i++) {
-        cumulative += vulnerability_table[i].weight;
-        if (cumulative > threshold) {
-            return i;
+        let entry = vulnerability_table[i];
+        if (mutation_family(entry) == family) {
+            cumulative += entry.weight;
+            if (cumulative > threshold) {
+                return i;
+            }
         }
     }
 
+    return MUTATION_NOOP;
+}
+
+// Select a semantic family first, then a weighted operation within that family.
+// This keeps adding entries to one family from silently changing global budgets.
+fn select_param(cell_id: u32, salt: u32) -> u32 {
+    let family = select_family(cell_id, salt);
+    let param = select_param_from_family(cell_id, salt + 17u, family);
+    if (param != MUTATION_NOOP) {
+        return param;
+    }
+
+    // Fallback for empty families: old weighted-table behavior.
+    var total_weight: f32 = 0.0;
+    let table_size = mutation_params.param_table_size;
+    for (var i = 0u; i < table_size; i++) {
+        total_weight += vulnerability_table[i].weight;
+    }
+    if (total_weight <= 0.0) { return 0u; }
+    let threshold = rng_f32(cell_id, salt + 31u) * total_weight;
+    var cumulative: f32 = 0.0;
+    for (var i = 0u; i < table_size; i++) {
+        cumulative += vulnerability_table[i].weight;
+        if (cumulative > threshold) { return i; }
+    }
     return table_size - 1u;
 }
 
@@ -563,6 +653,173 @@ fn clone_genome_modes(
     }
 }
 
+fn gene_pool_enabled(cell_type: u32) -> bool {
+    if (cell_type == 0u || cell_type > CELL_TYPE_MAX_REGISTERED) {
+        return false;
+    }
+    return (mutation_params.cell_type_gene_pool_mask & (1u << cell_type)) != 0u;
+}
+
+fn registered_biological_cell_type(cell_id: u32, salt: u32, current_type: u32) -> u32 {
+    let enabled_mask = mutation_params.cell_type_gene_pool_mask & 0x000FFFFEu;
+    if (enabled_mask == 0u) {
+        return 0u;
+    }
+
+    let start = 1u + (rng_u32(cell_id, salt) % CELL_TYPE_MAX_REGISTERED);
+    for (var i = 0u; i < CELL_TYPE_MAX_REGISTERED; i++) {
+        let candidate = 1u + ((start + i - 1u) % CELL_TYPE_MAX_REGISTERED);
+        if (gene_pool_enabled(candidate) && candidate != current_type) {
+            return candidate;
+        }
+    }
+
+    if (gene_pool_enabled(current_type)) {
+        return current_type;
+    }
+    return 0u;
+}
+
+fn sanitize_evolved_mode(mode_abs: u32, mode_count: u32) {
+    var p2 = mode_properties_v2[mode_abs];
+    // Player genomes may use -1 or large max_splits, but GPU-mutated genomes
+    // must not inherit runaway reproductive settings.
+    if (p2.x < 0.0 || p2.x > MAX_EVOLVED_SPLITS) {
+        p2.x = MAX_EVOLVED_SPLITS;
+    }
+    mode_properties_v2[mode_abs] = p2;
+
+    // Single-mode sticky self-replication is the dangerous case: it can saturate
+    // cell capacity before selection has any useful structure to work with.
+    if (mode_count == 1u && parent_make_adhesion_flags[mode_abs] != 0u && p2.x > MAX_EVOLVED_SPLITS) {
+        p2.x = MAX_EVOLVED_SPLITS;
+        mode_properties_v2[mode_abs] = p2;
+    }
+}
+
+fn sanitize_evolved_genome(dst_base: u32, mode_count: u32) {
+    for (var m = 0u; m < mode_count; m++) {
+        sanitize_evolved_mode(dst_base + m, mode_count);
+    }
+}
+
+fn specialize_mode_cell_type(mode_abs: u32, cell_type: u32) {
+    mode_cell_types[mode_abs] = clamp(cell_type, 1u, CELL_TYPE_MAX_REGISTERED);
+
+    var p0 = mode_properties_v0[mode_abs];
+    var p1 = mode_properties_v1[mode_abs];
+    var p2 = mode_properties_v2[mode_abs];
+    var p3 = mode_properties_v3[mode_abs];
+    var p4 = mode_properties_v4[mode_abs];
+    var color = mode_colors[mode_abs];
+    var emissive = vec4<f32>(0.0);
+
+    p0.y = clamp(p0.y, 1.0, 2.0); // max_cell_size: visible but not explosive
+    p1.x = clamp(p1.x, 1.5, 3.5); // split_mass
+    p1.y = clamp(p1.y, 0.5, 2.0); // nutrient_priority
+    p2.x = clamp(select(p2.x, MAX_EVOLVED_SPLITS, p2.x < 0.0), 0.0, MAX_EVOLVED_SPLITS);
+
+    switch (cell_type) {
+        case 1u: { // Flagellocyte
+            p1.z = max(p1.z, 0.55);
+            color = vec4<f32>(0.25, 0.72, 1.0, 1.0);
+        }
+        case 3u: { // Photocyte
+            p1.y = max(p1.y, 1.4);
+            color = vec4<f32>(1.0, 0.86, 0.28, 1.0);
+            emissive = vec4<f32>(0.5, 0.42, 0.12, 0.0);
+        }
+        case 4u: { // Lipocyte
+            p0.y = max(p0.y, 1.8);
+            p1.y = max(p1.y, 2.0);
+            p1.x = max(p1.x, 3.1);
+            color = vec4<f32>(0.96, 0.78, 0.22, 1.0);
+        }
+        case 5u: { // Buoyocyte
+            p0.y = max(p0.y, 1.8);
+            color = vec4<f32>(0.45, 0.86, 0.95, 1.0);
+        }
+        case 6u: { // Glueocyte
+            p1.y = max(p1.y, 2.0);
+            p1.x = max(p1.x, 3.1);
+            glueocyte_env_adhesion_flags[mode_abs] = 1u;
+            parent_make_adhesion_flags[mode_abs] = 1u;
+            color = vec4<f32>(0.35, 0.95, 0.45, 1.0);
+        }
+        case 7u: { // Oculocyte
+            oculocyte_params_buf[mode_abs] = vec4<u32>(16u, 24u, 0u, 0u);
+            color = vec4<f32>(0.18, 0.48, 1.0, 1.0);
+        }
+        case 8u: { // Ciliocyte
+            p1.z = max(p1.z, 0.25);
+            color = vec4<f32>(0.35, 0.9, 0.8, 1.0);
+        }
+        case 9u: { // Myocyte
+            parent_make_adhesion_flags[mode_abs] = 1u;
+            p4.x = max(p4.x, 4.0);
+            color = vec4<f32>(0.9, 0.18, 0.24, 1.0);
+        }
+        case 10u: { // Embryocyte
+            p0.y = max(p0.y, 2.0);
+            p1.x = max(p1.x, 2.0);
+            p1.y = max(p1.y, 1.0);
+            p2.x = max(p2.x, 1.0);
+            color = vec4<f32>(0.95, 0.62, 0.42, 1.0);
+        }
+        case 11u: { // Devorocyte
+            p1.y = max(p1.y, 1.0);
+            color = vec4<f32>(0.78, 0.16, 0.52, 1.0);
+        }
+        case 12u: { // Vasculocyte
+            p0.y = clamp(p0.y, 1.0, 1.5);
+            p1.x = max(p1.x, 2.5);
+            p1.y = min(p1.y, 0.7);
+            color = vec4<f32>(0.7, 0.08, 0.16, 1.0);
+        }
+        case 13u: { // Gametocyte
+            p0.w = max(p0.w, 60.0);
+            p1.x = max(p1.x, 20.0);
+            p2.x = 0.0;
+            color = vec4<f32>(0.9, 0.55, 1.0, 1.0);
+        }
+        case 14u: { // Cognocyte
+            regulation_params_buf[mode_abs] = vec4<u32>(8u, bitcast<u32>(1.0), 5u, 0u);
+            color = vec4<f32>(0.4, 0.72, 1.0, 1.0);
+        }
+        case 15u: { // Memorocyte
+            regulation_params_buf[mode_abs] = vec4<u32>(9u, bitcast<u32>(0.5), 5u, 0u);
+            color = vec4<f32>(0.58, 0.48, 0.95, 1.0);
+        }
+        case 16u: { // Luminocyte
+            color = vec4<f32>(0.2, 0.85, 1.0, 1.0);
+            emissive = vec4<f32>(0.25, 1.0, 1.4, 0.0);
+        }
+        case 17u: { // Siphonocyte
+            p1.y = max(p1.y, 1.4);
+            color = vec4<f32>(0.12, 0.52, 0.82, 1.0);
+        }
+        case 18u: { // Plumocyte
+            p0.y = max(p0.y, 1.6);
+            color = vec4<f32>(0.92, 0.86, 0.62, 1.0);
+        }
+        case 19u: { // Stemocyte
+            p0.y = max(p0.y, 1.8);
+            p1.x = min(p1.x, 1.8);
+            regulation_params_buf[mode_abs] = vec4<u32>(8u, bitcast<u32>(1.0), 3u, 0u);
+            color = vec4<f32>(0.52, 0.88, 0.78, 1.0);
+        }
+        default: {}
+    }
+
+    mode_properties_v0[mode_abs] = p0;
+    mode_properties_v1[mode_abs] = p1;
+    mode_properties_v2[mode_abs] = p2;
+    mode_properties_v3[mode_abs] = p3;
+    mode_properties_v4[mode_abs] = p4;
+    mode_colors[mode_abs] = color;
+    mode_emissive[mode_abs] = emissive;
+}
+
 // ============================================================
 // Apply mutation to a single parameter in the cloned genome
 // ============================================================
@@ -640,11 +897,13 @@ fn apply_mutation(
 
         // buffer_id 1: mode_cell_types (u32, 1 per mode)
         case 1u: {
-            // Cell type mutation: pick a random non-Test cell type.
-            // Test = 0 is excluded; valid range is [1, max_value].
-            // We generate in [0, max_value) and add 1 to shift into [1, max_value].
-            let new_type = 1u + rng_u32(cell_id, salt_base + 500u) % u32(entry.max_value);
-            mode_cell_types[mode_abs] = new_type;
+            // Cell-type specialization: choose a registered biological type
+            // and initialize the neighboring behavior/visual buffers enough
+            // that the new enum has visible semantics immediately.
+            let current_type = mode_cell_types[mode_abs];
+            let new_type = registered_biological_cell_type(cell_id, salt_base + 500u, current_type);
+            if (new_type == 0u || new_type == current_type) { return MUTATION_NOOP; }
+            specialize_mode_cell_type(mode_abs, new_type);
         }
 
         // buffer_id 2: child_mode_indices (vec2<i32>, 1 per mode)
@@ -1260,7 +1519,7 @@ fn apply_mutation(
                 // params, then points both children at itself (self-referential = dormant).
                 // Nothing in the existing graph points to it yet. Future CHAIN_EXTEND /
                 // LOOP_BRANCH mutations can wire it in; if they never do, MODE_TRIM removes it.
-                if (mode_count >= mutation_params.max_modes_per_genome) { return param_idx; }
+                if (mode_count >= mutation_params.max_modes_per_genome) { return MUTATION_NOOP; }
 
                 let last_abs  = dst_base + mode_count - 1u;
                 let new_abs   = dst_base + mode_count;
@@ -1273,7 +1532,7 @@ fn apply_mutation(
                 mode_properties_v0[new_abs] = mode_properties_v0[last_abs];
                 mode_properties_v1[new_abs] = mode_properties_v1[last_abs];
                 // Zero out the remaining sub-buffers (safe defaults)
-                mode_properties_v2[new_abs] = vec4<f32>(0.0, 0.5, -1.0, 0.5);   // max_splits=-1, split_ratio=0.5
+                mode_properties_v2[new_abs] = vec4<f32>(1.0, 0.5, -1.0, 0.5);   // max_splits=1, split_ratio=0.5
                 mode_properties_v3[new_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
                 mode_properties_v4[new_abs] = vec4<f32>(20.0, -1.0, -1.0, 0.0); // max_adhesions=20
 
@@ -1325,18 +1584,18 @@ fn apply_mutation(
                 // If any child_a or child_b points to the last mode, abort.
                 // Also abort if a live cell is currently in the last mode - that check
                 // is deferred to CPU (rare; the cell will simply find mode_count shrunk).
-                if (mode_count <= 1u) { return param_idx; }
+                if (mode_count <= 1u) { return MUTATION_NOOP; }
 
                 let last_local = mode_count - 1u;
                 let last_abs_i = i32(dst_base + last_local);
 
                 // Check if the initial_mode points to the last mode
-                if (genome_meta[new_genome_id].z == last_local) { return param_idx; }
+                if (genome_meta[new_genome_id].z == last_local) { return MUTATION_NOOP; }
 
                 // Scan all modes except last for references
                 for (var m = 0u; m < last_local; m++) {
                     let idx = child_mode_indices_buf[dst_base + m];
-                    if (idx.x == last_abs_i || idx.y == last_abs_i) { return param_idx; }
+                    if (idx.x == last_abs_i || idx.y == last_abs_i) { return MUTATION_NOOP; }
                 }
 
                 // Unreferenced - safe to trim
@@ -1376,6 +1635,10 @@ fn apply_mutation(
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let candidate_idx = global_id.x;
     let candidate_count = mutation_candidate_count[0];
+
+    if (candidate_idx == 0u && candidate_count > arrayLength(&mutation_candidates)) {
+        atomicAdd(&mutation_log_count[TELEMETRY_CANDIDATE_OVERFLOW], candidate_count - arrayLength(&mutation_candidates));
+    }
 
     if (candidate_idx >= candidate_count) {
         return;
@@ -1420,36 +1683,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let new_genome_id = allocate_genome_slot();
     if (new_genome_id == 0xFFFFFFFFu) {
+        atomicAdd(&mutation_log_count[TELEMETRY_GENOME_ALLOC_FAILED], 1u);
         return;
     }
 
-    // Allocate mode data range for the new genome
-    var new_base_offset = 0u;
-    var allocated = false;
-    for (var attempt = 0u; attempt < 100u; attempt++) {
-        let current_offset = atomicLoad(&genome_ring_state[3]);
-        if (current_offset + reserved_mode_count > mutation_params.total_mode_count) {
-            // No space - return slot to ring
-            let tail = atomicAdd(&genome_ring_state[1], 1u);
-            let ring_idx2 = tail % mutation_params.genome_ring_capacity;
-            genome_free_ring[ring_idx2] = new_genome_id;
-            return;
+    // Allocate mode data range for the new genome. GPU-mutated genomes reserve
+    // a full max_modes_per_genome block so later MODE_APPEND mutations can use
+    // the whole range even when the current mode_count is still small.
+    let recycled_base_offset = genome_meta[new_genome_id].y;
+    let recycled_block_valid =
+        recycled_base_offset > 0u
+        && recycled_base_offset + mutation_params.max_modes_per_genome <= mutation_params.total_mode_count;
+
+    var new_base_offset = recycled_base_offset;
+    if (!recycled_block_valid) {
+        var allocated = false;
+        for (var attempt = 0u; attempt < 100u; attempt++) {
+            let current_offset = atomicLoad(&genome_ring_state[3]);
+            if (current_offset + mutation_params.max_modes_per_genome > mutation_params.total_mode_count) {
+                atomicAdd(&mutation_log_count[TELEMETRY_MODE_BLOCK_ALLOC_FAILED], 1u);
+                return;
+            }
+
+            // Try to atomically claim a full genome block.
+            let old_offset = atomicCompareExchangeWeak(
+                &genome_ring_state[3],
+                current_offset,
+                current_offset + mutation_params.max_modes_per_genome
+            ).old_value;
+            if (old_offset == current_offset) {
+                new_base_offset = current_offset;
+                allocated = true;
+                break;
+            }
         }
 
-        // Try to atomically claim this range
-        let old_offset = atomicCompareExchangeWeak(&genome_ring_state[3], current_offset, current_offset + reserved_mode_count).old_value;
-        if (old_offset == current_offset) {
-            new_base_offset = current_offset;
-            allocated = true;
-            break;
+        if (!allocated) {
+            atomicAdd(&mutation_log_count[TELEMETRY_MODE_BLOCK_ALLOC_FAILED], 1u);
+            return;
         }
     }
 
-    if (!allocated) {
-        // Failed after 100 attempts (extreme contention) - return slot to ring
-        let tail = atomicAdd(&genome_ring_state[1], 1u);
-        let ring_idx3 = tail % mutation_params.genome_ring_capacity;
-        genome_free_ring[ring_idx3] = new_genome_id;
+    if (new_base_offset + reserved_mode_count > mutation_params.total_mode_count) {
+        atomicAdd(&mutation_log_count[TELEMETRY_MODE_BLOCK_ALLOC_FAILED], 1u);
         return;
     }
 
@@ -1464,9 +1740,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Clone all mode data from parent to new genome
     clone_genome_modes(parent_base_offset, new_base_offset, parent_mode_count);
+    sanitize_evolved_genome(new_base_offset, parent_mode_count);
 
     // Apply one mutation
     let applied_param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u, new_genome_id, param_idx);
+    if (applied_param_idx == MUTATION_NOOP) {
+        atomicSub(&genome_ref_counts[new_genome_id], 1u);
+        atomicAdd(&mutation_log_count[TELEMETRY_MUTATION_NOOP], 1u);
+        return;
+    }
+
+    let applied_family = mutation_family(vulnerability_table[applied_param_idx]);
+    atomicAdd(&mutation_log_count[TELEMETRY_APPLIED_BASE + min(applied_family, 7u)], 1u);
+    sanitize_evolved_genome(new_base_offset, genome_meta[new_genome_id].x);
 
     // Update cell's genome_id
     genome_ids[cell_idx] = new_genome_id;
@@ -1486,7 +1772,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Log mutation event (if log buffer has space)
-    let log_idx = atomicAdd(&mutation_log_count[0], 1u);
+    let log_idx = atomicAdd(&mutation_log_count[TELEMETRY_LOG_COUNT], 1u);
     if (log_idx < arrayLength(&mutation_log)) {
         mutation_log[log_idx] = vec4<u32>(cell_idx, new_genome_id, applied_param_idx, mutation_params.current_frame);
     }

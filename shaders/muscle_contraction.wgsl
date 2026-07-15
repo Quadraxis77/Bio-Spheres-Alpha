@@ -108,7 +108,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Get mode index and derive cell type
     let mode_idx = mode_indices[cell_idx];
-    if (mode_idx >= arrayLength(&mode_properties_v7)) {
+    if (mode_idx >= arrayLength(&mode_cell_types) || mode_idx >= arrayLength(&mode_properties_v7)) {
         // Non-myocyte: write 0.0 (relaxed, no grip)
         muscle_contraction_out[cell_idx] = 0.0;
         cell_grip_out[cell_idx] = 0.0;
@@ -157,7 +157,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // sin(time * rate * 2pi) produces a wave from -1 to +1
         // Pulse A contracts when sin >= 0, Pulse B contracts when sin < 0
         let wave = sin(params.current_time * pulse_rate * 2.0 * PI);
-        let is_active_phase = select(wave < 0.0, wave >= 0.0, pulse_phase < 0.5);
+        let is_active_phase = select((wave < 0.0), (wave >= 0.0), pulse_phase < 0.5);
         
         if (is_active_phase) {
             contraction = fixed_contraction;

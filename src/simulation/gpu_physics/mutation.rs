@@ -15,16 +15,36 @@ const MAX_MUTATION_CANDIDATES: u32 = 8192;
 /// Maximum mutation log entries for debug/UI feedback
 const MAX_MUTATION_LOG_ENTRIES: u32 = 1024;
 
-/// Maximum genomes the mutation system can allocate
-/// (80K genomes x 80 modes each = 6.4M total modes, bounded by wgpu's 256 MB/buffer limit)
-pub const GENOME_RING_CAPACITY: u32 = 80_000;
+/// Number of u32 telemetry counters stored in `mutation_log_count_buffer`.
+///
+/// Slot 0 remains the mutation log count for compatibility. The shader uses the
+/// remaining slots for candidate overflow, allocation failures, no-ops, and
+/// per-family applied counts.
+const MUTATION_TELEMETRY_COUNTERS: u32 = 16;
 
-/// Maximum modes across all genomes (must match triple_buffer.rs: 8_000_000)
-/// Total pool size is kept at 8M regardless of max_modes_per_genome - raising the per-genome
-/// limit just means fewer simultaneous genome variants fit before GC reclaims space.
+/// Maximum genomes the mutation system can allocate.
+///
+/// This matches the UI's 200k maximum cell-capacity range so, in the worst case,
+/// every live cell can own a distinct GPU-mutated genome slot.
+pub const GENOME_RING_CAPACITY: u32 = 200_000;
+
+/// Maximum modes across all GPU-mutated genomes.
+///
+/// The pool is sized for one full `MAX_MODES` block per possible live cell.
 /// Public so adhesion_buffers can be sized to match, preventing out-of-bounds reads in
 /// adhesion_physics.wgsl when mutated cells have mode_index values beyond the original genome range.
-pub const MAX_TOTAL_MODES: u32 = 8_000_000;
+pub const MAX_TOTAL_MODES: u32 = GENOME_RING_CAPACITY * crate::genome::MAX_MODES as u32;
+
+/// Initial physical mode-pool allocation.
+///
+/// The logical mutation address space spans `MAX_TOTAL_MODES`, but allocating that whole
+/// range up front freezes the GPU scene before any cells exist. Start small and let the
+/// existing growth path expand pools when CPU-synced genomes require more space.
+pub const INITIAL_MODE_POOL_MODES: u64 = 16_384;
+
+pub fn initial_mode_pool_capacity() -> u64 {
+    INITIAL_MODE_POOL_MODES.min(MAX_TOTAL_MODES as u64)
+}
 
 /// Run genome GC every N frames to avoid race conditions with mutations
 /// Running every frame causes newly created genomes to be recycled before cells can use them
@@ -133,6 +153,11 @@ pub struct MutationParamsUniform {
     pub genome_ring_capacity: u32,
     /// Mirrors WGSL `subtle_color_mutation`: 1 = nudge color, 0 = full re-roll
     pub subtle_color_mutation: u32,
+    /// Bit N enables CellType N for GPU cell-type specialization.
+    pub cell_type_gene_pool_mask: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
 }
 
 /// Per-genome metadata matching WGSL:
@@ -165,7 +190,7 @@ pub struct CollectParams {
 pub struct GCParams {
     pub genome_capacity: u32,
     pub genome_ring_capacity: u32,
-    pub _pad0: u32,
+    pub max_modes_per_genome: u32,
     pub _pad1: u32,
 }
 
@@ -255,6 +280,7 @@ pub struct MutationSystem {
     rng_counter: AtomicU32,
     radiation_level: f32,
     subtle_mutations: bool,
+    cell_type_gene_pool_mask: u32,
     cell_capacity: u32,
     gc_frame_counter: AtomicU32,
     // Number of user-owned genomes (indices 0..user_genome_count must stay immortal)
@@ -848,8 +874,8 @@ impl MutationSystem {
         });
 
         let mutation_log_count_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Mutation Log Count"),
-            size: 4,
+            label: Some("Mutation Telemetry Counters"),
+            size: (MUTATION_TELEMETRY_COUNTERS * 4) as u64,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
@@ -896,6 +922,7 @@ impl MutationSystem {
             rng_counter: AtomicU32::new(0),
             radiation_level: 1.0, // Default to enabled to avoid timing issues with UI sync
             subtle_mutations: false,
+            cell_type_gene_pool_mask: crate::ui::types::default_mutation_gene_pool_mask(),
             cell_capacity,
             gc_frame_counter: AtomicU32::new(0),
             ring_initialized: false,
@@ -1050,7 +1077,9 @@ impl MutationSystem {
                 max_value: 20.0,
                 data_type: data_type::INTEGER,
             },
-            // max_splits [1, 20]: nudge by 1-3 (-1=infinite won't be produced by mutation)
+            // max_splits [1, 5]: nudge by 1-3.
+            // Higher and infinite split counts are player-authored only; evolved genomes
+            // are capped to avoid explosive self-replication at cell-capacity scale.
             MutationParamEntry {
                 buffer_id: buffer_id::MODE_PROPERTIES,
                 element_offset: 8,
@@ -1058,7 +1087,7 @@ impl MutationSystem {
                 min_delta: 1.0,
                 max_delta: 3.0,
                 min_value: 1.0,
-                max_value: 20.0,
+                max_value: 5.0,
                 data_type: data_type::INTEGER,
             },
             // --- Parent settings (binary flips) ---
@@ -1391,17 +1420,16 @@ impl MutationSystem {
                 max_value: 39.0,
                 data_type: data_type::MODE_INDEX_CLAMP,
             },
-            // max_splits reset-to-infinite: sets max_splits to -1.0 (unlimited cycling).
+            // max_splits bounded reset: restores the evolved safety cap.
             // Stored in mode_properties_v2 at element offset 8 (vec4 index 2, component 0).
-            // Low weight - this is a rare but significant structural mutation.
             MutationParamEntry {
                 buffer_id: buffer_id::MODE_PROPERTIES,
                 element_offset: 8,
                 weight: 0.2,
                 min_delta: 0.0,
                 max_delta: 0.0,
-                min_value: -1.0,
-                max_value: -1.0,
+                min_value: 5.0,
+                max_value: 5.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
             // initial mode: nudge by 1-3 modes (clamped to genome's mode_count)
@@ -1942,6 +1970,11 @@ impl MutationSystem {
     /// Get the current radiation level
     pub fn radiation_level(&self) -> f32 {
         self.radiation_level
+    }
+
+    pub fn set_cell_type_gene_pool_mask(&mut self, mask: u32) {
+        let biological_mask = crate::ui::types::default_mutation_gene_pool_mask();
+        self.cell_type_gene_pool_mask = mask & biological_mask;
     }
 
     /// Switch between subtle (small perturbations) and dramatic (full re-roll) color mutations.
@@ -2897,7 +2930,7 @@ impl MutationSystem {
         let gc_params = GCParams {
             genome_capacity: GENOME_RING_CAPACITY,
             genome_ring_capacity: GENOME_RING_CAPACITY,
-            _pad0: 0,
+            max_modes_per_genome: crate::genome::MAX_MODES as u32,
             _pad1: 0,
         };
         queue.write_buffer(&self.gc_params_buffer, 0, bytemuck::bytes_of(&gc_params));
@@ -2943,7 +2976,7 @@ impl MutationSystem {
         let sync_params = GCParams {
             genome_capacity: self.cell_capacity,
             genome_ring_capacity: GENOME_RING_CAPACITY,
-            _pad0: 0,
+            max_modes_per_genome: 0,
             _pad1: 0,
         };
         queue.write_buffer(
@@ -2985,6 +3018,7 @@ impl MutationSystem {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         current_frame: u32,
+        mode_pool_capacity: u32,
     ) {
         if self.radiation_level <= 0.0 {
             return; // Mutations disabled
@@ -3043,18 +3077,23 @@ impl MutationSystem {
                 rng_seed,
                 current_frame,
                 param_table_size: self.vulnerability_table.len() as u32,
-                total_mode_count: MAX_TOTAL_MODES,
+                total_mode_count: mode_pool_capacity,
                 max_modes_per_genome: crate::genome::MAX_MODES as u32,
                 genome_ring_capacity: GENOME_RING_CAPACITY,
                 subtle_color_mutation: if self.subtle_mutations { 1 } else { 0 },
+                cell_type_gene_pool_mask: self.cell_type_gene_pool_mask,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
             };
             queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 
-            // Clear mutation log count
+            // Clear mutation log count and telemetry counters
+            let zeroed_telemetry = [0u32; MUTATION_TELEMETRY_COUNTERS as usize];
             queue.write_buffer(
                 &self.mutation_log_count_buffer,
                 0,
-                bytemuck::bytes_of(&0u32),
+                bytemuck::cast_slice(&zeroed_telemetry),
             );
 
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -3305,5 +3344,50 @@ mod tests {
         });
         assert!(has_append, "mode append mutation should be present");
         assert!(has_trim, "mode trim mutation should be present");
+    }
+
+    #[test]
+    fn gpu_mutation_table_keeps_evolved_max_splits_bounded() {
+        let entries = MutationSystem::build_default_vulnerability_table();
+        let max_split_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| {
+                entry.buffer_id == buffer_id::MODE_PROPERTIES && entry.element_offset == 8
+            })
+            .collect();
+
+        assert!(
+            !max_split_entries.is_empty(),
+            "max_splits should remain explicitly represented in mutation selection"
+        );
+        for entry in max_split_entries {
+            assert!(
+                entry.min_value >= 0.0,
+                "GPU mutation must not produce infinite max_splits"
+            );
+            assert!(
+                entry.max_value <= 5.0,
+                "GPU mutation max_splits above 5 is reserved for player-authored genomes"
+            );
+        }
+    }
+
+    #[test]
+    fn default_gene_pool_excludes_test_and_includes_biological_types() {
+        let mask = crate::ui::types::default_mutation_gene_pool_mask();
+
+        assert_eq!(mask & 1u32, 0, "Test must not be in mutation gene pool");
+        for cell_type in crate::cell::types::CellType::all()
+            .iter()
+            .copied()
+            .filter(|cell_type| *cell_type != crate::cell::types::CellType::Test)
+        {
+            assert_ne!(
+                mask & (1u32 << cell_type.to_index()),
+                0,
+                "{} should be available by default",
+                cell_type.name()
+            );
+        }
     }
 }

@@ -92,6 +92,7 @@
         water_viscosity: 0.01,
         radiation_level: 0.0,
         subtle_mutations: false,
+        mutation_gene_pool_mask: 1048574,
         world_radius: 500.0,
         solo_metabolism_enabled: true,
         solo_metabolism_multiplier: 3.0,

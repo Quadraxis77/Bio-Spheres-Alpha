@@ -107,7 +107,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mode_idx = mode_indices[cell_idx];
 
     // Bounds check
-    if (mode_idx >= arrayLength(&signal_settings_v3)) { return; }
+    if (mode_idx >= arrayLength(&mode_cell_types) || mode_idx >= arrayLength(&signal_settings_v3)) { return; }
 
     let ss_v3 = signal_settings_v3[mode_idx];
     let ss_v4 = signal_settings_v4[mode_idx];

@@ -145,6 +145,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= cell_count) { return; }
 
     let mode_idx = mode_indices[idx];
+    if (mode_idx >= arrayLength(&mode_cell_types)) { return; }
     let cell_type = mode_cell_types[mode_idx];
     // Oculocytes are hard stops: they never receive signals on any channel.
     // This matches the CPU BFS in signal_system.rs where is_signal_sender() returns
@@ -234,7 +235,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             // Equal-budget sources need a deterministic acyclic sweep. The host runs
             // both directions and combines them afterward.
-            let neighbor_is_upstream = select(neighbor < idx, neighbor > idx, PROPAGATION_DIRECTION == 1u);
+            let neighbor_is_upstream = select((neighbor < idx), (neighbor > idx), PROPAGATION_DIRECTION == 1u);
             let same_mode_source_upstream =
                 is_regulation_source &&
                 neighbor_source_flag != 0u &&

@@ -304,10 +304,11 @@ const _: () = assert!(
 impl InstanceBuilder {
     /// Create a new instance builder with the given capacity.
     pub fn new(device: &wgpu::Device, cell_capacity: usize) -> Self {
-        // Must match triple_buffer max_modes (8_000_000) so GPU-mutated mode indices never go out of bounds.
-        // mode_visuals stores 2 vec4<f32> per mode (color + emissive) = 32 bytes per mode.
-        // 8_000_000 * 32 = 256 MB - at wgpu's buffer limit.
-        let mode_capacity = 8_000_000;
+        // Fallback render lookup buffers. GPU scenes bind the live triple-buffer
+        // mode pools directly, so keep these small instead of mirroring the full
+        // logical mutation address space.
+        let mode_capacity =
+            crate::simulation::gpu_physics::mutation::initial_mode_pool_capacity() as usize;
         let cell_type_capacity = 16;
 
         // Create compute shader
@@ -1540,7 +1541,10 @@ impl InstanceBuilder {
         cell_count_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
         signal_flags_buffer: &wgpu::Buffer,
+        mode_properties_v1_buffer: Option<&wgpu::Buffer>,
         mode_properties_v7_buffer: &wgpu::Buffer,
+        mode_properties_v5_buffer: Option<&wgpu::Buffer>,
+        mode_cell_types_buffer: Option<&wgpu::Buffer>,
         solid_mask_buffer: &wgpu::Buffer,
         cell_thermal_state_buffer: &wgpu::Buffer,
         mode_properties_v14_buffer: &wgpu::Buffer,
@@ -1551,136 +1555,144 @@ impl InstanceBuilder {
         let (_dummy_texture, dummy_view) = Self::create_dummy_hiz_texture(device);
         let hiz_view = &dummy_view;
 
-        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Instance Builder Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.positions_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.rotations_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.radii_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.mode_indices_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: self.cell_ids_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: self.genome_ids_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: self.mode_colors_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: self.cell_type_visuals_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: self.instance_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: self.counters_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: wgpu::BindingResource::TextureView(hiz_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 12,
-                    resource: cell_count_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 13,
-                    resource: self.cell_types_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 14,
-                    resource: self.mode_properties_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 15,
-                    resource: self.mode_cell_types_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 16,
-                    resource: self.behavior_flags_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 17,
-                    resource: death_flags_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 18,
-                    resource: self.mode_emissive_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 19,
-                    resource: self.mode_properties_v5_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 20,
-                    resource: signal_flags_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 21,
-                    resource: mode_properties_v7_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 22,
-                    resource: self.cave_cull_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 23,
-                    resource: solid_mask_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 24,
-                    resource: cell_thermal_state_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 25,
-                    resource: mode_properties_v14_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 26,
-                    resource: cell_water_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 27,
-                    resource: velocity_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 28,
-                    resource: self.instance_velocity_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 29,
-                    resource: self.siphon_instance_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 30,
-                    resource: self.siphon_instance_velocity_buffer.as_entire_binding(),
-                },
-            ],
-        }));
+        self.bind_group = Some(
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Instance Builder Bind Group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.positions_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.rotations_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.radii_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.mode_indices_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: self.cell_ids_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: self.genome_ids_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: self.mode_colors_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: self.cell_type_visuals_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: self.instance_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: self.counters_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: wgpu::BindingResource::TextureView(hiz_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: cell_count_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: self.cell_types_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: mode_properties_v1_buffer
+                            .unwrap_or(&self.mode_properties_buffer)
+                            .as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: mode_cell_types_buffer
+                            .unwrap_or(&self.mode_cell_types_buffer)
+                            .as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: self.behavior_flags_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: death_flags_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 18,
+                        resource: self.mode_emissive_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 19,
+                        resource: mode_properties_v5_buffer
+                            .unwrap_or(&self.mode_properties_v5_buffer)
+                            .as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: signal_flags_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 21,
+                        resource: mode_properties_v7_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 22,
+                        resource: self.cave_cull_params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 23,
+                        resource: solid_mask_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 24,
+                        resource: cell_thermal_state_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 25,
+                        resource: mode_properties_v14_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 26,
+                        resource: cell_water_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 27,
+                        resource: velocity_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 28,
+                        resource: self.instance_velocity_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 29,
+                        resource: self.siphon_instance_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 30,
+                        resource: self.siphon_instance_velocity_buffer.as_entire_binding(),
+                    },
+                ],
+            }),
+        );
     }
 
     /// Extract frustum planes from a view-projection matrix (Gribb/Hartmann method).
@@ -1734,7 +1746,10 @@ impl InstanceBuilder {
         cell_count_buffer: &wgpu::Buffer,
         death_flags_buffer: &wgpu::Buffer,
         signal_flags_buffer: &wgpu::Buffer,
+        mode_properties_v1_buffer: Option<&wgpu::Buffer>,
         mode_properties_v7_buffer: &wgpu::Buffer,
+        mode_properties_v5_buffer: Option<&wgpu::Buffer>,
+        mode_cell_types_buffer: Option<&wgpu::Buffer>,
         lod_scale_factor: f32,
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
@@ -1846,7 +1861,10 @@ impl InstanceBuilder {
                 cell_count_buffer,
                 death_flags_buffer,
                 signal_flags_buffer,
+                mode_properties_v1_buffer,
                 mode_properties_v7_buffer,
+                mode_properties_v5_buffer,
+                mode_cell_types_buffer,
                 solid_mask_buffer,
                 cell_thermal_state_buffer,
                 mode_properties_v14_buffer,
@@ -1966,7 +1984,10 @@ impl InstanceBuilder {
             cell_count_buffer,
             death_flags_buffer,
             signal_flags_buffer,
+            None,
             mode_properties_v7_buffer,
+            None,
+            None,
             lod_scale_factor,
             lod_threshold_low,
             lod_threshold_medium,

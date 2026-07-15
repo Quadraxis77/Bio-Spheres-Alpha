@@ -1545,8 +1545,7 @@ impl App {
                     let camera = self.scene_manager.active_scene_mut().camera_mut();
                     let previous_sprint_multiplier = camera.sprint_multiplier;
                     camera.handle_scroll(*delta);
-                    if (camera.sprint_multiplier - previous_sprint_multiplier).abs()
-                        > f32::EPSILON
+                    if (camera.sprint_multiplier - previous_sprint_multiplier).abs() > f32::EPSILON
                     {
                         self.ui.state.camera_sprint_multiplier = camera.sprint_multiplier;
                     }
@@ -1610,8 +1609,8 @@ impl App {
                             }
                             if menu.visible {
                                 menu.close(false);
-                                let hide_cursor = menu.active_tool
-                                    != crate::ui::radial_menu::RadialTool::None;
+                                let hide_cursor =
+                                    menu.active_tool != crate::ui::radial_menu::RadialTool::None;
                                 self.window.set_cursor_visible(!hide_cursor);
                                 self.window.request_redraw();
                                 return true;
@@ -2764,6 +2763,9 @@ impl App {
                 mutation_system.set_subtle_mutations(
                     &self.queue,
                     self.ui.state.world_settings.subtle_mutations,
+                );
+                mutation_system.set_cell_type_gene_pool_mask(
+                    self.ui.state.world_settings.mutation_gene_pool_mask,
                 );
             }
 

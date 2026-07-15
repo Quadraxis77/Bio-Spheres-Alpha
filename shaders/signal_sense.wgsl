@@ -405,6 +405,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= cell_count) { return; }
 
     let mode_idx = mode_indices[idx];
+    if (mode_idx >= arrayLength(&mode_cell_types)) { return; }
     let cell_type = mode_cell_types[mode_idx];
 
     // === Phase 1: Oculocyte sensing (channels 0-7) ===

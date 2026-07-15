@@ -699,6 +699,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Get parent's mode index for looking up child orientations and split direction
     let parent_mode_idx = mode_indices[cell_idx];
+    if (parent_mode_idx >= arrayLength(&mode_cell_types)) {
+        return;
+    }
     
     // Read parent's split_ratio from mode_properties_v2 (.y = split_ratio)
     let parent_split_ratio = mode_properties_v2[parent_mode_idx].y;

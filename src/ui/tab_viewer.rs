@@ -7,6 +7,7 @@ use egui::{Id, Ui, WidgetText};
 use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 
+use crate::cell::types::CellType;
 use crate::field_report::{
     format_simulation_time, render_lineage_snapshot_report, render_specimen_report,
     ArchivedFieldReport, FieldReportHistory, FieldReportSeverity, LineageSnapshotReportSnapshot,
@@ -8318,44 +8319,43 @@ fn render_lighting_settings(ui: &mut Ui) {
     // TODO: Implement lighting settings
 }
 
-fn categorized_cell_types(
-) -> &'static [(&'static str, &'static [crate::cell::types::CellType])] {
+fn categorized_cell_types() -> &'static [(&'static str, &'static [crate::cell::types::CellType])] {
     use crate::cell::types::CellType;
 
-    const GENERAL: &[CellType] = &[
+    const METABOLIC: &[CellType] = &[
         CellType::Test,
-        CellType::Flagellocyte,
-        CellType::Ciliocyte,
-        CellType::Myocyte,
-        CellType::Buoyocyte,
-        CellType::Plumocyte,
-    ];
-    const METABOLISM: &[CellType] = &[
         CellType::Phagocyte,
         CellType::Photocyte,
         CellType::Lipocyte,
+        CellType::Devorocyte,
         CellType::Vasculocyte,
         CellType::Siphonocyte,
-        CellType::Devorocyte,
     ];
-    const CONTROL: &[CellType] = &[
+    const FUNCTION: &[CellType] = &[
+        CellType::Flagellocyte,
+        CellType::Buoyocyte,
         CellType::Oculocyte,
+        CellType::Ciliocyte,
+        CellType::Myocyte,
+        CellType::Luminocyte,
+        CellType::Plumocyte,
+    ];
+    const LOGIC: &[CellType] = &[
         CellType::Cognocyte,
         CellType::Memorocyte,
-        CellType::Luminocyte,
-        CellType::Glueocyte,
+        CellType::Stemocyte,
     ];
-    const DEVELOPMENT: &[CellType] = &[
+    const STRUCTURAL: &[CellType] = &[
+        CellType::Glueocyte,
         CellType::Embryocyte,
         CellType::Gametocyte,
-        CellType::Stemocyte,
     ];
 
     &[
-        ("Body & Motion", GENERAL),
-        ("Feeding & Transport", METABOLISM),
-        ("Sensing & Control", CONTROL),
-        ("Development", DEVELOPMENT),
+        ("Metabolic", METABOLIC),
+        ("Function", FUNCTION),
+        ("Logic", LOGIC),
+        ("Structural", STRUCTURAL),
     ]
 }
 
@@ -14106,7 +14106,87 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
         .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
 
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label("Gene Pool:")
+            .on_hover_text("Cell types available to cell-type specialization mutations. Player-authored genomes can still use any type; this only filters GPU mutation selection.");
+        if ui.small_button("All").clicked() {
+            world.mutation_gene_pool_mask = crate::ui::types::default_mutation_gene_pool_mask();
+        }
+        if ui.small_button("Clear").clicked() {
+            world.mutation_gene_pool_mask = 0;
+        }
+    });
+
+    let selected_count = CellType::all()
+        .iter()
+        .filter(|cell_type| **cell_type != CellType::Test)
+        .filter(|cell_type| (world.mutation_gene_pool_mask & (1u32 << cell_type.to_index())) != 0)
+        .count();
+    for (category, types) in categorized_cell_types() {
+        let available_types: Vec<CellType> = types
+            .iter()
+            .copied()
+            .filter(|cell_type| *cell_type != CellType::Test)
+            .collect();
+        if available_types.is_empty() {
+            continue;
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(*category).small().strong());
+            for cell_type in available_types {
+                let bit = 1u32 << cell_type.to_index();
+                let selected = (world.mutation_gene_pool_mask & bit) != 0;
+                if ui
+                    .selectable_label(selected, compact_cell_type_label(cell_type))
+                    .on_hover_text(cell_type.name())
+                    .clicked()
+                {
+                    if selected {
+                        world.mutation_gene_pool_mask &= !bit;
+                    } else {
+                        world.mutation_gene_pool_mask |= bit;
+                    }
+                }
+            }
+        });
+    }
+    ui.label(
+        egui::RichText::new(format!(
+            "{} cell-type{} available to mutation",
+            selected_count,
+            if selected_count == 1 { "" } else { "s" }
+        ))
+        .small(),
+    );
+
     ui.add_space(12.0);
+}
+
+fn compact_cell_type_label(cell_type: CellType) -> &'static str {
+    match cell_type {
+        CellType::Test => "Test",
+        CellType::Flagellocyte => "Flag",
+        CellType::Phagocyte => "Phag",
+        CellType::Photocyte => "Photo",
+        CellType::Lipocyte => "Lipo",
+        CellType::Buoyocyte => "Buoy",
+        CellType::Glueocyte => "Glue",
+        CellType::Oculocyte => "Eye",
+        CellType::Ciliocyte => "Cilia",
+        CellType::Myocyte => "Muscle",
+        CellType::Embryocyte => "Embryo",
+        CellType::Devorocyte => "Devour",
+        CellType::Vasculocyte => "Vasc",
+        CellType::Gametocyte => "Gamete",
+        CellType::Cognocyte => "Cog",
+        CellType::Memorocyte => "Memory",
+        CellType::Luminocyte => "Lum",
+        CellType::Siphonocyte => "Siphon",
+        CellType::Plumocyte => "Plume",
+        CellType::Stemocyte => "Stem",
+    }
 }
 
 /// Render the Help panel showing context-specific controls and shortcuts.

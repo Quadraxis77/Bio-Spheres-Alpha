@@ -346,6 +346,11 @@ pub struct WorldSettings {
     #[serde(default)]
     pub subtle_mutations: bool,
 
+    /// Bitmask of biological cell types available to GPU cell-type specialization.
+    /// Bit N corresponds to CellType index N. Test (0) is intentionally excluded.
+    #[serde(default = "default_mutation_gene_pool_mask")]
+    pub mutation_gene_pool_mask: u32,
+
     /// World sphere radius in simulation units (applied on scene reset).
     /// Affects cave scale, fog bounds, fluid grid cell size, and physics boundary.
     #[serde(default = "default_world_radius")]
@@ -391,6 +396,7 @@ impl Default for WorldSettings {
             water_viscosity: 0.0,
             radiation_level: 0.0,
             subtle_mutations: false,
+            mutation_gene_pool_mask: default_mutation_gene_pool_mask(),
             world_radius: 200.0,
             solo_metabolism_enabled: false,
             solo_metabolism_multiplier: 3.0,
@@ -731,6 +737,16 @@ fn default_constraint_iterations() -> u32 {
 
 fn default_cell_capacity() -> u32 {
     20_000
+}
+
+pub fn default_mutation_gene_pool_mask() -> u32 {
+    crate::cell::types::CellType::all()
+        .iter()
+        .copied()
+        .filter(|cell_type| *cell_type != crate::cell::types::CellType::Test)
+        .fold(0u32, |mask, cell_type| {
+            mask | (1u32 << cell_type.to_index())
+        })
 }
 
 fn default_world_diameter() -> f32 {

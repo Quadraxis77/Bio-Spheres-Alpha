@@ -426,6 +426,10 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Get cell type early (needed for Embryocyte handling before division checks)
     let mode_idx = mode_indices[cell_idx];
+    if (mode_idx >= arrayLength(&mode_cell_types)) {
+        division_flags[cell_idx] = 0u;
+        return;
+    }
     let cell_type = mode_cell_types[mode_idx];
 
     let thermal_state = cell_thermal_state[cell_idx];
@@ -770,6 +774,9 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         // Derive neighbor's cell_type from mode (always up-to-date)
         let neighbor_mode_idx = mode_indices[neighbor_idx];
+        if (neighbor_mode_idx >= arrayLength(&mode_cell_types)) {
+            continue;
+        }
         let neighbor_cell_type = mode_cell_types[neighbor_mode_idx];
         let neighbor_behavior = type_behaviors[neighbor_cell_type];
 
