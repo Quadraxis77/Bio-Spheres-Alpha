@@ -257,17 +257,17 @@ pub struct GenomeBrowserState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserSort {
-    /// Alphabetical A->Z (default).
+    /// Alphabetical A->Z.
     NameAsc,
     /// Alphabetical Z->A.
     NameDesc,
-    /// Most recently modified first.
+    /// Most recently modified first (default).
     Recent,
 }
 
 impl Default for BrowserSort {
     fn default() -> Self {
-        BrowserSort::NameAsc
+        BrowserSort::Recent
     }
 }
 
@@ -283,7 +283,7 @@ impl Default for GenomeBrowserState {
             confirm_delete: false,
             status_msg: None,
             status_timer: 0.0,
-            sort_mode: BrowserSort::NameAsc,
+            sort_mode: BrowserSort::default(),
             tag_filter: String::new(),
             pending_load: std::collections::VecDeque::new(),
             is_loading: false,

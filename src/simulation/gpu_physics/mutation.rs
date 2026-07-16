@@ -515,6 +515,12 @@ impl MutationSystem {
                 Self::storage_rw_entry(30),
                 // binding 31: child_b_after_split_keep_adhesion_flags
                 Self::storage_rw_entry(31),
+                // binding 32: mode_properties_v9 (Embryocyte/Stemocyte params)
+                Self::storage_rw_entry(32),
+                // binding 33: mode_properties_v10 (Embryocyte/Stemocyte params)
+                Self::storage_rw_entry(33),
+                // binding 34: mode_properties_v11 (Stemocyte thresholds)
+                Self::storage_rw_entry(34),
             ],
         });
 
@@ -1916,7 +1922,7 @@ impl MutationSystem {
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_STRUCTURE,
                 element_offset: 0,
-                weight: 0.15,
+                weight: 0.8,
                 min_delta: 0.0,
                 max_delta: 0.0,
                 min_value: 0.0,
@@ -1926,7 +1932,7 @@ impl MutationSystem {
             MutationParamEntry {
                 buffer_id: buffer_id::GENOME_STRUCTURE,
                 element_offset: 0,
-                weight: 0.15,
+                weight: 0.05,
                 min_delta: 0.0,
                 max_delta: 0.0,
                 min_value: 0.0,
@@ -2669,6 +2675,9 @@ impl MutationSystem {
         regulation_params_buffer: &wgpu::Buffer,
         child_a_after_split_keep_adhesion_flags_buffer: &wgpu::Buffer,
         child_b_after_split_keep_adhesion_flags_buffer: &wgpu::Buffer,
+        mode_properties_v9_buffer: &wgpu::Buffer,
+        mode_properties_v10_buffer: &wgpu::Buffer,
+        mode_properties_v11_buffer: &wgpu::Buffer,
     ) {
         self.params_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mutation Params Bind Group"),
@@ -2859,6 +2868,18 @@ impl MutationSystem {
                 wgpu::BindGroupEntry {
                     binding: 31,
                     resource: child_b_after_split_keep_adhesion_flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 32,
+                    resource: mode_properties_v9_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 33,
+                    resource: mode_properties_v10_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 34,
+                    resource: mode_properties_v11_buffer.as_entire_binding(),
                 },
             ],
         }));

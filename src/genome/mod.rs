@@ -483,10 +483,10 @@ impl Default for ModeSettings {
             glueocyte_cell_adhesion_signal_channel: -1, // Default: always active (no signal gate)
             glueocyte_cell_adhesion_signal_threshold: 1.0,
             glueocyte_signal_gate_invert: false, // Default: active when signal >= threshold
-            swim_force: 0.5,                     // Default swim force for flagellocytes
+            swim_force: 1.5,                     // Default swim force for flagellocytes
             flagellocyte_use_signal: false,      // Default: fixed speed mode
             flagellocyte_signal_channel: 0,      // Default: channel 0
-            flagellocyte_speed_a: 0.5,           // Default: same as swim_force
+            flagellocyte_speed_a: 1.5,           // Default: same as swim_force
             flagellocyte_speed_b: 0.0,           // Default: stop when signal received
             flagellocyte_threshold_c: 1.0,       // Default: threshold of 1.0
             cilia_speed: 0.5,                    // Default cilia speed for ciliocytes

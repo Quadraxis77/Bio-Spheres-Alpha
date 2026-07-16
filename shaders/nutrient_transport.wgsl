@@ -182,7 +182,7 @@ const TRANSPORT_RATE: f32 = 100.0;  // Max nutrients/sec total outflow per cell 
                                     // through the body. Vasculocytes still get 5x (500/sec highway).
 const LERP_SPEED: f32 = 999.0;     // Smoothing factor (per second); lower = smoother, less oscillation
 const BASE_METABOLISM_RATE: f32 = 1.0;  // Base metabolic cost in nutrients/sec for non-auto-gain cells
-const SWIM_CONSUMPTION_RATE: f32 = 2.0;  // 2 nutrients/sec at swim_force=1, 6/sec at swim_force=3
+const SWIM_CONSUMPTION_RATE: f32 = 0.2;  // 0.2 nutrients/sec at swim_force=1, 0.6/sec at swim_force=3
 const DEFER_FRAMES: i32 = 6;  // ~0.1 seconds at 64 FPS = 6 frames
 
 // Vasculocyte transport constants

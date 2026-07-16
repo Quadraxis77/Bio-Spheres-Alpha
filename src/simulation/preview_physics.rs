@@ -969,7 +969,7 @@ pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
 /// These cells should be removed from the simulation.
 ///
 /// # Physics
-/// - Consumption rate: swim_force * 5.0 * dt (5 nutrients per second at full swim force)
+/// - Consumption rate: swim_force * 0.2 * dt (0.2 nutrients per second at full swim force)
 /// - Death threshold: nutrients < 1.0
 /// - Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 /// - Only applies to cells with cell_type == 1 (Flagellocyte) and swim_force > 0.0
@@ -977,8 +977,8 @@ pub fn consume_swim_nutrients(state: &mut CanonicalState, genome: &Genome, dt: f
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     // Fixed consumption rate - NOT adjustable by user
     // This creates a direct tradeoff: faster swimming = higher nutrient cost
-    // Rate: 1.0 nutrients/sec at swim_force=1.0, 3.0/sec at swim_force=3.0
-    const CONSUMPTION_RATE: f32 = 1.0;
+    // Rate: 0.2 nutrients/sec at swim_force=1.0, 0.6/sec at swim_force=3.0
+    const CONSUMPTION_RATE: f32 = 0.2;
 
     let mut cells_to_remove = Vec::new();
 

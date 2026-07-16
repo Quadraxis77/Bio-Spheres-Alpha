@@ -9256,36 +9256,51 @@ fn draw_stemocyte_response_strip(
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.small("W");
+        ui.small("S");
 
         let width = (ui.available_width() - 18.0).max(120.0);
         let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(width, 25.0), egui::Sense::hover());
-        let mut edges = [0.0_f32; 6];
-        edges[0] = bar_rect.left();
-        for boundary in 0..4 {
-            edges[boundary + 1] =
-                bar_rect.left() + bar_rect.width() * thresholds[boundary] as f32 / 100.0;
-        }
-        edges[5] = bar_rect.right();
+        let signal_to_x = |signal_percent: u8| {
+            bar_rect.right() - bar_rect.width() * signal_percent as f32 / 100.0
+        };
+        let visual_signal_edges = [
+            100_u8,
+            thresholds[3],
+            thresholds[2],
+            thresholds[1],
+            thresholds[0],
+            0_u8,
+        ];
+        let visual_x_edges = [
+            bar_rect.left(),
+            signal_to_x(thresholds[3]),
+            signal_to_x(thresholds[2]),
+            signal_to_x(thresholds[1]),
+            signal_to_x(thresholds[0]),
+            bar_rect.right(),
+        ];
 
-        for weak_band in 0..5 {
+        for visual_band in 0..5 {
+            let weak_band = 4 - visual_band;
             let outcome_index = if weak_first { weak_band } else { 4 - weak_band };
             let outcome = outcomes[outcome_index];
+            let segment_left = visual_x_edges[visual_band];
+            let segment_right = visual_x_edges[visual_band + 1];
             let segment_rect = egui::Rect::from_min_max(
-                egui::pos2(edges[weak_band], bar_rect.top()),
-                egui::pos2(edges[weak_band + 1], bar_rect.bottom()),
+                egui::pos2(segment_left, bar_rect.top()),
+                egui::pos2(segment_right, bar_rect.bottom()),
             );
             let response = ui.interact(
                 segment_rect,
-                ui.make_persistent_id(("stemocyte_response_segment", weak_band)),
+                ui.make_persistent_id(("stemocyte_response_segment_strong_left", visual_band)),
                 egui::Sense::click(),
             );
             let color = stemocyte_response_color(outcome, modes);
             ui.painter()
                 .rect_filled(segment_rect.shrink(0.5), 3.0, color);
 
-            let percentage = ((edges[weak_band + 1] - edges[weak_band]) / bar_rect.width() * 100.0)
-                .round() as u8;
+            let percentage =
+                visual_signal_edges[visual_band].saturating_sub(visual_signal_edges[visual_band + 1]);
             if segment_rect.width() >= 27.0 {
                 let name = stemocyte_response_name(outcome, modes);
                 let label = if segment_rect.width() >= 72.0 {
@@ -9378,7 +9393,7 @@ fn draw_stemocyte_response_strip(
         }
 
         for boundary in 0..4 {
-            let x = edges[boundary + 1];
+            let x = signal_to_x(thresholds[boundary]);
             let handle_rect = egui::Rect::from_center_size(
                 egui::pos2(x, bar_rect.center().y),
                 egui::vec2(9.0, bar_rect.height() + 8.0),
@@ -9390,8 +9405,9 @@ fn draw_stemocyte_response_strip(
             );
             if response.dragged() {
                 if let Some(pointer) = response.interact_pointer_pos() {
-                    let requested =
-                        ((pointer.x - bar_rect.left()) / bar_rect.width() * 100.0).round() as i32;
+                    let requested = (100.0
+                        - ((pointer.x - bar_rect.left()) / bar_rect.width() * 100.0))
+                        .round() as i32;
                     let min = if boundary == 0 {
                         1
                     } else {
@@ -9425,7 +9441,7 @@ fn draw_stemocyte_response_strip(
             egui::Stroke::new(1.0, egui::Color32::from_white_alpha(100)),
             egui::StrokeKind::Inside,
         );
-        ui.small("S");
+        ui.small("W");
     });
 }
 
@@ -10164,7 +10180,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     if !mode.flagellocyte_use_signal {
                         // Fixed speed mode
                         ui.label("Swim Force:")
-                            .on_hover_text("Thrust force applied in the cell's forward direction each frame. Higher values = faster swimming. Consumes nutrients proportional to force (5 nutrients/sec at force 1.0)");
+                            .on_hover_text("Thrust force applied in the cell's forward direction each frame. Higher values = faster swimming. Consumes nutrients proportional to force (0.2 nutrients/sec at force 1.0)");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };

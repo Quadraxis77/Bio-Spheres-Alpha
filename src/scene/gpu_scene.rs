@@ -7723,6 +7723,9 @@ impl GpuScene {
                 &self
                     .gpu_triple_buffers
                     .child_b_after_split_keep_adhesion_flags,
+                &self.gpu_triple_buffers.mode_properties_v9,
+                &self.gpu_triple_buffers.mode_properties_v10,
+                &self.gpu_triple_buffers.mode_properties_v11,
             );
 
             // Rebuild GC bind group (for genome recycling)
