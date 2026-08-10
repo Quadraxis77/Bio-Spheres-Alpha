@@ -76,6 +76,14 @@ enum MenuAction {
     Exit,
 }
 
+/// Interaction result from the main-menu egui pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MenuUiResponse {
+    action: MenuAction,
+    hovered: MenuAction,
+    audio_settings_changed: bool,
+}
+
 const CELL_LINK_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(450);
 const CELL_LINK_HOLD_CANCEL_DISTANCE_PX: f32 = 8.0;
 const SCAFFOLD_MIN_REST_LENGTH: f32 = 0.5;
@@ -190,6 +198,12 @@ pub struct App {
     app_phase: AppPhase,
     /// Main menu scene (two live genome previews + egui overlay).
     main_menu_scene: Option<MainMenuScene>,
+    /// Last menu option hovered, used to play hover audio only on transitions.
+    main_menu_hovered: MenuAction,
+    /// Whether the main-menu settings overlay is open.
+    main_menu_settings_open: bool,
+    /// Runtime audio playback for music and short SFX.
+    audio: crate::audio::AudioLayer,
 }
 
 impl App {
@@ -206,6 +220,8 @@ impl App {
         // Build the main menu scene before moving `ui` into the struct so we
         // can access `ui.renderer` mutably without fighting the borrow checker.
         let main_menu_scene = MainMenuScene::new(&device, &queue, &config, &mut ui.renderer);
+        let initial_music_volume = ui.state.music_volume;
+        let initial_sfx_volume = ui.state.sfx_volume;
 
         Self {
             window,
@@ -237,11 +253,27 @@ impl App {
             surface,
             app_phase: AppPhase::MainMenu,
             main_menu_scene: Some(main_menu_scene),
+            main_menu_hovered: MenuAction::None,
+            main_menu_settings_open: false,
+            audio: crate::audio::AudioLayer::new_with_volumes(
+                initial_music_volume,
+                initial_sfx_volume,
+            ),
         }
     }
 
     pub fn window(&self) -> &Window {
         &self.window
+    }
+
+    pub fn play_cell_divide_sfx(&mut self, divisions_this_frame: usize) {
+        self.audio
+            .play_cell_divide_burst_scaled(divisions_this_frame);
+    }
+
+    pub fn play_cell_divide_sfx_at(&mut self, divisions_this_frame: usize, position: glam::Vec3) {
+        self.audio
+            .play_cell_divide_burst_scaled_at(divisions_this_frame, position);
     }
 
     fn set_app_cursor(&mut self, icon: CursorIcon) {
@@ -1783,7 +1815,7 @@ impl App {
                 return;
             };
 
-        let action = Self::render_main_menu_ui(
+        let menu_response = Self::render_main_menu_ui(
             &self.ui.ctx.clone(),
             left_id,
             right_id,
@@ -1792,7 +1824,24 @@ impl App {
             panel_w,
             panel_h,
             self.ui.state.tutorial.ever_shown,
+            &mut self.main_menu_settings_open,
+            &mut self.ui.state.music_volume,
+            &mut self.ui.state.sfx_volume,
         );
+        if menu_response.audio_settings_changed {
+            self.audio
+                .set_volumes(self.ui.state.music_volume, self.ui.state.sfx_volume);
+            self.ui.mark_ui_state_dirty();
+        }
+        if menu_response.hovered != self.main_menu_hovered {
+            if menu_response.hovered != MenuAction::None {
+                self.audio.play_menu_hover();
+            }
+            self.main_menu_hovered = menu_response.hovered;
+        }
+        if menu_response.action != MenuAction::None {
+            self.audio.play_menu_select();
+        }
 
         let egui_output = self.ui.ctx.end_pass();
 
@@ -1818,9 +1867,10 @@ impl App {
         output.present();
 
         // Handle button actions.
-        match action {
+        match menu_response.action {
             MenuAction::Play => {
                 self.app_phase = AppPhase::InGame;
+                self.main_menu_hovered = MenuAction::None;
                 let target = crate::ui::types::SimulationMode::Gpu;
                 self.ui.state.current_mode = target;
                 let cave_init = self.scene_manager.switch_mode(
@@ -1839,6 +1889,7 @@ impl App {
             }
             MenuAction::GenomeEditor => {
                 self.app_phase = AppPhase::InGame;
+                self.main_menu_hovered = MenuAction::None;
                 let target = crate::ui::types::SimulationMode::Preview;
                 self.ui.state.current_mode = target;
                 self.scene_manager.switch_mode(
@@ -1855,6 +1906,7 @@ impl App {
             MenuAction::Tutorial => {
                 // Go to Preview mode and start the tutorial from step 0.
                 self.app_phase = AppPhase::InGame;
+                self.main_menu_hovered = MenuAction::None;
                 let target = crate::ui::types::SimulationMode::Preview;
                 self.ui.state.current_mode = target;
                 self.scene_manager.switch_mode(
@@ -1868,6 +1920,9 @@ impl App {
                 );
                 self.dock_manager.switch_mode(target);
                 self.ui.state.tutorial.start();
+            }
+            MenuAction::Settings => {
+                self.main_menu_settings_open = true;
             }
             MenuAction::Exit => {
                 self.save_persistent_settings();
@@ -1901,7 +1956,7 @@ impl App {
         self.editor_state.save_sun_settings();
     }
 
-    /// Draw the main-menu egui overlay and return the button action (if any).
+    /// Draw the main-menu egui overlay and return button interaction state.
     fn render_main_menu_ui(
         ctx: &egui::Context,
         left_id: TextureId,
@@ -1911,7 +1966,10 @@ impl App {
         _panel_w: f32,
         _panel_h: f32,
         ever_shown: bool,
-    ) -> MenuAction {
+        settings_open: &mut bool,
+        music_volume: &mut f32,
+        sfx_volume: &mut f32,
+    ) -> MenuUiResponse {
         use egui::{Align2, Color32, FontFamily, FontId, Pos2, Rect, Stroke, Vec2};
 
         // Background: deep navy blue, darker at edges
@@ -1938,6 +1996,8 @@ impl App {
         let muted_text = Color32::from_rgb(136, 135, 144);
 
         let mut action = MenuAction::None;
+        let mut hovered = MenuAction::None;
+        let mut audio_settings_changed = false;
 
         #[allow(deprecated)]
         egui::CentralPanel::default()
@@ -2124,7 +2184,7 @@ impl App {
                 y += 38.0;
 
                 macro_rules! btn {
-                    ($label:expr, $fill:expr, $fill_h:expr, $border:expr, $text_col:expr) => {{
+                    ($action:expr, $label:expr, $fill:expr, $fill_h:expr, $border:expr, $text_col:expr) => {{
                         let r = Rect::from_center_size(
                             Pos2::new(cx, y + btn_h * 0.5),
                             Vec2::new(btn_w, btn_h),
@@ -2139,6 +2199,7 @@ impl App {
                             .corner_radius(32.0_f32),
                         );
                         if response.hovered() {
+                            hovered = $action;
                             ui.painter().rect_filled(r, 32.0, $fill_h);
                             ui.painter().rect_stroke(
                                 r,
@@ -2153,6 +2214,7 @@ impl App {
                 }
 
                 if btn!(
+                    MenuAction::Play,
                     "Main Simulation",
                     teal_fill,
                     teal_fill_h,
@@ -2164,6 +2226,7 @@ impl App {
                     action = MenuAction::Play;
                 }
                 if btn!(
+                    MenuAction::GenomeEditor,
                     "Genome editor",
                     blue_fill,
                     blue_fill_h,
@@ -2197,6 +2260,7 @@ impl App {
                         .corner_radius(32.0_f32),
                     );
                     if response.hovered() {
+                        hovered = MenuAction::Tutorial;
                         ui.painter().rect_filled(r, 32.0, tut_fill_h);
                         ui.painter().rect_stroke(
                             r,
@@ -2249,6 +2313,7 @@ impl App {
                 y += 14.0;
 
                 if btn!(
+                    MenuAction::Settings,
                     "Settings",
                     muted_fill,
                     muted_fill_h,
@@ -2260,6 +2325,7 @@ impl App {
                     action = MenuAction::Settings;
                 }
                 if btn!(
+                    MenuAction::Credits,
                     "Credits",
                     muted_fill,
                     muted_fill_h,
@@ -2278,13 +2344,67 @@ impl App {
                 );
                 y += 14.0;
 
-                if btn!("Exit", muted_fill, muted_fill_h, muted_border, muted_text).clicked() {
+                if btn!(
+                    MenuAction::Exit,
+                    "Exit",
+                    muted_fill,
+                    muted_fill_h,
+                    muted_border,
+                    muted_text
+                )
+                .clicked()
+                {
                     action = MenuAction::Exit;
                 }
                 let _ = y;
             });
 
-        action
+        if *settings_open {
+            let mut open = true;
+            egui::Window::new("Settings")
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.set_width(280.0);
+                    audio_settings_changed |= ui
+                        .add(
+                            egui::Slider::new(music_volume, 0.0..=1.0)
+                                .text("Music")
+                                .show_value(true),
+                        )
+                        .changed();
+                    audio_settings_changed |= ui
+                        .add(
+                            egui::Slider::new(sfx_volume, 0.0..=1.0)
+                                .text("SFX")
+                                .show_value(true),
+                        )
+                        .changed();
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Defaults").clicked() {
+                            *music_volume = 0.18;
+                            *sfx_volume = 0.45;
+                            audio_settings_changed = true;
+                        }
+                        if ui.button("Close").clicked() {
+                            *settings_open = false;
+                        }
+                    });
+                });
+            if !open {
+                *settings_open = false;
+            }
+        }
+
+        MenuUiResponse {
+            action,
+            hovered,
+            audio_settings_changed,
+        }
     }
 
     /// Horizontal gradient quad mesh (for edge fades).
@@ -2487,6 +2607,14 @@ impl App {
         }
 
         self.scene_manager.update(dt);
+
+        let camera = self.scene_manager.active_scene().camera();
+        self.audio
+            .set_listener_from_camera(camera.position(), camera.rotation);
+        for event in self.scene_manager.drain_audio_events() {
+            self.audio.play_event(event);
+        }
+        self.audio.update();
 
         // Poll for async tool operation results (GPU mode only)
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {

@@ -16,10 +16,11 @@ use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, Solid
 use crate::simulation::gpu_physics::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
     execute_signal_system, AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
-    DevorocyteConsumptionSystem, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
-    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
-    GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
-    PhysicsFeatureFlags,
+    DevorocyteConsumptionSystem, DivisionAudioCandidate, DivisionAudioCollectDispatch,
+    DivisionAudioParams, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
+    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem,
+    GpuToolOperations, GpuTripleBufferSystem, LightFieldSystem, MossSystem,
+    PhagocyteConsumptionSystem, PhysicsFeatureFlags,
 };
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
@@ -32,6 +33,10 @@ const MAX_SUN_BRIGHTNESS: f32 = 5.0;
 const PHOTOCYTE_BASELINE_MASS_RATE: f32 = 0.2;
 const LEGACY_PHOTOCYTE_MASS_RATE_MAX: f32 = 0.02;
 const SIGNAL_UPDATE_INTERVAL_FRAMES: i32 = 4;
+const DIVISION_AUDIO_PLAYBACK_CANDIDATES: usize = 256;
+const DIVISION_AUDIO_SEARCH_RADIUS_CELLS: u32 = 18;
+const DIVISION_AUDIO_GRID_RESOLUTION: u32 = 128;
+const DIVISION_AUDIO_MAX_CELLS_PER_GRID: u32 = 16;
 
 /// Scale photocyte nutrient production across the sun's 0-5 brightness range.
 /// The squared response keeps very low brightness weak, preserves the configured
@@ -396,6 +401,25 @@ pub struct GpuScene {
     /// Receiver for the gamete staging buffer map_async callback.
     /// Some means map_async has already been called; None means it hasn't been called yet.
     gamete_map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    /// Uniform params for the division-audio spatial-grid collector.
+    division_audio_params_buffer: wgpu::Buffer,
+    /// GPU output buffer for the closest split candidates.
+    division_audio_candidates_buffer: wgpu::Buffer,
+    /// Atomic count of division-audio candidates written this frame.
+    division_audio_candidate_count_buffer: wgpu::Buffer,
+    /// Staging buffer used to read closest split candidates.
+    division_audio_readback_buffer: wgpu::Buffer,
+    /// Bind group for division-audio params, flags, and candidate output.
+    division_audio_bind_group: wgpu::BindGroup,
+    /// Whether a division-audio candidate readback is in flight.
+    division_audio_readback_in_flight: bool,
+    /// Whether the division-audio candidate buffer has already been cleared
+    /// this render frame. Multiple `run_physics` steps can execute per frame
+    /// (fixed-timestep catch-up); only the first should clear the buffer so
+    /// later steps' candidates accumulate instead of clobbering earlier ones.
+    division_audio_cleared_this_frame: bool,
+    /// Audio events decoded from the latest completed division readback.
+    pending_audio_events: Vec<crate::audio::GameAudioEvent>,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
@@ -700,6 +724,55 @@ impl GpuScene {
         let mutation_system = Some(crate::simulation::gpu_physics::MutationSystem::new(
             device, queue, capacity,
         ));
+        let division_audio_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Division Audio Params"),
+            size: std::mem::size_of::<DivisionAudioParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let division_audio_candidates_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Division Audio Candidates"),
+            size: std::mem::size_of::<DivisionAudioCandidate>() as u64 * capacity as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let division_audio_candidate_count_buffer =
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Division Audio Candidate Count"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        let division_audio_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Division Audio Candidate Readback"),
+            size: std::mem::size_of::<DivisionAudioCandidate>() as u64 * capacity as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let division_audio_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Division Audio Bind Group"),
+            layout: &gpu_physics_pipelines.division_audio_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: division_audio_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: gpu_triple_buffers.division_flags.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: division_audio_candidates_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: division_audio_candidate_count_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
         // Create cached bind groups (once, not per-frame!)
         // Pass organism label buffer for self-collision filtering
@@ -903,6 +976,14 @@ impl GpuScene {
             pending_gamete_merges: Vec::new(),
             gamete_readback_in_flight: false,
             gamete_map_receiver: None,
+            division_audio_params_buffer,
+            division_audio_candidates_buffer,
+            division_audio_candidate_count_buffer,
+            division_audio_readback_buffer,
+            division_audio_bind_group,
+            division_audio_readback_in_flight: false,
+            division_audio_cleared_this_frame: false,
+            pending_audio_events: Vec::new(),
             moss_system: None,
             show_moss: true,
             moss_needs_clear: false,
@@ -2105,6 +2186,54 @@ impl GpuScene {
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
         // Cell count is updated on GPU by division shader
+        //
+        // Up to `max_physics_steps_per_frame` steps can run per render() call (fixed-
+        // timestep catch-up). The candidate readback only happens once per frame, after
+        // all steps complete, but every step still needs to contribute its dividing
+        // cells - otherwise only the first step of each frame is ever heard, and once
+        // the population plateaus at capacity (so each step only produces a handful of
+        // divisions via slot recycling) that 1-in-N sampling made division audio nearly
+        // silent even though cells kept dividing and dying every step. So the collect
+        // pass now runs on *every* step, and only the first step of the frame clears the
+        // candidate buffer - later steps' candidates accumulate on top instead of
+        // clobbering them.
+        let clear_before_collect = !self.division_audio_cleared_this_frame;
+        let division_audio_collect = {
+            let params = DivisionAudioParams {
+                listener_position: self.camera.position().to_array(),
+                search_radius_cells: DIVISION_AUDIO_SEARCH_RADIUS_CELLS,
+                grid_resolution: DIVISION_AUDIO_GRID_RESOLUTION,
+                max_cells_per_grid: DIVISION_AUDIO_MAX_CELLS_PER_GRID,
+                max_candidates: self.gpu_triple_buffers.capacity,
+                _pad0: 0,
+            };
+            queue.write_buffer(
+                &self.division_audio_params_buffer,
+                0,
+                bytemuck::bytes_of(&params),
+            );
+
+            let diameter = DIVISION_AUDIO_SEARCH_RADIUS_CELLS * 2 + 1;
+            let bucket_slots = diameter
+                .saturating_mul(diameter)
+                .saturating_mul(diameter)
+                .saturating_mul(params.max_cells_per_grid);
+            let collector_threads =
+                bucket_slots.saturating_add(self.gpu_triple_buffers.capacity);
+            Some(DivisionAudioCollectDispatch {
+                pipeline: &self.gpu_physics_pipelines.division_audio_collect,
+                bind_group: &self.division_audio_bind_group,
+                candidate_buffer: &self.division_audio_candidates_buffer,
+                candidate_count_buffer: &self.division_audio_candidate_count_buffer,
+                readback_buffer: &self.division_audio_readback_buffer,
+                dispatch_workgroups: (collector_threads + 63) / 64,
+                copy_bytes: std::mem::size_of::<DivisionAudioCandidate>() as u64
+                    * self.gpu_triple_buffers.capacity as u64,
+                clear_before_collect,
+            })
+        };
+        self.division_audio_cleared_this_frame = true;
+
         let division_pipeline_ran = execute_lifecycle_pipeline(
             device,
             encoder,
@@ -2118,7 +2247,11 @@ impl GpuScene {
             // readback has reported total_cell_slots > 0 (lags 1-3 frames).
             self.total_cell_slots.max(1),
             physics_features,
+            division_audio_collect,
         );
+        if division_pipeline_ran && !self.division_audio_readback_in_flight {
+            self.division_audio_readback_in_flight = true;
+        }
 
         self.dispatch_scaffold_rules(device, encoder, queue);
 
@@ -7962,6 +8095,63 @@ impl GpuScene {
             face_size
         );
     }
+
+    fn initiate_division_audio_map(&mut self, device: &wgpu::Device) {
+        if !self.division_audio_readback_in_flight {
+            return;
+        }
+
+        let bytes = std::mem::size_of::<DivisionAudioCandidate>() as u64
+            * self.gpu_triple_buffers.capacity as u64;
+        let slice = self.division_audio_readback_buffer.slice(0..bytes);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+
+        match rx.recv() {
+            Ok(Ok(())) => {
+                let mapped = slice.get_mapped_range();
+                let mut candidates: Vec<DivisionAudioCandidate> =
+                    bytemuck::cast_slice(&mapped)
+                        .iter()
+                        .copied()
+                        .filter(|candidate: &DivisionAudioCandidate| {
+                            candidate.distance_fixed != u32::MAX && candidate.position[3] > 0.0
+                        })
+                        .collect();
+                candidates.sort_by_key(|candidate| candidate.distance_fixed);
+                candidates.truncate(DIVISION_AUDIO_PLAYBACK_CANDIDATES);
+
+                self.pending_audio_events
+                    .extend(candidates.into_iter().map(|candidate| {
+                        crate::audio::GameAudioEvent::CellDivide {
+                            position: glam::Vec3::new(
+                                candidate.position[0],
+                                candidate.position[1],
+                                candidate.position[2],
+                            ),
+                            burst_count: 1,
+                        }
+                    }));
+                drop(mapped);
+                self.division_audio_readback_buffer.unmap();
+            }
+            Ok(Err(err)) => {
+                log::warn!("Division audio candidate readback failed: {err}");
+            }
+            Err(err) => {
+                log::warn!("Division audio candidate readback channel failed: {err}");
+            }
+        }
+
+        self.division_audio_readback_in_flight = false;
+    }
 }
 
 impl Scene for GpuScene {
@@ -7974,6 +8164,10 @@ impl Scene for GpuScene {
         // Physics steps will be executed in render() based on accumulated time
         // Apply time_scale to make simulation run faster/slower
         self.time_accumulator += dt * self.time_scale;
+    }
+
+    fn drain_audio_events(&mut self) -> Vec<crate::audio::GameAudioEvent> {
+        std::mem::take(&mut self.pending_audio_events)
     }
 
     fn render(
@@ -8205,6 +8399,10 @@ impl Scene for GpuScene {
             let max_steps =
                 (self.max_physics_steps_per_frame as f32 * self.time_scale).ceil() as i32;
 
+            // Reset once per frame so the first `run_physics` step below clears the
+            // division-audio candidate buffer and later steps in this frame accumulate.
+            self.division_audio_cleared_this_frame = false;
+
             while self.time_accumulator >= fixed_dt && physics_steps < max_steps {
                 self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
 
@@ -8354,6 +8552,7 @@ impl Scene for GpuScene {
             if should_start_readback {
                 self.gpu_triple_buffers.initiate_cell_count_map();
             }
+            self.initiate_division_audio_map(device);
 
             if should_start_readback || cell_count_read_pending {
                 if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
@@ -9233,6 +9432,7 @@ impl Scene for GpuScene {
         if should_start_readback {
             self.gpu_triple_buffers.initiate_cell_count_map();
         }
+        self.initiate_division_audio_map(device);
 
         // Poll for cell count readback completion and update current_cell_count.
         if should_start_readback || cell_count_read_pending {

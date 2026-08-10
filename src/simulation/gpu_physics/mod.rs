@@ -33,8 +33,8 @@ pub use cell_data_extraction::{CellExtractionParams, GpuCellDataExtraction, Insp
 pub use cell_insertion::GpuCellInsertion;
 pub use compute_pipelines::{
     CachedBindGroups, CellBoostParams, CellDataExtractionLayouts, CellInsertionParams,
-    CellRemovalParams, GpuPhysicsPipelines, PositionUpdateParams, SpatialQueryParams,
-    SpatialQueryResult,
+    CellRemovalParams, DivisionAudioCandidate, DivisionAudioParams, GpuPhysicsPipelines,
+    PositionUpdateParams, SpatialQueryParams, SpatialQueryResult,
 };
 pub use devorocyte_consumption::DevorocyteConsumptionSystem;
 pub use dynamic_buffers::{DynamicBuffer, DynamicGenomeBufferManager};
@@ -45,7 +45,7 @@ pub use gpu_cell_inspector::{
 };
 pub use gpu_scene_integration::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
-    execute_signal_system, PhysicsFeatureFlags,
+    execute_signal_system, DivisionAudioCollectDispatch, PhysicsFeatureFlags,
 };
 pub use gpu_tool_operations::GpuToolOperations;
 pub use light_field::LightFieldSystem;

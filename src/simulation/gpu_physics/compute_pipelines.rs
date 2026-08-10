@@ -101,6 +101,37 @@ const _: () = assert!(
     "SpatialQueryResult must be 16 bytes"
 );
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DivisionAudioParams {
+    pub listener_position: [f32; 3],
+    pub search_radius_cells: u32,
+    pub grid_resolution: u32,
+    pub max_cells_per_grid: u32,
+    pub max_candidates: u32,
+    pub _pad0: u32,
+}
+
+const _: () = assert!(
+    std::mem::size_of::<DivisionAudioParams>() == 32,
+    "DivisionAudioParams must be 32 bytes"
+);
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DivisionAudioCandidate {
+    pub distance_fixed: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+    pub position: [f32; 4],
+}
+
+const _: () = assert!(
+    std::mem::size_of::<DivisionAudioCandidate>() == 32,
+    "DivisionAudioCandidate must be 32 bytes"
+);
+
 /// Position update parameters for GPU position update compute shader
 /// Size: 32 bytes (must match WGSL struct layout with vec3 alignment)
 /// WGSL vec3<f32> has 16-byte alignment, so there's padding after cell_index
@@ -298,6 +329,9 @@ pub struct GpuPhysicsPipelines {
     // Spatial query pipeline
     pub spatial_query: wgpu::ComputePipeline,
 
+    // Division audio spatial-grid collector pipeline
+    pub division_audio_collect: wgpu::ComputePipeline,
+
     // Position update pipeline
     pub position_update_tool: wgpu::ComputePipeline,
 
@@ -392,6 +426,7 @@ pub struct GpuPhysicsPipelines {
     // Spatial query bind group layouts
     pub spatial_query_params_layout: wgpu::BindGroupLayout,
     pub spatial_query_result_layout: wgpu::BindGroupLayout,
+    pub division_audio_layout: wgpu::BindGroupLayout,
 
     // Position update bind group layouts
     pub position_update_params_layout: wgpu::BindGroupLayout,
@@ -595,6 +630,7 @@ impl GpuPhysicsPipelines {
             Self::create_spatial_query_params_bind_group_layout(device);
         let spatial_query_result_layout =
             Self::create_spatial_query_result_bind_group_layout(device);
+        let division_audio_layout = Self::create_division_audio_bind_group_layout(device);
 
         // Create position update bind group layouts
         let position_update_params_layout =
@@ -728,6 +764,14 @@ impl GpuPhysicsPipelines {
                 &spatial_query_result_layout,
             ],
             "Spatial Query",
+        );
+
+        let division_audio_collect = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/division_audio_collect.wgsl"),
+            "main",
+            &[&physics_layout, &spatial_grid_layout, &division_audio_layout],
+            "Division Audio Collect",
         );
 
         // Create position update pipeline
@@ -1434,6 +1478,7 @@ impl GpuPhysicsPipelines {
             cell_insertion,
             cell_data_extraction,
             spatial_query,
+            division_audio_collect,
             position_update_tool,
             cell_removal,
             cell_boost,
@@ -1472,6 +1517,7 @@ impl GpuPhysicsPipelines {
             cell_extraction_output_layout,
             spatial_query_params_layout,
             spatial_query_result_layout,
+            division_audio_layout,
             position_update_params_layout,
             cell_removal_params_layout,
             cell_boost_params_layout,
@@ -7387,6 +7433,54 @@ impl GpuPhysicsPipelines {
                 // Output buffer for spatial query result
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    fn create_division_audio_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Division Audio Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },

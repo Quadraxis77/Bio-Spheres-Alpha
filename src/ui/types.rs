@@ -928,6 +928,14 @@ fn default_skin_alpha() -> f32 {
     0.9
 }
 
+fn default_music_volume() -> f32 {
+    0.18
+}
+
+fn default_sfx_volume() -> f32 {
+    0.45
+}
+
 /// Global UI state shared across all UI components.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GlobalUiState {
@@ -1005,6 +1013,14 @@ pub struct GlobalUiState {
     /// Interval between scheduled ecosystem field-report scans.
     #[serde(default = "default_field_report_interval_seconds")]
     pub field_report_interval_seconds: f32,
+
+    /// Master music volume, 0.0 to 1.0.
+    #[serde(default = "default_music_volume")]
+    pub music_volume: f32,
+
+    /// Master SFX volume, 0.0 to 1.0.
+    #[serde(default = "default_sfx_volume")]
+    pub sfx_volume: f32,
 
     /// GPU mode no-render performance cockpit. Simulation continues, visual render passes stop.
     #[serde(skip)]
@@ -1163,6 +1179,8 @@ impl Default for GlobalUiState {
             camera_sprint_multiplier: default_camera_sprint_multiplier(),
             camera_scroll_sensitivity: default_camera_scroll_sensitivity(),
             field_report_interval_seconds: default_field_report_interval_seconds(),
+            music_volume: default_music_volume(),
+            sfx_volume: default_sfx_volume(),
             gpu_headless_mode: false,
             gpu_headless_auto_speed: false,
             gpu_headless_target_fps: default_headless_target_fps(),

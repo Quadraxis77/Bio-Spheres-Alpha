@@ -13,6 +13,11 @@ pub trait Scene {
     /// Update the scene simulation by the given delta time.
     fn update(&mut self, dt: f32);
 
+    /// Drain gameplay audio events generated since the last frame.
+    fn drain_audio_events(&mut self) -> Vec<crate::audio::GameAudioEvent> {
+        Vec::new()
+    }
+
     /// Render the scene to the given texture view.
     ///
     /// For GPU scenes, this method also processes pending GPU queries and operations

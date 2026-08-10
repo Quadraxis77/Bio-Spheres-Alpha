@@ -32,6 +32,21 @@
 //! - 128^3 spatial grid for collision acceleration
 
 use super::{CachedBindGroups, GpuPhysicsPipelines, GpuTripleBufferSystem};
+
+pub struct DivisionAudioCollectDispatch<'a> {
+    pub pipeline: &'a wgpu::ComputePipeline,
+    pub bind_group: &'a wgpu::BindGroup,
+    pub candidate_buffer: &'a wgpu::Buffer,
+    pub candidate_count_buffer: &'a wgpu::Buffer,
+    pub readback_buffer: &'a wgpu::Buffer,
+    pub dispatch_workgroups: u32,
+    pub copy_bytes: u64,
+    /// Clear the candidate buffer/count before this dispatch. Only the first
+    /// physics step of a render frame should clear - later steps in the same
+    /// frame accumulate their candidates so a multi-step frame doesn't lose
+    /// every step but the last to the once-per-frame readback.
+    pub clear_before_collect: bool,
+}
 // MAX_ADHESION_CONNECTIONS is now dynamic (adhesion_buffers.max_connections)
 
 /// Physics parameters for GPU uniform buffer (256-byte aligned)
@@ -889,6 +904,7 @@ pub fn execute_lifecycle_pipeline(
     _current_time: f32,
     total_cell_slots: u32,
     features: PhysicsFeatureFlags,
+    division_audio_collect: Option<DivisionAudioCollectDispatch<'_>>,
 ) -> bool {
     // Get current buffer index (already rotated by physics pipeline)
     let current_index = triple_buffers.current_index();
@@ -980,6 +996,32 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
 
         drop(compute_pass);
+
+        if let Some(audio) = division_audio_collect {
+            if audio.clear_before_collect {
+                encoder.clear_buffer(audio.candidate_buffer, 0, Some(audio.copy_bytes));
+                encoder.clear_buffer(audio.candidate_count_buffer, 0, Some(16));
+            }
+
+            let mut audio_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Division Audio Collect"),
+                timestamp_writes: None,
+            });
+            audio_pass.set_pipeline(audio.pipeline);
+            audio_pass.set_bind_group(0, physics_bind_group, &[]);
+            audio_pass.set_bind_group(1, &cached_bind_groups.spatial_grid, &[]);
+            audio_pass.set_bind_group(2, audio.bind_group, &[]);
+            audio_pass.dispatch_workgroups(audio.dispatch_workgroups, 1, 1);
+            drop(audio_pass);
+
+            encoder.copy_buffer_to_buffer(
+                audio.candidate_buffer,
+                0,
+                audio.readback_buffer,
+                0,
+                audio.copy_bytes,
+            );
+        }
     }
 
     // Stage 3: Division execute (uses pre-allocated slots from division scan)
