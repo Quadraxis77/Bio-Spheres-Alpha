@@ -37,7 +37,7 @@ struct PhotocyteParams {
     geothermal_mass_per_second_full_light: f32,
     // Minimum light intensity to gain any mass (threshold)
     min_light_threshold: f32,
-    _pad0: f32,
+    ambient_floor: f32,
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,
@@ -103,6 +103,10 @@ const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
 // Luminocyte energy cost per second at full brightness.
 const LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND: f32 = 6.0;
+// Photocytes below the direct-light threshold should starve at a stable rate.
+// Do not scale this by sampled sunlight; true darkness would otherwise drain
+// nothing and blocked cells could survive indefinitely.
+const PHOTOCYTE_SHADE_LOSS_RATE: f32 = 10.0;
 // Full sunlight is 1.0. Geothermal vents are allowed to be worth 1.5x the
 // default photocyte replacement rate: 75 nutrients/sec / 20 nutrients/sec.
 const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
@@ -227,10 +231,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let max_nutrients = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
     let light_intensity = sample_light(pos);
-    let in_light = light_intensity >= photocyte_params.min_light_threshold;
 
-    var nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0
-        * clamp(light_intensity, 0.0, 1.0);
+    let ambient_floor = clamp(photocyte_params.ambient_floor, 0.0, 0.95);
+    let direct_sun = clamp(
+        (light_intensity - ambient_floor) / max(1.0 - ambient_floor, 0.001),
+        0.0,
+        1.0
+    );
+    let geothermal_light = select(0.0, light_intensity, light_intensity > 1.0);
+    let usable_light = max(direct_sun, geothermal_light);
+    let in_light = usable_light >= photocyte_params.min_light_threshold;
+
+    var nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0 * direct_sun;
     if (light_intensity > 1.0) {
         nutrient_rate = photocyte_params.geothermal_mass_per_second_full_light * 100.0
             * clamp(light_intensity, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
@@ -242,7 +254,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(nutrient_gain));
         }
     } else {
-        let nutrient_loss = min(nutrient_rate * 0.5 * params.delta_time, max(current_nutrients - 1.0, 0.0));
+        let nutrient_loss = min(PHOTOCYTE_SHADE_LOSS_RATE * params.delta_time, max(current_nutrients - 1.0, 0.0));
         if (nutrient_loss > 0.0) {
             atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(nutrient_loss));
         }

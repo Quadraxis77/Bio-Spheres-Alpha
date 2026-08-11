@@ -32,7 +32,7 @@ struct PhotocyteParams {
     mass_per_second_full_light: f32,
     geothermal_mass_per_second_full_light: f32,
     min_light_threshold: f32,
-    _pad0: f32,
+    ambient_floor: f32,
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,

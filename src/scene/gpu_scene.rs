@@ -34,6 +34,7 @@ const PHOTOCYTE_BASELINE_MASS_RATE: f32 = 0.2;
 const LEGACY_PHOTOCYTE_MASS_RATE_MAX: f32 = 0.02;
 const SIGNAL_UPDATE_INTERVAL_FRAMES: i32 = 4;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES: usize = 256;
+const DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32: u32 = DIVISION_AUDIO_PLAYBACK_CANDIDATES as u32;
 const DIVISION_AUDIO_SEARCH_RADIUS_CELLS: u32 = 18;
 const DIVISION_AUDIO_GRID_RESOLUTION: u32 = 128;
 const DIVISION_AUDIO_MAX_CELLS_PER_GRID: u32 = 16;
@@ -732,7 +733,8 @@ impl GpuScene {
         });
         let division_audio_candidates_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Division Audio Candidates"),
-            size: std::mem::size_of::<DivisionAudioCandidate>() as u64 * capacity as u64,
+            size: std::mem::size_of::<DivisionAudioCandidate>() as u64
+                * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -746,7 +748,8 @@ impl GpuScene {
         });
         let division_audio_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Division Audio Candidate Readback"),
-            size: std::mem::size_of::<DivisionAudioCandidate>() as u64 * capacity as u64,
+            size: std::mem::size_of::<DivisionAudioCandidate>() as u64
+                * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2148,6 +2151,8 @@ impl GpuScene {
             self.physics_features
         };
 
+        let known_cell_slots = self.total_cell_slots.max(self.current_cell_count);
+
         execute_gpu_physics_step(
             device,
             encoder,
@@ -2165,7 +2170,7 @@ impl GpuScene {
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
-            self.total_cell_slots,
+            known_cell_slots,
             self.constraint_iterations,
             self.solo_metabolism_multiplier,
             self.boulder_system
@@ -2197,13 +2202,13 @@ impl GpuScene {
         // candidate buffer - later steps' candidates accumulate on top instead of
         // clobbering them.
         let clear_before_collect = !self.division_audio_cleared_this_frame;
-        let division_audio_collect = {
+        let division_audio_collect = if known_cell_slots > 0 {
             let params = DivisionAudioParams {
                 listener_position: self.camera.position().to_array(),
                 search_radius_cells: DIVISION_AUDIO_SEARCH_RADIUS_CELLS,
                 grid_resolution: DIVISION_AUDIO_GRID_RESOLUTION,
                 max_cells_per_grid: DIVISION_AUDIO_MAX_CELLS_PER_GRID,
-                max_candidates: self.gpu_triple_buffers.capacity,
+                max_candidates: DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32,
                 _pad0: 0,
             };
             queue.write_buffer(
@@ -2226,9 +2231,11 @@ impl GpuScene {
                 readback_buffer: &self.division_audio_readback_buffer,
                 dispatch_workgroups: (collector_threads + 63) / 64,
                 copy_bytes: std::mem::size_of::<DivisionAudioCandidate>() as u64
-                    * self.gpu_triple_buffers.capacity as u64,
+                    * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
                 clear_before_collect,
             })
+        } else {
+            None
         };
         self.division_audio_cleared_this_frame = true;
 
@@ -2243,7 +2250,7 @@ impl GpuScene {
             self.current_time,
             // Use max(1) so lifecycle runs on the first cell even before the async
             // readback has reported total_cell_slots > 0 (lags 1-3 frames).
-            self.total_cell_slots.max(1),
+            known_cell_slots.max(1),
             physics_features,
             division_audio_collect,
         );
@@ -2306,7 +2313,7 @@ impl GpuScene {
             self.cave_renderer.as_ref(),
             self.cave_physics_bind_groups.as_ref(),
             &self.adhesion_buffers,
-            self.total_cell_slots,
+            self.total_cell_slots.max(self.current_cell_count),
             self.constraint_iterations,
             self.physics_features,
         );
@@ -2484,7 +2491,10 @@ impl GpuScene {
         }
         let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
 
-        if self.current_cell_count > 0 {
+        // Dispatch at capacity and let the shader read cell_count_buffer[0].
+        // The CPU live count is async and can lag the GPU-side high-water mark,
+        // which would leave the light field with an empty occupancy grid.
+        if self.total_cell_slots > 0 || self.current_cell_count > 0 {
             let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Build Cell Occupancy"),
@@ -8100,7 +8110,7 @@ impl GpuScene {
         }
 
         let bytes = std::mem::size_of::<DivisionAudioCandidate>() as u64
-            * self.gpu_triple_buffers.capacity as u64;
+            * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64;
         let slice = self.division_audio_readback_buffer.slice(0..bytes);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {

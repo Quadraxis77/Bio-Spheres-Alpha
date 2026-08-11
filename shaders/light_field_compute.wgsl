@@ -354,7 +354,8 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
     let humidity_atten = max(1.0 - humidity_column * HUMIDITY_LIGHT_ATTENUATION, HUMIDITY_ATTENUATION_FLOOR);
     transmittance *= humidity_atten;
 
-    // Apply ambient floor - even fully shadowed areas get some light
+    // Apply ambient floor for visual consumers. Photocyte metabolism receives
+    // the same floor separately and subtracts it before calculating nutrient gain.
     return vec2<f32>(max(transmittance, params.ambient_floor), water_column);
 }
 
@@ -440,6 +441,8 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let geo_transmittance = geothermal_transmittance(grid_pos.x, grid_pos.y, grid_pos.z, geo.w);
     let local_glow = geo.xyz * geo_tint * ice_tint * geo_transmittance;
     let local_weight = clamp(geo.w * geo_transmittance, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
+    // Photocyte metabolism reads this scalar. It should include usable light
+    // sources (sunlight and geothermal), but not the ambient visual floor.
     light_field[idx] = max(intensity, local_weight);
     let sunlight_color = sun_color * ray_tint * voxel_tint;
     let local_blend = local_weight / max(intensity + local_weight, 0.001);
@@ -482,6 +485,18 @@ fn world_to_grid(world_pos: vec3<f32>) -> vec3<i32> {
     );
 }
 
+fn grid_to_world_occupancy(gx: i32, gy: i32, gz: i32) -> vec3<f32> {
+    return vec3<f32>(
+        occupancy_params.grid_origin_x + (f32(gx) + 0.5) * occupancy_params.cell_size,
+        occupancy_params.grid_origin_y + (f32(gy) + 0.5) * occupancy_params.cell_size,
+        occupancy_params.grid_origin_z + (f32(gz) + 0.5) * occupancy_params.cell_size,
+    );
+}
+
+fn cell_radius_from_mass(mass: f32) -> f32 {
+    return clamp(mass, 0.5, 2.0);
+}
+
 @compute @workgroup_size(256)
 fn build_cell_occupancy(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
@@ -491,19 +506,49 @@ fn build_cell_occupancy(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    let pos = cell_positions[cell_idx].xyz;
-    let grid_pos = world_to_grid(pos);
-    let res = i32(occupancy_params.grid_resolution);
-    
-    // Bounds check
-    if (grid_pos.x < 0 || grid_pos.x >= res ||
-        grid_pos.y < 0 || grid_pos.y >= res ||
-        grid_pos.z < 0 || grid_pos.z >= res) {
+    let pos_mass = cell_positions[cell_idx];
+    let pos = pos_mass.xyz;
+    let radius = cell_radius_from_mass(pos_mass.w);
+    if (pos_mass.w <= 0.0 || radius <= 0.0) {
         return;
     }
-    
-    let voxel_idx = u32(grid_pos.x) + u32(grid_pos.y) * u32(res) + u32(grid_pos.z) * u32(res) * u32(res);
-    atomicAdd(&cell_occupancy_out[voxel_idx], 1u);
+
+    let grid_pos = world_to_grid(pos);
+    let res = i32(occupancy_params.grid_resolution);
+    let half_voxel_diag = occupancy_params.cell_size * 0.8660254;
+    let overlap_radius = radius + half_voxel_diag;
+    // The light ray marches in multi-voxel steps, so include the immediate
+    // neighbor shell. Otherwise a valid blocker can sit between ray samples.
+    let voxel_radius = 1;
+
+    for (var dz = -voxel_radius; dz <= voxel_radius; dz++) {
+        let z = grid_pos.z + dz;
+        if (z < 0 || z >= res) {
+            continue;
+        }
+
+        for (var dy = -voxel_radius; dy <= voxel_radius; dy++) {
+            let y = grid_pos.y + dy;
+            if (y < 0 || y >= res) {
+                continue;
+            }
+
+            for (var dx = -voxel_radius; dx <= voxel_radius; dx++) {
+                let x = grid_pos.x + dx;
+                if (x < 0 || x >= res) {
+                    continue;
+                }
+
+                let voxel_center = grid_to_world_occupancy(x, y, z);
+                if (distance(voxel_center, pos) > overlap_radius) {
+                    continue;
+                }
+
+                let voxel_idx = u32(x) + u32(y) * u32(res) + u32(z) * u32(res) * u32(res);
+                atomicAdd(&cell_occupancy_out[voxel_idx], 1u);
+            }
+        }
+    }
 }
 
 @compute @workgroup_size(256)
