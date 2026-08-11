@@ -321,7 +321,9 @@ pub fn execute_gpu_physics_step(
         {
             let max_buckets = (triple_buffers.capacity + 15) / 16;
             let pair_threads = max_buckets * 120; // 120 = MAX_CELLS_PER_GRID*(MAX_CELLS_PER_GRID-1)/2
-            let collision_workgroups = ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+            let collision_workgroups =
+                ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1)
+                    / WORKGROUP_SIZE_CELLS;
             compute_pass.set_pipeline(&pipelines.collision_detection);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
@@ -722,7 +724,9 @@ pub fn execute_gpu_mechanics_step(
         {
             let max_buckets = (triple_buffers.capacity + 15) / 16;
             let pair_threads = max_buckets * 120;
-            let collision_workgroups = ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+            let collision_workgroups =
+                ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1)
+                    / WORKGROUP_SIZE_CELLS;
             compute_pass.set_pipeline(&pipelines.collision_detection);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
             compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);

@@ -5530,15 +5530,19 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     };
     if ui
         .add(
-            egui::Button::new(egui::RichText::new(static_label).color(if static_water_active {
-                p.accent_primary
-            } else {
-                p.text_secondary
-            }))
+            egui::Button::new(
+                egui::RichText::new(static_label).color(if static_water_active {
+                    p.accent_primary
+                } else {
+                    p.text_secondary
+                }),
+            )
             .fill(static_fill)
             .stroke(egui::Stroke::new(1.0, static_stroke)),
         )
-        .on_hover_text("Fill all in-bounds non-solid space with water and skip dynamic fluid/weather physics")
+        .on_hover_text(
+            "Fill all in-bounds non-solid space with water and skip dynamic fluid/weather physics",
+        )
         .clicked()
     {
         context.editor_state.request_toggle_static_water = true;
@@ -6189,19 +6193,21 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             .on_hover_text("How quickly sunlight darkens with water depth. Higher values simulate deeper water where sunlight cannot reach.");
         if ui
             .add(
-                egui::Slider::new(&mut context.editor_state.water_light_attenuation, 0.1..=20.0)
-                    .logarithmic(true)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
+                egui::Slider::new(
+                    &mut context.editor_state.water_light_attenuation,
+                    0.1..=20.0,
+                )
+                .logarithmic(true)
+                .step_by(0.05)
+                .fixed_decimals(2),
             )
             .changed()
         {
             context.editor_state.light_params_dirty = true;
             if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                 if let Some(ref mut light_field) = gpu_scene.light_field_system {
-                    light_field.set_water_light_attenuation(
-                        context.editor_state.water_light_attenuation,
-                    );
+                    light_field
+                        .set_water_light_attenuation(context.editor_state.water_light_attenuation);
                 }
             }
             context.editor_state.save_light_settings();
@@ -6212,9 +6218,12 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             .on_hover_text("Minimum indirect light in shadowed or deep-water areas. Set to 0 for truly black depths; raise it for scattered ambient light.");
         if ui
             .add(
-                egui::Slider::new(&mut context.editor_state.light_field_ambient_floor, 0.0..=0.2)
-                    .step_by(0.001)
-                    .fixed_decimals(3),
+                egui::Slider::new(
+                    &mut context.editor_state.light_field_ambient_floor,
+                    0.0..=0.2,
+                )
+                .step_by(0.001)
+                .fixed_decimals(3),
             )
             .changed()
         {
@@ -8275,8 +8284,9 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     ui.label("Walk Speed:")
         .on_hover_text("Camera movement speed while holding Shift in FreeFly mode");
     ui.add(egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
-    ui.label("Run Speed:")
-        .on_hover_text("Normal FreeFly speed multiplier. Adjust with the scroll wheel while flying");
+    ui.label("Run Speed:").on_hover_text(
+        "Normal FreeFly speed multiplier. Adjust with the scroll wheel while flying",
+    );
     let sprint_response = ui.add(
         egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 1.0..=20.0)
             .custom_formatter(|value, _| format!("{value:.1}x")),
@@ -8639,13 +8649,12 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     .editor_state
                     .renaming_mode
                     .and_then(remap_surviving_index);
-                context.editor_state.color_picker_state = context
-                    .editor_state
-                    .color_picker_state
-                    .take()
-                    .and_then(|(idx, hsva, original)| {
-                        remap_surviving_index(idx).map(|idx| (idx, hsva, original))
-                    });
+                context.editor_state.color_picker_state =
+                    context.editor_state.color_picker_state.take().and_then(
+                        |(idx, hsva, original)| {
+                            remap_surviving_index(idx).map(|idx| (idx, hsva, original))
+                        },
+                    );
 
                 selected_index = context.editor_state.selected_mode_index;
                 initial_mode = context.genome.initial_mode.max(0) as usize;
@@ -9299,8 +9308,8 @@ fn draw_stemocyte_response_strip(
             ui.painter()
                 .rect_filled(segment_rect.shrink(0.5), 3.0, color);
 
-            let percentage =
-                visual_signal_edges[visual_band].saturating_sub(visual_signal_edges[visual_band + 1]);
+            let percentage = visual_signal_edges[visual_band]
+                .saturating_sub(visual_signal_edges[visual_band + 1]);
             if segment_rect.width() >= 27.0 {
                 let name = stemocyte_response_name(outcome, modes);
                 let label = if segment_rect.width() >= 72.0 {

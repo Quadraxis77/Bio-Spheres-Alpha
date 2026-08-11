@@ -34,24 +34,61 @@ const CELL_DIVIDE_FAR_GAIN: f32 = 0.08;
 const EAR_HALF_WIDTH: f32 = 0.22;
 const DEFAULT_MUSIC_VOLUME: f32 = 0.18;
 const DEFAULT_SFX_VOLUME: f32 = 0.45;
-const MENU_HOVER_VOLUME: f32 = 0.22;
-const MENU_SELECT_VOLUME: f32 = 0.28;
-const MENU_SELECT_PITCH: f32 = 1.06;
-const MAIN_MENU_MUSIC_PATH: &str =
-    "assets/music/tracks/bio_spheres_main_menu_remaster_v0_1.wav";
-const BUTTON_CLICK_BYTES: &[u8] =
-    include_bytes!("../assets/sfx/processed/button_click/button_click_bio_ui_v0_3_tight_no_thump.wav");
+const MENU_HOVER_VOLUME: f32 = 1.25;
+const MENU_SELECT_VOLUME: f32 = 1.55;
+const MENU_HOVER_PITCH: f32 = 1.0;
+const MENU_SELECT_PITCH: f32 = 1.0;
+const SLIDER_TICK_VOLUME: f32 = 0.9;
+const SLIDER_TICK_MIN_INTERVAL: Duration = Duration::from_millis(83);
+const CELL_MODE_SELECT_VOLUME: f32 = 1.15;
+const MUSIC_FADE_DURATION: Duration = Duration::from_millis(1400);
+const MAIN_MENU_MUSIC_PATH: &str = "assets/music/tracks/bio_spheres_main_menu_remaster_v0_1.wav";
+const PREVIEW_MUSIC_PATH: &str = "assets/music/tracks/h_project_9_preview.mp3";
+const BUTTON_HOVER_BYTES: &[u8] =
+    include_bytes!("../assets/sfx/processed/button_click/h_click4_hover.mp3");
+const BUTTON_SELECT_BYTES: &[u8] =
+    include_bytes!("../assets/sfx/processed/button_click/h_click6_select.mp3");
+const SLIDER_TICK_BYTES: &[u8] =
+    include_bytes!("../assets/sfx/processed/button_click/h_click7_slider.mp3");
+const CELL_MODE_SELECT_BYTES: &[u8] =
+    include_bytes!("../assets/sfx/processed/button_click/h_pop1_mode_select.mp3");
 const CELL_DIVIDE_BYTES: &[u8] = include_bytes!(
     "../assets/sfx/processed/cell_divide/v0_6/dry/cell_divide_slime_membrane_tear_wet_v0_6.wav"
 );
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicTrack {
+    MainMenu,
+    Preview,
+}
+
+impl MusicTrack {
+    fn path(self) -> &'static str {
+        match self {
+            MusicTrack::MainMenu => MAIN_MENU_MUSIC_PATH,
+            MusicTrack::Preview => PREVIEW_MUSIC_PATH,
+        }
+    }
+}
+
 /// Gameplay event that should produce runtime audio.
 #[derive(Debug, Clone, Copy)]
 pub enum GameAudioEvent {
-    CellDivide {
-        position: Vec3,
-        burst_count: usize,
-    },
+    CellDivide { position: Vec3, burst_count: usize },
+    SliderTick,
+}
+
+struct MusicPlayer {
+    track: MusicTrack,
+    player: Player,
+    fade_started_at: Instant,
+    fade: MusicFade,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MusicFade {
+    In,
+    Out,
 }
 
 /// Small playback parameter bundle for one SFX instance.
@@ -140,11 +177,16 @@ struct PendingCellDivisions {
 /// Resident audio service owned by `App`.
 pub struct AudioLayer {
     sink: Option<MixerDeviceSink>,
-    music: Option<Player>,
+    music: Option<MusicPlayer>,
+    fading_music: Vec<MusicPlayer>,
     music_volume: f32,
     sfx_volume: f32,
-    button_click: Vec<u8>,
+    button_hover: Vec<u8>,
+    button_select: Vec<u8>,
+    slider_tick: Vec<u8>,
+    cell_mode_select: Vec<u8>,
     cell_divide: Vec<u8>,
+    last_slider_tick_at: Option<Instant>,
     active_sfx: VecDeque<ActiveSfx>,
     pending_cell_divisions: Vec<PendingCellDivisions>,
     pending_cell_divisions_first_seen_at: Option<Instant>,
@@ -169,26 +211,29 @@ impl AudioLayer {
         let mut audio = Self {
             sink,
             music: None,
+            fading_music: Vec::new(),
             music_volume: music_volume.clamp(0.0, 1.0),
             sfx_volume: sfx_volume.clamp(0.0, 1.0),
-            button_click: BUTTON_CLICK_BYTES.to_vec(),
+            button_hover: BUTTON_HOVER_BYTES.to_vec(),
+            button_select: BUTTON_SELECT_BYTES.to_vec(),
+            slider_tick: SLIDER_TICK_BYTES.to_vec(),
+            cell_mode_select: CELL_MODE_SELECT_BYTES.to_vec(),
             cell_divide: CELL_DIVIDE_BYTES.to_vec(),
+            last_slider_tick_at: None,
             active_sfx: VecDeque::with_capacity(MAX_SFX_VOICES),
             pending_cell_divisions: Vec::with_capacity(MAX_PENDING_CELL_DIVISION_EVENTS),
             pending_cell_divisions_first_seen_at: None,
             listener: AudioListener::from_camera(Vec3::ZERO, Quat::IDENTITY),
             rng: TinyRng::new(0xB105_FEEE_D1A1_DEAD),
         };
-        audio.start_main_menu_music_loop();
+        audio.set_music_track(Some(MusicTrack::MainMenu));
         audio
     }
 
     pub fn set_volumes(&mut self, music_volume: f32, sfx_volume: f32) {
         self.music_volume = music_volume.clamp(0.0, 1.0);
         self.sfx_volume = sfx_volume.clamp(0.0, 1.0);
-        if let Some(music) = &self.music {
-            music.set_volume(self.music_volume);
-        }
+        self.update_music_fades();
     }
 
     /// Keep this in sync with the active scene camera before playing spatial SFX.
@@ -202,20 +247,60 @@ impl AudioLayer {
                 position,
                 burst_count,
             } => self.queue_cell_divisions(burst_count, position),
+            GameAudioEvent::SliderTick => self.play_slider_tick(),
         }
     }
 
     pub fn update(&mut self) {
         self.prune_finished();
         self.flush_cell_division_queue();
+        self.update_music_fades();
     }
 
     pub fn play_menu_hover(&self) {
-        self.play_ui_click(1.0, MENU_HOVER_VOLUME);
+        self.play_ui_click(&self.button_hover, MENU_HOVER_PITCH, MENU_HOVER_VOLUME);
     }
 
     pub fn play_menu_select(&self) {
-        self.play_ui_click(MENU_SELECT_PITCH, MENU_SELECT_VOLUME);
+        self.play_ui_click(&self.button_select, MENU_SELECT_PITCH, MENU_SELECT_VOLUME);
+    }
+
+    pub fn play_slider_tick(&mut self) {
+        let now = Instant::now();
+        if let Some(last_tick_at) = self.last_slider_tick_at {
+            if now.duration_since(last_tick_at) < SLIDER_TICK_MIN_INTERVAL {
+                return;
+            }
+        }
+        self.last_slider_tick_at = Some(now);
+
+        let Some(sink) = &self.sink else {
+            return;
+        };
+
+        let cursor = Cursor::new(self.slider_tick.clone());
+        let Ok(source) = Decoder::try_from(cursor) else {
+            log::warn!("Failed to decode slider tick SFX");
+            return;
+        };
+
+        sink.mixer()
+            .add(source.amplify(SLIDER_TICK_VOLUME * self.sfx_volume));
+    }
+
+    pub fn play_cell_mode_select(&self) {
+        let Some(sink) = &self.sink else {
+            return;
+        };
+
+        let cursor = Cursor::new(self.cell_mode_select.clone());
+        let Ok(source) = Decoder::try_from(cursor) else {
+            log::warn!("Failed to decode cell mode select SFX");
+            return;
+        };
+
+        sink.mixer()
+            .add(source.amplify(CELL_MODE_SELECT_VOLUME * self.sfx_volume));
     }
 
     /// Play the accepted cell division sound with subtle per-instance variation.
@@ -288,16 +373,26 @@ impl AudioLayer {
         self.active_sfx.len()
     }
 
-    pub fn start_main_menu_music_loop(&mut self) {
-        if self.music.is_some() {
+    pub fn set_music_track(&mut self, target: Option<MusicTrack>) {
+        if self.music.as_ref().map(|music| music.track) == target {
             return;
         }
 
+        let now = Instant::now();
+        if let Some(mut old_music) = self.music.take() {
+            old_music.fade_started_at = now;
+            old_music.fade = MusicFade::Out;
+            self.fading_music.push(old_music);
+        }
+
+        let Some(track) = target else {
+            return;
+        };
         let Some(sink) = &self.sink else {
             return;
         };
 
-        let path = asset_path(MAIN_MENU_MUSIC_PATH);
+        let path = asset_path(track.path());
         let Ok(file) = File::open(&path) else {
             log::warn!("Music disabled: could not open {}", path.display());
             return;
@@ -308,17 +403,54 @@ impl AudioLayer {
         };
 
         let player = Player::connect_new(sink.mixer());
-        player.set_volume(self.music_volume);
+        player.set_volume(0.0);
         player.append(source.repeat_infinite());
-        self.music = Some(player);
+        self.music = Some(MusicPlayer {
+            track,
+            player,
+            fade_started_at: now,
+            fade: MusicFade::In,
+        });
     }
 
-    fn play_ui_click(&self, pitch: f32, volume: f32) {
+    pub fn start_main_menu_music_loop(&mut self) {
+        self.set_music_track(Some(MusicTrack::MainMenu));
+    }
+
+    fn update_music_fades(&mut self) {
+        let now = Instant::now();
+        let fade_secs = MUSIC_FADE_DURATION.as_secs_f32().max(0.001);
+
+        if let Some(music) = &mut self.music {
+            let t = now.duration_since(music.fade_started_at).as_secs_f32() / fade_secs;
+            match music.fade {
+                MusicFade::In => {
+                    let gain = t.clamp(0.0, 1.0);
+                    music.player.set_volume(self.music_volume * gain);
+                    if t >= 1.0 {
+                        music.fade = MusicFade::In;
+                    }
+                }
+                MusicFade::Out => {
+                    music.player.set_volume(0.0);
+                }
+            }
+        }
+
+        self.fading_music.retain_mut(|music| {
+            let t = now.duration_since(music.fade_started_at).as_secs_f32() / fade_secs;
+            let gain = (1.0 - t).clamp(0.0, 1.0);
+            music.player.set_volume(self.music_volume * gain);
+            t < 1.0
+        });
+    }
+
+    fn play_ui_click(&self, bytes: &[u8], pitch: f32, volume: f32) {
         let Some(sink) = &self.sink else {
             return;
         };
 
-        let cursor = Cursor::new(self.button_click.clone());
+        let cursor = Cursor::new(bytes.to_vec());
         let Ok(source) = Decoder::try_from(cursor) else {
             log::warn!("Failed to decode menu click SFX");
             return;

@@ -358,7 +358,7 @@ impl OrganismLabelSystem {
     /// Used by the follow camera to skip CoM updates on frames where labels are
     /// temporarily reset to each cell's own index.
     pub fn is_reset_frame(&self) -> bool {
-    self.debug_frame % 60 == 0
+        self.debug_frame % 60 == 0
     }
 
     pub fn encode_frame(

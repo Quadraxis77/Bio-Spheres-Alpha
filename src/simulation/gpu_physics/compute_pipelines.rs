@@ -770,7 +770,11 @@ impl GpuPhysicsPipelines {
             device,
             include_str!("../../../shaders/division_audio_collect.wgsl"),
             "main",
-            &[&physics_layout, &spatial_grid_layout, &division_audio_layout],
+            &[
+                &physics_layout,
+                &spatial_grid_layout,
+                &division_audio_layout,
+            ],
             "Division Audio Collect",
         );
 
@@ -2663,11 +2667,12 @@ impl GpuPhysicsPipelines {
                 mapped_at_creation: false,
             })
         };
-        let dummy_cave_solid_mask_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Dummy Cave Solid Mask (Env Adhesion)"),
-            contents: bytemuck::cast_slice(&[0u32]),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let dummy_cave_solid_mask_buf =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Dummy Cave Solid Mask (Env Adhesion)"),
+                contents: bytemuck::cast_slice(&[0u32]),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
         let dummy_cave_collision_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Dummy Cave Collision Layout"),
@@ -6178,8 +6183,7 @@ impl GpuPhysicsPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: adhesion_buffers.angular_velocities[output_index]
-                        .as_entire_binding(),
+                    resource: adhesion_buffers.angular_velocities[output_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,

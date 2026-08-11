@@ -1055,11 +1055,7 @@ impl CaveSystemRenderer {
         &self.collision_bind_group
     }
 
-    pub fn set_collision_solid_mask(
-        &mut self,
-        device: &wgpu::Device,
-        solid_mask: &wgpu::Buffer,
-    ) {
+    pub fn set_collision_solid_mask(&mut self, device: &wgpu::Device, solid_mask: &wgpu::Buffer) {
         self.collision_solid_mask = solid_mask.clone();
         self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),

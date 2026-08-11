@@ -18,9 +18,9 @@ use crate::simulation::gpu_physics::{
     execute_signal_system, AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
     DevorocyteConsumptionSystem, DivisionAudioCandidate, DivisionAudioCollectDispatch,
     DivisionAudioParams, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
-    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem,
-    GpuToolOperations, GpuTripleBufferSystem, LightFieldSystem, MossSystem,
-    PhagocyteConsumptionSystem, PhysicsFeatureFlags,
+    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
+    GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
+    PhysicsFeatureFlags,
 };
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
@@ -738,13 +738,12 @@ impl GpuScene {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let division_audio_candidate_count_buffer =
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Division Audio Candidate Count"),
-                size: 16,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+        let division_audio_candidate_count_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Division Audio Candidate Count"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let division_audio_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Division Audio Candidate Readback"),
             size: std::mem::size_of::<DivisionAudioCandidate>() as u64 * capacity as u64,
@@ -2218,8 +2217,7 @@ impl GpuScene {
                 .saturating_mul(diameter)
                 .saturating_mul(diameter)
                 .saturating_mul(params.max_cells_per_grid);
-            let collector_threads =
-                bucket_slots.saturating_add(self.gpu_triple_buffers.capacity);
+            let collector_threads = bucket_slots.saturating_add(self.gpu_triple_buffers.capacity);
             Some(DivisionAudioCollectDispatch {
                 pipeline: &self.gpu_physics_pipelines.division_audio_collect,
                 bind_group: &self.division_audio_bind_group,
@@ -8117,14 +8115,13 @@ impl GpuScene {
         match rx.recv() {
             Ok(Ok(())) => {
                 let mapped = slice.get_mapped_range();
-                let mut candidates: Vec<DivisionAudioCandidate> =
-                    bytemuck::cast_slice(&mapped)
-                        .iter()
-                        .copied()
-                        .filter(|candidate: &DivisionAudioCandidate| {
-                            candidate.distance_fixed != u32::MAX && candidate.position[3] > 0.0
-                        })
-                        .collect();
+                let mut candidates: Vec<DivisionAudioCandidate> = bytemuck::cast_slice(&mapped)
+                    .iter()
+                    .copied()
+                    .filter(|candidate: &DivisionAudioCandidate| {
+                        candidate.distance_fixed != u32::MAX && candidate.position[3] > 0.0
+                    })
+                    .collect();
                 candidates.sort_by_key(|candidate| candidate.distance_fixed);
                 candidates.truncate(DIVISION_AUDIO_PLAYBACK_CANDIDATES);
 

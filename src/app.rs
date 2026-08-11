@@ -47,6 +47,7 @@ use crate::scene::{MainMenuScene, PreviewScene, SceneManager};
 use crate::ui::{DockManager, PerformanceMetrics, UiSystem};
 use egui::TextureId;
 use egui_wgpu::ScreenDescriptor;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
@@ -72,7 +73,6 @@ enum MenuAction {
     GenomeEditor,
     Tutorial,
     Settings,
-    Credits,
     Exit,
 }
 
@@ -276,6 +276,33 @@ impl App {
             .play_cell_divide_burst_scaled_at(divisions_this_frame, position);
     }
 
+    fn sync_music_for_current_phase(&mut self) {
+        let target = match self.app_phase {
+            AppPhase::MainMenu => Some(crate::audio::MusicTrack::MainMenu),
+            AppPhase::InGame => match self.scene_manager.current_mode() {
+                crate::ui::types::SimulationMode::Preview => {
+                    Some(crate::audio::MusicTrack::Preview)
+                }
+                crate::ui::types::SimulationMode::Gpu => None,
+            },
+        };
+        self.audio.set_music_track(target);
+    }
+
+    fn ui_value_audio_fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", self.ui.state).hash(&mut hasher);
+        format!("{:?}", self.editor_state).hash(&mut hasher);
+        format!("{:?}", self.working_genome).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn pointer_is_dragging_ui_value(&self) -> bool {
+        self.ui
+            .ctx()
+            .input(|input| input.pointer.primary_down() && input.pointer.delta().length_sq() > 0.0)
+    }
+
     fn set_app_cursor(&mut self, icon: CursorIcon) {
         if self.app_cursor_icon != icon {
             self.window.set_cursor(icon);
@@ -333,6 +360,8 @@ impl App {
 
     fn select_preview_mode_from_hit(&mut self, hit: PreviewCellHit, ctrl_held: bool) {
         let mode_idx = hit.mode_index;
+        let previous_selected_mode_index = self.editor_state.selected_mode_index;
+        let previous_selected_mode_indices = self.editor_state.selected_mode_indices.clone();
         if self.editor_state.selected_mode_indices.is_empty() {
             self.editor_state.selected_mode_indices = vec![self.editor_state.selected_mode_index];
         }
@@ -367,6 +396,12 @@ impl App {
                 self.editor_state.child_b_orientation = mode.child_b.orientation;
             }
             log::info!("Preview cell click: selected mode {}", mode_idx);
+        }
+
+        if self.editor_state.selected_mode_index != previous_selected_mode_index
+            || self.editor_state.selected_mode_indices != previous_selected_mode_indices
+        {
+            self.audio.play_cell_mode_select();
         }
     }
 
@@ -1529,6 +1564,7 @@ impl App {
                             }
                             if !self.editor_state.selected_mode_indices.contains(&mode_idx) {
                                 self.editor_state.selected_mode_indices.push(mode_idx);
+                                self.audio.play_cell_mode_select();
                                 self.window.request_redraw();
                             }
                         }
@@ -1740,6 +1776,9 @@ impl App {
 
     /// Full render pass for a single main-menu frame.
     fn render_main_menu_frame(&mut self, dt: f32) {
+        self.sync_music_for_current_phase();
+        self.audio.update();
+
         // Update genome simulations and orbit cameras.
         if let Some(menu) = &mut self.main_menu_scene {
             menu.update(dt);
@@ -1831,6 +1870,7 @@ impl App {
         if menu_response.audio_settings_changed {
             self.audio
                 .set_volumes(self.ui.state.music_volume, self.ui.state.sfx_volume);
+            self.audio.play_slider_tick();
             self.ui.mark_ui_state_dirty();
         }
         if menu_response.hovered != self.main_menu_hovered {
@@ -1930,6 +1970,7 @@ impl App {
             }
             _ => {}
         }
+        self.sync_music_for_current_phase();
 
         // FPS counter.
         self.frame_count += 1;
@@ -2324,18 +2365,6 @@ impl App {
                 {
                     action = MenuAction::Settings;
                 }
-                if btn!(
-                    MenuAction::Credits,
-                    "Credits",
-                    muted_fill,
-                    muted_fill_h,
-                    muted_border,
-                    muted_text
-                )
-                .clicked()
-                {
-                    action = MenuAction::Credits;
-                }
 
                 y += 4.0;
                 ui.painter().line_segment(
@@ -2356,6 +2385,22 @@ impl App {
                 {
                     action = MenuAction::Exit;
                 }
+                y += 8.0;
+                ui.painter().text(
+                    Pos2::new(cx, y),
+                    Align2::CENTER_CENTER,
+                    "Main developer: Quadraxis77",
+                    FontId::new(11.0, FontFamily::Proportional),
+                    Color32::from_rgb(116, 142, 150),
+                );
+                y += 16.0;
+                ui.painter().text(
+                    Pos2::new(cx, y),
+                    Align2::CENTER_CENTER,
+                    "Special contributor: h",
+                    FontId::new(11.0, FontFamily::Proportional),
+                    Color32::from_rgb(100, 190, 155),
+                );
                 let _ = y;
             });
 
@@ -2473,6 +2518,7 @@ impl App {
 
         // Update performance metrics (includes automatic spike detection)
         self.performance.update(dt);
+        self.sync_music_for_current_phase();
         self.update_cell_link_hold();
         let gpu_headless = self.scene_manager.current_mode()
             == crate::ui::types::SimulationMode::Gpu
@@ -3061,6 +3107,11 @@ impl App {
 
         // Use persistent editor state and create scene request
         let mut scene_request = crate::ui::panel_context::SceneModeRequest::None;
+        let selected_modes_before_audio = (
+            self.editor_state.selected_mode_index,
+            self.editor_state.selected_mode_indices.clone(),
+        );
+        let ui_value_audio_before = self.ui_value_audio_fingerprint();
 
         // Sync working genome from preview scene if in Preview mode
         // This keeps the genome available for GPU scene cell insertion.
@@ -3768,6 +3819,19 @@ impl App {
 
             output
         };
+
+        let selected_modes_changed = selected_modes_before_audio
+            != (
+                self.editor_state.selected_mode_index,
+                self.editor_state.selected_mode_indices.clone(),
+            );
+        if current_mode == crate::ui::types::SimulationMode::Preview && selected_modes_changed {
+            self.audio.play_cell_mode_select();
+        } else if self.pointer_is_dragging_ui_value()
+            && self.ui_value_audio_fingerprint() != ui_value_audio_before
+        {
+            self.audio.play_slider_tick();
+        }
 
         // Update gizmo configuration for all scenes
         self.scene_manager.update_gizmo_config(&self.editor_state);

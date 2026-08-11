@@ -59,11 +59,7 @@ impl SolidMaskGenerator {
 
                     // Calculate world position of grid point
                     let world_pos = grid_origin
-                    + (Vec3::new(
-                        x as f32,
-                        y as f32,
-                        z as f32,
-                    ) + Vec3::splat(0.5)) * cell_size;
+                        + (Vec3::new(x as f32, y as f32, z as f32) + Vec3::splat(0.5)) * cell_size;
 
                     // Use cave generation logic to determine if this is solid
                     solid[voxel_index] = self.is_solid_cave_volume(world_pos, cave_params);
@@ -152,7 +148,7 @@ impl SolidMaskGenerator {
             }
         }
 
-                let fields = crate::simulation::fluid_simulation::geothermal_vents::apply_to_solid_mask(
+        let fields = crate::simulation::fluid_simulation::geothermal_vents::apply_to_solid_mask(
             &mut solid_mask,
             cave_params,
             self.world_center,
@@ -179,8 +175,7 @@ impl SolidMaskGenerator {
                         ];
 
                         if neighbors.iter().any(|&(nx, ny, nz)| {
-                            let ni =
-                                nx + ny * grid_size + nz * grid_size * grid_size;
+                            let ni = nx + ny * grid_size + nz * grid_size * grid_size;
                             original[ni] == 0
                         }) {
                             solid_mask[i] = 0;

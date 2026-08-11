@@ -1404,21 +1404,20 @@ impl GpuScene {
             fluid_type,
             fluid_continuous_spawn,
             fluid_static_water_world,
-        ) =
-            if let Some(ref sim) = self.fluid_simulator {
-                log::info!("[Snapshot] Reading back fluid voxels (2 × 8 MB)…");
-                let (fv, nv) = sim.snapshot_voxels(device, queue);
-                (
-                    fv,
-                    nv,
-                    sim.time(),
-                    sim.get_fluid_type(),
-                    sim.is_continuous_spawn_enabled(),
-                    sim.is_static_water_world_enabled(),
-                )
-            } else {
-                (Vec::new(), Vec::new(), 0.0, 1, false, false)
-            };
+        ) = if let Some(ref sim) = self.fluid_simulator {
+            log::info!("[Snapshot] Reading back fluid voxels (2 × 8 MB)…");
+            let (fv, nv) = sim.snapshot_voxels(device, queue);
+            (
+                fv,
+                nv,
+                sim.time(),
+                sim.get_fluid_type(),
+                sim.is_continuous_spawn_enabled(),
+                sim.is_static_water_world_enabled(),
+            )
+        } else {
+            (Vec::new(), Vec::new(), 0.0, 1, false, false)
+        };
 
         log::info!(
             "[Snapshot] Readback complete: {} cells, {} adhesions, {} genomes, fluid={}",
