@@ -38,7 +38,7 @@ sysinfo = "0.32"
 image = { version = "0.25", default-features = false, features = ["png"] }
 gif = "0.13"
 dirs = "5.0"
-kira = "0.12"
+kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis", "wav"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["wincon", "consoleapi", "winuser", "libloaderapi", "basetsd"] }
