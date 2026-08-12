@@ -90,15 +90,20 @@ fn fs_tonemap(in: VOut) -> @location(0) vec4<f32> {
 
     uv += radial * (boundary_warp + boundary_ripple + water_ripple);
 
-    // Underwater: a gentle, slow two-axis refraction wobble - the "looking
-    // through water" cue. Kept low-amplitude and low-frequency on purpose:
-    // a full-screen distortion that's too large or too fast reads as motion
-    // sickness territory, not ambience, especially since it's active
-    // continuously for as long as the camera stays submerged.
-    let water_wobble = vec2<f32>(
-        sin(uv.y * 6.0 + params.time * 0.3),
-        sin(uv.x * 5.0 + params.time * 0.22 + 1.7),
-    ) * params.underwater_fraction * 0.0015;
+    // Underwater: a gentle two-axis refraction wobble - the "looking through
+    // water" cue, active continuously for as long as the camera stays
+    // submerged. A single sine per axis (tried at several amplitude/speed
+    // combos) always read as the screen mechanically wobbling rather than
+    // water refracting, because both axes moved as one fixed, correlated
+    // wave every frame. Summing two sines per axis with non-harmonic spatial
+    // frequencies and opposing/differing time directions breaks that
+    // lockstep - it drifts and wanders instead of visibly repeating, while
+    // still being cheap trig with no extra textures or noise functions.
+    let drift_x = sin(uv.y * 9.0 + params.time * 0.55) * 0.65
+        + sin(uv.y * 3.3 - params.time * 0.9 + 2.1) * 0.35;
+    let drift_y = sin(uv.x * 7.1 - params.time * 0.4 + 1.7) * 0.65
+        + sin(uv.x * 2.6 + params.time * 0.7 + 4.2) * 0.35;
+    let water_wobble = vec2<f32>(drift_x, drift_y) * params.underwater_fraction * 0.0055;
     uv += water_wobble;
 
     // Very subtle chromatic aberration - reads as "glass" near the world

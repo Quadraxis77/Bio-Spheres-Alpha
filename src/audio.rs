@@ -132,6 +132,15 @@ const DRONE_VOLUME_TWEEN: Duration = Duration::from_millis(150);
 
 const DEFAULT_MUSIC_VOLUME: f32 = 0.18;
 const DEFAULT_SFX_VOLUME: f32 = 0.45;
+/// Flat attenuation applied to both volume sliders' raw 0.0-1.0 value before
+/// it's used anywhere. Playtesting at a "balanced" middle slider setting
+/// (both sliders around 0.5) came out too loud across the board - rather
+/// than lower the slider *defaults* (which wouldn't help anyone who already
+/// has settings saved, and doesn't fix the mapping for other slider
+/// positions either), this scales the whole 0-1 range down so the same
+/// slider position everyone is already used to now produces a quieter,
+/// better-calibrated result without them having to touch anything.
+const USER_VOLUME_SCALE: f32 = 2.0 / 3.0;
 const MENU_HOVER_VOLUME: f32 = 1.25;
 const MENU_SELECT_VOLUME: f32 = 1.55;
 const SLIDER_TICK_VOLUME: f32 = 0.9;
@@ -785,8 +794,8 @@ impl AudioLayer {
             ambient_track,
             ambient_filter,
             music: None,
-            music_volume: music_volume.clamp(0.0, 1.0),
-            sfx_volume: sfx_volume.clamp(0.0, 1.0),
+            music_volume: music_volume.clamp(0.0, 1.0) * USER_VOLUME_SCALE,
+            sfx_volume: sfx_volume.clamp(0.0, 1.0) * USER_VOLUME_SCALE,
             button_hover: BUTTON_HOVER_BYTES.to_vec(),
             button_select: BUTTON_SELECT_BYTES.to_vec(),
             slider_tick: SLIDER_TICK_BYTES.to_vec(),
@@ -825,8 +834,8 @@ impl AudioLayer {
     }
 
     pub fn set_volumes(&mut self, music_volume: f32, sfx_volume: f32) {
-        self.music_volume = music_volume.clamp(0.0, 1.0);
-        self.sfx_volume = sfx_volume.clamp(0.0, 1.0);
+        self.music_volume = music_volume.clamp(0.0, 1.0) * USER_VOLUME_SCALE;
+        self.sfx_volume = sfx_volume.clamp(0.0, 1.0) * USER_VOLUME_SCALE;
         if let Some(music) = &mut self.music {
             music
                 .handle

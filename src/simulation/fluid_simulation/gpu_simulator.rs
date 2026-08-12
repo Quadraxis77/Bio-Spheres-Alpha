@@ -1980,6 +1980,18 @@ impl GpuFluidSimulator {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
+        // Must run before the static-water-world early return below - that
+        // branch returns before reaching the calls at the end of this
+        // function, which otherwise left rain/flow audio state (and the
+        // listener-underwater poll) permanently frozen at whatever they were
+        // the instant static water world was switched on. water_velocity was
+        // just cleared above and stays all-zero for the whole static-mode
+        // step (no swap pass ever runs to repopulate it), so both correctly
+        // settle toward "no flow, no rain" via their existing smoothing
+        // instead of the old sound looping forever with no way to decay.
+        self.update_water_audio_summary(queue, encoder);
+        self.update_listener_water_query(encoder);
+
         if self.static_water_world_enabled.get() {
             if self.static_water_world_needs_fill.replace(false) {
                 let bind_group = self.create_bind_group(_device);
@@ -2125,9 +2137,6 @@ impl GpuFluidSimulator {
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
         }
-
-        self.update_water_audio_summary(queue, encoder);
-        self.update_listener_water_query(encoder);
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {

@@ -2462,8 +2462,23 @@ fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
         let gravity_strength = length(grav_dir);
         // Fall rate proportional to gravity magnitude
         // Linear scaling: gravity_magnitude of 50.0 = 100% fall rate
-        let gravity_probability = min(1.0, gravity_strength / 50.0);
-        
+        var gravity_probability = min(1.0, gravity_strength / 50.0);
+
+        // Steam's vertical rise through open air reuses this same
+        // probability (with alignment reversed above) - at any gravity
+        // magnitude worth having, that's effectively 100%, so the hash roll
+        // below has nothing left to filter and every checker-eligible steam
+        // voxel moves on the same sub-step. The whole layer advances in
+        // lockstep every tick, which is what actually reads as a discrete
+        // rising "wave" (the underwater-bubble teleport above is staggered
+        // separately, but rarely fires for steam already in open air).
+        // Capping well under 1.0 here restores real per-voxel staggering
+        // without slowing the average rise much - each voxel still gets
+        // several independent rolls per second across sub-steps and ticks.
+        if a_is_steam || b_is_steam {
+            gravity_probability = min(gravity_probability, 0.4);
+        }
+
         // Use hash-based probability for gravity direction
         let time_hash = u32(params.time * 1000.0) + direction * 12345u;
         let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;

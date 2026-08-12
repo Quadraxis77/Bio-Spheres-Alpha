@@ -9983,8 +9983,30 @@ impl Scene for GpuScene {
             // one-frame lag every other readback-driven system in this file
             // already has - not fixable by reordering within a single frame.
             fluid_sim.poll_listener_water(device);
-            self.listener_underwater = fluid_sim.is_listener_underwater();
-            self.listener_underwater_fraction = fluid_sim.listener_water_fraction();
+            // The per-voxel query only covers dynamic local water pools - the
+            // whole-world-filled ("static water world") configuration never
+            // writes water into the voxel grid at all, so it wouldn't
+            // otherwise register here regardless of camera depth. Same OR the
+            // audio side already does in `App::update_audio_world_environment`
+            // - this field just wasn't doing it for the callers that read it
+            // directly (post-process distortion/tint, and the direct
+            // `set_listener_environment` call in `App::render`).
+            //
+            // `is_static_water_world_enabled` is a global mode flag, not a
+            // per-position check - it says the *world* is configured as
+            // filled water, not that the camera is currently inside it. In
+            // free-fly the camera can leave the world sphere entirely, and
+            // without gating on actual position every camera outside the
+            // sphere was incorrectly treated as submerged too.
+            let inside_sphere = self.camera.position().length() <= self.config.sphere_radius;
+            let static_world_underwater =
+                fluid_sim.is_static_water_world_enabled() && inside_sphere;
+            self.listener_underwater = fluid_sim.is_listener_underwater() || static_world_underwater;
+            self.listener_underwater_fraction = if static_world_underwater {
+                1.0
+            } else {
+                fluid_sim.listener_water_fraction()
+            };
         } else {
             self.flowing_water_audio_sources.clear();
             self.rain_audio_sources.clear();
