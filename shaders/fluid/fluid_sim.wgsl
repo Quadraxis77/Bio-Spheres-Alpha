@@ -2013,56 +2013,72 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Steam teleportation - find nearest water above and swap with it (directional mode only)
     // Steam rises by swapping with the lowest water voxel directly above it.
     // The scan passes through empty cells and other steam, but stops at solids.
+    //
+    // Staggered per-voxel: without this, every steam voxel with a clear path
+    // to water above it teleports on the *same* tick (this whole pass runs
+    // synchronously over the full grid every step), so an entire open steam
+    // column jumps to the surface at once - visible as a discrete "wave"
+    // instead of a staggered, continuously rising stream. Gating each
+    // voxel's attempt behind an independent per-tick roll (same time+position
+    // hash idiom as the lateral escape below) spreads those jumps out over
+    // several ticks - each voxel still teleports quickly on average, just not
+    // all in lockstep.
     if fluid_type == 3u && params.gravity_mode != 3u {
-        let grav_dir_for_steam = get_effective_gravity(gid);
-        let gravity_dir_index_steam = gravity_dir_to_index(grav_dir_for_steam);
-        // "Up" for steam is opposite to gravity
-        let up_offset = get_offset(gravity_dir_index_steam ^ 1u);
+        let stagger_time_hash = u32(params.time * 1000.0) * 2654435761u;
+        let stagger_pos_hash = gid.x * 73856093u ^ gid.y * 19349663u ^ gid.z * 83492791u;
+        let stagger_roll = (stagger_time_hash ^ stagger_pos_hash) & 0xFFu;
+        // ~40% of qualifying voxels attempt the scan on any given tick.
+        if stagger_roll < 102u {
+            let grav_dir_for_steam = get_effective_gravity(gid);
+            let gravity_dir_index_steam = gravity_dir_to_index(grav_dir_for_steam);
+            // "Up" for steam is opposite to gravity
+            let up_offset = get_offset(gravity_dir_index_steam ^ 1u);
 
-        // Scan upward (against gravity) to find the nearest water voxel
-        // Cap at 16 steps - enough for realistic steam behavior, avoids 64-step worst case
-        for (var step = 1; step <= 16; step++) {
-            let sx = i32(gid.x) + up_offset.x * step;
-            let sy = i32(gid.y) + up_offset.y * step;
-            let sz = i32(gid.z) + up_offset.z * step;
+            // Scan upward (against gravity) to find the nearest water voxel
+            // Cap at 16 steps - enough for realistic steam behavior, avoids 64-step worst case
+            for (var step = 1; step <= 16; step++) {
+                let sx = i32(gid.x) + up_offset.x * step;
+                let sy = i32(gid.y) + up_offset.y * step;
+                let sz = i32(gid.z) + up_offset.z * step;
 
-            if sx < 0 || sx >= i32(params.grid_resolution) ||
-               sy < 0 || sy >= i32(params.grid_resolution) ||
-               sz < 0 || sz >= i32(params.grid_resolution) {
-                break;
-            }
-
-            if is_solid(u32(sx), u32(sy), u32(sz)) {
-                break; // Solid blocks the path
-            }
-
-            let scan_idx = grid_index(u32(sx), u32(sy), u32(sz));
-            let scan_state = atomicLoad(&voxels[scan_idx]);
-            let scan_fluid_type = get_fluid_type(scan_state);
-
-            if scan_fluid_type == 1u {
-                // Found water - swap with it (nearest water above, not topmost)
-                let water_idx_tele = scan_idx;
-                let water_state_tele = scan_state;
-
-                // Two-phase CAS swap: claim water first, then steam
-                let water_result_tele = atomicCompareExchangeWeak(&voxels[water_idx_tele], water_state_tele, 0xFFFFFFFFu);
-                if water_result_tele.exchanged {
-                    let steam_result_tele = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
-                    if steam_result_tele.exchanged {
-                        atomicStore(&voxels[water_idx_tele], state);       // steam goes up
-                        atomicStore(&voxels[idx], water_state_tele);       // water comes down
-                        swap_field_temp(idx, water_idx_tele);
-                        return;
-                    } else {
-                        atomicStore(&voxels[water_idx_tele], water_state_tele);
-                    }
+                if sx < 0 || sx >= i32(params.grid_resolution) ||
+                   sy < 0 || sy >= i32(params.grid_resolution) ||
+                   sz < 0 || sz >= i32(params.grid_resolution) {
+                    break;
                 }
-                break; // Whether swap succeeded or not, stop scanning
+
+                if is_solid(u32(sx), u32(sy), u32(sz)) {
+                    break; // Solid blocks the path
+                }
+
+                let scan_idx = grid_index(u32(sx), u32(sy), u32(sz));
+                let scan_state = atomicLoad(&voxels[scan_idx]);
+                let scan_fluid_type = get_fluid_type(scan_state);
+
+                if scan_fluid_type == 1u {
+                    // Found water - swap with it (nearest water above, not topmost)
+                    let water_idx_tele = scan_idx;
+                    let water_state_tele = scan_state;
+
+                    // Two-phase CAS swap: claim water first, then steam
+                    let water_result_tele = atomicCompareExchangeWeak(&voxels[water_idx_tele], water_state_tele, 0xFFFFFFFFu);
+                    if water_result_tele.exchanged {
+                        let steam_result_tele = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
+                        if steam_result_tele.exchanged {
+                            atomicStore(&voxels[water_idx_tele], state);       // steam goes up
+                            atomicStore(&voxels[idx], water_state_tele);       // water comes down
+                            swap_field_temp(idx, water_idx_tele);
+                            return;
+                        } else {
+                            atomicStore(&voxels[water_idx_tele], water_state_tele);
+                        }
+                    }
+                    break; // Whether swap succeeded or not, stop scanning
+                }
+                // Empty (0) or steam (3): keep scanning upward through them
             }
-            // Empty (0) or steam (3): keep scanning upward through them
+            // Swap is handled inline above; fall through to normal movement if no swap occurred
         }
-        // Swap is handled inline above; fall through to normal movement if no swap occurred
     }
 
     // Steam lateral escape: when the upward path is blocked (solid or out of bounds),

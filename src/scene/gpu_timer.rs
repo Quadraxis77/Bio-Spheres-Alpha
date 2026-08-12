@@ -8,7 +8,7 @@
 use std::sync::mpsc::Receiver;
 
 /// Number of timed segments per frame.
-pub const SEGMENT_COUNT: usize = 5;
+pub const SEGMENT_COUNT: usize = 6;
 
 /// Number of timestamp writes per frame (one per segment boundary).
 const TIMESTAMP_COUNT: usize = SEGMENT_COUNT + 1;
@@ -24,7 +24,8 @@ pub const SEGMENT_LABELS: [&str; SEGMENT_COUNT] = [
     "Physics & Compute",
     "Instance Build & Culling",
     "Opaque Render",
-    "Skins & Effects",
+    "Skins & Water Mesh",
+    "Particles & Fog",
     "Post-Process",
 ];
 

@@ -15,9 +15,15 @@ struct PostProcessParams {
     adapt_min: f32,
     adapt_max: f32,
     adapt_enabled: u32,
+    time: f32,
+    // 0-1 continuous - underwater occupancy / world-sphere boundary proximity.
+    underwater_fraction: f32,
+    boundary_fraction: f32,
+    // 0-1 decaying pulses, set to 1.0 the instant a genuine crossing happens.
+    water_crossing_pulse: f32,
+    boundary_crossing_pulse: f32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 pub struct PostProcessRenderer {
@@ -46,6 +52,10 @@ pub struct PostProcessRenderer {
     pub adapt_speed: f32,
     pub adapt_min: f32,
     pub adapt_max: f32,
+
+    // Drives the distortion animation in fs_tonemap - self-contained so no
+    // extra per-frame plumbing is needed just to animate a ripple.
+    created_at: std::time::Instant,
 }
 
 impl PostProcessRenderer {
@@ -204,6 +214,7 @@ impl PostProcessRenderer {
             adapt_speed: 0.05,
             adapt_min: 0.1,
             adapt_max: 8.0,
+            created_at: std::time::Instant::now(),
         }
     }
 
@@ -282,12 +293,21 @@ impl PostProcessRenderer {
         );
     }
 
-    /// Run adapt compute + tonemap render.  Call after all scene passes complete.
+    /// Run adapt compute + tonemap render. Call after all scene passes complete.
+    /// `underwater_fraction`/`boundary_fraction` are continuous 0-1 state (see
+    /// `GpuScene::listener_underwater_fraction`/`world_boundary_proximity`);
+    /// `water_crossing_pulse`/`boundary_crossing_pulse` are decaying 0-1
+    /// pulses that should only be nonzero right after a genuine crossing.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         swapchain: &wgpu::TextureView,
+        underwater_fraction: f32,
+        boundary_fraction: f32,
+        water_crossing_pulse: f32,
+        boundary_crossing_pulse: f32,
     ) {
         let p = PostProcessParams {
             contrast: self.contrast,
@@ -295,9 +315,13 @@ impl PostProcessRenderer {
             adapt_min: self.adapt_min,
             adapt_max: self.adapt_max,
             adapt_enabled: self.adapt_enabled as u32,
+            time: self.created_at.elapsed().as_secs_f32(),
+            underwater_fraction,
+            boundary_fraction,
+            water_crossing_pulse,
+            boundary_crossing_pulse,
             _pad0: 0,
             _pad1: 0,
-            _pad2: 0,
         };
         queue.write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&p));
 

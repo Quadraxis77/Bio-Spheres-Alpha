@@ -3708,7 +3708,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             egui::Color32::from_rgb(80, 160, 220),  // Physics & Compute
             egui::Color32::from_rgb(120, 200, 120), // Instance Build & Culling
             egui::Color32::from_rgb(220, 180, 60),  // Opaque Render
-            egui::Color32::from_rgb(220, 120, 200), // Skins & Effects
+            egui::Color32::from_rgb(220, 120, 200), // Skins & Water Mesh
+            egui::Color32::from_rgb(160, 100, 220), // Particles & Fog
             egui::Color32::from_rgb(220, 100, 100), // Post-Process
         ];
 

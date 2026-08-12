@@ -15,6 +15,18 @@ pub const MAX_HORIZONTAL_FOV_DEGREES: f32 = 140.0;
 const ORBIT_FIT_FOV_FRACTION: f32 = 0.9;
 /// Maximum gap (in seconds) between middle-mouse clicks to count as a double-click.
 const DOUBLE_CLICK_SECONDS: f32 = 0.35;
+/// Thickness (world units, either side of the boundary) of the "membrane"
+/// zone where pushing through the world sphere requires sustained pressure.
+const MEMBRANE_BAND: f32 = 4.0;
+/// How long continuous pushing takes to fully break through the membrane.
+const MEMBRANE_PUSH_THROUGH_SECONDS: f32 = 1.2;
+/// How quickly built-up push progress relaxes back to 0 once the camera
+/// stops pressing against the membrane (moves away, stops, or breaks through).
+const MEMBRANE_RELEASE_SECONDS: f32 = 0.3;
+/// How much the membrane "gives" while still being pushed through (0 = rigid
+/// wall until progress completes, 1 = no resistance at all) - keeps some
+/// squishy give without letting movement through early.
+const MEMBRANE_GIVE_FACTOR: f32 = 0.35;
 
 /// Camera mode - matches BioSpheres-Q
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +76,18 @@ pub struct CameraController {
     // Radius of the world boundary sphere, used to auto-fit the orbit distance
     // when switching to Orbit mode (see `toggle_mode` and `reset_orbit_view`).
     pub world_radius: f32,
+
+    // How far into "pushing through" the world sphere membrane the camera
+    // currently is (0 = not pressing against it, 1 = fully pushed through).
+    // Builds up while sustained movement presses against the boundary from
+    // either side, decays back to 0 the instant that pressure stops - see the
+    // FreeFly movement block in `update`.
+    boundary_push_progress: f32,
+    // Set for exactly one `update()` call when the camera's actual position
+    // crosses the world sphere boundary (Some(true) = just exited,
+    // Some(false) = just entered) - consumed by the renderer to trigger a
+    // crossing effect only on a genuine pass-through, never on mere proximity.
+    pub last_boundary_crossing: Option<bool>,
 
     // Configuration (matches BioSpheres-Q defaults)
     pub move_speed: f32,
@@ -125,6 +149,8 @@ impl CameraController {
             accumulated_look_delta: Vec3::ZERO,
             last_middle_click: None,
             world_radius: 200.0,
+            boundary_push_progress: 0.0,
+            last_boundary_crossing: None,
             move_speed: 15.0,
             sprint_multiplier: 6.0, // Normal FreeFly run speed multiplier; Shift walks.
             mouse_sensitivity: 0.003,
@@ -163,6 +189,8 @@ impl CameraController {
             accumulated_look_delta: Vec3::ZERO,
             last_middle_click: None,
             world_radius: 200.0,
+            boundary_push_progress: 0.0,
+            last_boundary_crossing: None,
             move_speed: 15.0,
             sprint_multiplier: 6.0,
             mouse_sensitivity: 0.003,
@@ -201,6 +229,8 @@ impl CameraController {
             accumulated_look_delta: Vec3::ZERO,
             last_middle_click: None,
             world_radius: 200.0,
+            boundary_push_progress: 0.0,
+            last_boundary_crossing: None,
             move_speed: 15.0,
             sprint_multiplier: 6.0,
             mouse_sensitivity: 0.003,
@@ -317,6 +347,14 @@ impl CameraController {
     /// Update the world boundary sphere radius used to auto-fit the orbit distance.
     pub fn set_world_radius(&mut self, radius: f32) {
         self.world_radius = radius;
+    }
+
+    /// How hard the camera is currently pressing against the world sphere
+    /// membrane (0 = not touching it, 1 = about to break through). Useful for
+    /// a subtle visual "bulge"/resistance cue layered on top of the base
+    /// proximity tint.
+    pub fn boundary_push_progress(&self) -> f32 {
+        self.boundary_push_progress
     }
 
     /// Reset the orbit camera to its default view: centered on the world origin,
@@ -692,13 +730,67 @@ impl CameraController {
                 move_vec += self.rotation * Vec3::Y * -1.0; // down
             }
 
+            self.last_boundary_crossing = None;
+
             if move_vec.length_squared() > 0.0 {
-                self.center += move_vec.normalize() * speed;
+                let delta = move_vec.normalize() * speed;
+                let radial_distance = self.center.length();
+
+                if self.world_radius > 0.001 && radial_distance > 0.001 {
+                    // Split the desired movement into radial (toward/away from
+                    // the world center) and tangential components. Only the
+                    // radial component gets resisted, and only near the
+                    // boundary - strafing along the inside (or outside) of the
+                    // sphere stays completely free.
+                    let radial_dir = self.center / radial_distance;
+                    let radial_component = delta.dot(radial_dir);
+                    let tangential_delta = delta - radial_dir * radial_component;
+                    let inside = radial_distance <= self.world_radius;
+                    let near_membrane = (radial_distance - self.world_radius).abs() < MEMBRANE_BAND;
+                    let pressing = near_membrane
+                        && ((inside && radial_component > 0.0)
+                            || (!inside && radial_component < 0.0));
+
+                    if pressing {
+                        self.boundary_push_progress = (self.boundary_push_progress
+                            + dt / MEMBRANE_PUSH_THROUGH_SECONDS)
+                            .min(1.0);
+                    } else {
+                        self.boundary_push_progress = (self.boundary_push_progress
+                            - dt / MEMBRANE_RELEASE_SECONDS)
+                            .max(0.0);
+                    }
+
+                    // Fully resisted at progress 0 (can still nudge the membrane
+                    // a little, giving it a soft "give"), fully free the instant
+                    // sustained pressure fills boundary_push_progress - that's
+                    // the actual break-through moment.
+                    let allowed_radial_component = if pressing && self.boundary_push_progress < 1.0
+                    {
+                        radial_component * self.boundary_push_progress * MEMBRANE_GIVE_FACTOR
+                    } else {
+                        radial_component
+                    };
+
+                    self.center += tangential_delta + radial_dir * allowed_radial_component;
+
+                    let now_inside = self.center.length() <= self.world_radius;
+                    if now_inside != inside {
+                        self.last_boundary_crossing = Some(!now_inside);
+                        self.boundary_push_progress = 0.0;
+                    }
+                } else {
+                    self.center += delta;
+                }
+
                 log::debug!(
                     "FreeFly movement: center={:?}, speed={}",
                     self.center,
                     speed
                 );
+            } else {
+                self.boundary_push_progress =
+                    (self.boundary_push_progress - dt / MEMBRANE_RELEASE_SECONDS).max(0.0);
             }
         }
     }

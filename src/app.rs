@@ -312,12 +312,12 @@ impl App {
         let diag_start = std::time::Instant::now();
 
         if self.scene_manager.current_mode() != crate::ui::types::SimulationMode::Gpu {
-            log::warn!("[audio-diag] world env: not GPU mode, clearing");
+            log::debug!("[audio-diag] world env: not GPU mode, clearing");
             self.audio.clear_world_environment();
             return;
         }
         let Some(gpu_scene) = self.scene_manager.gpu_scene() else {
-            log::warn!("[audio-diag] world env: no gpu_scene, clearing");
+            log::debug!("[audio-diag] world env: no gpu_scene, clearing");
             self.audio.clear_world_environment();
             return;
         };
@@ -365,7 +365,7 @@ impl App {
             .unwrap_or(false)
             || gpu_scene.listener_underwater;
 
-        log::warn!(
+        log::debug!(
             "[audio-diag] world env: took={:?} has_cave_renderer={has_cave_renderer} nearest={nearest:?} underwater={underwater} flow_sources={} rain_sources={} rain_intensity={:.2}",
             diag_start.elapsed(),
             gpu_scene.flowing_water_audio_sources.len(),
@@ -2891,6 +2891,10 @@ impl App {
                     self.editor_state.fluid_mesh_params_dirty = false;
                 }
 
+                // Keep the splash particles' water color/opacity in sync with the
+                // actual rendered water mesh's live alpha.
+                gpu_scene.water_alpha = self.editor_state.fluid_alpha;
+
                 // Always update render params every frame (time drives wave animation)
                 if let Some(ref mut surface_nets) = gpu_scene.gpu_surface_nets {
                     let params = crate::rendering::DensityMeshParams {
@@ -4828,10 +4832,40 @@ impl App {
             self.window.request_redraw();
         }
 
-        // FPS counter
+        // FPS counter + once-a-second perf log: GPU segment breakdown (see
+        // gpu_timer::SEGMENT_LABELS) alongside the rain/water-audio state
+        // that's been the subject of recent frame-drop hunting, so a plain
+        // log file (no need to watch the in-app performance monitor live)
+        // is enough to correlate a drop with which segment caused it and
+        // what the scene was doing at the time. `warn` level so it shows up
+        // under the default file-logger filter without needing RUST_LOG set;
+        // once/sec is cheap enough not to reintroduce the logging-on-the-
+        // hot-path stutter the [audio-diag] lines caused earlier.
         self.frame_count += 1;
         if self.fps_timer.elapsed().as_secs_f32() >= 1.0 {
-            log::info!("FPS: {}", self.frame_count);
+            let fps = self.frame_count;
+            let frame_ms = if fps > 0 { 1000.0 / fps as f32 } else { 0.0 };
+
+            let segments = self.performance.gpu_segment_times_ms();
+            let gpu_total_ms: f32 = segments.iter().sum();
+            let segments_str = crate::scene::gpu_timer::SEGMENT_LABELS
+                .iter()
+                .zip(segments.iter())
+                .map(|(label, ms)| format!("{label}={ms:.2}ms"))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let gpu_scene = self.scene_manager.gpu_scene();
+            let rain_intensity = gpu_scene.map_or(0.0, |s| s.rain_audio_intensity);
+            let splash_particles = gpu_scene
+                .and_then(|s| s.rain_splash_particle_renderer.as_ref())
+                .map_or(0, |r| r.particle_count());
+            let cell_count = gpu_scene.map_or(0, |s| s.current_cell_count);
+
+            log::warn!(
+                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms | {segments_str} | rain_intensity={rain_intensity:.2} splash_particles={splash_particles} cells={cell_count}"
+            );
+
             self.frame_count = 0;
             self.fps_timer = std::time::Instant::now();
         }

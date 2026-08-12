@@ -26,9 +26,34 @@ const DEFAULT_SNOW_COMPACT_RATE: f32 = 1.0;
 // the raw per-sample occupancy, read out through a hysteresis band so a
 // listener sitting right at a wavy/bobbing water surface doesn't flip the
 // underwater state every other frame.
-const LISTENER_WATER_SMOOTH_TIME_CONSTANT: f32 = 0.35;
-const LISTENER_WATER_ENTER_THRESHOLD: f32 = 0.65;
-const LISTENER_WATER_EXIT_THRESHOLD: f32 = 0.35;
+// Snappy enough to settle within ~1-2 frames of readback latency for a real
+// crossing, while still absorbing single-frame surface noise (a bobbing/wavy
+// water surface flickering the raw per-voxel sample for a frame or two).
+const LISTENER_WATER_SMOOTH_TIME_CONSTANT: f32 = 0.12;
+const LISTENER_WATER_ENTER_THRESHOLD: f32 = 0.6;
+const LISTENER_WATER_EXIT_THRESHOLD: f32 = 0.4;
+// Smoothing time constant for per-bucket flow/rain strength (see
+// `water_audio_sources_from_buckets`). The raw per-frame voxel counts a
+// bucket's strength is derived from are inherently noisy - `water_velocity`
+// is fully cleared and recomputed by a probabilistic lateral-flow simulation
+// every step - so ranking/truncating candidate buckets by *raw* strength let
+// bucket membership near the cutoff flicker in and out every frame under
+// heavy/widespread rain (more candidates than the cap, all jostling for
+// rank), each flicker tearing down and respawning an audio voice. That
+// churn - dozens of kira voice creations per frame on the main thread - was
+// the actual source of the reported rain frame-rate drop, not the bucket
+// grid's own (cheap, constant) compute/aggregation cost.
+const WATER_AUDIO_BUCKET_SMOOTH_TIME_CONSTANT: f32 = 0.5;
+// The audio summary pass's cost isn't fixed like most full-grid compute
+// passes - each thread early-exits unless its voxel is actively flowing
+// water, so the *actual* GPU time scales with how much water is moving, and
+// spikes hardest during heavy/widespread rain (more threads take the
+// expensive atomic-write path, plus more contention between them). Since the
+// buckets only need a statistical estimate (not an exact count) for ranking,
+// examining every Nth voxel per axis cuts both the thread count and the
+// worst-case contention by stride^3 with no audible loss of resolution -
+// each 16-voxel-wide bucket still gets (16/stride)^3 samples.
+const WATER_AUDIO_SAMPLE_STRIDE: u32 = 2;
 const WATER_AUDIO_BUCKET_RESOLUTION: u32 = 8;
 const WATER_AUDIO_BUCKET_COUNT: usize = (WATER_AUDIO_BUCKET_RESOLUTION
     * WATER_AUDIO_BUCKET_RESOLUTION
@@ -123,7 +148,11 @@ struct WaterAudioSummaryParams {
     grid_resolution: u32,
     bucket_resolution: u32,
     gravity_mode: u32,
-    _pad0: u32,
+    /// Only every `sample_stride`-th voxel along each axis is examined - the
+    /// audio buckets only need a statistical estimate of flow/rain activity,
+    /// not an exact per-voxel count, and this pass otherwise costs as much as
+    /// a full fluid sub-step. See `WATER_AUDIO_SAMPLE_STRIDE`.
+    sample_stride: u32,
     grid_origin: [f32; 3],
     cell_size: f32,
 }
@@ -286,6 +315,14 @@ pub struct GpuFluidSimulator {
     flow_audio_sources: std::cell::RefCell<Vec<WaterAudioSource>>,
     rain_audio_sources: std::cell::RefCell<Vec<WaterAudioSource>>,
     rain_audio_intensity: std::cell::Cell<f32>,
+    /// Per-bucket EMA of flow/rain strength (indexed by the same bucket_idx
+    /// as the raw GPU readback), and when it was last updated - see
+    /// `water_audio_sources_from_buckets`. Smooths the noisy raw per-frame
+    /// counts before ranking/truncating candidate buckets, so which buckets
+    /// get an audio voice doesn't flicker every frame under heavy rain.
+    flow_bucket_strength: std::cell::RefCell<Vec<f32>>,
+    rain_bucket_strength: std::cell::RefCell<Vec<f32>>,
+    bucket_strength_smoothed_at: std::cell::Cell<std::time::Instant>,
 
     /// Single-voxel occupancy query for "is the listener currently inside
     /// water" - needed for partial/local water pools, where (unlike the
@@ -307,8 +344,14 @@ pub struct GpuFluidSimulator {
     listener_water_fraction: std::cell::Cell<f32>,
     listener_water_smoothed_at: std::cell::Cell<std::time::Instant>,
     /// Hysteresis output derived from `listener_water_fraction` - see
-    /// `poll_listener_water`.
+    /// `poll_listener_water`. Debounced on purpose (audio switching needs
+    /// stability), so anything that needs to react to the *instant* a
+    /// crossing happens (a one-shot visual transition, not sustained state)
+    /// should use `listener_underwater_instant` instead.
     listener_underwater: std::cell::Cell<bool>,
+    /// Raw per-poll occupancy sample, not run through the EMA/hysteresis at
+    /// all - reacts as fast as the async GPU readback allows (~1 frame).
+    listener_underwater_instant: std::cell::Cell<bool>,
 
     // Water bitfield for fast cell-water detection (32x compressed)
     water_bitfield_buffer: wgpu::Buffer,
@@ -441,7 +484,7 @@ impl GpuFluidSimulator {
             grid_resolution: GRID_RESOLUTION,
             bucket_resolution: WATER_AUDIO_BUCKET_RESOLUTION,
             gravity_mode: 1,
-            _pad0: 0,
+            sample_stride: WATER_AUDIO_SAMPLE_STRIDE,
             grid_origin: grid_origin.to_array(),
             cell_size,
         };
@@ -1315,6 +1358,15 @@ impl GpuFluidSimulator {
             flow_audio_sources: std::cell::RefCell::new(Vec::new()),
             rain_audio_sources: std::cell::RefCell::new(Vec::new()),
             rain_audio_intensity: std::cell::Cell::new(0.0),
+            flow_bucket_strength: std::cell::RefCell::new(vec![
+                0.0;
+                WATER_AUDIO_BUCKET_COUNT
+            ]),
+            rain_bucket_strength: std::cell::RefCell::new(vec![
+                0.0;
+                WATER_AUDIO_BUCKET_COUNT
+            ]),
+            bucket_strength_smoothed_at: std::cell::Cell::new(std::time::Instant::now()),
             listener_grid_index: std::cell::Cell::new(None),
             listener_water_staging_buffer,
             listener_water_readback_receiver: std::cell::RefCell::new(None),
@@ -1322,6 +1374,7 @@ impl GpuFluidSimulator {
             listener_water_fraction: std::cell::Cell::new(0.0),
             listener_water_smoothed_at: std::cell::Cell::new(std::time::Instant::now()),
             listener_underwater: std::cell::Cell::new(false),
+            listener_underwater_instant: std::cell::Cell::new(false),
             water_bitfield_buffer,
             ice_bitfield_buffer,
             water_grid_params_buffer,
@@ -1671,6 +1724,7 @@ impl GpuFluidSimulator {
         if x < 0 || y < 0 || z < 0 || x >= res || y >= res || z >= res {
             self.listener_grid_index.set(None);
             self.listener_underwater.set(false);
+            self.listener_underwater_instant.set(false);
             // Also reset the average, not just the hysteresis output - otherwise
             // re-entering the grid with a stale high fraction from before could
             // satisfy the enter threshold on the very first fresh air sample.
@@ -1688,6 +1742,22 @@ impl GpuFluidSimulator {
     /// whole-world-filled configuration.
     pub fn is_listener_underwater(&self) -> bool {
         self.listener_underwater.get()
+    }
+
+    /// Un-debounced occupancy sample from the most recent completed readback -
+    /// reacts within ~1 frame of an actual crossing, unlike
+    /// `is_listener_underwater`'s deliberately smoothed/hysteresis-banded
+    /// output. Use this to trigger one-shot visual transitions; use the
+    /// debounced version for anything that needs to stay stable (audio).
+    pub fn is_listener_underwater_instant(&self) -> bool {
+        self.listener_underwater_instant.get()
+    }
+
+    /// Raw smoothed occupancy fraction (0.0 = air, 1.0 = water) behind
+    /// `is_listener_underwater`'s hysteresis - continuous rather than
+    /// debounced, for a visual tint that should fade rather than snap.
+    pub fn listener_water_fraction(&self) -> f32 {
+        self.listener_water_fraction.get()
     }
 
     /// Queues (if needed) and polls the async readback of the listener's
@@ -1718,7 +1788,9 @@ impl GpuFluidSimulator {
                     let data = self.listener_water_staging_buffer.slice(..).get_mapped_range();
                     let value: &[u32] = bytemuck::cast_slice(&data);
                     let state = value.first().copied().unwrap_or(0);
-                    let sample = if (state & 0x7) == 1 { 1.0 } else { 0.0 };
+                    let is_water = (state & 0x7) == 1;
+                    self.listener_underwater_instant.set(is_water);
+                    let sample = if is_water { 1.0 } else { 0.0 };
 
                     let now = std::time::Instant::now();
                     let dt = now
@@ -2059,6 +2131,15 @@ impl GpuFluidSimulator {
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        // Skip only while a previous sample is still being consumed - no
+        // wall-clock delay here, so the (now much cheaper, see
+        // WATER_AUDIO_SAMPLE_STRIDE) cost is spread evenly across frames
+        // instead of concentrated into a periodic spike.
+        if self.water_audio_copy_pending.get() || self.water_audio_readback_receiver.borrow().is_some()
+        {
+            return;
+        }
+
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
@@ -2066,7 +2147,7 @@ impl GpuFluidSimulator {
             grid_resolution: GRID_RESOLUTION,
             bucket_resolution: WATER_AUDIO_BUCKET_RESOLUTION,
             gravity_mode: self.gravity_mode.get(),
-            _pad0: 0,
+            sample_stride: WATER_AUDIO_SAMPLE_STRIDE,
             grid_origin: grid_origin.to_array(),
             cell_size,
         };
@@ -2083,7 +2164,12 @@ impl GpuFluidSimulator {
             });
             pass.set_pipeline(&self.water_audio_summary_pipeline);
             pass.set_bind_group(0, &self.water_audio_summary_bind_group, &[]);
-            let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+            // Every dispatched thread examines one voxel, spaced
+            // WATER_AUDIO_SAMPLE_STRIDE apart along each axis - see the
+            // shader for the sparse-sampling math and count reweighting.
+            let sampled_resolution = (GRID_RESOLUTION + WATER_AUDIO_SAMPLE_STRIDE - 1)
+                / WATER_AUDIO_SAMPLE_STRIDE;
+            let workgroup_count = (sampled_resolution + 3) / 4;
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
@@ -2289,11 +2375,23 @@ impl GpuFluidSimulator {
                         .slice(..)
                         .get_mapped_range();
                     let counts: &[u32] = bytemuck::cast_slice(&data);
+
+                    let now = std::time::Instant::now();
+                    let dt = now
+                        .duration_since(self.bucket_strength_smoothed_at.get())
+                        .as_secs_f32();
+                    self.bucket_strength_smoothed_at.set(now);
+                    let smoothing_alpha =
+                        1.0 - (-dt / WATER_AUDIO_BUCKET_SMOOTH_TIME_CONSTANT).exp();
+
                     let (flow_sources, rain_sources, rain_intensity) =
                         water_audio_sources_from_buckets(
                             counts,
                             self.world_radius,
                             self.world_center,
+                            &self.flow_bucket_strength,
+                            &self.rain_bucket_strength,
+                            smoothing_alpha,
                         );
                     *self.flow_audio_sources.borrow_mut() = flow_sources;
                     *self.rain_audio_sources.borrow_mut() = rain_sources;
@@ -2532,6 +2630,9 @@ fn water_audio_sources_from_buckets(
     counts: &[u32],
     world_radius: f32,
     world_center: Vec3,
+    flow_strength: &std::cell::RefCell<Vec<f32>>,
+    rain_strength: &std::cell::RefCell<Vec<f32>>,
+    smoothing_alpha: f32,
 ) -> (Vec<WaterAudioSource>, Vec<WaterAudioSource>, f32) {
     // Kept in lockstep with FLOWING_WATER_MAX_VOICES/RAIN_MAX_VOICES in
     // audio.rs - this is the actual limiting cap (audio.rs's is a safety
@@ -2545,11 +2646,24 @@ fn water_audio_sources_from_buckets(
     const MAX_RAIN_SOURCES: usize = 40;
     const FLOW_BUCKET_FULL_COUNT: f32 = 8.0;
     const RAIN_BUCKET_FULL_COUNT: f32 = 8.0;
+    // Below this smoothed strength a bucket is dropped from the candidate
+    // list entirely - keeps the list from carrying an ever-growing tail of
+    // long-decayed-to-near-zero buckets.
+    const PRESENCE_EPSILON: f32 = 0.02;
 
     let bucket_res = WATER_AUDIO_BUCKET_RESOLUTION as usize;
     let world_diameter = world_radius * 2.0;
     let bucket_size = world_diameter / WATER_AUDIO_BUCKET_RESOLUTION as f32;
     let origin = world_center - Vec3::splat(world_radius);
+
+    let mut flow_strength = flow_strength.borrow_mut();
+    let mut rain_strength = rain_strength.borrow_mut();
+    if flow_strength.len() != WATER_AUDIO_BUCKET_COUNT {
+        flow_strength.resize(WATER_AUDIO_BUCKET_COUNT, 0.0);
+    }
+    if rain_strength.len() != WATER_AUDIO_BUCKET_COUNT {
+        rain_strength.resize(WATER_AUDIO_BUCKET_COUNT, 0.0);
+    }
 
     let mut flow = Vec::new();
     let mut rain = Vec::new();
@@ -2562,6 +2676,20 @@ fn water_audio_sources_from_buckets(
         let rain_count = counts.get(bucket_idx * 2 + 1).copied().unwrap_or(0);
         total_rain = total_rain.saturating_add(rain_count);
 
+        // Smooth each bucket's strength across frames before it's used for
+        // ranking/truncation below - the raw per-frame count is noisy (the
+        // sim clears and recomputes water_velocity every step via a
+        // probabilistic lateral-flow pass), so without this a bucket sitting
+        // near the top-N cutoff could flicker in and out of the candidate
+        // list every single frame under heavy/widespread rain, each flicker
+        // tearing down and respawning an audio voice.
+        let raw_flow_strength = (flow_count as f32 / FLOW_BUCKET_FULL_COUNT).clamp(0.0, 1.0);
+        let raw_rain_strength = (rain_count as f32 / RAIN_BUCKET_FULL_COUNT).clamp(0.0, 1.0);
+        flow_strength[bucket_idx] +=
+            (raw_flow_strength - flow_strength[bucket_idx]) * smoothing_alpha;
+        rain_strength[bucket_idx] +=
+            (raw_rain_strength - rain_strength[bucket_idx]) * smoothing_alpha;
+
         let x = bucket_idx % bucket_res;
         let y = (bucket_idx / bucket_res) % bucket_res;
         let z = bucket_idx / (bucket_res * bucket_res);
@@ -2572,16 +2700,16 @@ fn water_audio_sources_from_buckets(
                 (z as f32 + 0.5) * bucket_size,
             );
 
-        if flow_count > 0 {
+        if flow_strength[bucket_idx] > PRESENCE_EPSILON {
             flow.push(WaterAudioSource {
                 position,
-                strength: (flow_count as f32 / FLOW_BUCKET_FULL_COUNT).clamp(0.0, 1.0),
+                strength: flow_strength[bucket_idx],
             });
         }
-        if rain_count > 0 {
+        if rain_strength[bucket_idx] > PRESENCE_EPSILON {
             rain.push(WaterAudioSource {
                 position,
-                strength: (rain_count as f32 / RAIN_BUCKET_FULL_COUNT).clamp(0.0, 1.0),
+                strength: rain_strength[bucket_idx],
             });
         }
     }

@@ -359,10 +359,22 @@ pub struct GpuScene {
     pub show_water_particles: bool,
     /// Water particle prominence factor (0.0-1.0)
     pub water_particle_prominence: f32,
+    /// Live water mesh alpha (mirrors `editor_state.fluid_alpha`, synced each
+    /// frame in app.rs alongside the density mesh's own render params) - so
+    /// splash particles can match the actual rendered water's opacity instead
+    /// of guessing a fixed value.
+    pub water_alpha: f32,
     /// Cached water particle extract bind group (for compute)
     water_extract_bind_group: Option<wgpu::BindGroup>,
     /// Cached water particle render bind group
     water_render_bind_group: Option<wgpu::BindGroup>,
+    /// Rain splash particle system renderer - rings that expand/fade where
+    /// falling rain lands on the water surface.
+    pub rain_splash_particle_renderer: Option<crate::rendering::RainSplashParticleRenderer>,
+    /// Cached rain splash extract bind group (for compute)
+    rain_splash_extract_bind_group: Option<wgpu::BindGroup>,
+    /// Cached rain splash render bind group
+    rain_splash_render_bind_group: Option<wgpu::BindGroup>,
     /// Nutrient particle system renderer
     pub nutrient_particle_renderer: Option<NutrientParticleRenderer>,
     /// Whether to show nutrient particles
@@ -470,6 +482,25 @@ pub struct GpuScene {
     /// `is_static_water_world_enabled` which only reflects the whole-world-
     /// filled configuration.
     pub listener_underwater: bool,
+    /// Continuous (not hysteresis-debounced) version of `listener_underwater`,
+    /// for a visual tint that should fade smoothly rather than snap - see
+    /// `GpuFluidSimulator::listener_water_fraction`.
+    pub listener_underwater_fraction: f32,
+    /// 0-1, ramps up as the camera nears the world sphere boundary from
+    /// either side (and while actively pressing against it - see
+    /// `CameraController::boundary_push_progress`), for a subtle glassy tint.
+    pub world_boundary_proximity: f32,
+    /// Decaying 0-1 pulses, set to 1.0 the instant a genuine crossing event
+    /// happens (not mere proximity) and relaxed back to 0 over
+    /// `CROSSING_PULSE_DECAY_SECONDS` - see `update_boundary_visual_state`.
+    pub water_crossing_pulse: f32,
+    pub world_boundary_crossing_pulse: f32,
+    /// Tracks the un-debounced instant water sample (not `listener_underwater`,
+    /// which is deliberately smoothed for audio) so the crossing pulse fires
+    /// within ~1 frame of an actual crossing instead of waiting on that
+    /// smoothing to settle.
+    listener_underwater_instant_prev: bool,
+    visual_state_updated_at: std::time::Instant,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
@@ -566,6 +597,8 @@ pub struct GpuScene {
     env_camera_bind_group_steam: Option<wgpu::BindGroup>,
     /// Cached camera bind group for water particle renderer
     env_camera_bind_group_water: Option<wgpu::BindGroup>,
+    /// Cached camera bind group for rain splash particle renderer
+    env_camera_bind_group_rain_splash: Option<wgpu::BindGroup>,
     /// Cached camera bind group for nutrient particle renderer
     env_camera_bind_group_nutrient: Option<wgpu::BindGroup>,
     /// Cached adhesion data bind groups (one per triple buffer index)
@@ -1078,8 +1111,12 @@ impl GpuScene {
             water_particle_renderer: None,
             show_water_particles: false,
             water_particle_prominence: 0.0,
+            water_alpha: 0.85,
             water_extract_bind_group: None,
             water_render_bind_group: None,
+            rain_splash_particle_renderer: None,
+            rain_splash_extract_bind_group: None,
+            rain_splash_render_bind_group: None,
             nutrient_particle_renderer: None,
             show_nutrient_particles: true,
             nutrient_spawn_probability: 0.05, // 5% spawn probability
@@ -1127,6 +1164,12 @@ impl GpuScene {
             rain_audio_sources: Vec::new(),
             rain_audio_intensity: 0.0,
             listener_underwater: false,
+            listener_underwater_fraction: 0.0,
+            world_boundary_proximity: 0.0,
+            water_crossing_pulse: 0.0,
+            world_boundary_crossing_pulse: 0.0,
+            listener_underwater_instant_prev: false,
+            visual_state_updated_at: std::time::Instant::now(),
             moss_system: None,
             show_moss: true,
             moss_needs_clear: false,
@@ -1175,6 +1218,7 @@ impl GpuScene {
             env_camera_bind_group_voxel: None,
             env_camera_bind_group_steam: None,
             env_camera_bind_group_water: None,
+            env_camera_bind_group_rain_splash: None,
             env_camera_bind_group_nutrient: None,
             cached_adhesion_data_bind_groups: None,
             cave_shadow_bind_group_set: false,
@@ -2150,6 +2194,55 @@ impl GpuScene {
     /// Set whether to show the world boundary sphere.
     pub fn set_show_world_sphere(&mut self, enabled: bool) {
         self.show_world_sphere = enabled;
+    }
+
+    /// Refreshes the continuous world-sphere proximity tint and the two
+    /// decaying crossing pulses (world sphere membrane, water surface) -
+    /// called once per frame from `render`. Pulses only fire on an actual
+    /// crossing event (`CameraController::last_boundary_crossing`, or
+    /// `listener_underwater` toggling), never on mere proximity, so the
+    /// "whoosh" reads as a real transition instead of ambient shimmer.
+    fn update_boundary_visual_state(&mut self) {
+        const BOUNDARY_TINT_RANGE: f32 = 20.0;
+        const CROSSING_PULSE_DECAY_SECONDS: f32 = 0.4;
+
+        let now = std::time::Instant::now();
+        let dt = now
+            .duration_since(self.visual_state_updated_at)
+            .as_secs_f32();
+        self.visual_state_updated_at = now;
+
+        let radial_distance = self.camera.position().length();
+        let signed_distance_inside = self.config.sphere_radius - radial_distance;
+        let t = (signed_distance_inside.abs() / BOUNDARY_TINT_RANGE).clamp(0.0, 1.0);
+        let smooth = t * t * (3.0 - 2.0 * t);
+        let proximity = (1.0 - smooth).max(self.camera.boundary_push_progress());
+        self.world_boundary_proximity = proximity;
+
+        let decay = (dt / CROSSING_PULSE_DECAY_SECONDS).min(1.0);
+        self.world_boundary_crossing_pulse = if self.camera.last_boundary_crossing.is_some() {
+            1.0
+        } else {
+            (self.world_boundary_crossing_pulse - decay).max(0.0)
+        };
+
+        // Driven by the un-debounced instant sample, not `listener_underwater`
+        // (which is deliberately smoothed over ~0.1-0.3s so audio doesn't flip
+        // flap at the surface) - the pulse should react to an actual crossing
+        // within about a frame, not wait for that smoothing to settle.
+        let listener_underwater_instant = self
+            .fluid_simulator
+            .as_ref()
+            .map(|sim| sim.is_listener_underwater_instant())
+            .unwrap_or(false);
+        self.water_crossing_pulse = if listener_underwater_instant
+            != self.listener_underwater_instant_prev
+        {
+            1.0
+        } else {
+            (self.water_crossing_pulse - decay).max(0.0)
+        };
+        self.listener_underwater_instant_prev = listener_underwater_instant;
     }
 
     /// Get the world sphere renderer for customization.
@@ -5124,6 +5217,21 @@ impl GpuScene {
             }
         }
 
+        // Create rain splash particle camera bind group if needed
+        if self.env_camera_bind_group_rain_splash.is_none() {
+            if let Some(ref renderer) = self.rain_splash_particle_renderer {
+                self.env_camera_bind_group_rain_splash =
+                    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Env Rain Splash Camera Bind Group"),
+                        layout: renderer.camera_bind_group_layout(),
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        }],
+                    }));
+            }
+        }
+
         // Create nutrient particle camera bind group if needed
         if self.env_camera_bind_group_nutrient.is_none() {
             if let Some(ref renderer) = self.nutrient_particle_renderer {
@@ -6079,6 +6187,9 @@ impl GpuScene {
         // Initialize water particle renderer
         self.initialize_water_particle_renderer(device, surface_format);
 
+        // Initialize rain splash particle renderer
+        self.initialize_rain_splash_particle_renderer(device, surface_format);
+
         // Initialize nutrient particle renderer
         self.initialize_nutrient_particle_renderer(device, queue, surface_format);
 
@@ -6153,13 +6264,16 @@ impl GpuScene {
 
         self.steam_extract_bind_group = None;
         self.water_extract_bind_group = None;
+        self.rain_splash_extract_bind_group = None;
         self.nutrient_extract_bind_group = None;
         self.env_camera_bind_group_steam = None;
         self.env_camera_bind_group_water = None;
+        self.env_camera_bind_group_rain_splash = None;
         self.env_camera_bind_group_nutrient = None;
 
         self.initialize_steam_particle_renderer(device, surface_format);
         self.initialize_water_particle_renderer(device, surface_format);
+        self.initialize_rain_splash_particle_renderer(device, surface_format);
         self.initialize_nutrient_particle_renderer(device, queue, surface_format);
 
         self.show_gpu_density_mesh = true;
@@ -7198,6 +7312,110 @@ impl GpuScene {
         self.show_water_particles = true;
 
         log::info!("Water particle renderer initialized (GPU-based)");
+    }
+
+    /// Initialize the rain splash particle renderer
+    pub fn initialize_rain_splash_particle_renderer(
+        &mut self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+    ) {
+        if self.rain_splash_particle_renderer.is_some() {
+            return;
+        }
+
+        let depth_format = wgpu::TextureFormat::Depth32Float;
+
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Rain Splash Camera Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let rain_splash_particle_renderer = crate::rendering::RainSplashParticleRenderer::new(
+            device,
+            surface_format,
+            depth_format,
+            &camera_layout,
+        );
+
+        self.rain_splash_render_bind_group =
+            Some(rain_splash_particle_renderer.create_render_bind_group(device));
+        self.rain_splash_particle_renderer = Some(rain_splash_particle_renderer);
+
+        log::info!("Rain splash particle renderer initialized (GPU-based)");
+    }
+
+    fn ensure_rain_splash_extract_bind_group(&mut self, device: &wgpu::Device) {
+        if self.rain_splash_extract_bind_group.is_some() {
+            return;
+        }
+
+        if let (Some(ref particle_renderer), Some(ref fluid_sim)) =
+            (&self.rain_splash_particle_renderer, &self.fluid_simulator)
+        {
+            self.rain_splash_extract_bind_group =
+                Some(particle_renderer.create_compute_bind_group(
+                    device,
+                    fluid_sim.current_state_buffer(),
+                    fluid_sim.water_velocity_buffer(),
+                ));
+            log::info!("Rain splash extract bind group created");
+        }
+    }
+
+    /// Run the rain splash spawn/age compute passes for this fluid step.
+    pub fn update_rain_splash_particles(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        dt: f32,
+    ) {
+        self.ensure_rain_splash_extract_bind_group(device);
+
+        if let (
+            Some(ref mut particle_renderer),
+            Some(ref fluid_sim),
+            Some(ref extract_bind_group),
+        ) = (
+            &mut self.rain_splash_particle_renderer,
+            &self.fluid_simulator,
+            &self.rain_splash_extract_bind_group,
+        ) {
+            let (world_radius, world_center) = fluid_sim.grid_params();
+            let grid_resolution = 128u32;
+            let world_diameter = world_radius * 2.0;
+            let cell_size = world_diameter / grid_resolution as f32;
+            let grid_origin = world_center - glam::Vec3::splat(world_diameter / 2.0);
+
+            particle_renderer.update(
+                encoder,
+                queue,
+                extract_bind_group,
+                grid_resolution,
+                grid_origin,
+                cell_size,
+                self.gravity_mode,
+                self.water_alpha,
+                dt,
+            );
+        }
+    }
+
+    /// Poll for rain splash particle count after command buffer submission
+    pub fn poll_rain_splash_particle_count(&mut self, device: &wgpu::Device) {
+        if let Some(ref mut particle_renderer) = self.rain_splash_particle_renderer {
+            particle_renderer.poll_particle_count(device);
+        }
     }
 
     /// Create or update nutrient particle renderer when fluid simulator is available
@@ -8493,6 +8711,11 @@ impl Scene for GpuScene {
                 self.extract_water_particles(&mut encoder, device, queue, dt);
             }
 
+            // Spawn/age rain splash rings from fluid state (GPU compute)
+            if !self.headless_no_render {
+                self.update_rain_splash_particles(&mut encoder, device, queue, dt);
+            }
+
             // Extract nutrient particles from fluid state (GPU compute)
             if self.show_nutrient_particles && !self.headless_no_render {
                 self.extract_nutrient_particles(&mut encoder, device, queue, dt);
@@ -9409,6 +9632,16 @@ impl Scene for GpuScene {
             }
         }
 
+        // End of "Skins & Water Mesh" segment (adhesion lines, organism skins,
+        // fluid voxels, water/ice density mesh) - split from the particle/fog
+        // work below so the performance monitor can tell which half of the
+        // old combined "Skins & Effects" segment is actually expensive.
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 4);
+            }
+        }
+
         // Render steam particles if enabled (uses cached camera bind group)
         if self.show_steam_particles {
             if let (
@@ -9449,6 +9682,25 @@ impl Scene for GpuScene {
                     render_bind_group,
                 );
             }
+        }
+
+        // Render rain splash rings (uses cached camera bind group)
+        if let (
+            Some(ref rain_splash_particle_renderer),
+            Some(ref render_bind_group),
+            Some(ref camera_bind_group),
+        ) = (
+            &self.rain_splash_particle_renderer,
+            &self.rain_splash_render_bind_group,
+            &self.env_camera_bind_group_rain_splash,
+        ) {
+            rain_splash_particle_renderer.render(
+                &mut encoder,
+                scene_target,
+                &self.renderer.depth_view,
+                camera_bind_group,
+                render_bind_group,
+            );
         }
 
         // Render nutrient particles if enabled (uses cached camera bind group)
@@ -9569,10 +9821,10 @@ impl Scene for GpuScene {
             );
         }
 
-        // End of "Skins & Effects" segment.
+        // End of "Particles & Fog" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 4);
+                timer.write_timestamp(&mut encoder, 5);
             }
         }
 
@@ -9597,9 +9849,18 @@ impl Scene for GpuScene {
             );
         }
 
-        // Post-process (contrast + eye adaptation): always writes to swapchain.
+        // Post-process (contrast + eye adaptation + underwater/boundary tint):
+        // always writes to swapchain.
         if let Some(pp) = self.post_process.as_mut() {
-            pp.render(&mut encoder, queue, view);
+            pp.render(
+                &mut encoder,
+                queue,
+                view,
+                self.listener_underwater_fraction,
+                self.world_boundary_proximity,
+                self.water_crossing_pulse,
+                self.world_boundary_crossing_pulse,
+            );
         }
 
         // Start async cell count readback (copy to readback buffer). This tiny
@@ -9614,7 +9875,7 @@ impl Scene for GpuScene {
         // End of "Post-Process" segment, and final resolve for this frame's queries.
         if self.gpu_timing_enabled {
             if let Some(ref mut timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 5);
+                timer.write_timestamp(&mut encoder, 6);
                 timer.resolve(&mut encoder);
             }
         }
@@ -9707,19 +9968,31 @@ impl Scene for GpuScene {
         if self.show_water_particles {
             self.poll_water_particle_count(device);
         }
+        self.poll_rain_splash_particle_count(device);
         if let Some(ref fluid_sim) = self.fluid_simulator {
             fluid_sim.poll_water_audio_summary(device);
             self.flowing_water_audio_sources = fluid_sim.flow_audio_sources();
             self.rain_audio_sources = fluid_sim.rain_audio_sources();
             self.rain_audio_intensity = fluid_sim.rain_audio_intensity();
+            // Must stay after this frame's queue.submit() (like every other
+            // readback poll here) - map_async on a buffer that still has a
+            // just-encoded, not-yet-submitted write queued against it is
+            // invalid and previously caused a "still mapped" panic at submit
+            // time. This means the post-process pass (encoded earlier, before
+            // submit) always reads the *previous* frame's value here, same
+            // one-frame lag every other readback-driven system in this file
+            // already has - not fixable by reordering within a single frame.
             fluid_sim.poll_listener_water(device);
             self.listener_underwater = fluid_sim.is_listener_underwater();
+            self.listener_underwater_fraction = fluid_sim.listener_water_fraction();
         } else {
             self.flowing_water_audio_sources.clear();
             self.rain_audio_sources.clear();
             self.rain_audio_intensity = 0.0;
             self.listener_underwater = false;
+            self.listener_underwater_fraction = 0.0;
         }
+        self.update_boundary_visual_state();
 
         // Poll for nutrient particle count (GPU readback)
         if self.show_nutrient_particles {

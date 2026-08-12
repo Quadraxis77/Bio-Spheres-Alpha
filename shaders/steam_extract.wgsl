@@ -231,6 +231,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         particle.size = params.cell_size * 1.5;  // Slightly larger than voxel
         // Steam color: white/grey, wispy
         particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * light, 0.01);
+
+        // Gentle per-particle drift, independent of the underlying voxel's
+        // own timing. Regular steam is re-extracted fresh from live voxel
+        // occupancy every step with no persistent per-particle velocity, so
+        // it otherwise looks perfectly static between the fluid sim's own
+        // (now-staggered, but still discrete) rise jumps. A small continuous
+        // wobble - unique phase/frequency per particle via a position hash -
+        // makes each wisp read as independently adrift instead of frozen to
+        // the grid, without moving it far enough to visibly leave its voxel.
+        let drift_seed = hash_u32(idx ^ 0x51ed270bu);
+        let drift_up = anti_gravity_dir(world_pos);
+        let drift_side_seed = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(drift_up.y) < 0.92);
+        let drift_side = normalize(cross(drift_side_seed, drift_up));
+        let drift_fwd = normalize(cross(drift_up, drift_side));
+        let drift_freq = mix(0.5, 1.3, random_float(drift_seed + 1u));
+        let drift_phase = random_float(drift_seed + 2u) * 6.2831853;
+        let drift_angle = random_float(drift_seed + 3u) * 6.2831853
+            + params.time * mix(0.3, 0.7, random_float(drift_seed + 4u));
+        let drift_amp = params.cell_size * mix(0.12, 0.32, random_float(drift_seed + 5u));
+        let lateral_drift = (drift_side * cos(drift_angle) + drift_fwd * sin(drift_angle))
+            * drift_amp * sin(params.time * drift_freq + drift_phase);
+        let vertical_bob = drift_up * params.cell_size * 0.15
+            * sin(params.time * drift_freq * 1.7 + drift_phase);
+        particle.position = world_pos + lateral_drift + vertical_bob;
     }
 
     // Animation data (time offset based on position for variation)

@@ -2,7 +2,10 @@ struct SummaryParams {
     grid_resolution: u32,
     bucket_resolution: u32,
     gravity_mode: u32,
-    _pad0: u32,
+    // Only every sample_stride-th voxel along each axis is examined (see
+    // WATER_AUDIO_SAMPLE_STRIDE on the Rust side) - counts are scaled back up
+    // by stride^3 below so bucket strength stays comparable to a full scan.
+    sample_stride: u32,
     grid_origin: vec3<f32>,
     cell_size: f32,
 }
@@ -59,8 +62,10 @@ fn gravity_dir(world_pos: vec3<f32>) -> vec3<f32> {
 }
 
 @compute @workgroup_size(4, 4, 4)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn main(@builtin(global_invocation_id) sample_id: vec3<u32>) {
     let res = params.grid_resolution;
+    let stride = max(params.sample_stride, 1u);
+    let gid = sample_id * stride;
     if gid.x >= res || gid.y >= res || gid.z >= res {
         return;
     }
@@ -81,9 +86,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let world_pos = params.grid_origin + (vec3<f32>(gid) + vec3<f32>(0.5)) * params.cell_size;
     let falling = dot(normalize(velocity), gravity_dir(world_pos)) > 0.65;
+    // Scale back up by the voxels each sample stands in for, so bucket
+    // strength stays comparable to what a full (stride=1) scan would report.
+    let weight = stride * stride * stride;
     if falling {
-        atomicAdd(&buckets[bucket_idx].rain_count, 1u);
+        atomicAdd(&buckets[bucket_idx].rain_count, weight);
     } else {
-        atomicAdd(&buckets[bucket_idx].flow_count, 1u);
+        atomicAdd(&buckets[bucket_idx].flow_count, weight);
     }
 }
