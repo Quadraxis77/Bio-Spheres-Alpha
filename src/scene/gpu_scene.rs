@@ -464,6 +464,12 @@ pub struct GpuScene {
     pub rain_audio_sources:
         Vec<crate::simulation::fluid_simulation::gpu_simulator::WaterAudioSource>,
     pub rain_audio_intensity: f32,
+    /// Whether the camera is currently inside water, from a per-frame GPU
+    /// voxel-occupancy query (see `GpuFluidSimulator::set_listener_position`/
+    /// `poll_listener_water`). Covers local/partial water pools, unlike
+    /// `is_static_water_world_enabled` which only reflects the whole-world-
+    /// filled configuration.
+    pub listener_underwater: bool,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
@@ -1120,6 +1126,7 @@ impl GpuScene {
             flowing_water_audio_sources: Vec::new(),
             rain_audio_sources: Vec::new(),
             rain_audio_intensity: 0.0,
+            listener_underwater: false,
             moss_system: None,
             show_moss: true,
             moss_needs_clear: false,
@@ -6998,6 +7005,7 @@ impl GpuScene {
             // sun_intensity is now also 0-5 to match directly.
             simulator.set_sun_brightness(self.sun_intensity);
             simulator.set_water_drag_strength(queue, self.water_viscosity);
+            simulator.set_listener_position(self.camera.position());
             simulator.step(
                 device,
                 queue,
@@ -9704,10 +9712,13 @@ impl Scene for GpuScene {
             self.flowing_water_audio_sources = fluid_sim.flow_audio_sources();
             self.rain_audio_sources = fluid_sim.rain_audio_sources();
             self.rain_audio_intensity = fluid_sim.rain_audio_intensity();
+            fluid_sim.poll_listener_water(device);
+            self.listener_underwater = fluid_sim.is_listener_underwater();
         } else {
             self.flowing_water_audio_sources.clear();
             self.rain_audio_sources.clear();
             self.rain_audio_intensity = 0.0;
+            self.listener_underwater = false;
         }
 
         // Poll for nutrient particle count (GPU readback)

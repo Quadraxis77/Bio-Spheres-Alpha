@@ -355,14 +355,15 @@ impl App {
             }
         }
 
-        // Only detects the "whole world is water" configuration - localized
-        // water pools don't have a cheap CPU-side occupancy query available
-        // without a GPU readback, so they're not reflected here yet.
+        // Whole-world-filled water (static water world) OR the camera
+        // currently sitting inside a local/partial water pool, from the
+        // per-frame GPU voxel-occupancy query (`gpu_scene.listener_underwater`).
         let underwater = gpu_scene
             .fluid_simulator
             .as_ref()
             .map(|sim| sim.is_static_water_world_enabled())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || gpu_scene.listener_underwater;
 
         log::warn!(
             "[audio-diag] world env: took={:?} has_cave_renderer={has_cave_renderer} nearest={nearest:?} underwater={underwater} flow_sources={} rain_sources={} rain_intensity={:.2}",
@@ -2776,8 +2777,9 @@ impl App {
         let camera = self.scene_manager.active_scene().camera();
         self.audio
             .set_listener_from_camera(camera.position(), camera.rotation);
-        self.audio.set_listener_environment(false);
         if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+            self.audio
+                .set_listener_environment(gpu_scene.listener_underwater);
             let flow_sources: Vec<_> = gpu_scene
                 .flowing_water_audio_sources
                 .iter()
@@ -2799,6 +2801,8 @@ impl App {
                 &rain_sources,
                 gpu_scene.rain_audio_intensity,
             );
+        } else {
+            self.audio.set_listener_environment(false);
         }
         self.update_audio_world_environment(camera.position());
         for event in self.scene_manager.drain_audio_events() {

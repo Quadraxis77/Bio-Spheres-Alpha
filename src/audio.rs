@@ -160,8 +160,17 @@ const THERMAL_VENT_VOLUME_TWEEN: Duration = Duration::from_millis(220);
 const FLOWING_WATER_PATH: &str =
     "assets/sfx/environment/water/creek_06_loop_vkproduktion_cc0_preview.ogg";
 const RAIN_LOOP_PATH: &str = "assets/sfx/environment/rain/rain_loopable_ylmir_cc0.ogg";
-const FLOWING_WATER_MAX_VOICES: usize = 12;
-const RAIN_MAX_VOICES: usize = 8;
+// Generous headroom above what any real scene is expected to need
+// simultaneously - kept well above the GPU-side MAX_FLOW_SOURCES/
+// MAX_RAIN_SOURCES caps (water_audio_sources_from_buckets in gpu_simulator.rs)
+// so this truncation is a safety ceiling, not an active cutoff. A tight cap
+// here used to mean sources at the "Nth nearest" boundary would spawn/stop as
+// the camera moved past it, instead of smoothly crossfading via distance
+// falloff like every other source - every source that actually reaches this
+// layer now gets its own persistent voice, so proximity alone (continuously,
+// via `update_environmental_loop_voice_group`) decides how audible it is.
+const FLOWING_WATER_MAX_VOICES: usize = 64;
+const RAIN_MAX_VOICES: usize = 40;
 const FLOWING_WATER_FULL_VOLUME_RADIUS: f32 = 60.0;
 const FLOWING_WATER_AUDIBLE_RADIUS: f32 = 260.0;
 const FLOWING_WATER_FAR_GAIN: f32 = 0.14;
@@ -170,9 +179,14 @@ const RAIN_FULL_VOLUME_RADIUS: f32 = 120.0;
 const RAIN_AUDIBLE_RADIUS: f32 = 420.0;
 const RAIN_FAR_GAIN: f32 = 0.28;
 const RAIN_SILENCE_RADIUS: f32 = 700.0;
-const FLOWING_WATER_BASE_VOLUME: f32 = 3.4;
-const RAIN_BASE_VOLUME: f32 = 3.0;
+const FLOWING_WATER_BASE_VOLUME: f32 = 0.55;
+const RAIN_BASE_VOLUME: f32 = 0.5;
 const WATER_AMBIENCE_VOLUME_TWEEN: Duration = Duration::from_millis(280);
+// Significant, deliberately obvious down-pitch for flowing water/rain loops
+// while the listener is underwater - multiplies each voice's own base pitch
+// (see `EnvironmentalLoopVoice::base_pitch`) rather than replacing it, so the
+// natural per-voice variation is preserved, just transposed down.
+const UNDERWATER_AMBIENCE_PITCH_MULTIPLIER: f32 = 0.5;
 const BUTTON_HOVER_BYTES: &[u8] =
     include_bytes!("../assets/sfx/processed/button_click/h_click4_hover.mp3");
 const BUTTON_SELECT_BYTES: &[u8] =
@@ -380,6 +394,11 @@ pub struct EnvironmentalAudioSource {
 struct EnvironmentalLoopVoice {
     position: Vec3,
     strength: f32,
+    /// Playback rate this voice was spawned with (natural per-voice variation,
+    /// see `spawn_environmental_loop_voices`) - kept so the continuous
+    /// underwater pitch multiplier in `update_environmental_loop_voice_group`
+    /// can be applied on top of it each frame instead of overwriting it.
+    base_pitch: f32,
     handle: StaticSoundHandle,
 }
 
@@ -543,26 +562,6 @@ fn thermal_vent_pitch(position: Vec3, index: usize) -> f32 {
     0.82 + unit * 0.12
 }
 
-fn same_environmental_source_positions(
-    a: &[EnvironmentalAudioSource],
-    b: &[EnvironmentalAudioSource],
-) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(a, b)| a.position.distance_squared(b.position) < 4096.0)
-}
-
-fn sync_environmental_voice_strengths(
-    voices: &mut [EnvironmentalLoopVoice],
-    sources: &[EnvironmentalAudioSource],
-) {
-    for (voice, source) in voices.iter_mut().zip(sources) {
-        voice.position = source.position;
-        voice.strength = source.strength.clamp(0.0, 1.0);
-    }
-}
-
 fn update_environmental_loop_voice_group(
     listener: &AudioListener,
     voices: &mut Vec<EnvironmentalLoopVoice>,
@@ -572,6 +571,7 @@ fn update_environmental_loop_voice_group(
     far_gain: f32,
     silence_radius: f32,
     group_gain: f32,
+    pitch_multiplier: f32,
 ) {
     if voices.is_empty() {
         return;
@@ -601,6 +601,10 @@ fn update_environmental_loop_voice_group(
         voice
             .handle
             .set_panning(Panning(listener.pan(voice.position)), tween);
+        voice.handle.set_playback_rate(
+            PlaybackRate((voice.base_pitch * pitch_multiplier) as f64),
+            tween,
+        );
     }
 
     voices.retain(|voice| voice.handle.state() != PlaybackState::Stopped);
@@ -1130,39 +1134,84 @@ impl AudioLayer {
         });
         rain.truncate(RAIN_MAX_VOICES);
 
-        let same_flow = same_environmental_source_positions(&self.flowing_water_sources, &flow);
-        let same_rain = same_environmental_source_positions(&self.rain_sources, &rain);
-        if same_flow && same_rain {
-            self.flowing_water_sources = flow;
-            self.rain_sources = rain;
-            self.rain_intensity = rain_intensity;
-            sync_environmental_voice_strengths(
-                &mut self.flowing_water_voices,
-                &self.flowing_water_sources,
-            );
-            sync_environmental_voice_strengths(&mut self.rain_voices, &self.rain_sources);
-            return;
-        }
-
-        self.stop_environmental_loop_voices();
-        self.flowing_water_sources = flow;
-        self.rain_sources = rain;
-        self.rain_intensity = rain_intensity;
-
         let flow_loop = self.flowing_water_loop.clone();
-        let rain_loop = self.rain_loop.clone();
-        let flow_sources = self.flowing_water_sources.clone();
-        let rain_sources = self.rain_sources.clone();
-        if let Some(base_loop) = flow_loop {
-            self.flowing_water_voices =
-                self.spawn_environmental_loop_voices(base_loop, &flow_sources, 0xA611);
-        }
+        let mut flow_voices = std::mem::take(&mut self.flowing_water_voices);
+        self.reconcile_environmental_loop_voices(&mut flow_voices, &flow, flow_loop, 0xA611);
+        self.flowing_water_voices = flow_voices;
+        self.flowing_water_sources = flow;
+
         if rain_intensity > 0.0 {
-            if let Some(base_loop) = rain_loop {
-                self.rain_voices =
-                    self.spawn_environmental_loop_voices(base_loop, &rain_sources, 0xB411);
+            let rain_loop = self.rain_loop.clone();
+            let mut rain_voices = std::mem::take(&mut self.rain_voices);
+            self.reconcile_environmental_loop_voices(&mut rain_voices, &rain, rain_loop, 0xB411);
+            self.rain_voices = rain_voices;
+        } else {
+            for mut voice in self.rain_voices.drain(..) {
+                voice.handle.stop(fade_tween(WATER_AMBIENCE_VOLUME_TWEEN));
             }
         }
+        self.rain_sources = rain;
+        self.rain_intensity = rain_intensity;
+    }
+
+    /// Matches existing voices to current sources by position rather than
+    /// list index. `sources` is freshly re-sorted on every call - by
+    /// distance-to-listener here, and by a strength value that fluctuates
+    /// every physics step on the GPU extraction side - so index-based
+    /// matching (the old approach) treated harmless reordering as every
+    /// source disappearing and reappearing, tearing every voice down and
+    /// rebuilding it before its fade-in ever finished. Position-based
+    /// matching only actually spawns or stops a voice when a source
+    /// genuinely appears or disappears.
+    fn reconcile_environmental_loop_voices(
+        &mut self,
+        voices: &mut Vec<EnvironmentalLoopVoice>,
+        sources: &[EnvironmentalAudioSource],
+        base_loop: Option<StaticSoundData>,
+        salt: usize,
+    ) {
+        let mut matched = vec![false; sources.len()];
+        voices.retain_mut(|voice| {
+            let closest = sources
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !matched[*i])
+                .min_by(|(_, a), (_, b)| {
+                    voice
+                        .position
+                        .distance_squared(a.position)
+                        .total_cmp(&voice.position.distance_squared(b.position))
+                });
+            match closest {
+                Some((idx, source))
+                    if voice.position.distance_squared(source.position) < 4096.0 =>
+                {
+                    matched[idx] = true;
+                    voice.position = source.position;
+                    voice.strength = source.strength.clamp(0.0, 1.0);
+                    true
+                }
+                _ => {
+                    voice.handle.stop(fade_tween(WATER_AMBIENCE_VOLUME_TWEEN));
+                    false
+                }
+            }
+        });
+
+        let Some(base_loop) = base_loop else {
+            return;
+        };
+        let new_sources: Vec<EnvironmentalAudioSource> = sources
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !matched[*i])
+            .map(|(_, source)| *source)
+            .collect();
+        if new_sources.is_empty() {
+            return;
+        }
+        let spawned = self.spawn_environmental_loop_voices(base_loop, &new_sources, salt);
+        voices.extend(spawned);
     }
 
     fn spawn_environmental_loop_voices(
@@ -1198,6 +1247,7 @@ impl AudioLayer {
                 voices.push(EnvironmentalLoopVoice {
                     position: source.position,
                     strength: source.strength.clamp(0.0, 1.0),
+                    base_pitch: pitch,
                     handle,
                 });
             }
@@ -1218,6 +1268,11 @@ impl AudioLayer {
     }
 
     fn update_environmental_loops(&mut self) {
+        let pitch_multiplier = if self.listener_underwater {
+            UNDERWATER_AMBIENCE_PITCH_MULTIPLIER
+        } else {
+            1.0
+        };
         update_environmental_loop_voice_group(
             &self.listener,
             &mut self.flowing_water_voices,
@@ -1227,6 +1282,7 @@ impl AudioLayer {
             FLOWING_WATER_FAR_GAIN,
             FLOWING_WATER_SILENCE_RADIUS,
             1.0,
+            pitch_multiplier,
         );
         update_environmental_loop_voice_group(
             &self.listener,
@@ -1237,6 +1293,7 @@ impl AudioLayer {
             RAIN_FAR_GAIN,
             RAIN_SILENCE_RADIUS,
             self.rain_intensity,
+            pitch_multiplier,
         );
     }
 

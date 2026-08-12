@@ -21,6 +21,14 @@ const DEFAULT_MELT_RATE: f32 = 1.5;
 const DEFAULT_SNOW_MELT_RATE: f32 = 3.0;
 /// Default snow compaction debt rate (debt units per tick per degree below freeze threshold) - sustained cold packs snow into ice.
 const DEFAULT_SNOW_COMPACT_RATE: f32 = 1.0;
+// Smoothing for the listener underwater occupancy query (see
+// `GpuFluidSimulator::poll_listener_water`): an exponential moving average of
+// the raw per-sample occupancy, read out through a hysteresis band so a
+// listener sitting right at a wavy/bobbing water surface doesn't flip the
+// underwater state every other frame.
+const LISTENER_WATER_SMOOTH_TIME_CONSTANT: f32 = 0.35;
+const LISTENER_WATER_ENTER_THRESHOLD: f32 = 0.65;
+const LISTENER_WATER_EXIT_THRESHOLD: f32 = 0.35;
 const WATER_AUDIO_BUCKET_RESOLUTION: u32 = 8;
 const WATER_AUDIO_BUCKET_COUNT: usize = (WATER_AUDIO_BUCKET_RESOLUTION
     * WATER_AUDIO_BUCKET_RESOLUTION
@@ -279,6 +287,29 @@ pub struct GpuFluidSimulator {
     rain_audio_sources: std::cell::RefCell<Vec<WaterAudioSource>>,
     rain_audio_intensity: std::cell::Cell<f32>,
 
+    /// Single-voxel occupancy query for "is the listener currently inside
+    /// water" - needed for partial/local water pools, where (unlike the
+    /// static-water-world flag) there's no single boolean covering the whole
+    /// scene. Cheap: one 4-byte copy + async readback per frame, same
+    /// map_async/poll pattern as the water audio summary above, just reading
+    /// `fluid_state` occupancy directly instead of derived velocity buckets
+    /// (a calm, non-flowing pool wouldn't register in the audio buckets at
+    /// all, so those can't answer "is there water here").
+    listener_grid_index: std::cell::Cell<Option<u32>>,
+    listener_water_staging_buffer: wgpu::Buffer,
+    listener_water_readback_receiver:
+        std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
+    listener_water_copy_pending: std::cell::Cell<bool>,
+    /// Exponential moving average of the raw per-sample occupancy (0.0 = air,
+    /// 1.0 = water), and the last time it was updated - smooths out single-
+    /// voxel readback noise near a water surface (wave motion, camera
+    /// bobbing) so `listener_underwater` doesn't flip every other frame.
+    listener_water_fraction: std::cell::Cell<f32>,
+    listener_water_smoothed_at: std::cell::Cell<std::time::Instant>,
+    /// Hysteresis output derived from `listener_water_fraction` - see
+    /// `poll_listener_water`.
+    listener_underwater: std::cell::Cell<bool>,
+
     // Water bitfield for fast cell-water detection (32x compressed)
     water_bitfield_buffer: wgpu::Buffer,
     ice_bitfield_buffer: wgpu::Buffer,
@@ -433,6 +464,12 @@ impl GpuFluidSimulator {
         let water_audio_bucket_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Water Audio Bucket Staging Buffer"),
             size: water_audio_bucket_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let listener_water_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Listener Water Staging Buffer"),
+            size: std::mem::size_of::<u32>() as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -1278,6 +1315,13 @@ impl GpuFluidSimulator {
             flow_audio_sources: std::cell::RefCell::new(Vec::new()),
             rain_audio_sources: std::cell::RefCell::new(Vec::new()),
             rain_audio_intensity: std::cell::Cell::new(0.0),
+            listener_grid_index: std::cell::Cell::new(None),
+            listener_water_staging_buffer,
+            listener_water_readback_receiver: std::cell::RefCell::new(None),
+            listener_water_copy_pending: std::cell::Cell::new(false),
+            listener_water_fraction: std::cell::Cell::new(0.0),
+            listener_water_smoothed_at: std::cell::Cell::new(std::time::Instant::now()),
+            listener_underwater: std::cell::Cell::new(false),
             water_bitfield_buffer,
             ice_bitfield_buffer,
             water_grid_params_buffer,
@@ -1609,6 +1653,122 @@ impl GpuFluidSimulator {
         self.gravity_mode.set(mode);
     }
 
+    /// Records which voxel the listener currently occupies, for the
+    /// underwater occupancy query - cheap CPU-only bookkeeping, the actual
+    /// GPU readback happens in `step`/`poll_listener_water`. Positions
+    /// outside the simulated grid (e.g. camera outside the world sphere)
+    /// can't be underwater by definition, so this resolves that case
+    /// immediately without waiting on a readback.
+    pub fn set_listener_position(&self, position: Vec3) {
+        let world_diameter = self.world_radius * 2.0;
+        let cell_size = world_diameter / GRID_RESOLUTION as f32;
+        let grid_origin = self.world_center - Vec3::splat(world_diameter * 0.5);
+        let local = (position - grid_origin) / cell_size;
+        let res = GRID_RESOLUTION as i32;
+        let x = local.x.floor() as i32;
+        let y = local.y.floor() as i32;
+        let z = local.z.floor() as i32;
+        if x < 0 || y < 0 || z < 0 || x >= res || y >= res || z >= res {
+            self.listener_grid_index.set(None);
+            self.listener_underwater.set(false);
+            // Also reset the average, not just the hysteresis output - otherwise
+            // re-entering the grid with a stale high fraction from before could
+            // satisfy the enter threshold on the very first fresh air sample.
+            self.listener_water_fraction.set(0.0);
+            return;
+        }
+        let index = x as u32 + y as u32 * GRID_RESOLUTION + z as u32 * GRID_RESOLUTION * GRID_RESOLUTION;
+        self.listener_grid_index.set(Some(index));
+    }
+
+    /// Whether the listener's last-recorded voxel (see `set_listener_position`)
+    /// was water, as of the most recent completed `poll_listener_water`. Used
+    /// to switch ambient tone/echo/SFX filtering for local, partial water
+    /// pools - unlike `is_static_water_world_enabled`, which only covers the
+    /// whole-world-filled configuration.
+    pub fn is_listener_underwater(&self) -> bool {
+        self.listener_underwater.get()
+    }
+
+    /// Queues (if needed) and polls the async readback of the listener's
+    /// voxel state, same map_async/poll pattern as `poll_water_audio_summary`.
+    /// Call once per frame alongside it.
+    pub fn poll_listener_water(&self, device: &wgpu::Device) {
+        if self.listener_water_copy_pending.replace(false) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.listener_water_staging_buffer.slice(..).map_async(
+                wgpu::MapMode::Read,
+                move |result| {
+                    tx.send(result).ok();
+                },
+            );
+            *self.listener_water_readback_receiver.borrow_mut() = Some(rx);
+        }
+
+        let _ = device.poll(wgpu::PollType::Poll);
+        let receiver_ref = self.listener_water_readback_receiver.borrow();
+        let Some(rx) = receiver_ref.as_ref() else {
+            return;
+        };
+        let result = rx.try_recv();
+        drop(receiver_ref);
+        match result {
+            Ok(Ok(())) => {
+                {
+                    let data = self.listener_water_staging_buffer.slice(..).get_mapped_range();
+                    let value: &[u32] = bytemuck::cast_slice(&data);
+                    let state = value.first().copied().unwrap_or(0);
+                    let sample = if (state & 0x7) == 1 { 1.0 } else { 0.0 };
+
+                    let now = std::time::Instant::now();
+                    let dt = now
+                        .duration_since(self.listener_water_smoothed_at.get())
+                        .as_secs_f32();
+                    self.listener_water_smoothed_at.set(now);
+                    let alpha = 1.0 - (-dt / LISTENER_WATER_SMOOTH_TIME_CONSTANT).exp();
+                    let smoothed =
+                        self.listener_water_fraction.get() + (sample - self.listener_water_fraction.get()) * alpha;
+                    self.listener_water_fraction.set(smoothed);
+
+                    let next = if self.listener_underwater.get() {
+                        smoothed >= LISTENER_WATER_EXIT_THRESHOLD
+                    } else {
+                        smoothed >= LISTENER_WATER_ENTER_THRESHOLD
+                    };
+                    self.listener_underwater.set(next);
+                }
+                self.listener_water_staging_buffer.unmap();
+                *self.listener_water_readback_receiver.borrow_mut() = None;
+            }
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                *self.listener_water_readback_receiver.borrow_mut() = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    /// Queues a copy of the listener's current voxel state into the staging
+    /// buffer, if one isn't already in flight. Called at the end of `step`
+    /// so it reflects that step's final state, same as `update_water_audio_summary`.
+    fn update_listener_water_query(&self, encoder: &mut wgpu::CommandEncoder) {
+        let Some(index) = self.listener_grid_index.get() else {
+            return;
+        };
+        if !self.listener_water_copy_pending.get()
+            && self.listener_water_readback_receiver.borrow().is_none()
+        {
+            let offset = (index as u64) * std::mem::size_of::<u32>() as u64;
+            encoder.copy_buffer_to_buffer(
+                &self.state_buffer,
+                offset,
+                &self.listener_water_staging_buffer,
+                0,
+                std::mem::size_of::<u32>() as u64,
+            );
+            self.listener_water_copy_pending.set(true);
+        }
+    }
+
     /// Set surface pressure (tangential smoothing strength for radial mode, 0.0-1.0)
     pub fn set_surface_pressure(&self, pressure: f32) {
         self.surface_pressure.set(pressure);
@@ -1895,6 +2055,7 @@ impl GpuFluidSimulator {
         }
 
         self.update_water_audio_summary(queue, encoder);
+        self.update_listener_water_query(encoder);
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
@@ -2372,8 +2533,16 @@ fn water_audio_sources_from_buckets(
     world_radius: f32,
     world_center: Vec3,
 ) -> (Vec<WaterAudioSource>, Vec<WaterAudioSource>, f32) {
-    const MAX_FLOW_SOURCES: usize = 12;
-    const MAX_RAIN_SOURCES: usize = 8;
+    // Kept in lockstep with FLOWING_WATER_MAX_VOICES/RAIN_MAX_VOICES in
+    // audio.rs - this is the actual limiting cap (audio.rs's is a safety
+    // ceiling above it), sized generously so real scenes essentially never
+    // hit it. A tight cap here selected the top-N buckets by raw strength
+    // with no regard to the listener's position, so which sources survived
+    // could shuffle independent of (and be misread as caused by) camera
+    // movement, each shuffle popping a voice in or out instead of it just
+    // fading with distance like every other source.
+    const MAX_FLOW_SOURCES: usize = 64;
+    const MAX_RAIN_SOURCES: usize = 40;
     const FLOW_BUCKET_FULL_COUNT: f32 = 8.0;
     const RAIN_BUCKET_FULL_COUNT: f32 = 8.0;
 
