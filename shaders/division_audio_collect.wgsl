@@ -28,10 +28,21 @@ struct DivisionAudioParams {
 
 struct DivisionAudioCandidate {
     distance_fixed: u32,
-    _pad0: u32,
+    environment_flags: u32,
     _pad1: u32,
     _pad2: u32,
     position: vec4<f32>,
+}
+
+struct WaterGridParams {
+    grid_resolution: u32,
+    cell_size: f32,
+    grid_origin_x: f32,
+    grid_origin_y: f32,
+    grid_origin_z: f32,
+    buoyancy_multiplier: f32,
+    water_viscosity: f32,
+    _pad1: f32,
 }
 
 @group(0) @binding(0)
@@ -100,86 +111,64 @@ var<storage, read_write> candidates: array<DivisionAudioCandidate>;
 @group(2) @binding(3)
 var<storage, read_write> candidate_count: array<atomic<u32>>;
 
+@group(2) @binding(4)
+var<uniform> water_params: WaterGridParams;
+
+@group(2) @binding(5)
+var<storage, read> water_bitfield: array<u32>;
+
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const EMPTY_DISTANCE: u32 = 0xffffffffu;
+const ENV_EMITTER_UNDERWATER: u32 = 1u;
+const ENV_LISTENER_UNDERWATER: u32 = 2u;
 
-fn grid_index(coords: vec3<i32>, resolution: i32) -> u32 {
-    return u32(coords.x + coords.y * resolution + coords.z * resolution * resolution);
+fn water_voxel_at(world_pos: vec3<f32>) -> bool {
+    let res = water_params.grid_resolution;
+    if (res == 0u) {
+        return false;
+    }
+
+    let grid_pos = vec3<f32>(
+        (world_pos.x - water_params.grid_origin_x) / water_params.cell_size,
+        (world_pos.y - water_params.grid_origin_y) / water_params.cell_size,
+        (world_pos.z - water_params.grid_origin_z) / water_params.cell_size
+    );
+
+    if (grid_pos.x < 0.0 || grid_pos.x >= f32(res) ||
+        grid_pos.y < 0.0 || grid_pos.y >= f32(res) ||
+        grid_pos.z < 0.0 || grid_pos.z >= f32(res)) {
+        return false;
+    }
+
+    let gx = u32(grid_pos.x);
+    let gy = u32(grid_pos.y);
+    let gz = u32(grid_pos.z);
+    let x_groups = (res + 31u) / 32u;
+    let x_group = gx / 32u;
+    let bit_index = gx % 32u;
+    let bitfield_idx = x_group + gy * x_groups + gz * x_groups * res;
+
+    if (bitfield_idx >= arrayLength(&water_bitfield)) {
+        return false;
+    }
+
+    let bits = water_bitfield[bitfield_idx];
+    return (bits & (1u << bit_index)) != 0u;
 }
 
-fn grid_coords(index: u32, resolution: u32) -> vec3<i32> {
-    let z = index / (resolution * resolution);
-    let rem = index % (resolution * resolution);
-    let y = rem / resolution;
-    let x = rem % resolution;
-    return vec3<i32>(i32(x), i32(y), i32(z));
-}
-
-fn listener_grid_coords() -> vec3<i32> {
-    let grid_pos = (audio_params.listener_position + physics_params.world_size * 0.5)
-        / physics_params.grid_cell_size;
-    let max_coord = i32(audio_params.grid_resolution) - 1;
-    return clamp(vec3<i32>(grid_pos), vec3<i32>(0), vec3<i32>(max_coord));
-}
-
-fn append_candidate(distance_fixed: u32, position: vec3<f32>) {
+fn append_candidate(distance_fixed: u32, position: vec3<f32>, environment_flags: u32) {
     let slot = atomicAdd(&candidate_count[0], 1u);
     if (slot >= audio_params.max_candidates) {
         return;
     }
     candidates[slot].distance_fixed = distance_fixed;
+    candidates[slot].environment_flags = environment_flags;
     candidates[slot].position = vec4<f32>(position, 1.0);
 }
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let radius = audio_params.search_radius_cells;
-    let diameter = radius * 2u + 1u;
-    let bucket_count = diameter * diameter * diameter;
-    let slot_count = max(audio_params.max_cells_per_grid, 1u);
-    let bucket_slot_threads = bucket_count * slot_count;
-    let linear = global_id.x;
-    let center = listener_grid_coords();
-    let resolution = i32(audio_params.grid_resolution);
-
-    var cell_idx = 0u;
-
-    if (linear < bucket_slot_threads) {
-        let bucket_linear = linear / slot_count;
-        let slot = linear % slot_count;
-        let dz = i32(bucket_linear / (diameter * diameter)) - i32(radius);
-        let rem = bucket_linear % (diameter * diameter);
-        let dy = i32(rem / diameter) - i32(radius);
-        let dx = i32(rem % diameter) - i32(radius);
-
-        let coords = center + vec3<i32>(dx, dy, dz);
-        if (any(coords < vec3<i32>(0)) || any(coords >= vec3<i32>(resolution))) {
-            return;
-        }
-
-        let grid_idx = grid_index(coords, resolution);
-        let count = min(atomicLoad(&spatial_grid_counts[grid_idx]), audio_params.max_cells_per_grid);
-        if (slot >= count) {
-            return;
-        }
-
-        cell_idx = spatial_grid_cells[grid_idx * audio_params.max_cells_per_grid + slot];
-    } else {
-        let overflow_idx = linear - bucket_slot_threads;
-        let overflow_count = min(atomicLoad(&spatial_grid_overflow_count[0]), physics_params.cell_capacity);
-        if (overflow_idx >= overflow_count) {
-            return;
-        }
-
-        let overflow_grid_idx = spatial_grid_overflow_grid_indices[overflow_idx];
-        let coords = grid_coords(overflow_grid_idx, audio_params.grid_resolution);
-        let delta_grid = abs(coords - center);
-        if (any(delta_grid > vec3<i32>(i32(radius)))) {
-            return;
-        }
-
-        cell_idx = spatial_grid_overflow_cells[overflow_idx];
-    }
+    let cell_idx = global_id.x;
 
     if (cell_idx >= cell_count_buffer[0] || division_flags[cell_idx] != 1u) {
         return;
@@ -192,6 +181,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let delta = position_mass.xyz - audio_params.listener_position;
     let distance_sq = dot(delta, delta);
+
     let distance_fixed = min(u32(distance_sq * FIXED_POINT_SCALE), EMPTY_DISTANCE - 1u);
-    append_candidate(distance_fixed, position_mass.xyz);
+    var environment_flags = 0u;
+    if (water_voxel_at(position_mass.xyz)) {
+        environment_flags = environment_flags | ENV_EMITTER_UNDERWATER;
+    }
+    if (water_voxel_at(audio_params.listener_position)) {
+        environment_flags = environment_flags | ENV_LISTENER_UNDERWATER;
+    }
+    append_candidate(distance_fixed, position_mass.xyz, environment_flags);
 }

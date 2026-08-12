@@ -21,6 +21,10 @@ const DEFAULT_MELT_RATE: f32 = 1.5;
 const DEFAULT_SNOW_MELT_RATE: f32 = 3.0;
 /// Default snow compaction debt rate (debt units per tick per degree below freeze threshold) - sustained cold packs snow into ice.
 const DEFAULT_SNOW_COMPACT_RATE: f32 = 1.0;
+const WATER_AUDIO_BUCKET_RESOLUTION: u32 = 8;
+const WATER_AUDIO_BUCKET_COUNT: usize = (WATER_AUDIO_BUCKET_RESOLUTION
+    * WATER_AUDIO_BUCKET_RESOLUTION
+    * WATER_AUDIO_BUCKET_RESOLUTION) as usize;
 
 /// GPU fluid simulation parameters (must match shader)
 #[repr(C)]
@@ -103,6 +107,23 @@ pub struct ExtractParams {
     pub _pad3: f32,
     pub _pad4: f32,
     pub _pad5: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct WaterAudioSummaryParams {
+    grid_resolution: u32,
+    bucket_resolution: u32,
+    gravity_mode: u32,
+    _pad0: u32,
+    grid_origin: [f32; 3],
+    cell_size: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WaterAudioSource {
+    pub position: Vec3,
+    pub strength: f32,
 }
 
 /// Bitfield params (must match shader)
@@ -246,6 +267,17 @@ pub struct GpuFluidSimulator {
     // Water velocity field for cell drag (128^3 packed u32 per voxel, ~8MB)
     // Each u32 encodes the last movement direction of water at that voxel
     water_velocity_buffer: wgpu::Buffer,
+    water_audio_summary_pipeline: wgpu::ComputePipeline,
+    water_audio_summary_bind_group: wgpu::BindGroup,
+    water_audio_summary_params_buffer: wgpu::Buffer,
+    water_audio_bucket_buffer: wgpu::Buffer,
+    water_audio_bucket_staging_buffer: wgpu::Buffer,
+    water_audio_readback_receiver:
+        std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
+    water_audio_copy_pending: std::cell::Cell<bool>,
+    flow_audio_sources: std::cell::RefCell<Vec<WaterAudioSource>>,
+    rain_audio_sources: std::cell::RefCell<Vec<WaterAudioSource>>,
+    rain_audio_intensity: std::cell::Cell<f32>,
 
     // Water bitfield for fast cell-water detection (32x compressed)
     water_bitfield_buffer: wgpu::Buffer,
@@ -373,6 +405,126 @@ impl GpuFluidSimulator {
             size: buffer_size, // Same as state buffer: TOTAL_VOXELS * sizeof(u32)
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+        let water_audio_summary_params = WaterAudioSummaryParams {
+            grid_resolution: GRID_RESOLUTION,
+            bucket_resolution: WATER_AUDIO_BUCKET_RESOLUTION,
+            gravity_mode: 1,
+            _pad0: 0,
+            grid_origin: grid_origin.to_array(),
+            cell_size,
+        };
+        let water_audio_summary_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Water Audio Summary Params"),
+                contents: bytemuck::cast_slice(&[water_audio_summary_params]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+        let water_audio_bucket_size =
+            (WATER_AUDIO_BUCKET_COUNT * 2 * std::mem::size_of::<u32>()) as u64;
+        let water_audio_bucket_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Water Audio Bucket Buffer"),
+            size: water_audio_bucket_size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let water_audio_bucket_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Water Audio Bucket Staging Buffer"),
+            size: water_audio_bucket_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let water_audio_summary_shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Water Audio Summary Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../../shaders/water_audio_summary.wgsl").into(),
+                ),
+            });
+        let water_audio_summary_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Water Audio Summary Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let water_audio_summary_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Water Audio Summary Pipeline Layout"),
+                bind_group_layouts: &[&water_audio_summary_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let water_audio_summary_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Water Audio Summary Pipeline"),
+                layout: Some(&water_audio_summary_pipeline_layout),
+                module: &water_audio_summary_shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let water_audio_summary_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Water Audio Summary Bind Group"),
+            layout: &water_audio_summary_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: water_audio_summary_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: water_velocity_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: water_audio_bucket_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         // Climate accumulator: 6 atomic u32 slots (24 bytes), cleared and
@@ -1116,6 +1268,16 @@ impl GpuFluidSimulator {
             extract_bind_group_layout,
             bind_group_layout,
             water_velocity_buffer,
+            water_audio_summary_pipeline,
+            water_audio_summary_bind_group,
+            water_audio_summary_params_buffer,
+            water_audio_bucket_buffer,
+            water_audio_bucket_staging_buffer,
+            water_audio_readback_receiver: std::cell::RefCell::new(None),
+            water_audio_copy_pending: std::cell::Cell::new(false),
+            flow_audio_sources: std::cell::RefCell::new(Vec::new()),
+            rain_audio_sources: std::cell::RefCell::new(Vec::new()),
+            rain_audio_intensity: std::cell::Cell::new(0.0),
             water_bitfield_buffer,
             ice_bitfield_buffer,
             water_grid_params_buffer,
@@ -1395,6 +1557,7 @@ impl GpuFluidSimulator {
         encoder.clear_buffer(&self.humidity_buffer, 0, None);
         encoder.clear_buffer(&self.phase_debt_buffer, 0, None);
         encoder.clear_buffer(&self.water_velocity_buffer, 0, None);
+        encoder.clear_buffer(&self.water_audio_bucket_buffer, 0, None);
         encoder.clear_buffer(&self.water_bitfield_buffer, 0, None);
         encoder.clear_buffer(&self.ice_bitfield_buffer, 0, None);
         self.avg_humidity.set(0.0);
@@ -1730,6 +1893,51 @@ impl GpuFluidSimulator {
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
         }
+
+        self.update_water_audio_summary(queue, encoder);
+    }
+
+    fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        let world_diameter = self.world_radius * 2.0;
+        let cell_size = world_diameter / GRID_RESOLUTION as f32;
+        let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
+        let params = WaterAudioSummaryParams {
+            grid_resolution: GRID_RESOLUTION,
+            bucket_resolution: WATER_AUDIO_BUCKET_RESOLUTION,
+            gravity_mode: self.gravity_mode.get(),
+            _pad0: 0,
+            grid_origin: grid_origin.to_array(),
+            cell_size,
+        };
+        queue.write_buffer(
+            &self.water_audio_summary_params_buffer,
+            0,
+            bytemuck::cast_slice(&[params]),
+        );
+        encoder.clear_buffer(&self.water_audio_bucket_buffer, 0, None);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Water Audio Summary Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.water_audio_summary_pipeline);
+            pass.set_bind_group(0, &self.water_audio_summary_bind_group, &[]);
+            let workgroup_count = (GRID_RESOLUTION + 3) / 4;
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+
+        if !self.water_audio_copy_pending.get()
+            && self.water_audio_readback_receiver.borrow().is_none()
+        {
+            encoder.copy_buffer_to_buffer(
+                &self.water_audio_bucket_buffer,
+                0,
+                &self.water_audio_bucket_staging_buffer,
+                0,
+                self.water_audio_bucket_buffer.size(),
+            );
+            self.water_audio_copy_pending.set(true);
+        }
     }
 
     /// Get current state buffer
@@ -1891,6 +2099,65 @@ impl GpuFluidSimulator {
     /// Get the water velocity buffer for cell drag forces
     pub fn water_velocity_buffer(&self) -> &wgpu::Buffer {
         &self.water_velocity_buffer
+    }
+
+    pub fn poll_water_audio_summary(&self, device: &wgpu::Device) {
+        if self.water_audio_copy_pending.replace(false) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.water_audio_bucket_staging_buffer.slice(..).map_async(
+                wgpu::MapMode::Read,
+                move |result| {
+                    tx.send(result).ok();
+                },
+            );
+            *self.water_audio_readback_receiver.borrow_mut() = Some(rx);
+        }
+
+        let _ = device.poll(wgpu::PollType::Poll);
+        let receiver_ref = self.water_audio_readback_receiver.borrow();
+        let Some(rx) = receiver_ref.as_ref() else {
+            return;
+        };
+        let result = rx.try_recv();
+        drop(receiver_ref);
+        match result {
+            Ok(Ok(())) => {
+                {
+                    let data = self
+                        .water_audio_bucket_staging_buffer
+                        .slice(..)
+                        .get_mapped_range();
+                    let counts: &[u32] = bytemuck::cast_slice(&data);
+                    let (flow_sources, rain_sources, rain_intensity) =
+                        water_audio_sources_from_buckets(
+                            counts,
+                            self.world_radius,
+                            self.world_center,
+                        );
+                    *self.flow_audio_sources.borrow_mut() = flow_sources;
+                    *self.rain_audio_sources.borrow_mut() = rain_sources;
+                    self.rain_audio_intensity.set(rain_intensity);
+                }
+                self.water_audio_bucket_staging_buffer.unmap();
+                *self.water_audio_readback_receiver.borrow_mut() = None;
+            }
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                *self.water_audio_readback_receiver.borrow_mut() = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    pub fn flow_audio_sources(&self) -> Vec<WaterAudioSource> {
+        self.flow_audio_sources.borrow().clone()
+    }
+
+    pub fn rain_audio_sources(&self) -> Vec<WaterAudioSource> {
+        self.rain_audio_sources.borrow().clone()
+    }
+
+    pub fn rain_audio_intensity(&self) -> f32 {
+        self.rain_audio_intensity.get()
     }
 
     /// Get the water bitfield buffer for cell physics
@@ -2098,6 +2365,77 @@ impl GpuFluidSimulator {
     pub fn avg_humidity(&self) -> f32 {
         self.avg_humidity.get()
     }
+}
+
+fn water_audio_sources_from_buckets(
+    counts: &[u32],
+    world_radius: f32,
+    world_center: Vec3,
+) -> (Vec<WaterAudioSource>, Vec<WaterAudioSource>, f32) {
+    const MAX_FLOW_SOURCES: usize = 12;
+    const MAX_RAIN_SOURCES: usize = 8;
+    const FLOW_BUCKET_FULL_COUNT: f32 = 8.0;
+    const RAIN_BUCKET_FULL_COUNT: f32 = 8.0;
+
+    let bucket_res = WATER_AUDIO_BUCKET_RESOLUTION as usize;
+    let world_diameter = world_radius * 2.0;
+    let bucket_size = world_diameter / WATER_AUDIO_BUCKET_RESOLUTION as f32;
+    let origin = world_center - Vec3::splat(world_radius);
+
+    let mut flow = Vec::new();
+    let mut rain = Vec::new();
+    let mut total_rain = 0u32;
+
+    for bucket_idx in 0..WATER_AUDIO_BUCKET_COUNT {
+        let Some(&flow_count) = counts.get(bucket_idx * 2) else {
+            break;
+        };
+        let rain_count = counts.get(bucket_idx * 2 + 1).copied().unwrap_or(0);
+        total_rain = total_rain.saturating_add(rain_count);
+
+        let x = bucket_idx % bucket_res;
+        let y = (bucket_idx / bucket_res) % bucket_res;
+        let z = bucket_idx / (bucket_res * bucket_res);
+        let position = origin
+            + Vec3::new(
+                (x as f32 + 0.5) * bucket_size,
+                (y as f32 + 0.5) * bucket_size,
+                (z as f32 + 0.5) * bucket_size,
+            );
+
+        if flow_count > 0 {
+            flow.push(WaterAudioSource {
+                position,
+                strength: (flow_count as f32 / FLOW_BUCKET_FULL_COUNT).clamp(0.0, 1.0),
+            });
+        }
+        if rain_count > 0 {
+            rain.push(WaterAudioSource {
+                position,
+                strength: (rain_count as f32 / RAIN_BUCKET_FULL_COUNT).clamp(0.0, 1.0),
+            });
+        }
+    }
+
+    flow.sort_by(|a, b| b.strength.total_cmp(&a.strength));
+    rain.sort_by(|a, b| b.strength.total_cmp(&a.strength));
+    flow.truncate(MAX_FLOW_SOURCES);
+    rain.truncate(MAX_RAIN_SOURCES);
+
+    let raw_rain = (total_rain as f32 / 64.0).clamp(0.0, 1.0);
+    let rain_intensity = if raw_rain < 0.08 {
+        0.0
+    } else if raw_rain < 0.28 {
+        0.25
+    } else if raw_rain < 0.55 {
+        0.55
+    } else if raw_rain < 0.82 {
+        0.8
+    } else {
+        1.0
+    };
+
+    (flow, rain, rain_intensity)
 }
 
 // -- Snapshot support ----------------------------------------------------------

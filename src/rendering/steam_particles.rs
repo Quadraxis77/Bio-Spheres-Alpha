@@ -27,6 +27,8 @@ pub struct ExtractParams {
     pub time: f32,
     pub grid_origin: [f32; 3],
     pub sun_brightness: f32, // Normalized sun brightness (0-1.2) for particle lighting
+    pub gravity_mode: u32,   // 0=X, 1=Y, 2=Z, 3=radial
+    pub _padding: [u32; 3],
 }
 
 /// Particle counter (for atomic counting in compute shader)
@@ -426,6 +428,7 @@ impl SteamParticleRenderer {
         grid_origin: Vec3,
         cell_size: f32,
         sun_brightness: f32,
+        gravity_mode: u32,
         dt: f32,
     ) {
         self.time += dt;
@@ -441,6 +444,8 @@ impl SteamParticleRenderer {
             time: self.time,
             grid_origin: grid_origin.to_array(),
             sun_brightness,
+            gravity_mode,
+            _padding: [0; 3],
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 

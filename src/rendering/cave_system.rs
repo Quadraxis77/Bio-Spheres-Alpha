@@ -1227,6 +1227,175 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
     }
 }
 
+/// Surface type found by [`nearest_cave_wall`], for material-dependent ambient
+/// audio (a hard rock wall and a soft sandy floor should not echo the same way).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaveWallMaterial {
+    Rock,
+    Sand,
+}
+
+/// Result of a [`nearest_cave_wall`] query.
+#[derive(Debug, Clone, Copy)]
+pub struct CaveWallHit {
+    pub distance: f32,
+    pub material: CaveWallMaterial,
+}
+
+/// Cheap multi-ray search for the nearest cave wall or sandy floor around `from`,
+/// for ambient audio (echo distance + material). This is intentionally much
+/// coarser than `cave_sdf_push_out` (which needs per-frame collision accuracy) -
+/// it's meant to run a few times a second, not every frame.
+///
+/// Marches a fixed set of directions outward from `from` in fixed steps until
+/// each ray either crosses the solid-rock density threshold or reaches
+/// `max_distance`, and returns the closest hit across all directions.
+pub fn nearest_cave_wall(
+    from: Vec3,
+    params: &CaveParams,
+    max_distance: f32,
+) -> Option<CaveWallHit> {
+    if params.collision_enabled == 0 || max_distance <= 0.0 {
+        return None;
+    }
+
+    // -- helpers (mirrors cave_sdf_push_out / the WGSL density field) ----------
+
+    fn hash1(x: i32, y: i32, z: i32, seed: u32) -> f32 {
+        let mut h = seed;
+        h = h.wrapping_mul(374761393).wrapping_add(x as u32);
+        h = h.wrapping_mul(668265263).wrapping_add(y as u32);
+        h = h.wrapping_mul(1274126177).wrapping_add(z as u32);
+        h ^= h >> 13;
+        h = h.wrapping_mul(1274126177);
+        h ^= h >> 16;
+        h as f32 / u32::MAX as f32
+    }
+
+    fn smoothstep(t: f32) -> f32 {
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    fn value_noise_3d(p: Vec3, seed: u32) -> f32 {
+        let ix = p.x.floor() as i32;
+        let iy = p.y.floor() as i32;
+        let iz = p.z.floor() as i32;
+        let fx = p.x - p.x.floor();
+        let fy = p.y - p.y.floor();
+        let fz = p.z - p.z.floor();
+        let ux = smoothstep(fx);
+        let uy = smoothstep(fy);
+        let uz = smoothstep(fz);
+        let c000 = hash1(ix, iy, iz, seed);
+        let c100 = hash1(ix + 1, iy, iz, seed);
+        let c010 = hash1(ix, iy + 1, iz, seed);
+        let c110 = hash1(ix + 1, iy + 1, iz, seed);
+        let c001 = hash1(ix, iy, iz + 1, seed);
+        let c101 = hash1(ix + 1, iy, iz + 1, seed);
+        let c011 = hash1(ix, iy + 1, iz + 1, seed);
+        let c111 = hash1(ix + 1, iy + 1, iz + 1, seed);
+        let x00 = c000 + (c100 - c000) * ux;
+        let x10 = c010 + (c110 - c010) * ux;
+        let x01 = c001 + (c101 - c001) * ux;
+        let x11 = c011 + (c111 - c011) * ux;
+        let y0 = x00 + (x10 - x00) * uy;
+        let y1 = x01 + (x11 - x01) * uy;
+        y0 + (y1 - y0) * uz
+    }
+
+    let sample = |p: Vec3| -> f32 {
+        let world_center = Vec3::from(params.world_center);
+        if (p - world_center).length() > params.world_radius {
+            return 1.0;
+        }
+
+        if let Some(density) = flat_ground_density(p, params) {
+            return density;
+        }
+
+        let warp_scale = params.scale * 0.5;
+        let warp_strength = params.smoothness * params.scale;
+        let warp_seed = params.seed + 9999;
+        let wx = value_noise_3d(p / warp_scale, warp_seed) - 0.5;
+        let wy = value_noise_3d(p / warp_scale + Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
+        let wz = value_noise_3d(p / warp_scale + Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
+        let warped = p + Vec3::new(wx, wy, wz) * warp_strength;
+
+        let mut value = 0.0f32;
+        let mut amplitude = 1.0f32;
+        let mut frequency = 1.0f32;
+        let mut max_val = 0.0f32;
+        for i in 0..params.octaves {
+            let sp = warped * frequency / params.scale;
+            let octave_seed = params.seed + i * 1337;
+            value += amplitude * value_noise_3d(sp, octave_seed);
+            max_val += amplitude;
+            amplitude *= params.persistence;
+            frequency *= 2.0;
+        }
+        let noise = value / max_val.max(0.001);
+
+        let cave_threshold = params.density.clamp(0.0, 1.0);
+        if noise > cave_threshold {
+            let wall_factor = (noise - cave_threshold) / (1.0 - cave_threshold).max(0.001);
+            params.threshold + wall_factor * 0.5
+        } else {
+            params.threshold - 0.5
+        }
+    };
+
+    // 14 evenly-spread directions (6 face centers + 8 cube corners of a unit
+    // cube, normalized) - cheap and even enough for an ambient distance
+    // estimate; this doesn't need collision-grade angular resolution.
+    let c = 1.0 / 3.0_f32.sqrt();
+    const DIRECTIONS: [Vec3; 6] = [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, -1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.0, 0.0, -1.0),
+    ];
+    let corners = [
+        Vec3::new(c, c, c),
+        Vec3::new(c, c, -c),
+        Vec3::new(c, -c, c),
+        Vec3::new(c, -c, -c),
+        Vec3::new(-c, c, c),
+        Vec3::new(-c, c, -c),
+        Vec3::new(-c, -c, c),
+        Vec3::new(-c, -c, -c),
+    ];
+
+    const STEPS: usize = 24;
+    let step_len = max_distance / STEPS as f32;
+
+    let mut best: Option<CaveWallHit> = None;
+    for dir in DIRECTIONS.iter().chain(corners.iter()) {
+        for i in 1..=STEPS {
+            let t = step_len * i as f32;
+            let p = from + *dir * t;
+            if sample(p) > params.threshold {
+                let material = if flat_ground_density(p, params).is_some() {
+                    CaveWallMaterial::Sand
+                } else {
+                    CaveWallMaterial::Rock
+                };
+                let is_closer = best.map_or(true, |b| t < b.distance);
+                if is_closer {
+                    best = Some(CaveWallHit {
+                        distance: t,
+                        material,
+                    });
+                }
+                break;
+            }
+        }
+    }
+
+    best
+}
+
 // ============================================================================
 // Cave Mesh Generation
 // ============================================================================

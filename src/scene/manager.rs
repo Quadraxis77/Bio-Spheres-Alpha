@@ -245,6 +245,7 @@ impl SceneManager {
                         simulator.temperature_field_buffer(),
                         simulator.geothermal_heat_buffer(),
                     );
+                    gpu_scene.refresh_division_audio_bind_group(device);
                 }
             }
         } else {

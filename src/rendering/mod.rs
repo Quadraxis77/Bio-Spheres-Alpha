@@ -155,7 +155,10 @@ pub mod world_sphere;
 pub use adhesion_lines::AdhesionLineRenderer;
 pub use boulder_bubbles::BoulderBubbleSystem;
 pub use boulder_renderer::BoulderRenderer;
-pub use cave_system::{cave_sdf_push_out, CaveParams, CaveSystemRenderer};
+pub use cave_system::{
+    cave_sdf_push_out, nearest_cave_wall, CaveParams, CaveSystemRenderer, CaveWallHit,
+    CaveWallMaterial,
+};
 pub use cells::CellRenderer;
 pub use death_particles::DeathParticleRenderer;
 pub use depth_of_field::DepthOfFieldRenderer;

@@ -15,6 +15,10 @@ struct ExtractParams {
     time: f32,
     grid_origin: vec3<f32>,
     sun_brightness: f32, // Normalized sun brightness (0-1.2) for particle lighting
+    gravity_mode: u32, // 0=X, 1=Y, 2=Z, 3=radial
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 // Atomic counter for particle count
@@ -102,6 +106,27 @@ fn neighboring_water_count(gid: vec3<u32>) -> u32 {
     return count;
 }
 
+fn world_center() -> vec3<f32> {
+    let diameter = f32(params.grid_resolution) * params.cell_size;
+    return params.grid_origin + vec3<f32>(diameter * 0.5);
+}
+
+fn anti_gravity_dir(pos: vec3<f32>) -> vec3<f32> {
+    switch (params.gravity_mode) {
+        case 0u: { return vec3<f32>(1.0, 0.0, 0.0); }
+        case 2u: { return vec3<f32>(0.0, 0.0, 1.0); }
+        case 3u: {
+            let radial = pos - world_center();
+            let r = length(radial);
+            if r > 0.001 {
+                return radial / r;
+            }
+            return vec3<f32>(0.0, 1.0, 0.0);
+        }
+        default: { return vec3<f32>(0.0, 1.0, 0.0); }
+    }
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let res = params.grid_resolution;
@@ -125,13 +150,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let geo = geothermal_glow[idx];
-    let underwater_stack = geo.w > 0.10 && water_density[idx] > 0.35;
-    let soot_seed = hash_u32(idx + u32(params.time * 17.0));
+    let geothermal_source = geo.w > 0.10;
+    let underwater_stack = geothermal_source && water_density[idx] > 0.35;
+    let open_air_stack = geothermal_source && water_density[idx] <= 0.12;
+    let animated_seed = hash_u32(idx + u32(params.time * 17.0));
+    let soot_seed = animated_seed;
     let soot_keep = (soot_seed & 3u) == 0u;
+    let vapor_seed = hash_u32(idx + u32(params.time * 11.0) + 0x6d2b79f5u);
+    let vapor_keep = (vapor_seed & 7u) == 0u;
 
     // Render steam (3) as soft wispy particles, snow (4) as small opaque
-    // round white flakes, and underwater geothermal stack glow as soot.
-    if fluid_type != 3u && fluid_type != 4u && !(underwater_stack && soot_keep) {
+    // round white flakes, underwater geothermal stack glow as soot, and
+    // open-air vent glow as short-lived visual-only rising steam wisps.
+    if fluid_type != 3u && fluid_type != 4u &&
+        !(underwater_stack && soot_keep) &&
+        !(open_air_stack && vapor_keep) {
         return;
     }
 
@@ -154,7 +187,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // self-illumination (dark caves and night render dark flakes/wisps).
     let light = clamp(light_field[idx] * params.sun_brightness, 0.0, 1.2);
     var particle_kind = 1.0;
-    if underwater_stack && soot_keep {
+    if open_air_stack && vapor_keep && fluid_type != 3u && fluid_type != 4u {
+        particle_kind = 2.0;
+        // Visual-only open-air vent vapor: sparse short-lived wisps that rise
+        // out of the geothermal glow field without creating simulation steam.
+        let phase = random_float(vapor_seed + 13u);
+        let plume_up = anti_gravity_dir(world_pos);
+        let side_seed = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(plume_up.y) < 0.92);
+        let plume_right = normalize(cross(side_seed, plume_up));
+        let plume_forward = normalize(cross(plume_up, plume_right));
+        let rise = phase * params.cell_size * 5.5;
+        let spread = params.cell_size * mix(0.35, 1.45, phase);
+        let swirl_angle = random_float(vapor_seed + 19u) * 6.2831853 + params.time * mix(0.65, 1.25, random_float(vapor_seed + 23u));
+        let radius = spread * random_float(vapor_seed + 29u);
+        let lateral = (plume_right * cos(swirl_angle) + plume_forward * sin(swirl_angle)) * radius;
+        let jitter_angle = random_float(vapor_seed + 31u) * 6.2831853;
+        let jitter = (plume_right * cos(jitter_angle) + plume_forward * sin(jitter_angle)) *
+            params.cell_size * 0.45 * random_float(vapor_seed + 37u);
+        particle.position = world_pos + lateral + jitter + plume_up * rise;
+        particle.size = params.cell_size * mix(1.2, 3.2, phase);
+        let fade = sin(phase * 3.14159265);
+        let brightness = clamp(max(light, 0.42) + length(geo.xyz) * 0.025, 0.35, 1.1);
+        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * brightness, 0.025 * fade);
+    } else if underwater_stack && soot_keep {
         particle_kind = 3.0;
         // Underwater thermal soot: dark mineral flecks that catch a little of
         // the stack glow and drift as a loose plume.

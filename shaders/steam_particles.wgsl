@@ -74,11 +74,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Create soft circular particle
     let center_dist = length(in.uv - vec2<f32>(0.5));
     let soot = in.kind > 2.5;
-    let circle_alpha = select(
-        1.0 - smoothstep(0.3, 0.5, center_dist),
-        1.0 - smoothstep(0.18, 0.42, center_dist),
-        soot
-    );
+    var circle_alpha = 1.0 - smoothstep(0.3, 0.5, center_dist);
+    if soot {
+        circle_alpha = 1.0 - smoothstep(0.18, 0.42, center_dist);
+    }
 
     // Discard pixels outside the circle
     if circle_alpha < 0.01 {

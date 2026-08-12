@@ -12,7 +12,9 @@ use crate::rendering::{
 };
 use crate::scene::lineage::{EcosystemLineageArchive, LineageOrigin};
 use crate::scene::Scene;
-use crate::simulation::fluid_simulation::{FluidBuffers, GpuFluidSimulator, SolidMaskGenerator};
+use crate::simulation::fluid_simulation::{
+    FluidBuffers, GpuFluidSimulator, SolidMaskGenerator, WaterGridParams,
+};
 use crate::simulation::gpu_physics::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
     execute_signal_system, AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
@@ -35,6 +37,14 @@ const LEGACY_PHOTOCYTE_MASS_RATE_MAX: f32 = 0.02;
 const SIGNAL_UPDATE_INTERVAL_FRAMES: i32 = 4;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES: usize = 256;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32: u32 = DIVISION_AUDIO_PLAYBACK_CANDIDATES as u32;
+/// Number of staging buffers in the division-audio readback pool. Measured GPU
+/// submit-to-map latency on this pipeline runs 3-5 frames under normal load, so
+/// this must comfortably exceed that or the pool starves and collection gets
+/// skipped most frames (see the per-buffer map tracking below for the other
+/// half of that fix - a single global in-flight receiver always re-picked the
+/// lowest busy index, so any buffer beyond the first never even got its
+/// map_async started and sat busy forever).
+const DIVISION_AUDIO_READBACK_BUFFER_COUNT: usize = 8;
 const DIVISION_AUDIO_SEARCH_RADIUS_CELLS: u32 = 18;
 const DIVISION_AUDIO_GRID_RESOLUTION: u32 = 128;
 const DIVISION_AUDIO_MAX_CELLS_PER_GRID: u32 = 16;
@@ -408,19 +418,52 @@ pub struct GpuScene {
     division_audio_candidates_buffer: wgpu::Buffer,
     /// Atomic count of division-audio candidates written this frame.
     division_audio_candidate_count_buffer: wgpu::Buffer,
-    /// Staging buffer used to read closest split candidates.
-    division_audio_readback_buffer: wgpu::Buffer,
+    /// Pool of staging buffers used to read split candidates without stalling
+    /// collection. Sized to `DIVISION_AUDIO_READBACK_BUFFER_COUNT` - see that
+    /// constant for why it's not just 2.
+    division_audio_readback_buffers: Vec<wgpu::Buffer>,
+    /// Round-robin cursor into `division_audio_readback_buffers`.
+    division_audio_readback_write_index: usize,
+    /// Which staging buffers contain a submitted copy awaiting CPU consumption.
+    division_audio_readback_busy: Vec<bool>,
     /// Bind group for division-audio params, flags, and candidate output.
     division_audio_bind_group: wgpu::BindGroup,
-    /// Whether a division-audio candidate readback is in flight.
-    division_audio_readback_in_flight: bool,
+    /// Fallback zero water params for division-audio collection before fluid exists.
+    division_audio_dummy_water_params_buffer: wgpu::Buffer,
+    /// Fallback empty water bitfield for division-audio collection before fluid exists.
+    division_audio_dummy_water_bitfield_buffer: wgpu::Buffer,
+    /// Per-buffer receiver for its map_async callback, so every busy buffer
+    /// has its own in-flight map instead of serializing on one global
+    /// receiver (which always re-picked the lowest busy index and starved
+    /// every other buffer in the pool).
+    division_audio_map_receivers:
+        Vec<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
+    /// When each buffer was claimed for a collection pass - lets GPU
+    /// submit-to-map latency be measured directly rather than guessed at, if
+    /// this pipeline needs diagnosing again in the future.
+    division_audio_readback_claimed_at: Vec<Option<std::time::Instant>>,
     /// Whether the division-audio candidate buffer has already been cleared
     /// this render frame. Multiple `run_physics` steps can execute per frame
     /// (fixed-timestep catch-up); only the first should clear the buffer so
     /// later steps' candidates accumulate instead of clobbering earlier ones.
     division_audio_cleared_this_frame: bool,
+    /// Readback staging buffer index selected for this render frame's division-
+    /// audio collection. Chosen once per frame (not per physics step) so every
+    /// catch-up step within the frame accumulates into the same buffer instead
+    /// of exhausting the pool after just a couple of steps.
+    division_audio_frame_readback_index: Option<usize>,
+    /// Whether any physics step this frame actually dispatched the division-
+    /// audio collector using `division_audio_frame_readback_index`.
+    division_audio_frame_readback_used: bool,
     /// Audio events decoded from the latest completed division readback.
     pending_audio_events: Vec<crate::audio::GameAudioEvent>,
+    /// World-space geothermal vent mouths from the latest solid/thermal field build.
+    pub geothermal_vent_sources: Vec<glam::Vec3>,
+    pub flowing_water_audio_sources:
+        Vec<crate::simulation::fluid_simulation::gpu_simulator::WaterAudioSource>,
+    pub rain_audio_sources:
+        Vec<crate::simulation::fluid_simulation::gpu_simulator::WaterAudioSource>,
+    pub rain_audio_intensity: f32,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
     /// Whether to show moss on cave walls
@@ -576,6 +619,72 @@ pub struct GpuScene {
 }
 
 impl GpuScene {
+    fn create_division_audio_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        params_buffer: &wgpu::Buffer,
+        division_flags_buffer: &wgpu::Buffer,
+        candidates_buffer: &wgpu::Buffer,
+        candidate_count_buffer: &wgpu::Buffer,
+        water_params_buffer: &wgpu::Buffer,
+        water_bitfield_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Division Audio Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: division_flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: candidates_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: candidate_count_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: water_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: water_bitfield_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    pub fn refresh_division_audio_bind_group(&mut self, device: &wgpu::Device) {
+        let water_params_buffer = self
+            .fluid_simulator
+            .as_ref()
+            .map(|simulator| simulator.water_grid_params_buffer())
+            .unwrap_or(&self.division_audio_dummy_water_params_buffer);
+        let water_bitfield_buffer = self
+            .fluid_simulator
+            .as_ref()
+            .map(|simulator| simulator.water_bitfield_buffer())
+            .unwrap_or(&self.division_audio_dummy_water_bitfield_buffer);
+
+        self.division_audio_bind_group = Self::create_division_audio_bind_group(
+            device,
+            &self.gpu_physics_pipelines.division_audio_layout,
+            &self.division_audio_params_buffer,
+            &self.gpu_triple_buffers.division_flags,
+            &self.division_audio_candidates_buffer,
+            &self.division_audio_candidate_count_buffer,
+            water_params_buffer,
+            water_bitfield_buffer,
+        );
+    }
+
     /// Create a new GPU scene with the specified capacity.
     pub fn with_capacity(
         device: &wgpu::Device,
@@ -746,35 +855,45 @@ impl GpuScene {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let division_audio_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Division Audio Candidate Readback"),
-            size: std::mem::size_of::<DivisionAudioCandidate>() as u64
-                * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let division_audio_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Division Audio Bind Group"),
-            layout: &gpu_physics_pipelines.division_audio_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: division_audio_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: gpu_triple_buffers.division_flags.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: division_audio_candidates_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: division_audio_candidate_count_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let create_division_audio_readback_buffer = |label: &str| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: std::mem::size_of::<DivisionAudioCandidate>() as u64
+                    * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let division_audio_readback_buffers: Vec<wgpu::Buffer> = (0
+            ..DIVISION_AUDIO_READBACK_BUFFER_COUNT)
+            .map(|i| {
+                create_division_audio_readback_buffer(&format!(
+                    "Division Audio Candidate Readback {i}"
+                ))
+            })
+            .collect();
+        let division_audio_dummy_water_params_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Division Audio Dummy Water Params"),
+                contents: bytemuck::bytes_of(&WaterGridParams::zeroed()),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let division_audio_dummy_water_bitfield_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Division Audio Dummy Water Bitfield"),
+                contents: bytemuck::bytes_of(&0u32),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let division_audio_bind_group = Self::create_division_audio_bind_group(
+            device,
+            &gpu_physics_pipelines.division_audio_layout,
+            &division_audio_params_buffer,
+            &gpu_triple_buffers.division_flags,
+            &division_audio_candidates_buffer,
+            &division_audio_candidate_count_buffer,
+            &division_audio_dummy_water_params_buffer,
+            &division_audio_dummy_water_bitfield_buffer,
+        );
 
         // Create cached bind groups (once, not per-frame!)
         // Pass organism label buffer for self-collision filtering
@@ -981,11 +1100,26 @@ impl GpuScene {
             division_audio_params_buffer,
             division_audio_candidates_buffer,
             division_audio_candidate_count_buffer,
-            division_audio_readback_buffer,
+            division_audio_readback_write_index: 0,
+            division_audio_readback_busy: vec![false; division_audio_readback_buffers.len()],
+            division_audio_map_receivers: (0..division_audio_readback_buffers.len())
+                .map(|_| None)
+                .collect(),
+            division_audio_readback_claimed_at: (0..division_audio_readback_buffers.len())
+                .map(|_| None)
+                .collect(),
+            division_audio_readback_buffers,
             division_audio_bind_group,
-            division_audio_readback_in_flight: false,
+            division_audio_dummy_water_params_buffer,
+            division_audio_dummy_water_bitfield_buffer,
             division_audio_cleared_this_frame: false,
+            division_audio_frame_readback_index: None,
+            division_audio_frame_readback_used: false,
             pending_audio_events: Vec::new(),
+            geothermal_vent_sources: Vec::new(),
+            flowing_water_audio_sources: Vec::new(),
+            rain_audio_sources: Vec::new(),
+            rain_audio_intensity: 0.0,
             moss_system: None,
             show_moss: true,
             moss_needs_clear: false,
@@ -1083,6 +1217,19 @@ impl GpuScene {
         self.current_frame = 0;
         self.last_light_field_update_frame = None;
         self.light_field_needs_update = true;
+        for index in 0..self.division_audio_readback_buffers.len() {
+            if self.division_audio_map_receivers[index].take().is_some() {
+                self.division_audio_readback_buffers[index].unmap();
+            }
+        }
+        self.division_audio_readback_busy = vec![false; self.division_audio_readback_buffers.len()];
+        self.division_audio_readback_claimed_at =
+            vec![None; self.division_audio_readback_buffers.len()];
+        self.division_audio_readback_write_index = 0;
+        self.division_audio_cleared_this_frame = false;
+        self.division_audio_frame_readback_index = None;
+        self.division_audio_frame_readback_used = false;
+        self.pending_audio_events.clear();
         self.fluid_mesh_extract_counter = 0;
         self.paused = false;
         self.first_frame = true;
@@ -2201,8 +2348,15 @@ impl GpuScene {
         // pass now runs on *every* step, and only the first step of the frame clears the
         // candidate buffer - later steps' candidates accumulate on top instead of
         // clobbering them.
+        //
+        // The readback buffer index is chosen ONCE per render() call (in the caller,
+        // before the physics catch-up loop), not per step here. Toggling it per step
+        // exhausted the 2-buffer pool after just 2 steps, silently skipping the collect
+        // dispatch (and losing that step's divisions) on any frame needing 3+ catch-up
+        // steps - which defeated the "every step contributes" guarantee above.
         let clear_before_collect = !self.division_audio_cleared_this_frame;
-        let division_audio_collect = if known_cell_slots > 0 {
+        let audio_readback_index = self.division_audio_frame_readback_index;
+        let division_audio_collect = if known_cell_slots > 0 && audio_readback_index.is_some() {
             let params = DivisionAudioParams {
                 listener_position: self.camera.position().to_array(),
                 search_radius_cells: DIVISION_AUDIO_SEARCH_RADIUS_CELLS,
@@ -2217,18 +2371,14 @@ impl GpuScene {
                 bytemuck::bytes_of(&params),
             );
 
-            let diameter = DIVISION_AUDIO_SEARCH_RADIUS_CELLS * 2 + 1;
-            let bucket_slots = diameter
-                .saturating_mul(diameter)
-                .saturating_mul(diameter)
-                .saturating_mul(params.max_cells_per_grid);
-            let collector_threads = bucket_slots.saturating_add(self.gpu_triple_buffers.capacity);
+            let collector_threads = known_cell_slots.min(self.gpu_triple_buffers.capacity);
             Some(DivisionAudioCollectDispatch {
                 pipeline: &self.gpu_physics_pipelines.division_audio_collect,
                 bind_group: &self.division_audio_bind_group,
                 candidate_buffer: &self.division_audio_candidates_buffer,
                 candidate_count_buffer: &self.division_audio_candidate_count_buffer,
-                readback_buffer: &self.division_audio_readback_buffer,
+                readback_buffer: &self.division_audio_readback_buffers
+                    [audio_readback_index.unwrap_or(0)],
                 dispatch_workgroups: (collector_threads + 63) / 64,
                 copy_bytes: std::mem::size_of::<DivisionAudioCandidate>() as u64
                     * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
@@ -2254,8 +2404,8 @@ impl GpuScene {
             physics_features,
             division_audio_collect,
         );
-        if division_pipeline_ran && !self.division_audio_readback_in_flight {
-            self.division_audio_readback_in_flight = true;
+        if division_pipeline_ran && audio_readback_index.is_some() {
+            self.division_audio_frame_readback_used = true;
         }
 
         self.dispatch_scaffold_rules(device, encoder, queue);
@@ -5866,6 +6016,7 @@ impl GpuScene {
         {
             let (_, geothermal_fields) = solid_mask_generator
                 .generate_solid_mask_and_geothermal_fields(cave_renderer.params());
+            self.geothermal_vent_sources = geothermal_fields.vent_sources.clone();
             simulator.update_geothermal_fields(queue, &geothermal_fields);
         }
 
@@ -5911,6 +6062,7 @@ impl GpuScene {
         // Fluid will only appear when continuous spawning is enabled
 
         self.fluid_simulator = Some(simulator);
+        self.refresh_division_audio_bind_group(device);
         self.rebuild_signal_sense_world_data_bind_group(device);
         self.show_gpu_density_mesh = true;
 
@@ -5989,6 +6141,7 @@ impl GpuScene {
             }
         }
 
+        self.refresh_division_audio_bind_group(device);
         self.rebuild_signal_sense_world_data_bind_group(device);
 
         self.steam_extract_bind_group = None;
@@ -7263,6 +7416,7 @@ impl GpuScene {
                 grid_origin,
                 cell_size,
                 (self.sun_intensity / 3.0).clamp(0.0, 1.2),
+                self.gravity_mode,
                 dt,
             );
         }
@@ -7699,6 +7853,7 @@ impl GpuScene {
                     cave_params,
                     cave_renderer.culled_fragment_regions(),
                 );
+            self.geothermal_vent_sources = geothermal_fields.vent_sources.clone();
 
             // Update the solid mask buffer
             fluid_buffers.update_solid_mask(queue, &solid_mask);
@@ -8104,60 +8259,94 @@ impl GpuScene {
         );
     }
 
+    /// Pumps every busy division-audio readback buffer's map_async independently.
+    /// Each busy buffer gets its own in-flight map as soon as it becomes busy -
+    /// they don't wait on each other, which is what let a starved buffer sit
+    /// busy forever under the old single-receiver design (see
+    /// `DIVISION_AUDIO_READBACK_BUFFER_COUNT`'s doc comment).
     fn initiate_division_audio_map(&mut self, device: &wgpu::Device) {
-        if !self.division_audio_readback_in_flight {
+        if !self.division_audio_readback_busy.iter().any(|busy| *busy) {
             return;
         }
 
         let bytes = std::mem::size_of::<DivisionAudioCandidate>() as u64
             * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64;
-        let slice = self.division_audio_readback_buffer.slice(0..bytes);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
+        let buffer_count = self.division_audio_readback_buffers.len();
 
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-
-        match rx.recv() {
-            Ok(Ok(())) => {
-                let mapped = slice.get_mapped_range();
-                let mut candidates: Vec<DivisionAudioCandidate> = bytemuck::cast_slice(&mapped)
-                    .iter()
-                    .copied()
-                    .filter(|candidate: &DivisionAudioCandidate| {
-                        candidate.distance_fixed != u32::MAX && candidate.position[3] > 0.0
-                    })
-                    .collect();
-                candidates.sort_by_key(|candidate| candidate.distance_fixed);
-                candidates.truncate(DIVISION_AUDIO_PLAYBACK_CANDIDATES);
-
-                self.pending_audio_events
-                    .extend(candidates.into_iter().map(|candidate| {
-                        crate::audio::GameAudioEvent::CellDivide {
-                            position: glam::Vec3::new(
-                                candidate.position[0],
-                                candidate.position[1],
-                                candidate.position[2],
-                            ),
-                            burst_count: 1,
-                        }
-                    }));
-                drop(mapped);
-                self.division_audio_readback_buffer.unmap();
+        for index in 0..buffer_count {
+            if !self.division_audio_readback_busy[index]
+                || self.division_audio_map_receivers[index].is_some()
+            {
+                continue;
             }
-            Ok(Err(err)) => {
-                log::warn!("Division audio candidate readback failed: {err}");
-            }
-            Err(err) => {
-                log::warn!("Division audio candidate readback channel failed: {err}");
-            }
+            let slice = self.division_audio_readback_buffers[index].slice(0..bytes);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            self.division_audio_map_receivers[index] = Some(rx);
         }
 
-        self.division_audio_readback_in_flight = false;
+        let _ = device.poll(wgpu::PollType::Poll);
+
+        for index in 0..buffer_count {
+            let Some(rx) = self.division_audio_map_receivers[index].as_ref() else {
+                continue;
+            };
+            let result = rx.try_recv();
+
+            match result {
+                Ok(Ok(())) => {
+                    let slice = self.division_audio_readback_buffers[index].slice(0..bytes);
+                    let mapped = slice.get_mapped_range();
+                    let mut candidates: Vec<DivisionAudioCandidate> = bytemuck::cast_slice(&mapped)
+                        .iter()
+                        .copied()
+                        .filter(|candidate: &DivisionAudioCandidate| {
+                            candidate.distance_fixed != u32::MAX && candidate.position[3] > 0.0
+                        })
+                        .collect();
+                    candidates.sort_by_key(|candidate| candidate.distance_fixed);
+                    candidates.truncate(DIVISION_AUDIO_PLAYBACK_CANDIDATES);
+                    self.division_audio_readback_claimed_at[index] = None;
+
+                    let mut audio_events = Vec::with_capacity(candidates.len());
+                    for candidate in candidates {
+                        let position = glam::Vec3::new(
+                            candidate.position[0],
+                            candidate.position[1],
+                            candidate.position[2],
+                        );
+                        audio_events.push(crate::audio::GameAudioEvent::CellDivide {
+                            position,
+                            burst_count: 1,
+                            environment: crate::audio::AudioEnvironment {
+                                emitter_underwater: candidate.environment_flags & 1 != 0,
+                                listener_underwater: candidate.environment_flags & 2 != 0,
+                            },
+                        });
+                    }
+                    self.pending_audio_events.extend(audio_events);
+                    drop(mapped);
+                    self.division_audio_readback_buffers[index].unmap();
+                    self.division_audio_readback_busy[index] = false;
+                    self.division_audio_map_receivers[index] = None;
+                }
+                Ok(Err(err)) => {
+                    log::warn!("Division audio candidate readback failed: {err}");
+                    self.division_audio_readback_busy[index] = false;
+                    self.division_audio_map_receivers[index] = None;
+                    self.division_audio_readback_claimed_at[index] = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    log::warn!("Division audio candidate readback channel disconnected");
+                    self.division_audio_readback_busy[index] = false;
+                    self.division_audio_map_receivers[index] = None;
+                    self.division_audio_readback_claimed_at[index] = None;
+                }
+            }
+        }
     }
 }
 
@@ -8410,6 +8599,21 @@ impl Scene for GpuScene {
             // division-audio candidate buffer and later steps in this frame accumulate.
             self.division_audio_cleared_this_frame = false;
 
+            // Pick the division-audio readback buffer once for the whole frame, not per
+            // step - see the comment in `run_physics` for why toggling per step silently
+            // dropped divisions on frames with 3+ catch-up steps. Scan the whole ring
+            // (not just 2 slots) starting from the round-robin cursor.
+            let buffer_count = self.division_audio_readback_buffers.len();
+            self.division_audio_frame_readback_index = (0..buffer_count)
+                .map(|offset| (self.division_audio_readback_write_index + offset) % buffer_count)
+                .find(|&idx| !self.division_audio_readback_busy[idx]);
+            if self.division_audio_frame_readback_index.is_none() {
+                log::warn!(
+                    "Division audio: all {buffer_count} readback buffers busy this frame - collection skipped"
+                );
+            }
+            self.division_audio_frame_readback_used = false;
+
             while self.time_accumulator >= fixed_dt && physics_steps < max_steps {
                 self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
 
@@ -8423,6 +8627,16 @@ impl Scene for GpuScene {
                 physics_steps += 1;
             }
             self.last_physics_steps = physics_steps as u32;
+
+            if self.division_audio_frame_readback_used {
+                if let Some(index) = self.division_audio_frame_readback_index {
+                    self.division_audio_readback_busy[index] = true;
+                    self.division_audio_readback_claimed_at[index] =
+                        Some(std::time::Instant::now());
+                    self.division_audio_readback_write_index =
+                        (index + 1) % self.division_audio_readback_buffers.len();
+                }
+            }
 
             // If we hit max steps, discard remaining accumulated time
             if physics_steps >= max_steps {
@@ -9484,6 +9698,16 @@ impl Scene for GpuScene {
         // Poll for water particle count (GPU readback)
         if self.show_water_particles {
             self.poll_water_particle_count(device);
+        }
+        if let Some(ref fluid_sim) = self.fluid_simulator {
+            fluid_sim.poll_water_audio_summary(device);
+            self.flowing_water_audio_sources = fluid_sim.flow_audio_sources();
+            self.rain_audio_sources = fluid_sim.rain_audio_sources();
+            self.rain_audio_intensity = fluid_sim.rain_audio_intensity();
+        } else {
+            self.flowing_water_audio_sources.clear();
+            self.rain_audio_sources.clear();
+            self.rain_audio_intensity = 0.0;
         }
 
         // Poll for nutrient particle count (GPU readback)

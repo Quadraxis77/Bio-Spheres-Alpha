@@ -319,8 +319,17 @@ pub fn execute_gpu_physics_step(
         // Dispatch the larger of that bound and cell_workgroups so Pass A (per-cell
         // boundary forces) and Pass C (cross-bucket neighbors) are also fully covered.
         {
-            let max_buckets = (triple_buffers.capacity + 15) / 16;
-            let pair_threads = max_buckets * 120; // 120 = MAX_CELLS_PER_GRID*(MAX_CELLS_PER_GRID-1)/2
+            let active_slots = _cell_count_hint.min(triple_buffers.capacity);
+            let old_worst_case_pair_threads = ((triple_buffers.capacity + 15) / 16) * 120;
+            let pair_threads = if active_slots < 2 {
+                0
+            } else {
+                // At most active_slots / 2 buckets can contain a pair. Each such
+                // bucket needs 120 pair lanes in the packed collision shader.
+                active_slots
+                    .saturating_mul(60)
+                    .min(old_worst_case_pair_threads)
+            };
             let collision_workgroups =
                 ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1)
                     / WORKGROUP_SIZE_CELLS;
@@ -722,8 +731,15 @@ pub fn execute_gpu_mechanics_step(
 
         // Stage 4: Collision detection — per-pair parallel dispatch.
         {
-            let max_buckets = (triple_buffers.capacity + 15) / 16;
-            let pair_threads = max_buckets * 120;
+            let active_slots = _cell_count_hint.min(triple_buffers.capacity);
+            let old_worst_case_pair_threads = ((triple_buffers.capacity + 15) / 16) * 120;
+            let pair_threads = if active_slots < 2 {
+                0
+            } else {
+                active_slots
+                    .saturating_mul(60)
+                    .min(old_worst_case_pair_threads)
+            };
             let collision_workgroups =
                 ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1)
                     / WORKGROUP_SIZE_CELLS;
@@ -1055,13 +1071,15 @@ pub fn execute_lifecycle_pipeline(
     // (stale_idx) still holds old dead-cell data at recycled slot indices. Two physics steps
     // later that stale buffer rotates back into positions_in, causing ghost flickering.
     // Copying output -> stale keeps all 3 triple buffers consistent after every division.
-    // MUST use full capacity - divided cells land at recycled slot indices scattered
-    // throughout the buffer, not at the front. Truncating by total_cell_slots would leave
-    // stale data at higher indices, causing explosive teleportation when those slots rotate
-    // back into positions_in two steps later.
+    // Recycled child slots are already below `effective_slots`; brand-new child slots can
+    // only extend by at most one slot per scanned parent in this pass. Sync that bounded
+    // range instead of copying the entire allocation for worlds with only a few cells.
     let output_idx = (current_index + 1) % 3;
     let stale_idx = (current_index + 2) % 3;
-    let buf_size = triple_buffers.capacity as u64 * 16; // Vec4<f32> = 16 bytes per slot
+    let sync_slots = effective_slots
+        .saturating_mul(2)
+        .min(triple_buffers.capacity);
+    let buf_size = sync_slots as u64 * 16; // Vec4<f32> = 16 bytes per slot
     encoder.copy_buffer_to_buffer(
         &triple_buffers.position_and_mass[output_idx],
         0,

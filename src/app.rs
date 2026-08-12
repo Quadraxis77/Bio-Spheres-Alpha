@@ -204,6 +204,9 @@ pub struct App {
     main_menu_settings_open: bool,
     /// Runtime audio playback for music and short SFX.
     audio: crate::audio::AudioLayer,
+    /// Throttle for the world-echo environment query (cave wall / sphere boundary
+    /// raymarch) - cheap per call, but no need to redo it every single frame.
+    last_audio_environment_update: Option<std::time::Instant>,
 }
 
 impl App {
@@ -259,6 +262,7 @@ impl App {
                 initial_music_volume,
                 initial_sfx_volume,
             ),
+            last_audio_environment_update: None,
         }
     }
 
@@ -274,6 +278,122 @@ impl App {
     pub fn play_cell_divide_sfx_at(&mut self, divisions_this_frame: usize, position: glam::Vec3) {
         self.audio
             .play_cell_divide_burst_scaled_at(divisions_this_frame, position);
+    }
+
+    /// Refreshes the audio layer's world-echo/ambient-drone environment from
+    /// the nearest cave wall or the world sphere boundary around `listener_pos`.
+    /// Throttled - the raymarch is cheap but there's no reason to redo it every
+    /// single frame, and the audio side debounces small changes on its own too.
+    fn update_audio_world_environment(&mut self, listener_pos: glam::Vec3) {
+        const UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(180);
+        const WALL_SEARCH_DISTANCE: f32 = 240.0;
+
+        // Master boundary gate: cheap, and needs to react every frame. Inside
+        // the sphere this stays at full volume right up to the boundary; only
+        // distance beyond the boundary attenuates all audio.
+        let signed_boundary_distance =
+            if self.scene_manager.current_mode() != crate::ui::types::SimulationMode::Gpu {
+                None
+            } else {
+                self.scene_manager
+                    .gpu_scene()
+                    .map(|gpu_scene| gpu_scene.config.sphere_radius - listener_pos.length())
+            };
+        self.audio
+            .set_world_boundary_distance(signed_boundary_distance);
+
+        let should_update = self
+            .last_audio_environment_update
+            .map_or(true, |last| last.elapsed() >= UPDATE_INTERVAL);
+        if !should_update {
+            return;
+        }
+        self.last_audio_environment_update = Some(std::time::Instant::now());
+        let diag_start = std::time::Instant::now();
+
+        if self.scene_manager.current_mode() != crate::ui::types::SimulationMode::Gpu {
+            log::warn!("[audio-diag] world env: not GPU mode, clearing");
+            self.audio.clear_world_environment();
+            return;
+        }
+        let Some(gpu_scene) = self.scene_manager.gpu_scene() else {
+            log::warn!("[audio-diag] world env: no gpu_scene, clearing");
+            self.audio.clear_world_environment();
+            return;
+        };
+
+        // World sphere boundary ("glass") - always present while inside the
+        // sphere. Outside, keep ambience/vents alive and let the per-frame
+        // master boundary gate do the 200-unit linear fade instead of hard
+        // clearing the world bed.
+        let sphere_distance = gpu_scene.config.sphere_radius - listener_pos.length();
+        let mut nearest: Option<(crate::audio::EnvironmentSurface, f32)> = if sphere_distance > 0.0
+        {
+            Some((crate::audio::EnvironmentSurface::Glass, sphere_distance))
+        } else {
+            None
+        };
+
+        let has_cave_renderer = gpu_scene.cave_renderer.is_some();
+        if let Some(cave_renderer) = gpu_scene.cave_renderer.as_ref() {
+            let params = cave_renderer.params();
+            if let Some(hit) =
+                crate::rendering::nearest_cave_wall(listener_pos, params, WALL_SEARCH_DISTANCE)
+            {
+                let surface = match hit.material {
+                    crate::rendering::CaveWallMaterial::Rock => {
+                        crate::audio::EnvironmentSurface::Rock
+                    }
+                    crate::rendering::CaveWallMaterial::Sand => {
+                        crate::audio::EnvironmentSurface::Sand
+                    }
+                };
+                let closer = nearest.map_or(true, |(_, distance)| hit.distance < distance);
+                if closer {
+                    nearest = Some((surface, hit.distance));
+                }
+            }
+        }
+
+        // Only detects the "whole world is water" configuration - localized
+        // water pools don't have a cheap CPU-side occupancy query available
+        // without a GPU readback, so they're not reflected here yet.
+        let underwater = gpu_scene
+            .fluid_simulator
+            .as_ref()
+            .map(|sim| sim.is_static_water_world_enabled())
+            .unwrap_or(false);
+
+        log::warn!(
+            "[audio-diag] world env: took={:?} has_cave_renderer={has_cave_renderer} nearest={nearest:?} underwater={underwater} flow_sources={} rain_sources={} rain_intensity={:.2}",
+            diag_start.elapsed(),
+            gpu_scene.flowing_water_audio_sources.len(),
+            gpu_scene.rain_audio_sources.len(),
+            gpu_scene.rain_audio_intensity,
+        );
+
+        self.audio.set_world_environment(
+            nearest,
+            underwater,
+            &gpu_scene.geothermal_vent_sources,
+            &gpu_scene
+                .flowing_water_audio_sources
+                .iter()
+                .map(|source| crate::audio::EnvironmentalAudioSource {
+                    position: source.position,
+                    strength: source.strength,
+                })
+                .collect::<Vec<_>>(),
+            &gpu_scene
+                .rain_audio_sources
+                .iter()
+                .map(|source| crate::audio::EnvironmentalAudioSource {
+                    position: source.position,
+                    strength: source.strength,
+                })
+                .collect::<Vec<_>>(),
+            gpu_scene.rain_audio_intensity,
+        );
     }
 
     fn sync_music_for_current_phase(&mut self) {
@@ -2656,6 +2776,31 @@ impl App {
         let camera = self.scene_manager.active_scene().camera();
         self.audio
             .set_listener_from_camera(camera.position(), camera.rotation);
+        self.audio.set_listener_environment(false);
+        if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
+            let flow_sources: Vec<_> = gpu_scene
+                .flowing_water_audio_sources
+                .iter()
+                .map(|source| crate::audio::EnvironmentalAudioSource {
+                    position: source.position,
+                    strength: source.strength,
+                })
+                .collect();
+            let rain_sources: Vec<_> = gpu_scene
+                .rain_audio_sources
+                .iter()
+                .map(|source| crate::audio::EnvironmentalAudioSource {
+                    position: source.position,
+                    strength: source.strength,
+                })
+                .collect();
+            self.audio.set_water_environment(
+                &flow_sources,
+                &rain_sources,
+                gpu_scene.rain_audio_intensity,
+            );
+        }
+        self.update_audio_world_environment(camera.position());
         for event in self.scene_manager.drain_audio_events() {
             self.audio.play_event(event);
         }

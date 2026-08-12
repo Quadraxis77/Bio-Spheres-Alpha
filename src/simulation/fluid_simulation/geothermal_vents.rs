@@ -24,6 +24,7 @@ pub(crate) struct VentSpec {
 pub struct GeothermalFields {
     pub heat: Vec<f32>,
     pub glow: Vec<[f32; 4]>,
+    pub vent_sources: Vec<Vec3>,
 }
 
 const SEARCH_STRIDE: usize = 3;
@@ -702,10 +703,13 @@ pub fn apply_to_solid_mask(
 ) -> GeothermalFields {
     let mut heat = vec![0.0f32; solid_mask.len()];
     let mut glow = vec![[0.0f32; 4]; solid_mask.len()];
+    let mut vent_sources = Vec::new();
 
     let solid_raw: Vec<bool> = solid_mask.iter().map(|&v| v != 0).collect();
     let mut solid = dilate_solid(&solid_raw, res);
     let specs = generate_specs(&solid, res, params, params.seed ^ 0xCE11_5EED);
+    let cell_size = world_radius * 2.0 / res as f32;
+    let grid_origin = world_center - Vec3::splat(world_radius);
 
     for spec in specs {
         let (walls, core, openings, glow_sources) = stack_voxels(spec, params.seed, &solid, res);
@@ -800,6 +804,13 @@ pub fn apply_to_solid_mask(
                 }
             }
         }
+        if !openings.is_empty() {
+            let sum = openings.iter().fold(Vec3::ZERO, |acc, p| {
+                acc + Vec3::new(p.x as f32, p.y as f32, p.z as f32)
+            });
+            let avg_grid = sum / openings.len() as f32 + Vec3::splat(0.5);
+            vent_sources.push(grid_origin + avg_grid * cell_size);
+        }
 
         let shaft_inner_radius = (spec.width / 2).max(1);
         for &source in &glow_sources {
@@ -850,6 +861,10 @@ pub fn apply_to_solid_mask(
         }
     }
 
-    let _ = (solid_mask, world_center, world_radius);
-    GeothermalFields { heat, glow }
+    let _ = solid_mask;
+    GeothermalFields {
+        heat,
+        glow,
+        vent_sources,
+    }
 }
