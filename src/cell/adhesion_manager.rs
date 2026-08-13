@@ -1,5 +1,6 @@
 use super::adhesion::{
-    init_adhesion_indices, AdhesionConnections, AdhesionIndices, MAX_ADHESIONS_PER_CELL,
+    init_adhesion_indices, AdhesionConnections, AdhesionIndices, BOND_FLAG_SIGNAL_ACTIVE,
+    BOND_FLAG_SIGNAL_BACKBONE, MAX_ADHESIONS_PER_CELL,
 };
 use super::adhesion_zones::classify_bond_direction;
 use glam::{Quat, Vec3};
@@ -191,6 +192,11 @@ impl AdhesionConnectionManager {
         connections.zone_a[connection_index] = zone_a as u8;
         connections.zone_b[connection_index] = zone_b as u8;
         connections.bond_flags[connection_index] = 0;
+        connections.signal_creator_identity[connection_index] = 0;
+        connections.slot_generation[connection_index] = connections.slot_generation
+            [connection_index]
+            .wrapping_add(1)
+            .max(1);
         connections.rest_length_overrides[connection_index] = 0.0;
         connections.scaffold_rule_id[connection_index] = 0;
 
@@ -265,6 +271,11 @@ impl AdhesionConnectionManager {
         connections.zone_a[connection_index] = 2;
         connections.zone_b[connection_index] = 2;
         connections.bond_flags[connection_index] = bond_flags;
+        connections.signal_creator_identity[connection_index] = 0;
+        connections.slot_generation[connection_index] = connections.slot_generation
+            [connection_index]
+            .wrapping_add(1)
+            .max(1);
         connections.rest_length_overrides[connection_index] = 0.0;
         connections.scaffold_rule_id[connection_index] = 0;
         connections.anchor_direction_a[connection_index] = Vec3::ZERO;
@@ -284,6 +295,33 @@ impl AdhesionConnectionManager {
             connections.active_count = connection_index + 1;
         }
         Some(connection_index)
+    }
+
+    /// Apply immutable signal classification exactly once after the creating
+    /// operation has paid (or reserved) construction cost. A cycle candidate is
+    /// created as standby and evaluated by the next signal-tick topology commit.
+    pub fn classify_signal_backbone(
+        connections: &mut AdhesionConnections,
+        connection_index: usize,
+        owner_identity: u32,
+        initially_active: bool,
+    ) -> bool {
+        if connection_index >= connections.active_count
+            || connections.is_active[connection_index] == 0
+            || owner_identity == 0
+            || connections.bond_flags[connection_index] & BOND_FLAG_SIGNAL_BACKBONE != 0
+        {
+            return false;
+        }
+
+        connections.bond_flags[connection_index] |= BOND_FLAG_SIGNAL_BACKBONE;
+        if initially_active {
+            connections.bond_flags[connection_index] |= BOND_FLAG_SIGNAL_ACTIVE;
+        } else {
+            connections.bond_flags[connection_index] &= !BOND_FLAG_SIGNAL_ACTIVE;
+        }
+        connections.signal_creator_identity[connection_index] = owner_identity;
+        true
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -332,6 +370,8 @@ impl AdhesionConnectionManager {
 
         // Mark connection as inactive
         connections.is_active[connection_index] = 0;
+        // Broken active backbones stop transmitting before topology repair runs.
+        connections.bond_flags[connection_index] &= !BOND_FLAG_SIGNAL_ACTIVE;
 
         true
     }

@@ -135,6 +135,18 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 @group(2) @binding(9)
 var<storage, read> signal_flags: array<atomic<u32>>;
 
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
+}
+
+fn listener_active(value: f32, threshold: f32, response_mode: u32, invert: bool) -> bool {
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, invert);
+}
+
 @group(2) @binding(10)
 var<uniform> water_params: WaterGridParams;
 
@@ -236,27 +248,31 @@ fn heat_for_temperature(temp: f32, water: f32) -> f32 {
 }
 
 fn unpack_signal_channel(packed: f32) -> u32 {
-    return u32(clamp(packed, 0.0, 262143.0)) & 15u;
+    return u32(clamp(packed, 0.0, 786431.0)) & 15u;
 }
 
 fn unpack_siphon_invert(packed: f32) -> bool {
-    return (u32(clamp(packed, 0.0, 262143.0)) & 16u) != 0u;
+    return (u32(clamp(packed, 0.0, 786431.0)) & 16u) != 0u;
 }
 
 fn unpack_siphon_mode(packed: f32) -> u32 {
-    return min((u32(clamp(packed, 0.0, 262143.0)) / 32u) & 3u, 3u);
+    return min((u32(clamp(packed, 0.0, 786431.0)) / 32u) & 3u, 3u);
 }
 
 fn unpack_siphon_threshold(packed: f32) -> f32 {
-    return f32(u32(clamp(packed, 0.0, 262143.0)) / 128u);
+    return f32((u32(clamp(packed, 0.0, 786431.0)) % 262144u) / 128u);
+}
+
+fn unpack_siphon_response(packed: f32) -> u32 {
+    return min(u32(clamp(packed, 0.0, 786431.0)) / 262144u, 2u);
 }
 
 fn siphon_signal_active(cell_idx: u32, props: vec4<f32>) -> bool {
     let channel = unpack_signal_channel(props.w);
     let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + channel]);
-    let signal_value = f32(raw_signal & 2047u);
-    let above = signal_value >= unpack_siphon_threshold(props.w);
-    return select(above, !above, unpack_siphon_invert(props.w));
+    let signal_value = decode_signal(raw_signal);
+    return listener_active(signal_value, unpack_siphon_threshold(props.w),
+        unpack_siphon_response(props.w), unpack_siphon_invert(props.w));
 }
 
 fn siphon_should_expel(cell_idx: u32, mode_idx: u32, props: vec4<f32>) -> bool {
@@ -466,13 +482,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Determine effective swim speed
     var effective_speed: f32;
-    if (mode_v3.z >= 0.5) { // flagellocyte_use_signal
+    let signal_control = u32(round(max(mode_v3.z, 0.0)));
+    if ((signal_control & 1u) != 0u) { // flagellocyte_use_signal
         // Signal-based mode: read from the specific channel
         // mode_v2.z = flagellocyte_signal_channel
         let sig_channel = clamp(u32(mode_v2.z), 0u, 7u);
         let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + sig_channel]);
-        let signal_value = f32(raw_signal & 2047u); // Extract value component
-        if (signal_value >= mode_v3.y) { // flagellocyte_threshold_c
+        let signal_value = decode_signal(raw_signal);
+        if (listener_active(signal_value, mode_v3.y, min(signal_control / 2u, 2u), false)) {
             effective_speed = mode_v3.x; // flagellocyte_speed_b
         } else {
             effective_speed = mode_v2.w; // flagellocyte_speed_a

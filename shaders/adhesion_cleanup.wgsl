@@ -156,12 +156,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (cell_a >= cell_count || cell_b >= cell_count) {
                 // Invalid cell indices - mark as inactive
                 adhesion_connections[adhesion_idx].is_active = 0u;
+                adhesion_connections[adhesion_idx]._align_pad.x &= ~8u;
                 atomicSub(&adhesion_counts[1], 1u); // Decrement live count
                 
                 // Clean up per-cell indices for in-bounds cells
                 if (cell_a < cell_count) { remove_adhesion_from_cell(cell_a, adhesion_idx); }
                 if (cell_b < cell_count) { remove_adhesion_from_cell(cell_b, adhesion_idx); }
-                
+
                 // Add to free slot stack (deterministic order by adhesion index)
                 let free_slot_idx = atomicAdd(&adhesion_counts[2], 1u);
                 free_adhesion_slots[free_slot_idx] = adhesion_idx;
@@ -173,12 +174,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 if (cell_a_dead || cell_b_dead) {
                     // Mark adhesion as inactive
                     adhesion_connections[adhesion_idx].is_active = 0u;
+                    adhesion_connections[adhesion_idx]._align_pad.x &= ~8u;
                     
                     // Remove adhesion index from both cells' per-cell adhesion indices
                     // Even if a cell is dead, we still clean up its indices for consistency
                     remove_adhesion_from_cell(cell_a, adhesion_idx);
                     remove_adhesion_from_cell(cell_b, adhesion_idx);
-                    
                     // Decrement live adhesion count
                     atomicSub(&adhesion_counts[1], 1u);
                     

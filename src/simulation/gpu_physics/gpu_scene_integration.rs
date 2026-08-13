@@ -313,36 +313,19 @@ pub fn execute_gpu_physics_step(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        // Stage 4: Collision detection — per-pair parallel dispatch.
-        // Pass B (intra-bucket pairs) needs one thread per (bucket, pair).
-        // Worst-case: capacity/16 buckets * 120 pairs each.
-        // Dispatch the larger of that bound and cell_workgroups so Pass A (per-cell
-        // boundary forces) and Pass C (cross-bucket neighbors) are also fully covered.
-        {
-            let active_slots = _cell_count_hint.min(triple_buffers.capacity);
-            let old_worst_case_pair_threads = ((triple_buffers.capacity + 15) / 16) * 120;
-            let pair_threads = if active_slots < 2 {
-                0
-            } else {
-                // At most active_slots / 2 buckets can contain a pair. Each such
-                // bucket needs 120 pair lanes in the packed collision shader.
-                active_slots
-                    .saturating_mul(60)
-                    .min(old_worst_case_pair_threads)
-            };
-            let collision_workgroups =
-                ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1)
-                    / WORKGROUP_SIZE_CELLS;
-            compute_pass.set_pipeline(&pipelines.collision_detection);
-            compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-            compute_pass.set_bind_group(
-                2,
-                &cached_bind_groups.collision_force_accum[current_index],
-                &[],
-            );
-            compute_pass.dispatch_workgroups(collision_workgroups, 1, 1);
-        }
+        // Stage 4: Collision detection.
+        // One dispatch lane covers one cell slot and one occupied grid bucket. The
+        // shader handles each bucket's local pair set internally, which avoids the
+        // previous sparse-world multiplier of 120 pair lanes per possible bucket.
+        compute_pass.set_pipeline(&pipelines.collision_detection);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.set_bind_group(
+            2,
+            &cached_bind_groups.collision_force_accum[current_index],
+            &[],
+        );
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
         if has_adhesion_bonds {
             compute_pass.set_pipeline(&pipelines.adhesion_physics);
             compute_pass.set_bind_group(0, physics_bind_group, &[]);
@@ -729,30 +712,16 @@ pub fn execute_gpu_mechanics_step(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
-        // Stage 4: Collision detection — per-pair parallel dispatch.
-        {
-            let active_slots = _cell_count_hint.min(triple_buffers.capacity);
-            let old_worst_case_pair_threads = ((triple_buffers.capacity + 15) / 16) * 120;
-            let pair_threads = if active_slots < 2 {
-                0
-            } else {
-                active_slots
-                    .saturating_mul(60)
-                    .min(old_worst_case_pair_threads)
-            };
-            let collision_workgroups =
-                ((pair_threads.max(effective_cell_count)) + WORKGROUP_SIZE_CELLS - 1)
-                    / WORKGROUP_SIZE_CELLS;
-            compute_pass.set_pipeline(&pipelines.collision_detection);
-            compute_pass.set_bind_group(0, physics_bind_group, &[]);
-            compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
-            compute_pass.set_bind_group(
-                2,
-                &cached_bind_groups.collision_force_accum[current_index],
-                &[],
-            );
-            compute_pass.dispatch_workgroups(collision_workgroups, 1, 1);
-        }
+        // Stage 4: Collision detection.
+        compute_pass.set_pipeline(&pipelines.collision_detection);
+        compute_pass.set_bind_group(0, physics_bind_group, &[]);
+        compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
+        compute_pass.set_bind_group(
+            2,
+            &cached_bind_groups.collision_force_accum[current_index],
+            &[],
+        );
+        compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
 
         // Stage 5: Adhesion physics
         if has_adhesion_bonds {
@@ -1156,164 +1125,4 @@ pub fn rebuild_spatial_grid_after_lifecycle(
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
     }
-}
-
-/// Execute the signal system (clear -> sense -> propagate)
-///
-/// This runs ONCE PER FRAME, not per physics step, to avoid 4x over-dispatch.
-/// Should be called before lifecycle so gated actions consume the current frame's signals.
-///
-/// # Arguments
-/// * `has_oculocytes` - If false, skip the signal system (no signal sources or listeners)
-/// * `cell_count_hint` - Live cell count for dispatch scaling
-/// * `max_signal_hops` - Maximum signal hops across all oculocyte modes (determines propagation iterations)
-pub fn execute_signal_system(
-    encoder: &mut wgpu::CommandEncoder,
-    pipelines: &GpuPhysicsPipelines,
-    triple_buffers: &GpuTripleBufferSystem,
-    adhesion_buffers: &super::AdhesionBuffers,
-    cached_bind_groups: &CachedBindGroups,
-    has_oculocytes: bool,
-    cell_count_hint: u32,
-    max_signal_hops: u32,
-) {
-    // Early-out if no signal sources or listeners exist in any genome.
-    if !has_oculocytes {
-        return;
-    }
-
-    let current_index = triple_buffers.current_index();
-
-    // Dispatch size: round up to workgroup boundary (workgroup_size = 256, matching all other cell passes)
-    let signal_workgroups = (cell_count_hint.max(1) + 255) / 256;
-
-    // Copy/clear only the active slot range. At 100K cells this is 6.4 MB per
-    // signal buffer instead of touching the full capacity allocation.
-    let signal_buffer_size =
-        (u64::from(cell_count_hint.max(1)) * 16 * 4).min(adhesion_buffers.signal_flags.size());
-
-    // Step 1: Clear signal flags with DMA. This replaces a shader pass that
-    // performed 16 atomic stores per cell every signal frame.
-    encoder.clear_buffer(&adhesion_buffers.signal_flags, 0, Some(signal_buffer_size));
-
-    // Step 2: Oculocyte sensing (detect targets, write initial signal values)
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Signal Sense"),
-            timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&pipelines.signal_sense);
-        compute_pass.set_bind_group(0, &cached_bind_groups.signal_flags, &[]);
-        compute_pass.set_bind_group(
-            1,
-            &cached_bind_groups.signal_sense_cell_data[current_index],
-            &[],
-        );
-        compute_pass.set_bind_group(2, &cached_bind_groups.signal_sense_world_data, &[]);
-        compute_pass.set_bind_group(3, &cached_bind_groups.cilia_force_spatial, &[]);
-        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-    }
-
-    // Preserve direct emissions so the reverse sweep can start from the same
-    // seed without re-running the expensive sense shader.
-    encoder.copy_buffer_to_buffer(
-        &adhesion_buffers.signal_flags,
-        0,
-        &adhesion_buffers.signal_flags_seed,
-        0,
-        signal_buffer_size,
-    );
-
-    // Step 3: Forward double-buffered pull propagation - one hop per dispatch.
-    //
-    // The propagate shader reads from signal_flags (binding 0, read-only) and writes
-    // to signal_flags_next (binding 2, read_write).  After each dispatch we copy
-    // signal_flags_next -> signal_flags so the next hop sees the freshly propagated
-    // values.  This eliminates the read-write hazard that existed when both reads and
-    // writes targeted the same buffer (where thread scheduling order determined whether
-    // a relay cell's output was visible to its own neighbors in the same dispatch).
-    //
-    // The packed budget is measured in quarter-hop cost units, but each dispatch
-    // crosses one complete adhesion edge and subtracts that edge's full cost. The
-    // number of dispatches is therefore the authored hop count, not budget units.
-    //
-    let propagation_iterations = max_signal_hops.clamp(1, 20);
-    for _ in 0..propagation_iterations {
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Signal Propagate"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&pipelines.signal_propagate);
-            compute_pass.set_bind_group(0, &cached_bind_groups.signal_propagate_flags, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
-            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-        }
-        // Copy signal_flags_next -> signal_flags so the next hop reads the updated values.
-        encoder.copy_buffer_to_buffer(
-            &adhesion_buffers.signal_flags_next,
-            0,
-            &adhesion_buffers.signal_flags,
-            0,
-            signal_buffer_size,
-        );
-    }
-
-    // Preserve the forward sweep, then rebuild direct emissions and sweep in the
-    // opposite stable-index direction. Combining both gives same-mode emitter
-    // chains contributions from both sides without allowing feedback loops.
-    encoder.copy_buffer_to_buffer(
-        &adhesion_buffers.signal_flags,
-        0,
-        &adhesion_buffers.signal_flags_forward,
-        0,
-        signal_buffer_size,
-    );
-
-    // Re-seed direct emissions for the reverse sweep from the captured seed.
-    encoder.copy_buffer_to_buffer(
-        &adhesion_buffers.signal_flags_seed,
-        0,
-        &adhesion_buffers.signal_flags,
-        0,
-        signal_buffer_size,
-    );
-
-    for _ in 0..propagation_iterations {
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Signal Propagate Reverse"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&pipelines.signal_propagate_reverse);
-            compute_pass.set_bind_group(0, &cached_bind_groups.signal_propagate_flags, &[]);
-            compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
-            compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-        }
-        encoder.copy_buffer_to_buffer(
-            &adhesion_buffers.signal_flags_next,
-            0,
-            &adhesion_buffers.signal_flags,
-            0,
-            signal_buffer_size,
-        );
-    }
-
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Signal Combine Sweeps"),
-            timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&pipelines.signal_combine_sweeps);
-        compute_pass.set_bind_group(0, &cached_bind_groups.signal_propagate_flags, &[]);
-        compute_pass.set_bind_group(1, &cached_bind_groups.signal_propagate_adhesion, &[]);
-        compute_pass.dispatch_workgroups(signal_workgroups, 1, 1);
-    }
-    encoder.copy_buffer_to_buffer(
-        &adhesion_buffers.signal_flags_next,
-        0,
-        &adhesion_buffers.signal_flags,
-        0,
-        signal_buffer_size,
-    );
 }

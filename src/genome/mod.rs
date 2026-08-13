@@ -15,6 +15,50 @@ pub const GAMETOCYTE_MIN_SIMILARITY: f32 = 0.5;
 /// Raised from 80 to 128 to give more room for complex creatures.
 pub const MAX_MODES: usize = 128;
 
+/// Signed signal listener behavior stored by every signal-driven genome input.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalResponseMode {
+    Positive = 0,
+    Negative = 1,
+    Magnitude = 2,
+}
+
+impl SignalResponseMode {
+    #[inline]
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            1 => Self::Negative,
+            2 => Self::Magnitude,
+            _ => Self::Positive,
+        }
+    }
+
+    #[inline]
+    pub fn response_value(self, value: f32) -> f32 {
+        match self {
+            Self::Positive => value.max(0.0),
+            Self::Negative => (-value).max(0.0),
+            Self::Magnitude => value.abs(),
+        }
+    }
+}
+
+pub const SIGNAL_LISTENER_GLUEOCYTE: usize = 0;
+pub const SIGNAL_LISTENER_FLAGELLOCYTE: usize = 1;
+pub const SIGNAL_LISTENER_CILIOCYTE: usize = 2;
+pub const SIGNAL_LISTENER_MYOCYTE: usize = 3;
+pub const SIGNAL_LISTENER_EMBRYOCYTE: usize = 4;
+pub const SIGNAL_LISTENER_DIVISION: usize = 5;
+pub const SIGNAL_LISTENER_APOPTOSIS: usize = 6;
+pub const SIGNAL_LISTENER_CHILD_A: usize = 7;
+pub const SIGNAL_LISTENER_CHILD_B: usize = 8;
+pub const SIGNAL_LISTENER_MODE_SWITCH: usize = 9;
+pub const SIGNAL_LISTENER_LUMINOCYTE: usize = 10;
+pub const SIGNAL_LISTENER_SIPHONOCYTE: usize = 11;
+pub const SIGNAL_LISTENER_STEMOCYTE: usize = 12;
+pub const SIGNAL_LISTENER_COUNT: usize = 13;
+
 /// Selects a subset of cells by developmental identity.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CellAddressSelector {
@@ -104,6 +148,9 @@ impl Default for ChildSettings {
 /// Adhesion configuration for cell connections
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdhesionSettings {
+    /// Classify affordable cell-to-cell bonds created by this mode as immutable
+    /// signal-backbone bonds. This affects future bonds only.
+    pub creates_backbone: bool,
     pub can_break: bool,
     pub break_force: f32,
     pub rest_length: f32,
@@ -120,6 +167,7 @@ pub struct AdhesionSettings {
 impl Default for AdhesionSettings {
     fn default() -> Self {
         Self {
+            creates_backbone: false,
             can_break: true,
             break_force: 500.0,
             rest_length: 1.0,
@@ -167,6 +215,10 @@ pub struct ModeSettings {
     pub child_a_after_split_keep_adhesion: bool, // Whether Child A keeps adhesion when max_splits is reached
     pub child_b_after_split_keep_adhesion: bool, // Whether Child B keeps adhesion when max_splits is reached
 
+    /// Per-listener signed response modes, indexed by `SIGNAL_LISTENER_*`.
+    /// Values are `SignalResponseMode as i32`; invalid mutation values read as Positive.
+    pub signal_response_modes: [i32; SIGNAL_LISTENER_COUNT],
+
     // Glueocyte settings
     pub glueocyte_cell_adhesion: bool, // Whether this Glueocyte bonds to other cells on contact
     /// Whether this Glueocyte bonds to cells of its own organism.
@@ -197,24 +249,21 @@ pub struct ModeSettings {
     // Photocyte signal emission
     pub photocyte_emit_enabled: bool, // Whether signal emission is active
     pub photocyte_emit_channel: i32,  // 0-15 = channel to emit on
-    pub photocyte_emit_hops: i32,     // How many adhesion hops (1-20)
     pub photocyte_emit_threshold: f32, // Light level threshold (0.0-1.0)
     pub photocyte_emit_mode: i32,     // 0 = above threshold, 1 = below threshold
-    pub photocyte_emit_value: f32,    // Signal value to emit (-100.0 to 100.0)
+    pub photocyte_emit_value: f32,    // Signed signal value to emit (-1000.0 to 1000.0)
 
     // Lipocyte signal emission
     pub lipocyte_emit_enabled: bool, // Whether signal emission is active
     pub lipocyte_emit_channel: i32,  // 0-15 = channel to emit on
-    pub lipocyte_emit_hops: i32,     // How many adhesion hops (1-20)
     pub lipocyte_emit_threshold: f32, // Storage fraction threshold (0.0-1.0)
     pub lipocyte_emit_mode: i32,     // 0 = above threshold, 1 = below threshold
-    pub lipocyte_emit_value: f32,    // Signal value to emit (-100.0 to 100.0)
+    pub lipocyte_emit_value: f32,    // Signed signal value to emit (-1000.0 to 1000.0)
 
     // Oculocyte settings
     pub oculocyte_sense_type: u32, // Bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
     pub oculocyte_signal_channel: i32, // Which channel to send on (0-7, sensory channel range)
-    pub oculocyte_signal_value: f32, // Signal value to send when target detected (1.0 to 2047.0)
-    pub oculocyte_signal_hops: i32, // How many adhesion hops the signal propagates (1-20)
+    pub oculocyte_signal_value: f32, // Signed signal value to send (-1000.0 to 1000.0)
     pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
     pub oculocyte_light_target_color: Vec3, // RGB color that light-sensing oculocytes can see
     pub oculocyte_light_color_tolerance: f32, // Max RGB distance from target color for light detection
@@ -256,8 +305,7 @@ pub struct ModeSettings {
 
     // Developmental/regulation signal emission: any cell mode can emit on channels 8-15
     pub regulation_emit_channel: i32, // Channel to emit on (-1 = disabled, 8-15 = regulation/developmental channel)
-    pub regulation_emit_value: f32,   // Signal value to emit (0.0 to 2047.0)
-    pub regulation_emit_hops: i32,    // How many adhesion hops the signal propagates (1-20)
+    pub regulation_emit_value: f32,   // Signed signal value to emit (-1000.0 to 1000.0)
 
     // Signal-conditional behavior settings
     // Division gating: cell only divides if signal condition is met
@@ -295,7 +343,6 @@ pub struct ModeSettings {
     pub vascular_outlet: bool, // Nutrient exchange port: exchanges with non-vascular neighbors in both directions
     pub vascular_signal_transport: bool, // When true, this mode participates in vascular signal pipes
     pub vascular_signal_exchange: bool, // Signal exchange port: exchanges with non-vascular neighbors in both directions
-    pub vascular_signal_capacity: f32,  // Node-level throughput cap prevents fan-in amplification
 
     // Gametocyte settings
     pub gametocyte_merge_range: f32, // Extra contact range for merge detection beyond cell radii (0.0 to 2.0)
@@ -307,14 +354,13 @@ pub struct ModeSettings {
     pub memorocyte_input_channel: i32,
     /// Channel to emit the current memory value on (0-15).
     pub memorocyte_output_channel: i32,
-    /// How many adhesion hops the emitted memory propagates (1-20).
-    pub memorocyte_output_hops: i32,
 
     // Cognocyte settings
     /// Which arithmetic/logic operation to perform on the two input signals.
     /// 0=Add, 1=Subtract, 2=Multiply, 3=Divide, 4=Min, 5=Max, 6=Average,
     /// 7=GreaterThan, 8=LessThan, 9=Equal, 10=AND, 11=OR, 12=NOT, 13=Select,
-    /// 14=Oscillate (ignores inputs; emits half-rectified sine based on time)
+    /// 14=Oscillate, 15=Wave Oscillate, 16=ABS, 17=NEGATE,
+    /// 18=POSITIVE, 19=NEGATIVE.
     pub cognocyte_operation: i32,
     /// First input signal channel (0-15). Emits nothing if channel has no signal.
     pub cognocyte_input_channel_a: i32,
@@ -323,8 +369,6 @@ pub struct ModeSettings {
     pub cognocyte_input_channel_b: i32,
     /// Channel to emit the result on (0-15).
     pub cognocyte_output_channel: i32,
-    /// How many adhesion hops the result signal propagates (1-20).
-    pub cognocyte_output_hops: i32,
     /// Oscillate operation: cycles per second (ignored for non-Oscillate ops).
     pub cognocyte_oscillator_rate: f32,
     /// Oscillate operation: phase offset 0.0–1.0 fraction of a full cycle.
@@ -332,11 +376,8 @@ pub struct ModeSettings {
     pub cognocyte_oscillator_phase: f32,
     /// Oscillate operation: peak output strength. The signal scales from 0 to this value.
     pub cognocyte_oscillator_strength: f32,
-    /// Hops Oscillate operation: number of discrete steps per cycle (= max hop reach).
-    /// The signal steps from 1 hop up to this count over one cycle, then resets.
-    /// Cells closer to the source receive signal for more steps per cycle than distant cells,
-    /// creating an automatic phase gradient along the chain.
-    pub cognocyte_oscillator_step_count: i32,
+    /// 0 = positive, 1 = negative, 2 = bipolar.
+    pub cognocyte_oscillator_polarity: i32,
 
     // Luminocyte settings
     pub luminocyte_signal_channel: i32, // Signal channel to listen on (0-7)
@@ -374,6 +415,16 @@ pub struct ModeSettings {
 }
 
 impl ModeSettings {
+    #[inline]
+    pub fn signal_response_mode(&self, listener: usize) -> SignalResponseMode {
+        SignalResponseMode::from_i32(
+            self.signal_response_modes
+                .get(listener)
+                .copied()
+                .unwrap_or(SignalResponseMode::Positive as i32),
+        )
+    }
+
     /// Get split interval (potentially randomized from range)
     pub fn get_split_interval(&self, _cell_id: u32, _tick: u64, _rng_seed: u64) -> f32 {
         // For now, return the fixed value. In the future, this could be randomized
@@ -386,9 +437,9 @@ impl ModeSettings {
         self.split_mass
     }
 
-    /// Select the configured Stemocyte outcome for an existing 0-2047 signal value.
+    /// Select the configured Stemocyte outcome for a polarity-filtered 0-1000 signal value.
     pub fn stemocyte_outcome_for_signal(&self, signal_value: f32) -> i32 {
-        let normalized = (signal_value / 2047.0).clamp(0.0, 1.0);
+        let normalized = (signal_value / 1000.0).clamp(0.0, 1.0);
         let percentage = normalized * 100.0;
         let weak_band = self
             .stemocyte_thresholds
@@ -406,19 +457,19 @@ impl ModeSettings {
 
 #[cfg(test)]
 mod stemocyte_tests {
-    use super::ModeSettings;
+    use super::{ModeSettings, SignalResponseMode, SIGNAL_LISTENER_COUNT};
 
     #[test]
     fn stemocyte_bands_follow_selected_direction() {
         let mut mode = ModeSettings::default();
         mode.stemocyte_outcomes = [10, 11, 12, 13, 14];
 
-        assert_eq!(mode.stemocyte_outcome_for_signal(2047.0), 10);
+        assert_eq!(mode.stemocyte_outcome_for_signal(1000.0), 10);
         assert_eq!(mode.stemocyte_outcome_for_signal(0.0), 14);
 
         mode.stemocyte_weak_first = true;
         assert_eq!(mode.stemocyte_outcome_for_signal(0.0), 10);
-        assert_eq!(mode.stemocyte_outcome_for_signal(2047.0), 14);
+        assert_eq!(mode.stemocyte_outcome_for_signal(1000.0), 14);
     }
 
     #[test]
@@ -429,10 +480,37 @@ mod stemocyte_tests {
         mode.stemocyte_thresholds = [10, 25, 70, 90];
 
         assert_eq!(mode.stemocyte_outcome_for_signal(0.0), 10);
-        assert_eq!(mode.stemocyte_outcome_for_signal(204.0), 10);
-        assert_eq!(mode.stemocyte_outcome_for_signal(205.0), 11);
-        assert_eq!(mode.stemocyte_outcome_for_signal(1024.0), 12);
-        assert_eq!(mode.stemocyte_outcome_for_signal(1843.0), 14);
+        assert_eq!(mode.stemocyte_outcome_for_signal(99.0), 10);
+        assert_eq!(mode.stemocyte_outcome_for_signal(100.0), 11);
+        assert_eq!(mode.stemocyte_outcome_for_signal(500.0), 12);
+        assert_eq!(mode.stemocyte_outcome_for_signal(900.0), 14);
+    }
+
+    #[test]
+    fn every_listener_stores_an_independent_response_mode() {
+        let mut mode = ModeSettings::default();
+        assert_eq!(mode.signal_response_modes.len(), SIGNAL_LISTENER_COUNT);
+        for listener in 0..SIGNAL_LISTENER_COUNT {
+            mode.signal_response_modes
+                .fill(SignalResponseMode::Positive as i32);
+            mode.signal_response_modes[listener] = SignalResponseMode::Negative as i32;
+            assert_eq!(
+                mode.signal_response_mode(listener),
+                SignalResponseMode::Negative
+            );
+            assert!(mode
+                .signal_response_modes
+                .iter()
+                .enumerate()
+                .all(|(index, value)| index == listener || *value == 0));
+        }
+
+        mode.signal_response_modes[0] = 99;
+        assert_eq!(
+            mode.signal_response_mode(0),
+            SignalResponseMode::Positive,
+            "invalid mutated values deterministically fall back to Positive"
+        );
     }
 
     #[test]
@@ -476,10 +554,11 @@ impl Default for ModeSettings {
             child_b_after_split_orientation: Quat::IDENTITY, // Default orientation for Child B after max splits
             child_a_after_split_keep_adhesion: true, // Default: keep adhesion for Child A after max splits
             child_b_after_split_keep_adhesion: true, // Default: keep adhesion for Child B after max splits
-            glueocyte_cell_adhesion: false,          // Default: cell adhesion disabled
-            glueocyte_self_adhesion: false,          // Default: don't bond to own organism
-            glueocyte_env_adhesion: true,            // Default: environment adhesion enabled
-            glueocyte_boulder_adhesion: true,        // Default: boulder adhesion enabled
+            signal_response_modes: [SignalResponseMode::Positive as i32; SIGNAL_LISTENER_COUNT],
+            glueocyte_cell_adhesion: false, // Default: cell adhesion disabled
+            glueocyte_self_adhesion: false, // Default: don't bond to own organism
+            glueocyte_env_adhesion: true,   // Default: environment adhesion enabled
+            glueocyte_boulder_adhesion: true, // Default: boulder adhesion enabled
             glueocyte_cell_adhesion_signal_channel: -1, // Default: always active (no signal gate)
             glueocyte_cell_adhesion_signal_threshold: 1.0,
             glueocyte_signal_gate_invert: false, // Default: active when signal >= threshold
@@ -501,7 +580,6 @@ impl Default for ModeSettings {
             oculocyte_sense_type: 1,             // Default: sense cells (bit 0)
             oculocyte_signal_channel: 0,         // Default: channel 0
             oculocyte_signal_value: 10.0,        // Default: +10 signal
-            oculocyte_signal_hops: 3,            // Default: 3 hops
             oculocyte_ray_length: 20.0,          // Default: 20 units ray length
             oculocyte_light_target_color: Vec3::new(1.0, 0.95, 0.78), // Warm sun-like color
             oculocyte_light_color_tolerance: 0.18, // Narrow band around sun color
@@ -525,7 +603,6 @@ impl Default for ModeSettings {
             embryocyte_signal_value: 1.0,    // Default: threshold of 1.0
             regulation_emit_channel: -1,     // Disabled by default
             regulation_emit_value: 10.0,     // Default: 10 signal value
-            regulation_emit_hops: 3,         // Default: 3 hops
             division_signal_channel: -1,     // Disabled by default
             division_signal_threshold: 1.0,
             division_signal_invert: false,
@@ -550,33 +627,28 @@ impl Default for ModeSettings {
             vascular_outlet: false,
             photocyte_emit_enabled: false,
             photocyte_emit_channel: 0,
-            photocyte_emit_hops: 5,
             photocyte_emit_threshold: 0.5,
             photocyte_emit_mode: 0,
             photocyte_emit_value: 10.0,
             lipocyte_emit_enabled: false,
             lipocyte_emit_channel: 0,
-            lipocyte_emit_hops: 5,
             lipocyte_emit_threshold: 0.8,
             lipocyte_emit_mode: 1,
             lipocyte_emit_value: 10.0,
             vascular_signal_transport: false,
             vascular_signal_exchange: false,
-            vascular_signal_capacity: 10.0,
             gametocyte_merge_range: 0.5,
             memorocyte_rate: 0.1,
             memorocyte_input_channel: 0,
             memorocyte_output_channel: 9,
-            memorocyte_output_hops: 5,
             cognocyte_operation: 0, // Add
             cognocyte_input_channel_a: 0,
             cognocyte_input_channel_b: 1,
             cognocyte_output_channel: 8,
-            cognocyte_output_hops: 5,
             cognocyte_oscillator_rate: 1.0,
             cognocyte_oscillator_phase: 0.0,
             cognocyte_oscillator_strength: 1.0,
-            cognocyte_oscillator_step_count: 4,
+            cognocyte_oscillator_polarity: 0,
             luminocyte_signal_channel: 0,
             luminocyte_threshold: 1.0,
             luminocyte_invert: false,
@@ -1420,7 +1492,6 @@ impl Genome {
             // Emit anterior gradient so all cells know their head-to-tail position
             m.regulation_emit_channel = ch_anterior;
             m.regulation_emit_value = 50.0;
-            m.regulation_emit_hops = 20;
             // On maturity: stem becomes a feeder in the adult body
             m.mode_switch_signal_channel = ch_maturity;
             m.mode_switch_signal_threshold = 1.0;
@@ -1475,7 +1546,6 @@ impl Genome {
             m.division_signal_invert = false;
             m.regulation_emit_channel = ch_lateral;
             m.regulation_emit_value = 30.0;
-            m.regulation_emit_hops = 10;
             m.mode_switch_signal_channel = ch_maturity;
             m.mode_switch_signal_threshold = 1.0;
             m.mode_switch_target = r_loco as i32;
@@ -1583,7 +1653,6 @@ impl Genome {
             // Emit feeder abundance signal continuously
             m.regulation_emit_channel = ch_feeder;
             m.regulation_emit_value = 20.0;
-            m.regulation_emit_hops = 15;
             apply_adhesion(m, adh_rest, adh_lin * 0.8, adh_ang * 0.7, flex);
             // Exclude devorocyte - it can't produce nutrients independently
             let safe_feed_type = if feed_cell_type == 11 {
@@ -1697,7 +1766,6 @@ impl Genome {
             // Emit maturity signal: floods body, triggers all grow->adult switches
             m.regulation_emit_channel = ch_maturity;
             m.regulation_emit_value = 50.0;
-            m.regulation_emit_hops = 20;
             apply_adhesion(m, adh_rest, adh_lin, adh_ang, flex);
             // Child A = free stem (detaches, starts new organism directly)
             m.child_a.mode_number = r_stem as i32;
@@ -1734,7 +1802,6 @@ impl Genome {
             m.oculocyte_sense_type = if feed_cell_type == 11 { 1 << 1 } else { 1 << 0 }; // Food=bit1, Cell=bit0
             m.oculocyte_signal_channel = ch_sense;
             m.oculocyte_signal_value = rng.f32(5.0, 20.0);
-            m.oculocyte_signal_hops = rng.i32_range(3, 12);
             m.oculocyte_ray_length = rng.f32(10.0, 40.0);
             apply_adhesion(m, adh_rest, adh_lin, adh_ang, flex);
             m.child_a.mode_number = idx as i32;

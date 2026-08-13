@@ -102,6 +102,17 @@ var<storage, read> geothermal_heat: array<f32>;
 var<storage, read> mode_properties_v14: array<vec4<f32>>;
 @group(2) @binding(9)
 var<storage, read> signal_flags: array<atomic<u32>>;
+
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
+}
+fn listener_active(value: f32, threshold: f32, response_mode: u32, invert: bool) -> bool {
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, invert);
+}
 @group(2) @binding(10)
 var<storage, read> adhesion_settings_v0: array<vec4<f32>>;
 
@@ -277,14 +288,14 @@ fn siphon_intake_amount(siphon_idx: u32, mode_idx: u32, dt: f32, env: VoxelEnvir
         let props = mode_properties_v14[mode_idx];
         intake_rate = max(props.x, 0.0);
         impulse = max(props.z, 0.0);
-        let packed = u32(clamp(props.w, 0.0, 262143.0));
+        let packed = u32(clamp(props.w, 0.0, 786431.0));
         mode = min((packed / 32u) & 3u, 3u);
         let channel = packed & 15u;
         let invert = (packed & 16u) != 0u;
-        let threshold = f32(packed / 128u);
+        let threshold = f32((packed % 262144u) / 128u);
+        let response_mode = min(packed / 262144u, 2u);
         let raw_signal = atomicLoad(&signal_flags[siphon_idx * 16u + channel]);
-        let above = f32(raw_signal & 2047u) >= threshold;
-        signal_active = select(above, !above, invert);
+        signal_active = listener_active(decode_signal(raw_signal), threshold, response_mode, invert);
     }
 
     var stroke_gate = 1.0;

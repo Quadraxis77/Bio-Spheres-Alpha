@@ -70,23 +70,44 @@ struct ScaffoldParams {
 @group(1) @binding(3) var<storage, read> death_flags: array<u32>;
 @group(1) @binding(4) var<storage, read> parent_lineage_hashes: array<vec2<u32>>;
 @group(1) @binding(5) var<storage, read> organism_cell_ids: array<u32>;
+@group(1) @binding(6) var<storage, read> cell_ids: array<u32>;
+@group(1) @binding(7) var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+@group(1) @binding(8) var<storage, read> split_nutrient_thresholds: array<f32>;
 
 @group(2) @binding(0) var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 @group(2) @binding(1) var<storage, read_write> cell_adhesion_indices: array<atomic<i32>>;
 @group(2) @binding(2) var<storage, read_write> next_adhesion_id: array<atomic<u32>>;
 @group(2) @binding(3) var<storage, read_write> free_adhesion_slots: array<u32>;
 @group(2) @binding(4) var<storage, read_write> adhesion_counts: array<atomic<u32>>;
+@group(2) @binding(5) var<storage, read> adhesion_settings_v2: array<vec4<f32>>;
 
 @group(3) @binding(0) var<storage, read> scaffold_rules: array<ScaffoldRule>;
 @group(3) @binding(1) var<uniform> scaffold_params: ScaffoldParams;
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
+const BOND_FLAG_SIGNAL_BACKBONE: u32 = 4u;
+const BACKBONE_CONSTRUCTION_FRACTION: f32 = 0.05;
 const SELECTOR_ANY: u32 = 0u;
 const SELECTOR_MODE: u32 = 1u;
 const SELECTOR_LINEAGE: u32 = 2u;
 const SELECTOR_LINEAGE_OR_MODE: u32 = 3u;
 const SELECTOR_ORGANISM_CELL_ID: u32 = 4u;
+
+// Reserve the one-time construction charge atomically. The caller refunds it
+// if no complete physical bond is committed.
+fn try_reserve_construction(cell_idx: u32, cost: i32) -> bool {
+    if (cost <= 0i) { return true; }
+    loop {
+        let available = atomicLoad(&nutrients_buffer[cell_idx]);
+        if (available < cost) { return false; }
+        let result = atomicCompareExchangeWeak(
+            &nutrients_buffer[cell_idx], available, available - cost
+        );
+        if (result.exchanged) { return true; }
+    }
+    return false;
+}
 
 fn selector_matches(cell_idx: u32, kind: u32, mode_idx: u32, hash_lo: u32, hash_hi: u32, branch_slot: u32) -> bool {
     if (kind == SELECTOR_ANY) {
@@ -339,6 +360,13 @@ fn attach_index(cell_idx: u32, adhesion_id: u32) -> bool {
     return false;
 }
 
+fn detach_index(cell_idx: u32, adhesion_id: u32) {
+    let base = cell_idx * MAX_ADHESIONS_PER_CELL;
+    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
+        atomicCompareExchangeWeak(&cell_adhesion_indices[base + i], i32(adhesion_id), -1);
+    }
+}
+
 @compute @workgroup_size(128)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let source = gid.x;
@@ -530,20 +558,37 @@ fn create_or_update_scaffold_connection(source: u32, best_target: u32, rule: Sca
         return;
     }
 
+    let source_mode = mode_indices[source];
+    let creates_backbone = source_mode < arrayLength(&adhesion_settings_v2)
+        && adhesion_settings_v2[source_mode].w > 0.5;
+    let construction_cost_fixed = i32(round(
+        max(split_nutrient_thresholds[source], 0.0)
+            * BACKBONE_CONSTRUCTION_FRACTION * 1000.0
+    ));
+    let construction_reserved = !creates_backbone
+        || try_reserve_construction(source, construction_cost_fixed);
+    if (!construction_reserved) {
+        return;
+    }
+
     let adhesion_id = allocate_adhesion_slot();
     if (adhesion_id == 0xFFFFFFFFu) {
+        if (creates_backbone) {
+            atomicAdd(&nutrients_buffer[source], construction_cost_fixed);
+        }
         return;
     }
 
     var conn: AdhesionConnection;
     conn.cell_a_index = source;
     conn.cell_b_index = best_target;
-    conn.mode_index = mode_indices[source];
+    conn.mode_index = source_mode;
     conn.is_active = 1u;
     conn.zone_a = 2u;
     conn.zone_b = 2u;
-    conn.bond_flags = BOND_FLAG_BARRIER_BALL;
-    conn._align_pad1 = 0u;
+    conn.bond_flags = BOND_FLAG_BARRIER_BALL
+        | select(0u, BOND_FLAG_SIGNAL_BACKBONE, creates_backbone);
+    conn._align_pad1 = select(0u, cell_ids[source], creates_backbone);
     conn.anchor_direction_a = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     conn.anchor_direction_b = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     conn.twist_reference_a = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -556,5 +601,15 @@ fn create_or_update_scaffold_connection(source: u32, best_target: u32, rule: Sca
     let attached_b = attach_index(best_target, adhesion_id);
     if (!attached_a || !attached_b) {
         adhesion_connections[adhesion_id].is_active = 0u;
+        if (attached_a) { detach_index(source, adhesion_id); }
+        if (attached_b) { detach_index(best_target, adhesion_id); }
+        atomicSub(&adhesion_counts[1], 1u);
+        let free_top = atomicAdd(&adhesion_counts[2], 1u);
+        if (free_top < arrayLength(&free_adhesion_slots)) {
+            free_adhesion_slots[free_top] = adhesion_id;
+        }
+        if (creates_backbone) {
+            atomicAdd(&nutrients_buffer[source], construction_cost_fixed);
+        }
     }
 }

@@ -17,13 +17,14 @@ use crate::simulation::fluid_simulation::{
 };
 use crate::simulation::gpu_physics::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
-    execute_signal_system, AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
+    AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
     DevorocyteConsumptionSystem, DivisionAudioCandidate, DivisionAudioCollectDispatch,
     DivisionAudioParams, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
     GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
     GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
-    PhysicsFeatureFlags,
+    PhysicsFeatureFlags, SignalBackboneValuePipeline, SignalTickClock,
 };
+use crate::simulation::signal_backbone_bench::CachedForest;
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
@@ -34,7 +35,6 @@ const PHOTOCYTE_BASELINE_BRIGHTNESS: f32 = 2.5;
 const MAX_SUN_BRIGHTNESS: f32 = 5.0;
 const PHOTOCYTE_BASELINE_MASS_RATE: f32 = 0.2;
 const LEGACY_PHOTOCYTE_MASS_RATE_MAX: f32 = 0.02;
-const SIGNAL_UPDATE_INTERVAL_FRAMES: i32 = 4;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES: usize = 256;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32: u32 = DIVISION_AUDIO_PLAYBACK_CANDIDATES as u32;
 /// Number of staging buffers in the division-audio readback pool. Measured GPU
@@ -132,6 +132,11 @@ pub struct GpuScene {
     pub gpu_triple_buffers: GpuTripleBufferSystem,
     /// Adhesion buffer system for GPU adhesion physics
     pub adhesion_buffers: AdhesionBuffers,
+    /// Single cached-backbone signal value pipeline. The previous hop-based
+    /// gameplay implementation has been removed.
+    pub signal_backbone: SignalBackboneValuePipeline,
+    signal_clock: SignalTickClock,
+    signal_elapsed_pending: f32,
     /// GPU resolver for preview-authored scaffold links stored in genomes
     pub scaffold_system: GpuScaffoldSystem,
     /// Cached bind groups (created once, not per-frame)
@@ -170,12 +175,6 @@ pub struct GpuScene {
     pub(super) has_gametocytes: bool,
     /// Per-cell physics feature flags used to skip irrelevant compute passes.
     pub(super) physics_features: PhysicsFeatureFlags,
-    /// Maximum signal hops across all oculocyte modes in all genomes (for signal propagation dispatch count)
-    pub(super) max_signal_hops: u32,
-    /// Last simulation frame where adhesion signals were recomputed.
-    last_signal_update_frame: Option<i32>,
-    /// Cell-slot high-water mark used by the most recent signal recompute.
-    last_signal_total_cell_slots: u32,
     /// Genome buffer manager for per-genome GPU resources
     pub genome_buffer_manager: GenomeBufferManager,
     /// Cached parent_make_adhesion flags from genome modes for quick lookup during division
@@ -613,23 +612,6 @@ pub struct GpuScene {
     reflection_cubemap_captured: bool,
     /// Whether genome settings are dirty and need GPU sync
     pub(super) genomes_dirty: bool,
-    /// Uniform buffer for signal sense world params (boundary_radius, light_dir, grid params)
-    signal_sense_world_params_buffer: wgpu::Buffer,
-    /// Dummy nutrient buffer (used when fluid simulator is not yet initialized)
-    #[allow(dead_code)]
-    signal_sense_dummy_nutrient_buffer: wgpu::Buffer,
-    /// Dummy light field buffer (used when light field system is not yet initialized)
-    #[allow(dead_code)]
-    signal_sense_dummy_light_buffer: wgpu::Buffer,
-    /// Dummy light color field buffer (used when light field system is not yet initialized)
-    #[allow(dead_code)]
-    signal_sense_dummy_light_color_buffer: wgpu::Buffer,
-    /// Dummy solid mask buffer (used when fluid simulator is not yet initialized)
-    #[allow(dead_code)]
-    signal_sense_dummy_solid_buffer: wgpu::Buffer,
-    /// Dummy density field buffer (used when surface nets is not yet initialized)
-    #[allow(dead_code)]
-    signal_sense_dummy_density_buffer: wgpu::Buffer,
 
     // -- Organism follow camera ------------------------------------------------
     /// Root label (min cell index) of the organism the camera is following.
@@ -797,70 +779,14 @@ impl GpuScene {
         // Initialize adhesion buffers with default values
         adhesion_buffers.initialize(queue);
 
-        let scaffold_system = GpuScaffoldSystem::new(device);
+        let signal_backbone = SignalBackboneValuePipeline::new(
+            device,
+            capacity,
+            &gpu_triple_buffers.nutrients_buffer,
+            &adhesion_buffers.signal_flags,
+        );
 
-        // Create signal sense world params uniform buffer (48 bytes = 12 floats)
-        // Matches SignalSenseWorldParams in signal_sense.wgsl
-        let signal_sense_world_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Signal Sense World Params Buffer"),
-            size: 48, // 12 x f32
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        // Initialize with the correct boundary_radius immediately so the sphere check
-        // in sense_barrier works from the very first frame, before run_physics is called.
-        {
-            let initial_params: [f32; 12] = [
-                world_radius, // boundary_radius
-                -0.5,
-                0.7,
-                0.5, // light_dir (default)
-                0.0,
-                1.0, // grid_resolution (0 = no grid), cell_size
-                0.0,
-                0.0,
-                0.0, // grid_origin
-                0.0,
-                0.0,
-                0.0, // padding
-            ];
-            queue.write_buffer(
-                &signal_sense_world_params_buffer,
-                0,
-                bytemuck::cast_slice(&initial_params),
-            );
-        }
-        // Dummy storage buffers (4 bytes each) - used until real systems are initialized
-        let signal_sense_dummy_nutrient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Signal Sense Dummy Nutrient Buffer"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let signal_sense_dummy_light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Signal Sense Dummy Light Buffer"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let signal_sense_dummy_light_color_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Signal Sense Dummy Light Color Buffer"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let signal_sense_dummy_solid_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Signal Sense Dummy Solid Buffer"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let signal_sense_dummy_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Signal Sense Dummy Density Buffer"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
+        let scaffold_system = GpuScaffoldSystem::new(device);
 
         // Create organism label system (always-on, GPU self-throttled)
         let organism_label_system = Some(crate::simulation::gpu_physics::OrganismLabelSystem::new(
@@ -940,12 +866,6 @@ impl GpuScene {
             device,
             &gpu_triple_buffers,
             &adhesion_buffers,
-            &signal_sense_world_params_buffer,
-            &signal_sense_dummy_nutrient_buffer,
-            &signal_sense_dummy_light_buffer,
-            &signal_sense_dummy_light_color_buffer,
-            &signal_sense_dummy_solid_buffer,
-            &signal_sense_dummy_density_buffer,
             organism_label_system.as_ref().map(|s| &s.label_buffer),
             organism_label_system
                 .as_ref()
@@ -983,6 +903,9 @@ impl GpuScene {
             gpu_physics_pipelines,
             gpu_triple_buffers,
             adhesion_buffers,
+            signal_backbone,
+            signal_clock: SignalTickClock::default(),
+            signal_elapsed_pending: 0.0,
             scaffold_system,
             cached_bind_groups,
             cell_inspector,
@@ -1007,9 +930,6 @@ impl GpuScene {
             has_devorocytes: false,
             has_gametocytes: false,
             physics_features: PhysicsFeatureFlags::default(),
-            max_signal_hops: 0,
-            last_signal_update_frame: None,
-            last_signal_total_cell_slots: 0,
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
@@ -1226,12 +1146,6 @@ impl GpuScene {
             cell_shadow_bind_group_set: false,
             reflection_cubemap_captured: false,
             genomes_dirty: false,
-            signal_sense_world_params_buffer,
-            signal_sense_dummy_nutrient_buffer,
-            signal_sense_dummy_light_buffer,
-            signal_sense_dummy_light_color_buffer,
-            signal_sense_dummy_solid_buffer,
-            signal_sense_dummy_density_buffer,
             follow_organism_id: None,
             follow_target: glam::Vec3::ZERO,
             follow_center: glam::Vec3::ZERO,
@@ -1256,6 +1170,12 @@ impl GpuScene {
     /// Get the current cell capacity.
     pub fn capacity(&self) -> u32 {
         self.gpu_triple_buffers.capacity
+    }
+
+    /// Install the externally generated immutable Phase 3 backbone snapshot.
+    /// Phase 4 replaces this upload boundary with incremental topology repair.
+    pub fn set_static_signal_forest(&mut self, device: &wgpu::Device, cache: &CachedForest) {
+        self.signal_backbone.set_static_forest(device, cache);
     }
 
     /// Reset the simulation to initial state.
@@ -1303,9 +1223,9 @@ impl GpuScene {
         self.has_devorocytes = false;
         self.has_gametocytes = false;
         self.physics_features = PhysicsFeatureFlags::default();
-        self.max_signal_hops = 0;
-        self.last_signal_update_frame = None;
-        self.last_signal_total_cell_slots = 0;
+        self.signal_backbone.clear_static_forest();
+        self.signal_clock = SignalTickClock::default();
+        self.signal_elapsed_pending = 0.0;
         self.instance_builder.mark_all_dirty();
         // Reset GPU cell count buffer to 0 immediately
         let cell_counts: [u32; 2] = [0, 0];
@@ -1667,7 +1587,7 @@ impl GpuScene {
                             twist_constraint_stiffness: c[0],
                             twist_constraint_damping: c[1],
                             enable_twist_constraint: c[2] as i32,
-                            _padding: 0,
+                            creates_backbone: c[3] as i32,
                         }
                     })
                     .collect(),
@@ -1749,6 +1669,8 @@ impl GpuScene {
                 child_b_after_split_orientation: qb_split,
                 child_a_after_split_keep_adhesion: false,
                 child_b_after_split_keep_adhesion: false,
+                signal_response_modes: [crate::genome::SignalResponseMode::Positive as i32;
+                    crate::genome::SIGNAL_LISTENER_COUNT],
                 glueocyte_cell_adhesion: false,
                 glueocyte_self_adhesion: false,
                 glueocyte_env_adhesion: glueocyte_flags[i] != 0,
@@ -1765,20 +1687,17 @@ impl GpuScene {
                 buoyancy_force: 0.0,
                 photocyte_emit_enabled: false,
                 photocyte_emit_channel: 0,
-                photocyte_emit_hops: 5,
                 photocyte_emit_threshold: 0.5,
                 photocyte_emit_mode: 0,
                 photocyte_emit_value: 10.0,
                 lipocyte_emit_enabled: false,
                 lipocyte_emit_channel: 0,
-                lipocyte_emit_hops: 5,
                 lipocyte_emit_threshold: 0.8,
                 lipocyte_emit_mode: 1,
                 lipocyte_emit_value: 10.0,
                 oculocyte_sense_type: oculocyte_params[i][0], // u32 bitmask
                 oculocyte_signal_channel: 0,
                 oculocyte_signal_value: 0.0,
-                oculocyte_signal_hops: oculocyte_params[i][2] as i32,
                 oculocyte_ray_length: f32::from_bits(oculocyte_params[i][1]),
                 oculocyte_light_target_color: glam::Vec3::new(1.0, 0.95, 0.78),
                 oculocyte_light_color_tolerance: 0.18,
@@ -1792,7 +1711,6 @@ impl GpuScene {
                     }
                 },
                 regulation_emit_value: f32::from_bits(regulation_params[i][1]),
-                regulation_emit_hops: regulation_params[i][2].clamp(1, 20) as i32,
                 division_signal_channel: -1,
                 division_signal_threshold: 1.0,
                 division_signal_invert: false,
@@ -1842,21 +1760,18 @@ impl GpuScene {
                 vascular_outlet: false,
                 vascular_signal_transport: false,
                 vascular_signal_exchange: false,
-                vascular_signal_capacity: 10.0,
                 gametocyte_merge_range: 0.5,
                 memorocyte_rate: 0.1,
                 memorocyte_input_channel: 0,
                 memorocyte_output_channel: 9,
-                memorocyte_output_hops: 5,
                 cognocyte_operation: 0,
                 cognocyte_input_channel_a: 0,
                 cognocyte_input_channel_b: 1,
                 cognocyte_output_channel: 8,
-                cognocyte_output_hops: 5,
                 cognocyte_oscillator_rate: 1.0,
                 cognocyte_oscillator_phase: 0.0,
                 cognocyte_oscillator_strength: 1.0,
-                cognocyte_oscillator_step_count: 4,
+                cognocyte_oscillator_polarity: 0,
                 luminocyte_signal_channel: 0,
                 luminocyte_threshold: 1.0,
                 luminocyte_invert: false,
@@ -1902,6 +1817,7 @@ impl GpuScene {
                 adhesion_settings: {
                     let gpu_as = &adhesion_settings_raw[i];
                     crate::genome::AdhesionSettings {
+                        creates_backbone: gpu_as.creates_backbone != 0,
                         can_break: gpu_as.can_break != 0,
                         break_force: gpu_as.break_force,
                         rest_length: gpu_as.rest_length,
@@ -2235,13 +2151,12 @@ impl GpuScene {
             .as_ref()
             .map(|sim| sim.is_listener_underwater_instant())
             .unwrap_or(false);
-        self.water_crossing_pulse = if listener_underwater_instant
-            != self.listener_underwater_instant_prev
-        {
-            1.0
-        } else {
-            (self.water_crossing_pulse - decay).max(0.0)
-        };
+        self.water_crossing_pulse =
+            if listener_underwater_instant != self.listener_underwater_instant_prev {
+                1.0
+            } else {
+                (self.water_crossing_pulse - decay).max(0.0)
+            };
         self.listener_underwater_instant_prev = listener_underwater_instant;
     }
 
@@ -2336,46 +2251,6 @@ impl GpuScene {
             if let Some(ref mut bs) = self.boulder_system {
                 bs.update(device, queue, delta_time);
             }
-        }
-
-        // Update signal sense world params (boundary_radius, light_dir, fluid grid params)
-        if self.has_oculocytes {
-            let boundary_radius = world_diameter * 0.5;
-            let light_dir = self
-                .light_field_system
-                .as_ref()
-                .map(|lfs| lfs.light_dir())
-                .unwrap_or([-0.5, 0.7, 0.5]);
-            let (grid_resolution, cell_size, grid_origin) = self
-                .fluid_simulator
-                .as_ref()
-                .map(|fs| {
-                    let (wr, wc) = fs.grid_params();
-                    let wd = wr * 2.0;
-                    let cs = wd / 128.0;
-                    let go = wc - glam::Vec3::splat(wd / 2.0);
-                    (128u32, cs, [go.x, go.y, go.z])
-                })
-                .unwrap_or((0u32, 1.0, [0.0, 0.0, 0.0]));
-            let params: [f32; 12] = [
-                boundary_radius,
-                light_dir[0],
-                light_dir[1],
-                light_dir[2],
-                f32::from_bits(grid_resolution),
-                cell_size,
-                grid_origin[0],
-                grid_origin[1],
-                grid_origin[2],
-                0.0,
-                0.0,
-                0.0, // padding
-            ];
-            queue.write_buffer(
-                &self.signal_sense_world_params_buffer,
-                0,
-                bytemuck::cast_slice(&params),
-            );
         }
 
         // Cell count is read from GPU buffer by shaders
@@ -3102,7 +2977,6 @@ impl GpuScene {
         self.has_devorocytes = false;
         self.has_gametocytes = false;
         self.physics_features = PhysicsFeatureFlags::default();
-        self.max_signal_hops = 0;
         for g in &self.genomes {
             for m in &g.modes {
                 if m.cell_type == flagellocyte_type {
@@ -3122,7 +2996,6 @@ impl GpuScene {
                 }
                 if m.cell_type == luminocyte_type {
                     self.has_oculocytes = true;
-                    self.max_signal_hops = self.max_signal_hops.max(1);
                 }
                 if m.cell_type == buoyocyte_type {
                     self.physics_features.has_buoyocytes = true;
@@ -3153,24 +3026,16 @@ impl GpuScene {
                 }
                 if m.cell_type == oculocyte_type {
                     self.has_oculocytes = true;
-                    self.max_signal_hops = self
-                        .max_signal_hops
-                        .max(m.oculocyte_signal_hops.clamp(1, 20) as u32);
                 }
                 // Regulation emitters (channels 8-15) also need the signal system.
                 // Without this, genomes with no oculocytes but with regulation signals
-                // never run signal_clear/sense/propagate, so signal_flags stays zero
+                // never run signal evaluation, so the public signal field stays zero
                 // and division/apoptosis/mode-switch gates never open.
                 if m.regulation_emit_channel >= 8 {
                     self.has_oculocytes = true;
-                    self.max_signal_hops = self
-                        .max_signal_hops
-                        .max(m.regulation_emit_hops.clamp(1, 20) as u32);
                 }
                 // Signal listeners also keep the pass active so stale signal flags are
                 // cleared and inverted absence gates are evaluated consistently.
-                // max_signal_hops is not updated here — the emitter (regulation_emit or
-                // oculocyte) that sends the signal governs propagation distance.
                 let has_mode_switch =
                     m.mode_switch_signal_channel >= 8 && m.mode_switch_target >= 0;
                 if has_mode_switch {
@@ -3187,35 +3052,6 @@ impl GpuScene {
             }
         }
         self.physics_features.has_glueocytes = self.has_glueocytes;
-        self.last_signal_update_frame = None;
-    }
-
-    /// Decide whether adhesion signals should be recomputed this frame.
-    ///
-    /// Signal state is intentionally persistent between refreshes so lifecycle
-    /// gates and signal-reactive cell forces can reuse the most recent result.
-    /// We refresh immediately for topology/slot changes and periodically for
-    /// motion-dependent sensing such as oculocyte rays.
-    fn should_update_signals(&self, cell_inserted: bool, is_dragging: bool) -> bool {
-        if self.paused || !self.has_oculocytes {
-            return false;
-        }
-        if self.total_cell_slots == 0 && !cell_inserted {
-            return false;
-        }
-        if cell_inserted || is_dragging {
-            return true;
-        }
-        if self.last_signal_total_cell_slots != self.total_cell_slots {
-            return true;
-        }
-        match self.last_signal_update_frame {
-            None => true,
-            Some(frame) => {
-                (self.current_frame as u32).wrapping_sub(frame as u32)
-                    >= SIGNAL_UPDATE_INTERVAL_FRAMES as u32
-            }
-        }
     }
 
     /// Incremental sync of a single genome's data to GPU buffers
@@ -3452,8 +3288,8 @@ impl GpuScene {
                 };
                 [
                     channel,
-                    mode.regulation_emit_value.clamp(0.0, 2047.0).to_bits(),
-                    mode.regulation_emit_hops.clamp(1, 20) as u32,
+                    mode.regulation_emit_value.clamp(-1000.0, 1000.0).to_bits(),
+                    0,
                     0u32,
                 ]
             })
@@ -3475,7 +3311,7 @@ impl GpuScene {
                 [
                     mode.oculocyte_sense_type, // u32 bitmask, no clamping needed
                     mode.oculocyte_ray_length.to_bits(),
-                    mode.oculocyte_signal_hops.clamp(1, 20) as u32,
+                    0,
                     mode.oculocyte_signal_channel.clamp(0, 7) as u32,
                 ]
             })
@@ -3493,7 +3329,7 @@ impl GpuScene {
         let oculo_signal_values: Vec<f32> = genome_ref
             .modes
             .iter()
-            .map(|mode| mode.oculocyte_signal_value.clamp(0.0, 2047.0))
+            .map(|mode| mode.oculocyte_signal_value.clamp(-1000.0, 1000.0))
             .collect();
         if !oculo_signal_values.is_empty() {
             let offset = (global_start_index * 4) as u64;
@@ -3525,7 +3361,7 @@ impl GpuScene {
             );
         }
 
-        // Refresh has_oculocytes / max_signal_hops in case oculocyte or regulation settings changed
+        // Refresh signal and physics feature inventory after mode changes.
         self.update_has_oculocytes();
 
         log::info!(
@@ -3777,11 +3613,11 @@ impl GpuScene {
         self.gpu_triple_buffers
             .sync_glueocyte_cell_adhesion_flags(queue, &self.genomes);
 
-        // Sync oculocyte parameters (sense_type, sense_range, signal_hops, signal_channel per mode)
+        // Sync oculocyte parameters (sense_type, sense_range, reserved, signal_channel per mode)
         self.gpu_triple_buffers
             .sync_oculocyte_params(queue, &self.genomes);
 
-        // Sync regulation emission parameters (emit_channel, emit_value, emit_hops per mode)
+        // Sync regulation emission parameters (emit_channel, emit_value, reserved per mode)
         self.gpu_triple_buffers
             .sync_regulation_params(queue, &self.genomes);
 
@@ -5382,42 +5218,6 @@ impl GpuScene {
         let light_field_system =
             LightFieldSystem::new(device, world_radius, self.gpu_triple_buffers.capacity);
 
-        // Rebuild signal sense world data bind group with real light field buffer
-        {
-            let nutrient_buf = self
-                .fluid_simulator
-                .as_ref()
-                .map(|fs| fs.nutrient_voxels_buffer())
-                .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
-            let solid_buf = self
-                .fluid_simulator
-                .as_ref()
-                .map(|fs| fs.solid_mask_buffer())
-                .unwrap_or(&self.signal_sense_dummy_solid_buffer);
-            let density_buf = self
-                .gpu_surface_nets
-                .as_ref()
-                .map(|sn| sn.density_buffer())
-                .unwrap_or(&self.signal_sense_dummy_density_buffer);
-            self.cached_bind_groups.signal_sense_world_data = self
-                .gpu_physics_pipelines
-                .create_signal_sense_world_data_bind_group(
-                    device,
-                    &self.signal_sense_world_params_buffer,
-                    nutrient_buf,
-                    light_field_system.light_field_buffer(),
-                    light_field_system.light_color_field_buffer(),
-                    solid_buf,
-                    density_buf,
-                    self.boulder_system
-                        .as_ref()
-                        .map(|bs| &bs.buffers.boulder_state),
-                    self.boulder_system
-                        .as_ref()
-                        .map(|bs| &bs.buffers.boulder_count),
-                );
-        }
-
         self.light_field_system = Some(light_field_system);
 
         // Initialize moss system now that light field is available
@@ -6178,7 +5978,6 @@ impl GpuScene {
 
         self.fluid_simulator = Some(simulator);
         self.refresh_division_audio_bind_group(device);
-        self.rebuild_signal_sense_world_data_bind_group(device);
         self.show_gpu_density_mesh = true;
 
         // Initialize steam particle renderer
@@ -6260,7 +6059,6 @@ impl GpuScene {
         }
 
         self.refresh_division_audio_bind_group(device);
-        self.rebuild_signal_sense_world_data_bind_group(device);
 
         self.steam_extract_bind_group = None;
         self.water_extract_bind_group = None;
@@ -6279,51 +6077,6 @@ impl GpuScene {
         self.show_gpu_density_mesh = true;
         self.water_shadow_bind_group_set = false;
         self.fluid_mesh_extract_counter = 0;
-    }
-
-    fn rebuild_signal_sense_world_data_bind_group(&mut self, device: &wgpu::Device) {
-        let nutrient_buf = self
-            .fluid_simulator
-            .as_ref()
-            .map(|fs| fs.nutrient_voxels_buffer())
-            .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
-        let light_buf = self
-            .light_field_system
-            .as_ref()
-            .map(|lfs| lfs.light_field_buffer())
-            .unwrap_or(&self.signal_sense_dummy_light_buffer);
-        let light_color_buf = self
-            .light_field_system
-            .as_ref()
-            .map(|lfs| lfs.light_color_field_buffer())
-            .unwrap_or(&self.signal_sense_dummy_light_color_buffer);
-        let solid_buf = self
-            .fluid_simulator
-            .as_ref()
-            .map(|fs| fs.solid_mask_buffer())
-            .unwrap_or(&self.signal_sense_dummy_solid_buffer);
-        let density_buf = self
-            .gpu_surface_nets
-            .as_ref()
-            .map(|sn| sn.density_buffer())
-            .unwrap_or(&self.signal_sense_dummy_density_buffer);
-        self.cached_bind_groups.signal_sense_world_data = self
-            .gpu_physics_pipelines
-            .create_signal_sense_world_data_bind_group(
-                device,
-                &self.signal_sense_world_params_buffer,
-                nutrient_buf,
-                light_buf,
-                light_color_buf,
-                solid_buf,
-                density_buf,
-                self.boulder_system
-                    .as_ref()
-                    .map(|bs| &bs.buffers.boulder_state),
-                self.boulder_system
-                    .as_ref()
-                    .map(|bs| &bs.buffers.boulder_count),
-            );
     }
 
     /// Initialize the phagocyte nutrient consumption system
@@ -6905,52 +6658,6 @@ impl GpuScene {
                     );
                     bs.bubble_compute_bg = Some(bg);
                 }
-            }
-
-            // Rebuild signal sense world data bind group with boulder buffers
-            {
-                let nutrient_buf = self
-                    .fluid_simulator
-                    .as_ref()
-                    .map(|fs| fs.nutrient_voxels_buffer())
-                    .unwrap_or(&self.signal_sense_dummy_nutrient_buffer);
-                let light_buf = self
-                    .light_field_system
-                    .as_ref()
-                    .map(|lfs| lfs.light_field_buffer())
-                    .unwrap_or(&self.signal_sense_dummy_light_buffer);
-                let light_color_buf = self
-                    .light_field_system
-                    .as_ref()
-                    .map(|lfs| lfs.light_color_field_buffer())
-                    .unwrap_or(&self.signal_sense_dummy_light_color_buffer);
-                let solid_buf = self
-                    .fluid_simulator
-                    .as_ref()
-                    .map(|fs| fs.solid_mask_buffer())
-                    .unwrap_or(&self.signal_sense_dummy_solid_buffer);
-                let density_buf = self
-                    .gpu_surface_nets
-                    .as_ref()
-                    .map(|sn| sn.density_buffer())
-                    .unwrap_or(&self.signal_sense_dummy_density_buffer);
-                self.cached_bind_groups.signal_sense_world_data = self
-                    .gpu_physics_pipelines
-                    .create_signal_sense_world_data_bind_group(
-                        device,
-                        &self.signal_sense_world_params_buffer,
-                        nutrient_buf,
-                        light_buf,
-                        light_color_buf,
-                        solid_buf,
-                        density_buf,
-                        self.boulder_system
-                            .as_ref()
-                            .map(|bs| &bs.buffers.boulder_state),
-                        self.boulder_system
-                            .as_ref()
-                            .map(|bs| &bs.buffers.boulder_count),
-                    );
             }
         }
     }
@@ -8248,6 +7955,10 @@ impl GpuScene {
                 &self.gpu_triple_buffers.mode_properties_v9,
                 &self.gpu_triple_buffers.mode_properties_v10,
                 &self.gpu_triple_buffers.mode_properties_v11,
+                &self.gpu_triple_buffers.mode_properties_v5,
+                &self.gpu_triple_buffers.mode_properties_v7,
+                &self.gpu_triple_buffers.mode_properties_v14,
+                &self.gpu_triple_buffers.glueocyte_cell_adhesion_flags,
             );
 
             // Rebuild GC bind group (for genome recycling)
@@ -8585,7 +8296,9 @@ impl Scene for GpuScene {
         // Fixed timestep accumulator pattern
         // Physics steps will be executed in render() based on accumulated time
         // Apply time_scale to make simulation run faster/slower
-        self.time_accumulator += dt * self.time_scale;
+        let simulation_dt = dt * self.time_scale;
+        self.time_accumulator += simulation_dt;
+        self.signal_elapsed_pending += simulation_dt;
     }
 
     fn drain_audio_events(&mut self) -> Vec<crate::audio::GameAudioEvent> {
@@ -8791,24 +8504,51 @@ impl Scene for GpuScene {
             false
         };
 
-        // Evaluate signals before lifecycle work so apoptosis, mode switching,
-        // child routing, and division gates all consume signal state. The signal
-        // buffers persist between refreshes; recomputing lazily avoids the full
-        // adhesion propagation cost on every render frame at high cell counts.
-        if self.should_update_signals(cell_inserted, is_dragging) {
-            let signal_cell_slots = self.total_cell_slots.max(if cell_inserted { 1 } else { 0 });
-            execute_signal_system(
+        // End of "Physics Setup", start of independently timed topology repair.
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 1);
+            }
+        }
+
+        // Phase 4 topology work is encoded at this boundary. Keeping an empty
+        // segment visible is intentional: repair cost cannot hide in propagation.
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 2);
+            }
+        }
+
+        // Fixed 15 Hz cached-backbone value ticks. All catch-up ticks stay in
+        // this command encoder and therefore add no queue submission.
+        let elapsed = std::mem::take(&mut self.signal_elapsed_pending);
+        let signal_ticks = if self.signal_backbone.has_static_forest() {
+            self.signal_clock.advance(elapsed)
+        } else {
+            0
+        };
+        let signal_cell_slots = self.total_cell_slots.max(if cell_inserted { 1 } else { 0 });
+        for tick_slot in 0..signal_ticks {
+            let tick = self.signal_clock.begin_tick();
+            self.signal_backbone
+                .write_params(queue, tick_slot, signal_cell_slots, tick, 0xf);
+            self.signal_backbone
+                .encode_sources(&mut encoder, tick_slot, signal_cell_slots);
+            self.signal_backbone
+                .encode_propagation(&mut encoder, 0xf, tick_slot);
+            self.signal_backbone.encode_finalize_and_processors(
                 &mut encoder,
-                &self.gpu_physics_pipelines,
-                &self.gpu_triple_buffers,
-                &self.adhesion_buffers,
-                &self.cached_bind_groups,
-                self.has_oculocytes,
+                tick_slot,
                 signal_cell_slots,
-                self.max_signal_hops,
+                true,
             );
-            self.last_signal_update_frame = Some(self.current_frame);
-            self.last_signal_total_cell_slots = signal_cell_slots;
+        }
+
+        // End of "Signal Processing" segment, start of "Physics & Lifecycle".
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 3);
+            }
         }
 
         // Snapshot death_flags BEFORE physics runs - needed by spawn_new to detect
@@ -8945,10 +8685,10 @@ impl Scene for GpuScene {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
-        // End of "Physics & Compute" segment.
+        // End of "Physics & Lifecycle" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 1);
+                timer.write_timestamp(&mut encoder, 4);
             }
         }
 
@@ -8964,7 +8704,7 @@ impl Scene for GpuScene {
             // then resolve before submitting.
             if self.gpu_timing_enabled {
                 if let Some(ref mut timer) = self.gpu_timer {
-                    for boundary in 2..=crate::scene::gpu_timer::SEGMENT_COUNT {
+                    for boundary in 5..=crate::scene::gpu_timer::SEGMENT_COUNT {
                         timer.write_timestamp(&mut encoder, boundary);
                     }
                     timer.resolve(&mut encoder);
@@ -9091,7 +8831,7 @@ impl Scene for GpuScene {
         // End of "Instance Build & Culling" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 2);
+                timer.write_timestamp(&mut encoder, 5);
             }
         }
 
@@ -9405,7 +9145,7 @@ impl Scene for GpuScene {
         // End of "Opaque Render" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 3);
+                timer.write_timestamp(&mut encoder, 6);
             }
         }
 
@@ -9638,7 +9378,7 @@ impl Scene for GpuScene {
         // old combined "Skins & Effects" segment is actually expensive.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 4);
+                timer.write_timestamp(&mut encoder, 7);
             }
         }
 
@@ -9824,7 +9564,7 @@ impl Scene for GpuScene {
         // End of "Particles & Fog" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 5);
+                timer.write_timestamp(&mut encoder, 8);
             }
         }
 
@@ -9875,7 +9615,7 @@ impl Scene for GpuScene {
         // End of "Post-Process" segment, and final resolve for this frame's queries.
         if self.gpu_timing_enabled {
             if let Some(ref mut timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 6);
+                timer.write_timestamp(&mut encoder, 9);
                 timer.resolve(&mut encoder);
             }
         }
@@ -10001,7 +9741,8 @@ impl Scene for GpuScene {
             let inside_sphere = self.camera.position().length() <= self.config.sphere_radius;
             let static_world_underwater =
                 fluid_sim.is_static_water_world_enabled() && inside_sphere;
-            self.listener_underwater = fluid_sim.is_listener_underwater() || static_world_underwater;
+            self.listener_underwater =
+                fluid_sim.is_listener_underwater() || static_world_underwater;
             self.listener_underwater_fraction = if static_world_underwater {
                 1.0
             } else {

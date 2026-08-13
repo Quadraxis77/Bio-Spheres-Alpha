@@ -307,9 +307,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Additional consumption from swim force (Flagellocytes only)
         let swim_force = mode_v1.z; // mode_properties_v1.z = swim_force
-        let flagellocyte_use_signal = mode_v3.z; // v3.z = flagellocyte_use_signal
+        let flagellocyte_use_signal =
+            (u32(round(max(mode_v3.z, 0.0))) & 1u) != 0u;
         var effective_swim_speed = 0.0;
-        if (flagellocyte_use_signal > 0.5) {
+        if (flagellocyte_use_signal) {
             // Signal-based: use max of speed_a and speed_b for conservative consumption estimate
             effective_swim_speed = max(mode_properties_v2[mode_idx].w, mode_properties_v3[mode_idx].x);
         } else {

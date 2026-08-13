@@ -101,6 +101,7 @@ fn find_scaffold_connection_between(
 
 fn create_or_update_scaffold_bond(
     state: &mut CanonicalState,
+    genome: &Genome,
     ca: usize,
     cb: usize,
     rule_id: u32,
@@ -124,6 +125,21 @@ fn create_or_update_scaffold_bond(
     }
 
     let mode_index = state.mode_indices[ca];
+    let creates_backbone = genome
+        .modes
+        .get(mode_index)
+        .is_some_and(|mode| mode.adhesion_settings.creates_backbone);
+    let funded_nutrients = if creates_backbone {
+        crate::simulation::signal_system::reserve_backbone_construction(
+            state.nutrients[ca],
+            state.split_nutrient_thresholds[ca],
+        )
+    } else {
+        Some(state.nutrients[ca])
+    };
+    let Some(funded_nutrients) = funded_nutrients else {
+        return;
+    };
     let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
         &mut state.adhesion_connections,
         ca,
@@ -135,6 +151,16 @@ fn create_or_update_scaffold_bond(
     );
     if let Some(idx) = conn_idx {
         state.adhesion_connections.scaffold_rule_id[idx] = rule_id;
+        if creates_backbone {
+            state.nutrients[ca] = funded_nutrients;
+            let owner_identity = state.cell_ids[ca];
+            crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
+                &mut state.adhesion_connections,
+                idx,
+                owner_identity,
+                false,
+            );
+        }
     }
 }
 
@@ -279,6 +305,7 @@ pub fn resolve_scaffold_rules(
 
                 create_or_update_scaffold_bond(
                     state,
+                    genome,
                     ca,
                     cb,
                     rule.id,
@@ -336,6 +363,7 @@ pub fn resolve_scaffold_rules(
                         }
                         create_or_update_scaffold_bond(
                             state,
+                            genome,
                             ca,
                             cb,
                             rule.id,
@@ -378,6 +406,7 @@ pub fn resolve_scaffold_rules(
 
                     create_or_update_scaffold_bond(
                         state,
+                        genome,
                         ca,
                         cb,
                         rule.id,
@@ -829,7 +858,12 @@ pub fn apply_myocyte_contraction(state: &mut CanonicalState, genome: &Genome, cu
                 .copied()
                 .flatten()
                 .unwrap_or(0.0);
-            if signal_value >= mode.myocyte_threshold {
+            if crate::simulation::signal_system::listener_active(
+                signal_value,
+                mode.myocyte_threshold,
+                mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_MYOCYTE),
+                false,
+            ) {
                 mode.myocyte_contraction_above
             } else {
                 mode.myocyte_contraction_below
@@ -929,7 +963,12 @@ pub fn apply_swim_forces(state: &mut CanonicalState, genome: &Genome) {
                 let effective_speed = if mode.flagellocyte_use_signal {
                     let channel = mode.flagellocyte_signal_channel.clamp(0, 7) as usize;
                     let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
-                    if signal_value >= mode.flagellocyte_threshold_c {
+                    if crate::simulation::signal_system::listener_active(
+                        signal_value,
+                        mode.flagellocyte_threshold_c,
+                        mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_FLAGELLOCYTE),
+                        false,
+                    ) {
                         mode.flagellocyte_speed_b
                     } else {
                         mode.flagellocyte_speed_a
@@ -991,7 +1030,12 @@ pub fn consume_swim_nutrients(state: &mut CanonicalState, genome: &Genome, dt: f
                 let effective_speed = if mode.flagellocyte_use_signal {
                     let channel = mode.flagellocyte_signal_channel.clamp(0, 7) as usize;
                     let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
-                    if signal_value >= mode.flagellocyte_threshold_c {
+                    if crate::simulation::signal_system::listener_active(
+                        signal_value,
+                        mode.flagellocyte_threshold_c,
+                        mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_FLAGELLOCYTE),
+                        false,
+                    ) {
                         mode.flagellocyte_speed_b
                     } else {
                         mode.flagellocyte_speed_a
@@ -1271,7 +1315,12 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
                 .copied()
                 .flatten()
                 .unwrap_or(0.0);
-            if signal_val < mode.embryocyte_signal_value {
+            if !crate::simulation::signal_system::listener_active(
+                signal_val,
+                mode.embryocyte_signal_value,
+                mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_EMBRYOCYTE),
+                false,
+            ) {
                 all_satisfied = false;
             }
         }
@@ -1607,6 +1656,34 @@ pub fn form_glueocyte_contact_bonds(
             continue;
         }
 
+        let glue_gate_active = |cell_idx: usize, mode: &crate::genome::ModeSettings| {
+            let channel = mode.glueocyte_cell_adhesion_signal_channel;
+            if channel < 0 {
+                return true;
+            }
+            let value =
+                state.signal_channels[cell_idx * 16 + channel.clamp(0, 15) as usize].unwrap_or(0.0);
+            crate::simulation::signal_system::listener_active(
+                value,
+                mode.glueocyte_cell_adhesion_signal_threshold,
+                mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_GLUEOCYTE),
+                mode.glueocyte_signal_gate_invert,
+            )
+        };
+        if (is_glue_a
+            && !genome
+                .modes
+                .get(mode_a)
+                .is_some_and(|mode| glue_gate_active(idx_a, mode)))
+            || (is_glue_b
+                && !genome
+                    .modes
+                    .get(mode_b)
+                    .is_some_and(|mode| glue_gate_active(idx_b, mode)))
+        {
+            continue;
+        }
+
         // Skip if either glueocyte has self-adhesion disabled.
         // In preview mode all cells belong to the same organism, so self-adhesion
         // off means no cell-to-cell bonding at all in this context.
@@ -1646,8 +1723,27 @@ pub fn form_glueocyte_contact_bonds(
             continue;
         }
 
-        let glue_mode = if is_glue_a { mode_a } else { mode_b };
-        let _ = state.adhesion_manager.add_ball_joint(
+        let (creator, glue_mode) = if is_glue_a {
+            (idx_a, mode_a)
+        } else {
+            (idx_b, mode_b)
+        };
+        let creates_backbone = genome
+            .modes
+            .get(glue_mode)
+            .is_some_and(|mode| mode.adhesion_settings.creates_backbone);
+        let funded_nutrients = if creates_backbone {
+            crate::simulation::signal_system::reserve_backbone_construction(
+                state.nutrients[creator],
+                state.split_nutrient_thresholds[creator],
+            )
+        } else {
+            Some(state.nutrients[creator])
+        };
+        let Some(funded_nutrients) = funded_nutrients else {
+            continue;
+        };
+        let result = state.adhesion_manager.add_ball_joint(
             &mut state.adhesion_connections,
             idx_a,
             idx_b,
@@ -1656,6 +1752,18 @@ pub fn form_glueocyte_contact_bonds(
             crate::cell::adhesion::BOND_FLAG_GLUEOCYTE
                 | crate::cell::adhesion::BOND_FLAG_BARRIER_BALL,
         );
+        if creates_backbone {
+            if let Some(connection_index) = result {
+                state.nutrients[creator] = funded_nutrients;
+                let owner_identity = state.cell_ids[creator];
+                crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
+                    &mut state.adhesion_connections,
+                    connection_index,
+                    owner_identity,
+                    false,
+                );
+            }
+        }
     }
 }
 
@@ -1937,8 +2045,11 @@ pub fn physics_step_with_genome(
     // Remove any cells that starved, matching GPU death threshold.
     // - Standard cells (non-Embryocyte): die when nutrients < 1.0 AND reserve == 0.
     //   A non-zero reserve extends life (reserve burns first in update_nutrient_growth).
-    // - Embryocytes (cell_type == 10): die when reserve == 0 (nutrients are irrelevant).
+    // - Embryocytes (cell_type == 10): die when reserve == 0 after a short newborn
+    //   feed grace. The grace matches the GPU path, where freshly split children are
+    //   briefly blocked from nutrient transport before an attached egg can be filled.
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
+    const EMBRYOCYTE_NEWBORN_FEED_GRACE: f32 = 0.2;
     let starved: Vec<usize> = (0..state.cell_count)
         .filter(|&i| {
             let mode_index = state.mode_indices[i];
@@ -1949,6 +2060,7 @@ pub fn physics_step_with_genome(
                 .unwrap_or(false);
             if is_embryocyte {
                 state.reserves[i] == 0
+                    && current_time - state.birth_times[i] >= EMBRYOCYTE_NEWBORN_FEED_GRACE
             } else {
                 state.nutrients[i] < DEATH_NUTRIENT_THRESHOLD && state.reserves[i] == 0
             }
@@ -1961,7 +2073,7 @@ pub fn physics_step_with_genome(
     // Form contact adhesion bonds for Glueocyte cells
     form_glueocyte_contact_bonds(state, genome, current_time);
 
-    // Run signal system (oculocyte sensing + BFS propagation)
+    // Run the fixed-rate cached-backbone signal system.
     let boundary_radius = config.sphere_radius;
     crate::simulation::signal_system::run_signal_system(
         state,
@@ -1969,22 +2081,8 @@ pub fn physics_step_with_genome(
         boundary_radius,
         dt,
         current_time,
+        test_signals,
     );
-
-    // Apply persistent test signals (if any) after normal signal system.
-    // Do NOT clear signals first - regulation signals (channels 8-15) must remain intact.
-    // run_signal_system already called clear_all_signals at the start of this step, so
-    // there is no cross-step accumulation. Test signals simply add on top of the
-    // normally-computed oculocyte and regulation signals.
-    if let Some(test_signals) = test_signals {
-        if !test_signals.is_empty() {
-            crate::simulation::signal_system::propagate_test_signals(
-                state,
-                genome,
-                test_signals.to_vec(),
-            );
-        }
-    }
 
     let max_cells = state.capacity;
     let rng_seed = 12345;
@@ -2003,7 +2101,11 @@ pub fn physics_step_with_genome(
             continue;
         }
         let channel = mode.stemocyte_signal_channel.clamp(8, 15) as usize;
-        let signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
+        let raw_signal_value = state.signal_channels[i * 16 + channel].unwrap_or(0.0);
+        let signal_value = crate::simulation::signal_system::listener_response_value(
+            raw_signal_value,
+            mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_STEMOCYTE),
+        );
         let delay_value = mode.stemocyte_delay_value.max(0.0);
         let delay_ready = match mode.stemocyte_delay_mode {
             1 => state.split_counts[i] as f32 >= delay_value.ceil(),
@@ -2035,6 +2137,7 @@ pub fn physics_step_with_genome(
         }
     }
     for (cell_index, target) in stemocyte_switches {
+        crate::simulation::signal_system::reset_processor_state(state, cell_index);
         state.mode_indices[cell_index] = target;
         state.split_counts[cell_index] = 0;
         state.stemocyte_delay_timers[cell_index] = 0.0;
@@ -2059,9 +2162,10 @@ pub fn physics_step_with_genome(
                 let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
                 let cell_age = current_time - state.birth_times[i];
                 let should_die = cell_age >= 0.1
-                    && crate::simulation::signal_system::signal_gate_active(
+                    && crate::simulation::signal_system::listener_active(
                         signal_val,
                         mode.apoptosis_signal_threshold,
+                        mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_APOPTOSIS),
                         mode.apoptosis_signal_invert,
                     );
                 if should_die {
@@ -2084,14 +2188,16 @@ pub fn physics_step_with_genome(
             {
                 let ch = mode.mode_switch_signal_channel as usize;
                 let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
-                let should_switch = crate::simulation::signal_system::signal_gate_active(
+                let should_switch = crate::simulation::signal_system::listener_active(
                     signal_val,
                     mode.mode_switch_signal_threshold,
+                    mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_MODE_SWITCH),
                     mode.mode_switch_invert,
                 );
                 if should_switch {
                     let target = mode.mode_switch_target as usize;
                     if target < genome.modes.len() {
+                        crate::simulation::signal_system::reset_processor_state(state, i);
                         state.mode_indices[i] = target;
                         // Reset split count and copy new mode's per-cell settings,
                         // mirroring what mode_switch.wgsl does on the GPU side.

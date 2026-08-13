@@ -246,6 +246,17 @@ struct CaveCullParams {
 
 const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
+
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & SIGNAL_VALUE_MASK) << 21u) >> 21u);
+}
+fn listener_active(value: f32, threshold: f32, response_mode: u32, invert: bool) -> bool {
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, invert);
+}
 const THERMAL_STATE_FROZEN: u32 = 1u;
 
 // ============================================================================
@@ -483,10 +494,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var sig_val = 0.0;
         let sig_idx = idx * SIGNAL_CHANNELS + channel;
         if (sig_idx < arrayLength(&signal_flags)) {
-            sig_val = f32(signal_flags[sig_idx] & SIGNAL_VALUE_MASK);
+            sig_val = decode_signal(signal_flags[sig_idx]);
         }
-        let above = sig_val >= threshold;
-        emissive = select(emissive * 0.15, emissive, above != invert);
+        let listener_on = listener_active(sig_val, threshold, min(u32(max(lum.y, 0.0)), 2u), invert);
+        emissive = select(emissive * 0.15, emissive, listener_on);
     }
 
     // Look up cell type visuals (with bounds check)
@@ -706,11 +717,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var extra_y = anim_speed_val;
         if (cell_type == 17u && mode_index < arrayLength(&mode_properties_v14)) {
             let siphon = mode_properties_v14[mode_index];
-            let packed = u32(clamp(siphon.w, 0.0, 262143.0));
+            let packed = u32(clamp(siphon.w, 0.0, 786431.0));
             let siphon_channel = packed & 15u;
             let siphon_invert = (packed & 16u) != 0u;
             let siphon_mode = min((packed / 32u) & 3u, 3u);
-            let siphon_threshold = f32(packed / 128u);
+            let siphon_threshold = f32((packed % 262144u) / 128u);
+            let siphon_response = min(packed / 262144u, 2u);
             let stroke_phase = fract(params.current_time * mix(0.85, 2.4, clamp(siphon.z / 3.0, 0.0, 1.0)) + f32(cell_id & 1023u) * 0.013);
             let expel_stroke = smoothstep(0.54, 0.64, stroke_phase) * (1.0 - smoothstep(0.82, 0.96, stroke_phase));
             if (siphon_mode == 0u || siphon_mode == 1u) {
@@ -721,7 +733,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 extra_y = clamp(siphon.y / 4.0, 0.15, 1.0);
             }
             let raw_signal = signal_flags[idx * 16u + siphon_channel];
-            let signal_active = select(f32(raw_signal & 2047u) >= siphon_threshold, f32(raw_signal & 2047u) < siphon_threshold, siphon_invert);
+            let decoded_signal = decode_signal(raw_signal);
+            let signal_active = listener_active(
+                decoded_signal, siphon_threshold, siphon_response, siphon_invert);
             var output_active = siphon_mode == 0u || ((siphon_mode == 1u || siphon_mode == 3u) && signal_active);
             let has_water = idx < arrayLength(&cell_water) && cell_water[idx] > 0.001;
             if (output_active && !has_water) {

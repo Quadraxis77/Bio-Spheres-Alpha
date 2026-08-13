@@ -101,6 +101,17 @@ const PHOTOCYTE_TYPE: u32 = 3u;
 const LUMINOCYTE_TYPE: u32 = 16u;
 const SIGNAL_CHANNELS: u32 = 16u;
 const SIGNAL_VALUE_MASK: u32 = 2047u;
+
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & SIGNAL_VALUE_MASK) << 21u) >> 21u);
+}
+fn listener_active(value: f32, threshold: f32, response_mode: u32, invert: bool) -> bool {
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, invert);
+}
 // Luminocyte energy cost per second at full brightness.
 const LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND: f32 = 6.0;
 // Photocytes below the direct-light threshold should starve at a stable rate.
@@ -146,7 +157,7 @@ fn sample_light(world_pos: vec3<f32>) -> f32 {
 
 fn signal_value(cell_idx: u32, channel: u32) -> f32 {
     let packed = atomicLoad(&signal_flags[cell_idx * SIGNAL_CHANNELS + min(channel, SIGNAL_CHANNELS - 1u)]);
-    return f32(packed & SIGNAL_VALUE_MASK);
+    return decode_signal(packed);
 }
 
 @compute @workgroup_size(256)
@@ -178,9 +189,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var dim_level = 0.15;
         var bright_level = 1.0;
         var invert = false;
+        var response_mode = 0u;
         if (mode_idx < arrayLength(&mode_properties_v7)) {
             let control = mode_properties_v7[mode_idx];
             invert = control.x >= 0.5;
+            response_mode = min(u32(max(control.y, 0.0)), 2u);
             signal_channel = u32(clamp(control.z, 0.0, 15.0));
             threshold = control.w;
         }
@@ -191,8 +204,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         let incoming = signal_value(cell_idx, signal_channel);
-        let above = incoming >= threshold;
-        let brightness = select(dim_level, bright_level, above != invert);
+        let listener_on = listener_active(incoming, threshold, response_mode, invert);
+        let brightness = select(dim_level, bright_level, listener_on);
         if (brightness <= 0.001) {
             // glow_flags[cell_idx] is already 0 (DMA-cleared before this dispatch)
             return;

@@ -1,7 +1,9 @@
 // Cell division logic
 
 use crate::genome::Genome;
-use crate::simulation::adhesion_inheritance::inherit_adhesions_on_division;
+use crate::simulation::adhesion_inheritance::{
+    count_backbone_duplicates_on_division, inherit_adhesions_on_division,
+};
 use crate::simulation::canonical_state::{CanonicalState, CellDevelopmentAddress, DivisionEvent};
 use glam::{EulerRot, Quat, Vec3};
 
@@ -105,9 +107,10 @@ pub fn division_step(
                 if m.division_signal_channel >= 8 && (m.division_signal_channel as usize) <= 15 {
                     let ch = m.division_signal_channel as usize;
                     let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
-                    crate::simulation::signal_system::signal_gate_active(
+                    crate::simulation::signal_system::listener_active(
                         signal_val,
                         m.division_signal_threshold,
+                        m.signal_response_mode(crate::genome::SIGNAL_LISTENER_DIVISION),
                         m.division_signal_invert,
                     )
                 } else {
@@ -220,6 +223,11 @@ pub fn division_step(
             child_b_split_nutrient_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
+            create_sibling_adhesion: bool,
+            sibling_is_backbone: bool,
+            backbone_duplicate_budget: usize,
+            backbone_construction_cost: f32,
+            parent_creator_identity: u32,
             child_a_development_address: CellDevelopmentAddress,
             child_b_development_address: CellDevelopmentAddress,
         }
@@ -317,9 +325,10 @@ pub fn division_step(
                 {
                     let ch = mode.signal_child_a_channel as usize;
                     let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                    if crate::simulation::signal_system::signal_gate_active(
+                    if crate::simulation::signal_system::listener_active(
                         signal_val,
                         mode.signal_child_a_threshold,
+                        mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CHILD_A),
                         false,
                     ) {
                         if mode.signal_child_a_mode_above >= 0 {
@@ -335,9 +344,10 @@ pub fn division_step(
                 {
                     let ch = mode.signal_child_b_channel as usize;
                     let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                    if crate::simulation::signal_system::signal_gate_active(
+                    if crate::simulation::signal_system::listener_active(
                         signal_val,
                         mode.signal_child_b_threshold,
+                        mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CHILD_B),
                         false,
                     ) {
                         if mode.signal_child_b_mode_above >= 0 {
@@ -409,11 +419,6 @@ pub fn division_step(
                 let child_a_mode = genome.modes.get(child_a_mode_idx);
                 let child_b_mode = genome.modes.get(child_b_mode_idx);
 
-                // Nutrients always split evenly. The mode's split_ratio is reserved
-                // exclusively for adhesion-zone inheritance.
-                let child_a_nutrients = parent_nutrients * 0.5;
-                let child_b_nutrients = parent_nutrients * 0.5;
-
                 // Get split intervals (potentially randomized from range)
                 // Use parent cell_id + tick for deterministic randomness
                 let tick = (current_time * 60.0) as u64; // Approximate tick from time
@@ -445,6 +450,52 @@ pub fn division_step(
                 } else {
                     50.0
                 };
+
+                let after_split_sibling_allowed = !will_reach_max_splits
+                    || (mode.child_a_after_split_keep_adhesion
+                        && mode.child_b_after_split_keep_adhesion);
+                let sibling_requested = mode.parent_make_adhesion && after_split_sibling_allowed;
+                let sibling_is_backbone =
+                    sibling_requested && mode.adhesion_settings.creates_backbone;
+                let construction_cost =
+                    crate::simulation::signal_system::backbone_construction_cost(
+                        state.split_nutrient_thresholds[parent_idx],
+                    );
+                let backbone_construction_cost = construction_cost.unwrap_or(0.0);
+                let requested_duplicates = construction_cost.map_or(0, |_| {
+                    count_backbone_duplicates_on_division(
+                        state,
+                        genome,
+                        mode_index,
+                        parent_idx,
+                        parent_split_count,
+                    )
+                });
+                let backbone_duplicate_budget = if backbone_construction_cost == 0.0 {
+                    requested_duplicates
+                } else {
+                    requested_duplicates.min(
+                        (parent_nutrients / backbone_construction_cost)
+                            .floor()
+                            .max(0.0) as usize,
+                    )
+                };
+                let after_duplicate_reservations = parent_nutrients
+                    - backbone_construction_cost * backbone_duplicate_budget as f32;
+                let distributable_nutrients = if sibling_is_backbone {
+                    crate::simulation::signal_system::reserve_backbone_construction(
+                        after_duplicate_reservations,
+                        state.split_nutrient_thresholds[parent_idx],
+                    )
+                } else {
+                    Some(after_duplicate_reservations)
+                };
+                // An unaffordable eligible operation creates no physical bond.
+                let create_sibling_adhesion =
+                    sibling_requested && distributable_nutrients.is_some();
+                let distributable_nutrients = distributable_nutrients.unwrap_or(parent_nutrients);
+                let child_a_nutrients = distributable_nutrients * 0.5;
+                let child_b_nutrients = distributable_nutrients * 0.5;
 
                 // Calculate split rotation for both physics and genome orientations
                 // This compounds the rotation each generation
@@ -525,6 +576,11 @@ pub fn division_step(
                     child_b_split_nutrient_threshold,
                     child_a_split_count,
                     child_b_split_count,
+                    create_sibling_adhesion,
+                    sibling_is_backbone,
+                    backbone_duplicate_budget,
+                    backbone_construction_cost,
+                    parent_creator_identity: parent_cell_id,
                     child_a_development_address,
                     child_b_development_address,
                 });
@@ -642,7 +698,7 @@ pub fn division_step(
 
             // Handle adhesion inheritance from parent to children
             // This must happen AFTER children are written but BEFORE new adhesions are created
-            inherit_adhesions_on_division(
+            let inherited_backbones_created = inherit_adhesions_on_division(
                 state,
                 genome,
                 data.parent_mode_idx,
@@ -652,7 +708,18 @@ pub fn division_step(
                 current_time,
                 data.parent_split_count,
                 data.parent_radius, // Use the saved pre-split parent radius, not the child's post-split radius
+                data.backbone_duplicate_budget,
+                data.parent_creator_identity,
             );
+            let unused_duplicate_reservations = data
+                .backbone_duplicate_budget
+                .saturating_sub(inherited_backbones_created);
+            if unused_duplicate_reservations != 0 {
+                let refund =
+                    data.backbone_construction_cost * unused_duplicate_reservations as f32 * 0.5;
+                state.nutrients[data.child_a_slot] += refund;
+                state.nutrients[data.child_b_slot] += refund;
+            }
 
             // Create sibling adhesion between children if parent_make_adhesion is enabled.
             // Normal keep_adhesion flags only affect inheritance; after-split keep flags
@@ -660,13 +727,7 @@ pub fn division_step(
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
-                let will_reach_max_splits =
-                    mode.max_splits >= 0 && (data.parent_split_count + 1) >= mode.max_splits;
-                let after_split_sibling_allowed = !will_reach_max_splits
-                    || (mode.child_a_after_split_keep_adhesion
-                        && mode.child_b_after_split_keep_adhesion);
-
-                if mode.parent_make_adhesion && after_split_sibling_allowed {
+                if data.create_sibling_adhesion {
                     // Calculate anchor directions based on compounded genome orientations (matches Python reference)
                     // Python: angle1_relative = (spawn_direction + math.pi) - daughter1.arrow_direction
                     // Python: angle2_relative = spawn_direction - daughter2.arrow_direction
@@ -747,7 +808,7 @@ pub fn division_step(
                         }
                     }
 
-                    let _result = state.adhesion_manager.add_adhesion_with_directions(
+                    let result = state.adhesion_manager.add_adhesion_with_directions(
                         &mut state.adhesion_connections,
                         data.child_a_slot,
                         data.child_b_slot,
@@ -762,6 +823,20 @@ pub fn division_step(
                         child_b_split_ratio,
                         current_time,
                     );
+                    if data.sibling_is_backbone {
+                        if let Some(connection_index) = result {
+                            crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
+                                &mut state.adhesion_connections,
+                                connection_index,
+                                data.parent_creator_identity,
+                                false,
+                            );
+                        } else {
+                            let refund = data.backbone_construction_cost * 0.5;
+                            state.nutrients[data.child_a_slot] += refund;
+                            state.nutrients[data.child_b_slot] += refund;
+                        }
+                    }
                 } else {
                     // parent_make_adhesion is off: grant 1-second sister immunity so
                     // Glueocyte children don't immediately bond to each other on contact.
@@ -879,9 +954,10 @@ pub fn division_step_multi(
                 if m.division_signal_channel >= 8 && m.division_signal_channel <= 15 {
                     let ch = m.division_signal_channel as usize;
                     let signal_val = state.signal_channels[i * 16 + ch].unwrap_or(0.0);
-                    crate::simulation::signal_system::signal_gate_active(
+                    crate::simulation::signal_system::listener_active(
                         signal_val,
                         m.division_signal_threshold,
+                        m.signal_response_mode(crate::genome::SIGNAL_LISTENER_DIVISION),
                         m.division_signal_invert,
                     )
                 } else {
@@ -962,6 +1038,11 @@ pub fn division_step_multi(
             child_b_split_nutrient_threshold: f32,
             child_a_split_count: i32,
             child_b_split_count: i32,
+            create_sibling_adhesion: bool,
+            sibling_is_backbone: bool,
+            backbone_duplicate_budget: usize,
+            backbone_construction_cost: f32,
+            parent_creator_identity: u32,
             child_a_development_address: CellDevelopmentAddress,
             child_b_development_address: CellDevelopmentAddress,
             split_direction_local: Vec3,
@@ -1036,9 +1117,10 @@ pub fn division_step_multi(
             if mode.signal_child_a_channel >= 0 && (mode.signal_child_a_channel as usize) < 16 {
                 let ch = mode.signal_child_a_channel as usize;
                 let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                if crate::simulation::signal_system::signal_gate_active(
+                if crate::simulation::signal_system::listener_active(
                     signal_val,
                     mode.signal_child_a_threshold,
+                    mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CHILD_A),
                     false,
                 ) {
                     if mode.signal_child_a_mode_above >= 0 {
@@ -1053,9 +1135,10 @@ pub fn division_step_multi(
             if mode.signal_child_b_channel >= 0 && (mode.signal_child_b_channel as usize) < 16 {
                 let ch = mode.signal_child_b_channel as usize;
                 let signal_val = state.signal_channels[parent_idx * 16 + ch].unwrap_or(0.0);
-                if crate::simulation::signal_system::signal_gate_active(
+                if crate::simulation::signal_system::listener_active(
                     signal_val,
                     mode.signal_child_b_threshold,
+                    mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CHILD_B),
                     false,
                 ) {
                     if mode.signal_child_b_mode_above >= 0 {
@@ -1103,11 +1186,6 @@ pub fn division_step_multi(
             let child_a_mode = genome.modes.get(child_a_mode_idx);
             let child_b_mode = genome.modes.get(child_b_mode_idx);
 
-            // Nutrients always split evenly. The mode's split_ratio is reserved
-            // exclusively for adhesion-zone inheritance.
-            let child_a_nutrients = parent_nutrients * 0.5;
-            let child_b_nutrients = parent_nutrients * 0.5;
-
             let parent_cell_id = state.cell_ids[parent_idx];
             let tick = (current_time * 60.0) as u64;
 
@@ -1137,6 +1215,48 @@ pub fn division_step_multi(
             } else {
                 50.0
             };
+
+            let after_split_sibling_allowed = !will_reach_max_splits
+                || (mode.child_a_after_split_keep_adhesion
+                    && mode.child_b_after_split_keep_adhesion);
+            let sibling_requested = mode.parent_make_adhesion && after_split_sibling_allowed;
+            let sibling_is_backbone = sibling_requested && mode.adhesion_settings.creates_backbone;
+            let construction_cost = crate::simulation::signal_system::backbone_construction_cost(
+                state.split_nutrient_thresholds[parent_idx],
+            );
+            let backbone_construction_cost = construction_cost.unwrap_or(0.0);
+            let requested_duplicates = construction_cost.map_or(0, |_| {
+                count_backbone_duplicates_on_division(
+                    state,
+                    genome,
+                    mode_index,
+                    parent_idx,
+                    parent_split_count,
+                )
+            });
+            let backbone_duplicate_budget = if backbone_construction_cost == 0.0 {
+                requested_duplicates
+            } else {
+                requested_duplicates.min(
+                    (parent_nutrients / backbone_construction_cost)
+                        .floor()
+                        .max(0.0) as usize,
+                )
+            };
+            let after_duplicate_reservations =
+                parent_nutrients - backbone_construction_cost * backbone_duplicate_budget as f32;
+            let distributable_nutrients = if sibling_is_backbone {
+                crate::simulation::signal_system::reserve_backbone_construction(
+                    after_duplicate_reservations,
+                    state.split_nutrient_thresholds[parent_idx],
+                )
+            } else {
+                Some(after_duplicate_reservations)
+            };
+            let create_sibling_adhesion = sibling_requested && distributable_nutrients.is_some();
+            let distributable_nutrients = distributable_nutrients.unwrap_or(parent_nutrients);
+            let child_a_nutrients = distributable_nutrients * 0.5;
+            let child_b_nutrients = distributable_nutrients * 0.5;
 
             // Match division_step: compound split_rotation into genome orientations so
             // adhesion anchor directions are computed in the correct frame across generations.
@@ -1208,6 +1328,11 @@ pub fn division_step_multi(
                 child_b_split_nutrient_threshold,
                 child_a_split_count,
                 child_b_split_count,
+                create_sibling_adhesion,
+                sibling_is_backbone,
+                backbone_duplicate_budget,
+                backbone_construction_cost,
+                parent_creator_identity: parent_cell_id,
                 child_a_development_address,
                 child_b_development_address,
                 split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
@@ -1315,7 +1440,7 @@ pub fn division_step_multi(
             });
 
             // Handle adhesion inheritance
-            inherit_adhesions_on_division(
+            let inherited_backbones_created = inherit_adhesions_on_division(
                 state,
                 genome,
                 data.parent_mode_idx,
@@ -1325,7 +1450,18 @@ pub fn division_step_multi(
                 current_time,
                 data.parent_split_count,
                 data.parent_radius,
+                data.backbone_duplicate_budget,
+                data.parent_creator_identity,
             );
+            let unused_duplicate_reservations = data
+                .backbone_duplicate_budget
+                .saturating_sub(inherited_backbones_created);
+            if unused_duplicate_reservations != 0 {
+                let refund =
+                    data.backbone_construction_cost * unused_duplicate_reservations as f32 * 0.5;
+                state.nutrients[data.child_a_slot] += refund;
+                state.nutrients[data.child_b_slot] += refund;
+            }
 
             // Create sibling adhesion between children if parent_make_adhesion is enabled.
             // Normal keep_adhesion flags only affect inheritance; after-split keep flags
@@ -1333,13 +1469,7 @@ pub fn division_step_multi(
             let parent_mode = genome.modes.get(data.parent_mode_idx);
 
             if let Some(mode) = parent_mode {
-                let will_reach_max_splits =
-                    mode.max_splits >= 0 && (data.parent_split_count + 1) >= mode.max_splits;
-                let after_split_sibling_allowed = !will_reach_max_splits
-                    || (mode.child_a_after_split_keep_adhesion
-                        && mode.child_b_after_split_keep_adhesion);
-
-                if mode.parent_make_adhesion && after_split_sibling_allowed {
+                if data.create_sibling_adhesion {
                     // Use the full world-space spawn direction (parent_genome_orientation * split_rotation),
                     // then transform into each child's genome-local space - matching division_step exactly.
                     let pitch = mode.parent_split_direction.x.to_radians();
@@ -1413,7 +1543,7 @@ pub fn division_step_multi(
                         }
                     }
 
-                    let _ = state.adhesion_manager.add_adhesion_with_directions(
+                    let result = state.adhesion_manager.add_adhesion_with_directions(
                         &mut state.adhesion_connections,
                         data.child_a_slot,
                         data.child_b_slot,
@@ -1428,6 +1558,20 @@ pub fn division_step_multi(
                         child_b_split_ratio,
                         current_time,
                     );
+                    if data.sibling_is_backbone {
+                        if let Some(connection_index) = result {
+                            crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
+                                &mut state.adhesion_connections,
+                                connection_index,
+                                data.parent_creator_identity,
+                                false,
+                            );
+                        } else {
+                            let refund = data.backbone_construction_cost * 0.5;
+                            state.nutrients[data.child_a_slot] += refund;
+                            state.nutrients[data.child_b_slot] += refund;
+                        }
+                    }
                 }
             }
         }

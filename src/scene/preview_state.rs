@@ -252,6 +252,7 @@ impl PreviewState {
             // Hash child split keep adhesion settings
             mode.child_a_after_split_keep_adhesion.hash(&mut hasher);
             mode.child_b_after_split_keep_adhesion.hash(&mut hasher);
+            mode.signal_response_modes.hash(&mut hasher);
             mode.max_adhesions.hash(&mut hasher);
             mode.min_adhesions.hash(&mut hasher);
             mode.enable_parent_angle_snapping.hash(&mut hasher);
@@ -295,7 +296,6 @@ impl PreviewState {
             mode.oculocyte_sense_type.hash(&mut hasher);
             mode.oculocyte_signal_channel.hash(&mut hasher);
             mode.oculocyte_signal_value.to_bits().hash(&mut hasher);
-            mode.oculocyte_signal_hops.hash(&mut hasher);
             mode.oculocyte_ray_length.to_bits().hash(&mut hasher);
             mode.oculocyte_light_target_color
                 .x
@@ -316,7 +316,6 @@ impl PreviewState {
             // Hash regulation emit settings
             mode.regulation_emit_channel.hash(&mut hasher);
             mode.regulation_emit_value.to_bits().hash(&mut hasher);
-            mode.regulation_emit_hops.hash(&mut hasher);
 
             // Hash signal-conditional settings
             mode.division_signal_channel.hash(&mut hasher);
@@ -423,7 +422,6 @@ impl PreviewState {
             mode.vascular_outlet.hash(&mut hasher);
             mode.vascular_signal_transport.hash(&mut hasher);
             mode.vascular_signal_exchange.hash(&mut hasher);
-            mode.vascular_signal_capacity.to_bits().hash(&mut hasher);
 
             // Hash gametocyte settings
             mode.gametocyte_merge_range.to_bits().hash(&mut hasher);
@@ -431,7 +429,6 @@ impl PreviewState {
             // Hash photocyte signal emission settings
             mode.photocyte_emit_enabled.hash(&mut hasher);
             mode.photocyte_emit_channel.hash(&mut hasher);
-            mode.photocyte_emit_hops.hash(&mut hasher);
             mode.photocyte_emit_threshold.to_bits().hash(&mut hasher);
             mode.photocyte_emit_mode.hash(&mut hasher);
             mode.photocyte_emit_value.to_bits().hash(&mut hasher);
@@ -439,7 +436,6 @@ impl PreviewState {
             // Hash lipocyte signal emission settings
             mode.lipocyte_emit_enabled.hash(&mut hasher);
             mode.lipocyte_emit_channel.hash(&mut hasher);
-            mode.lipocyte_emit_hops.hash(&mut hasher);
             mode.lipocyte_emit_threshold.to_bits().hash(&mut hasher);
             mode.lipocyte_emit_mode.hash(&mut hasher);
             mode.lipocyte_emit_value.to_bits().hash(&mut hasher);
@@ -448,20 +444,18 @@ impl PreviewState {
             mode.memorocyte_rate.to_bits().hash(&mut hasher);
             mode.memorocyte_input_channel.hash(&mut hasher);
             mode.memorocyte_output_channel.hash(&mut hasher);
-            mode.memorocyte_output_hops.hash(&mut hasher);
 
             // Hash cognocyte settings
             mode.cognocyte_operation.hash(&mut hasher);
             mode.cognocyte_input_channel_a.hash(&mut hasher);
             mode.cognocyte_input_channel_b.hash(&mut hasher);
             mode.cognocyte_output_channel.hash(&mut hasher);
-            mode.cognocyte_output_hops.hash(&mut hasher);
             mode.cognocyte_oscillator_rate.to_bits().hash(&mut hasher);
             mode.cognocyte_oscillator_phase.to_bits().hash(&mut hasher);
             mode.cognocyte_oscillator_strength
                 .to_bits()
                 .hash(&mut hasher);
-            mode.cognocyte_oscillator_step_count.hash(&mut hasher);
+            mode.cognocyte_oscillator_polarity.hash(&mut hasher);
 
             // Luminocyte signal settings
             mode.luminocyte_signal_channel.hash(&mut hasher);

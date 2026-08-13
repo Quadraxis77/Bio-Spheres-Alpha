@@ -9,8 +9,22 @@ name = "bio_spheres"
 path = "src/lib.rs"
 
 [[bin]]
+name = "signal-backbone-bench"
+path = "src/bin/signal_backbone_bench.rs"
+required-features = ["signal-backbone-bench"]
+
+[[bin]]
+name = "signal-backbone-topology-bench"
+path = "src/bin/signal_backbone_topology_bench.rs"
+required-features = ["signal-backbone-bench"]
+
+[[bin]]
 name = "bio-spheres"
 path = "src/main.rs"
+
+[features]
+default = []
+signal-backbone-bench = []
 
 [dependencies]
 wgpu = "27.0"
@@ -38,7 +52,7 @@ sysinfo = "0.32"
 image = { version = "0.25", default-features = false, features = ["png"] }
 gif = "0.13"
 dirs = "5.0"
-kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis", "wav"] }
+kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis", "wav", "pcm"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["wincon", "consoleapi", "winuser", "libloaderapi", "basetsd"] }

@@ -297,10 +297,15 @@ fn is_signal_gate_active(mode_idx: u32, cell_idx: u32) -> bool {
     let threshold_bits = glueocyte_cell_adhesion_flags[base + 2u];
     let threshold = bitcast<f32>(threshold_bits);
     let raw = signal_flags[cell_idx * SIGNAL_CHANNELS + clamp(channel, 0u, 7u)];
-    let sig = f32(raw & 0x7FFu);
+    let sig = f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
     let flags = glueocyte_cell_adhesion_flags[base + 3u];
     let invert = (flags & 2u) != 0u;
-    return select(sig >= threshold, sig < threshold, invert);
+    let response_mode = min((flags >> 2u) & 3u, 2u);
+    var response = max(sig, 0.0);
+    if (response_mode == 1u) { response = max(-sig, 0.0); }
+    if (response_mode == 2u) { response = abs(sig); }
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, invert);
 }
 
 @compute @workgroup_size(256)

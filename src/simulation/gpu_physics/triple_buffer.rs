@@ -208,6 +208,14 @@ pub struct GpuTripleBufferSystem {
     /// cell_grid_indices[cell_idx] = which grid cell this cell belongs to
     pub cell_grid_indices: wgpu::Buffer,
 
+    /// Per-cell slot within its bucket's fixed spatial_grid_cells array.
+    /// cell_grid_slot[cell_idx] = index in [0, MAX_CELLS_PER_GRID) if stored there,
+    /// or u32::MAX if the cell overflowed into the side list instead. Lets the
+    /// collision shader dispatch intra/cross-bucket pair resolution per cell
+    /// (parallel across the bucket's occupants) instead of serializing a whole
+    /// bucket's pairs onto a single thread.
+    pub cell_grid_slot: wgpu::Buffer,
+
     /// Dense list of grid buckets occupied by at least one live cell this frame.
     pub occupied_grid_cells: wgpu::Buffer,
 
@@ -497,7 +505,7 @@ pub struct GpuTripleBufferSystem {
     /// Stored as a flat array of u32: mode_index * 4 + field_index
     pub glueocyte_cell_adhesion_flags: wgpu::Buffer,
 
-    /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), signal_hops(u32), signal_channel(u32)] = 16 bytes per mode
+    /// Per-mode oculocyte parameters: [sense_type(u32), ray_length(f32), reserved, signal_channel(u32)] = 16 bytes per mode
     pub oculocyte_params: wgpu::Buffer,
 
     /// Per-mode oculocyte signal values: one f32 per mode (the value emitted when target detected)
@@ -506,7 +514,7 @@ pub struct GpuTripleBufferSystem {
     /// Per-mode oculocyte light color filters: [target_r, target_g, target_b, tolerance].
     pub oculocyte_light_filters: wgpu::Buffer,
 
-    /// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)] = 16 bytes per mode
+    /// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), reserved, padding(u32)] = 16 bytes per mode
     /// emit_channel: 0xFFFFFFFF = disabled, 8-15 = regulation channel
     pub regulation_params: wgpu::Buffer,
 
@@ -606,6 +614,12 @@ impl GpuTripleBufferSystem {
             device,
             capacity as u64 * 4, // u32 per cell
             "Cell Grid Indices",
+        );
+
+        let cell_grid_slot = Self::create_storage_buffer(
+            device,
+            capacity as u64 * 4, // u32 per cell
+            "Cell Grid Slot",
         );
 
         // Sorted cell indices by grid cell (16 cells max per grid cell * 128^3 grid cells)
@@ -931,7 +945,7 @@ impl GpuTripleBufferSystem {
             "Cell Heat Delta Buffer",
         );
 
-        // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, signal_hops, signal_channel)
+        // Per-mode oculocyte parameters: vec4<u32> per mode (sense_type, sense_range_bits, reserved, signal_channel)
         let oculocyte_params =
             Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Params");
 
@@ -942,7 +956,7 @@ impl GpuTripleBufferSystem {
         let oculocyte_light_filters =
             Self::create_storage_buffer(device, max_modes * 16, "Oculocyte Light Filters");
 
-        // Per-mode regulation emission parameters: vec4<u32> per mode (emit_channel, emit_value_bits, emit_hops, padding)
+        // Per-mode regulation emission parameters: vec4<u32> per mode (emit_channel, emit_value_bits, reserved, padding)
         let regulation_params =
             Self::create_storage_buffer(device, max_modes * 16, "Regulation Params");
 
@@ -1001,6 +1015,7 @@ impl GpuTripleBufferSystem {
             spatial_grid_offsets,
             spatial_grid_cells,
             cell_grid_indices,
+            cell_grid_slot,
             occupied_grid_cells,
             occupied_grid_count,
             spatial_grid_overflow_cells,
@@ -1971,11 +1986,9 @@ impl GpuTripleBufferSystem {
                 v3.push([
                     mode.flagellocyte_speed_b,
                     mode.flagellocyte_threshold_c,
-                    if mode.flagellocyte_use_signal {
-                        1.0
-                    } else {
-                        0.0
-                    },
+                    (if mode.flagellocyte_use_signal { 1 } else { 0 }
+                        + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_FLAGELLOCYTE)
+                            as i32) as f32,
                     mode.min_adhesions as f32,
                 ]);
                 v4.push([
@@ -2014,7 +2027,9 @@ impl GpuTripleBufferSystem {
                 v5.push([
                     mode.cilia_speed,
                     if mode.cilia_push_bonded { 1.0 } else { 0.0 },
-                    if mode.cilia_use_signal { 1.0 } else { 0.0 },
+                    (if mode.cilia_use_signal { 1 } else { 0 }
+                        + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CILIOCYTE)
+                            as i32) as f32,
                     mode.cilia_signal_channel as f32,
                 ]);
                 v6.push([
@@ -2046,7 +2061,9 @@ impl GpuTripleBufferSystem {
             v5.push([
                 mode.cilia_speed,
                 if mode.cilia_push_bonded { 1.0 } else { 0.0 },
-                if mode.cilia_use_signal { 1.0 } else { 0.0 },
+                (if mode.cilia_use_signal { 1 } else { 0 }
+                    + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CILIOCYTE)
+                        as i32) as f32,
                 mode.cilia_signal_channel as f32,
             ]);
             v6.push([
@@ -2081,14 +2098,17 @@ impl GpuTripleBufferSystem {
                 if mode.cell_type == 16 {
                     v7.push([
                         if mode.luminocyte_invert { 1.0 } else { 0.0 },
-                        0.0,
+                        mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_LUMINOCYTE) as i32
+                            as f32,
                         mode.luminocyte_signal_channel.clamp(0, 7) as f32,
                         mode.luminocyte_threshold,
                     ]);
                 } else {
                     v7.push([
                         mode.myocyte_contraction,
-                        if mode.myocyte_use_signal { 1.0 } else { 0.0 },
+                        (if mode.myocyte_use_signal { 1 } else { 0 }
+                            + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_MYOCYTE)
+                                as i32) as f32,
                         mode.myocyte_signal_channel as f32,
                         mode.myocyte_threshold,
                     ]);
@@ -2122,14 +2142,17 @@ impl GpuTripleBufferSystem {
             if mode.cell_type == 16 {
                 v7.push([
                     if mode.luminocyte_invert { 1.0 } else { 0.0 },
-                    0.0,
+                    mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_LUMINOCYTE) as i32
+                        as f32,
                     mode.luminocyte_signal_channel as f32,
                     mode.luminocyte_threshold,
                 ]);
             } else {
                 v7.push([
                     mode.myocyte_contraction,
-                    if mode.myocyte_use_signal { 1.0 } else { 0.0 },
+                    (if mode.myocyte_use_signal { 1 } else { 0 }
+                        + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_MYOCYTE)
+                            as i32) as f32,
                     mode.myocyte_signal_channel as f32,
                     mode.myocyte_threshold,
                 ]);
@@ -2182,7 +2205,10 @@ impl GpuTripleBufferSystem {
                     };
                     v9.push([
                         mode.stemocyte_signal_channel.clamp(8, 15) as f32,
-                        if mode.stemocyte_weak_first { 1.0 } else { 0.0 },
+                        (if mode.stemocyte_weak_first { 1 } else { 0 }
+                            + 2 * mode
+                                .signal_response_mode(crate::genome::SIGNAL_LISTENER_STEMOCYTE)
+                                as i32) as f32,
                         remap(mode.stemocyte_outcomes[0]),
                         remap(mode.stemocyte_outcomes[1]),
                     ]);
@@ -2207,7 +2233,8 @@ impl GpuTripleBufferSystem {
                         if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
                         mode.embryocyte_signal_channel as f32,
                         mode.embryocyte_signal_value,
-                        0.0,
+                        mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_EMBRYOCYTE) as i32
+                            as f32,
                     ]);
                 }
             }
@@ -2248,7 +2275,9 @@ impl GpuTripleBufferSystem {
                 };
                 v9.push([
                     mode.stemocyte_signal_channel.clamp(8, 15) as f32,
-                    if mode.stemocyte_weak_first { 1.0 } else { 0.0 },
+                    (if mode.stemocyte_weak_first { 1 } else { 0 }
+                        + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_STEMOCYTE)
+                            as i32) as f32,
                     remap(mode.stemocyte_outcomes[0]),
                     remap(mode.stemocyte_outcomes[1]),
                 ]);
@@ -2273,7 +2302,8 @@ impl GpuTripleBufferSystem {
                     if mode.embryocyte_use_signal { 1.0 } else { 0.0 },
                     mode.embryocyte_signal_channel as f32,
                     mode.embryocyte_signal_value,
-                    0.0,
+                    mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_EMBRYOCYTE) as i32
+                        as f32,
                 ]);
             }
         }
@@ -2467,7 +2497,7 @@ impl GpuTripleBufferSystem {
 
     /// Sync Siphonocyte mode properties.
     /// v14: [intake_rate, expel_rate, impulse, packed signal settings]
-    /// packed = threshold * 128 + mode * 32 + invert * 16 + channel
+    /// packed = response * 262144 + threshold * 128 + mode * 32 + invert * 16 + channel
     pub fn sync_siphonocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2479,7 +2509,9 @@ impl GpuTripleBufferSystem {
                 let packed = mode.siphon_signal_channel.clamp(0, 15)
                     + (if mode.siphon_signal_invert { 1 } else { 0 }) * 16
                     + mode.siphon_mode.clamp(0, 3) * 32
-                    + mode.siphon_signal_threshold.clamp(0.0, 2047.0).round() as i32 * 128;
+                    + mode.siphon_signal_threshold.clamp(0.0, 1000.0).round() as i32 * 128
+                    + mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_SIPHONOCYTE) as i32
+                        * 262_144;
                 v14.push([
                     mode.siphon_intake_rate,
                     mode.siphon_expel_rate,
@@ -2507,7 +2539,9 @@ impl GpuTripleBufferSystem {
                 let packed = mode.siphon_signal_channel.clamp(0, 15)
                     + (if mode.siphon_signal_invert { 1 } else { 0 }) * 16
                     + mode.siphon_mode.clamp(0, 3) * 32
-                    + mode.siphon_signal_threshold.clamp(0.0, 2047.0).round() as i32 * 128;
+                    + mode.siphon_signal_threshold.clamp(0.0, 1000.0).round() as i32 * 128
+                    + mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_SIPHONOCYTE) as i32
+                        * 262_144;
                 [
                     mode.siphon_intake_rate,
                     mode.siphon_expel_rate,
@@ -2703,7 +2737,16 @@ impl GpuTripleBufferSystem {
                     } else {
                         0u32
                     };
-                    [enabled, channel, threshold_bits, self_adhesion | invert]
+                    let response = (mode
+                        .signal_response_mode(crate::genome::SIGNAL_LISTENER_GLUEOCYTE)
+                        as u32)
+                        << 2;
+                    [
+                        enabled,
+                        channel,
+                        threshold_bits,
+                        self_adhesion | invert | response,
+                    ]
                 })
             })
             .collect();
@@ -2717,7 +2760,7 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync oculocyte parameters for all modes across all genomes
-    /// Layout per mode: [sense_type(u32), ray_length_bits(u32), signal_hops(u32), signal_channel(u32)]
+    /// Layout per mode: [sense_type(u32), ray_length_bits(u32), reserved, signal_channel(u32)]
     pub fn sync_oculocyte_params(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let params: Vec<[u32; 4]> = genomes
             .iter()
@@ -2726,7 +2769,7 @@ impl GpuTripleBufferSystem {
                     [
                         mode.oculocyte_sense_type, // already u32 bitmask
                         mode.oculocyte_ray_length.to_bits(),
-                        mode.oculocyte_signal_hops as u32,
+                        0,
                         mode.oculocyte_signal_channel.clamp(0, 7) as u32, // Oculocyte channels 0-7 only
                     ]
                 })
@@ -2743,7 +2786,7 @@ impl GpuTripleBufferSystem {
                 genome
                     .modes
                     .iter()
-                    .map(|mode| mode.oculocyte_signal_value.clamp(0.0, 2047.0))
+                    .map(|mode| mode.oculocyte_signal_value.clamp(-1000.0, 1000.0))
             })
             .collect();
         if !signal_values.is_empty() {
@@ -2777,7 +2820,7 @@ impl GpuTripleBufferSystem {
     }
 
     /// Sync regulation emission parameters for all modes across all genomes.
-    /// Layout per mode: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
+    /// Layout per mode: [emit_channel(u32), emit_value_bits(u32), reserved, padding(u32)]
     /// emit_channel: 0xFFFFFFFF (u32 max) = disabled, 8-15 = regulation channel
     pub fn sync_regulation_params(&self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let params: Vec<[u32; 4]> = genomes
@@ -2791,8 +2834,8 @@ impl GpuTripleBufferSystem {
                     };
                     [
                         channel,
-                        mode.regulation_emit_value.clamp(0.0, 2047.0).to_bits(),
-                        mode.regulation_emit_hops.clamp(1, 20) as u32,
+                        mode.regulation_emit_value.clamp(-1000.0, 1000.0).to_bits(),
+                        0,
                         0u32, // padding
                     ]
                 })
@@ -2828,27 +2871,35 @@ impl GpuTripleBufferSystem {
                 v0.push([
                     mode.division_signal_channel as f32,
                     mode.division_signal_threshold,
-                    if mode.division_signal_invert {
-                        1.0
-                    } else {
-                        0.0
-                    },
+                    (if mode.division_signal_invert { 1 } else { 0 }
+                        + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_DIVISION)
+                            as i32) as f32,
                     mode.apoptosis_signal_channel as f32,
                 ]);
                 v1.push([
                     mode.apoptosis_signal_threshold,
-                    if mode.apoptosis_signal_invert {
-                        1.0
+                    (if mode.apoptosis_signal_invert { 1 } else { 0 }
+                        + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_APOPTOSIS)
+                            as i32) as f32,
+                    if mode.signal_child_a_channel < 0 {
+                        -1.0
                     } else {
-                        0.0
+                        (mode.signal_child_a_channel
+                            + 16 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CHILD_A)
+                                as i32) as f32
                     },
-                    mode.signal_child_a_channel as f32,
                     mode.signal_child_a_threshold,
                 ]);
                 v2.push([
                     remap(mode.signal_child_a_mode_above),
                     remap(mode.signal_child_a_mode_below),
-                    mode.signal_child_b_channel as f32,
+                    if mode.signal_child_b_channel < 0 {
+                        -1.0
+                    } else {
+                        (mode.signal_child_b_channel
+                            + 16 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_CHILD_B)
+                                as i32) as f32
+                    },
                     mode.signal_child_b_threshold,
                 ]);
                 v3.push([
@@ -2859,7 +2910,9 @@ impl GpuTripleBufferSystem {
                 ]);
                 v4.push([
                     remap(mode.mode_switch_target),
-                    if mode.mode_switch_invert { 1.0 } else { 0.0 },
+                    (if mode.mode_switch_invert { 1 } else { 0 }
+                        + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_MODE_SWITCH)
+                            as i32) as f32,
                     0.0,
                     0.0,
                 ]);

@@ -1,30 +1,29 @@
-// Stage 4: Deduplicated cell collision broadphase — per-pair parallel dispatch.
+// Stage 4: Deduplicated cell collision broadphase.
 //
-// High-density cluster performance comes from parallelising the O(n²) intra-bucket
-// pair work across GPU threads instead of assigning the entire bucket to one thread.
+// Dispatch strategy:
+// - Pass A: dispatch_idx maps directly to a cell slot for per-cell forces,
+//   and for that same cell's intra-bucket and cross-bucket collision pairs
+//   (resolve_intra_bucket / resolve_cross_bucket). Every cell resolves its
+//   own neighborhood independently, bounding each thread's cost to a fixed
+//   number of grid buckets (own + forward neighbors) x MAX_CELLS_PER_GRID.
+//   This matches how collision detection worked before commit b555380
+//   ("Performance updates") switched to one-thread-per-occupied-bucket to
+//   eliminate redundant A<->B force computation - that consolidation
+//   concentrated a whole bucket's neighborhood cost onto a single GPU
+//   thread, so total collision cost ended up scaling with how many buckets
+//   happen to be densely packed rather than with GPU core count. A
+//   tightly-adhered, continuously-budding organism can drive that
+//   arbitrarily high regardless of total cell count or dispatch sizing.
+//   Per-cell dispatch trades some redundant memory traffic for a hard
+//   per-thread cost bound, which is what let this engine handle 100k+ cells
+//   at good frame rates previously.
+// - Pass D: dispatch_idx maps to overflow cells (buckets with more than
+//   MAX_CELLS_PER_GRID occupants spill the excess here, one thread each).
 //
-// Dispatch strategy (three independent passes per thread, indexed by dispatch_idx):
-//
-// Pass A — Per-cell forces (boundary sphere, boulders):
-//   dispatch_idx maps directly to cell_idx. O(1) per thread, always run.
-//
-// Pass B — Intra-bucket pairs (same-bucket broadphase):
-//   Each occupied bucket with N cells has N*(N-1)/2 unique pairs.
-//   dispatch_idx is reinterpreted as a flat pair index across all occupied buckets.
-//   A prefix-sum over bucket pair counts would give exact mapping, but that requires
-//   an extra pass. Instead: dispatch_idx maps to occupied_bucket, and within each
-//   bucket we use triangle-number inversion to find (i, j).
-//   For buckets <= MAX_CELLS_PER_GRID (16 cells): at most 120 pairs, all resolved
-//   with full friction by one thread per cell-pair (inner loop kept but j > i only).
-//   For overflow (dense) buckets: use existing phase-sampled resolve_cell_pair_dense.
-//
-// Pass C — Cross-bucket pairs (13 forward neighbors, rotation-grouped):
-//   Same as before: one thread per occupied bucket, rotated across 3 frames.
-//   This is already parallel enough since cross-bucket work is O(N_a × N_b) per
-//   thread and buckets are sparsely occupied in normal scenes.
-//
-// Net improvement for dense clusters: intra-bucket work is now O(N²/threads)
-// instead of O(N²) per single thread, giving near-linear GPU scaling with cell count.
+// Keep dispatch proportional to active slots. A previous per-pair experiment
+// multiplied sparse worlds by 120 lanes per possible bucket and assumed buckets
+// with pairs were packed at the front of occupied_grid_cells; that list is
+// atomic append order, so it was both expensive and not generally correct.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -81,11 +80,10 @@ var<storage, read> stiffnesses: array<f32>;
 @group(1) @binding(5)
 var<storage, read> organism_labels: array<u32>;
 
-@group(1) @binding(6)
-var<storage, read_write> occupied_grid_cells: array<u32>;
-
-@group(1) @binding(7)
-var<storage, read_write> occupied_grid_count: array<atomic<u32>>;
+// Bindings 6/7 (occupied_grid_cells, occupied_grid_count) are written by
+// spatial_grid_build but unused here: collision pair resolution is dispatched
+// per cell (see resolve_intra_bucket / resolve_cross_bucket), not per
+// occupied bucket, so this shader has no need to enumerate buckets.
 
 @group(1) @binding(8)
 var<storage, read_write> spatial_grid_overflow_cells: array<u32>;
@@ -95,6 +93,14 @@ var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
 
 @group(1) @binding(10)
 var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
+
+// Per-cell slot within its bucket's fixed spatial_grid_cells array, or
+// SENTINEL_OVERFLOW if the cell overflowed into the side list instead.
+// Declared read_write (though only read here) because the shared bind group
+// layout provisions this binding for read_write access, and wgpu requires an
+// exact storage-access match between the shader and the pipeline layout.
+@group(1) @binding(12)
+var<storage, read_write> cell_grid_slot: array<u32>;
 
 @group(2) @binding(0)
 var<storage, read_write> force_accum_x: array<atomic<i32>>;
@@ -183,12 +189,6 @@ const FORWARD_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 13> = array<vec3<i32>, 13>(
 // group_end[g]   = one-past-last neighbor index for group g.
 const ROTATION_GROUP_START: array<u32, 3> = array<u32, 3>(0u, 4u, 8u);
 const ROTATION_GROUP_END:   array<u32, 3> = array<u32, 3>(4u, 8u, 13u);
-
-const FORWARD_FACE_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 3> = array<vec3<i32>, 3>(
-    vec3<i32>(0, 0, 1),
-    vec3<i32>(0, 1, 0),
-    vec3<i32>(1, 0, 0),
-);
 
 const OVERFLOW_NEIGHBOR_OFFSETS_3D: array<vec3<i32>, 7> = array<vec3<i32>, 7>(
     vec3<i32>(0, 0, 0),
@@ -519,78 +519,62 @@ fn apply_single_cell_forces(cell_idx: u32) {
     add_torque(cell_idx, torque);
 }
 
-fn process_same_bucket(grid_idx: u32, raw_count: u32) {
+// Intra-bucket pairs, dispatched one thread per CELL instead of one thread per
+// bucket. Each cell scans only its own bucket's (up to MAX_CELLS_PER_GRID)
+// stored occupants and resolves the pair when the other cell has a larger
+// index, so every pair is still resolved exactly once but the O(n) scan per
+// cell replaces what used to be an O(n^2) loop serialized onto a single
+// thread. A bucket with n cells now costs O(n) wall time (n parallel threads
+// each doing O(n) work) instead of O(n^2) wall time on one thread - the fix
+// for LUCA-style organisms that pack many cells into one grid cell via tight
+// adhesion rest lengths and continuous brood budding.
+fn resolve_intra_bucket(cell_idx: u32, grid_idx: u32) {
     let base = grid_idx * MAX_CELLS_PER_GRID;
-    let count = min(raw_count, MAX_CELLS_PER_GRID);
-
-    // Normal (non-overflow) bucket: full O(n²) with friction.
-    // Called once per (bucket, pair) thread — see main() for dispatch.
-    if (raw_count <= MAX_CELLS_PER_GRID) {
-        for (var i = 0u; i < count; i++) {
-            let a_idx = spatial_grid_cells[base + i];
-            for (var j = i + 1u; j < count; j++) {
-                resolve_cell_pair(a_idx, spatial_grid_cells[base + j]);
-            }
-        }
-        return;
-    }
-
-    // Overflow bucket: phase-sampled dense path.
-    let window = collision_sample_count(raw_count);
-    let phase = u32(params.current_frame) % count;
-    for (var i = 0u; i < count; i++) {
-        let a_idx = spatial_grid_cells[base + i];
-        for (var k = 1u; k <= window; k++) {
-            let j = (i + k + phase) % count;
-            if (j == i) { continue; }
-            resolve_cell_pair_dense(a_idx, spatial_grid_cells[base + j]);
+    let count = min(spatial_grid_counts[grid_idx], MAX_CELLS_PER_GRID);
+    for (var k = 0u; k < count; k++) {
+        let other = spatial_grid_cells[base + k];
+        if (other > cell_idx) {
+            resolve_cell_pair(cell_idx, other);
         }
     }
 }
 
-// Process one specific intra-bucket pair identified by linear pair index.
-// pair_idx is in [0, count*(count-1)/2).
-// Uses triangle number inversion: i = floor((sqrt(8*p+1)-1)/2), j = p - i*(i+1)/2 + i+1
-fn process_bucket_pair(grid_idx: u32, raw_count: u32, pair_idx: u32) {
-    let base = grid_idx * MAX_CELLS_PER_GRID;
-    let count = min(raw_count, MAX_CELLS_PER_GRID);
-    let max_pairs = count * (count - 1u) / 2u;
-    if (pair_idx >= max_pairs) {
-        return;
-    }
-
-    // Invert triangle number: find (i, j) from flat pair_idx.
-    // i = floor((sqrt(8*pair_idx + 1) - 1) / 2)
-    let p = pair_idx;
-    let i = u32((sqrt(f32(8u * p + 1u)) - 1.0) * 0.5);
-    let j = p - i * (i + 1u) / 2u + i + 1u;
-
-    if (i >= count || j >= count) { return; }
-
-    let a_idx = spatial_grid_cells[base + i];
-    let b_idx = spatial_grid_cells[base + j];
-    resolve_cell_pair(a_idx, b_idx);
-}
-
-fn process_neighbor_bucket(grid_idx_a: u32, raw_count_a: u32, grid_idx_b: u32, raw_count_b: u32) {
-    let base_a = grid_idx_a * MAX_CELLS_PER_GRID;
-    let base_b = grid_idx_b * MAX_CELLS_PER_GRID;
-    let count_a = min(raw_count_a, MAX_CELLS_PER_GRID);
-    let count_b = min(raw_count_b, MAX_CELLS_PER_GRID);
-    let window_b = collision_sample_count(raw_count_b);
-
-    for (var i = 0u; i < count_a; i++) {
-        let a_idx = spatial_grid_cells[base_a + i];
-        if (raw_count_b <= MAX_CELLS_PER_GRID) {
-            for (var j = 0u; j < count_b; j++) {
-                resolve_cell_pair(a_idx, spatial_grid_cells[base_b + j]);
-            }
-        } else {
-            let start = (i + u32(params.current_frame)) % count_b;
-            for (var k = 0u; k < window_b; k++) {
-                let j = (start + k) % count_b;
-                resolve_cell_pair_dense(a_idx, spatial_grid_cells[base_b + j]);
-            }
+// Cross-bucket pairs, dispatched one thread per cell - matching the intra-
+// bucket fix above and, further back, matching how this shader worked before
+// commit b555380 ("Performance updates") replaced per-cell dispatch with a
+// one-thread-per-bucket scheme to eliminate redundant A<->B force
+// computation. That trade sounded free (half the total math) but it
+// concentrates a bucket's full neighborhood cost onto a single GPU thread,
+// so total collision cost ends up scaling with how many buckets happen to be
+// dense rather than with GPU core count - which is exactly the pathology a
+// tightly-adhered, continuously-budding organism can drive arbitrarily high
+// regardless of total cell count. Keeping every cell's own thread responsible
+// for its own neighborhood (bounded by MAX_CELLS_PER_GRID per bucket
+// touched) is what let this engine handle 100k+ cells at good frame rates
+// previously; that property matters more than avoiding the redundant work an
+// occasional double-counted memory fetch costs.
+fn resolve_cross_bucket(cell_idx: u32, grid_idx: u32) {
+    let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
+    let rotation_group = u32(params.current_frame) % 3u;
+    let n_start = ROTATION_GROUP_START[rotation_group];
+    let n_end = ROTATION_GROUP_END[rotation_group];
+    for (var n = n_start; n < n_end; n++) {
+        let offset = FORWARD_NEIGHBOR_OFFSETS_3D[n];
+        let nx = coords.x + offset.x;
+        let ny = coords.y + offset.y;
+        let nz = coords.z + offset.z;
+        if (nx < 0 || ny < 0 || nz < 0 ||
+            nx >= params.grid_resolution ||
+            ny >= params.grid_resolution ||
+            nz >= params.grid_resolution) {
+            continue;
+        }
+        let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
+        let neighbor_count = min(spatial_grid_counts[neighbor_grid_idx], MAX_CELLS_PER_GRID);
+        if (neighbor_count == 0u) { continue; }
+        let neighbor_base = neighbor_grid_idx * MAX_CELLS_PER_GRID;
+        for (var j = 0u; j < neighbor_count; j++) {
+            resolve_cell_pair(cell_idx, spatial_grid_cells[neighbor_base + j]);
         }
     }
 }
@@ -651,102 +635,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dispatch_idx = global_id.x;
 
     // -------------------------------------------------------------------------
-    // Pass A: per-cell forces (boundary sphere + boulders).
-    // One thread per cell — always runs regardless of grid state.
+    // Pass A: per-cell forces (boundary sphere + boulders), and intra/cross
+    // bucket collision pairs. One thread per cell — always runs regardless of
+    // grid state, and every live cell resolves its own neighborhood
+    // independently (see resolve_intra_bucket / resolve_cross_bucket). This
+    // bounds each thread's cost to a fixed number of grid buckets touched
+    // (own + forward neighbors) times MAX_CELLS_PER_GRID, so total collision
+    // cost scales with GPU core count rather than with how many buckets
+    // happen to be dense. Cells that overflowed their bucket (cell_grid_slot
+    // == u32::MAX) are handled entirely by Pass D below to avoid
+    // double-resolving their pairs against the bucket's stored cells.
     // -------------------------------------------------------------------------
     if (dispatch_idx < cell_count_buffer[0]) {
         apply_single_cell_forces(dispatch_idx);
-    }
 
-    // -------------------------------------------------------------------------
-    // Pass B: intra-bucket pairs — one thread per (bucket, pair).
-    //
-    // A bucket with N cells has N*(N-1)/2 unique pairs. MAX_CELLS_PER_GRID=16
-    // gives at most 120 pairs per bucket. We pack (bucket_idx, pair_idx) into
-    // dispatch_idx as:
-    //   bucket_slot = dispatch_idx / MAX_PAIRS_PER_BUCKET
-    //   pair_slot   = dispatch_idx % MAX_PAIRS_PER_BUCKET
-    // where MAX_PAIRS_PER_BUCKET = 120 (= 16*15/2).
-    //
-    // This turns the previously serial O(n²) single-thread loop into a fully
-    // parallel per-pair dispatch. For a 200-bucket dense cluster, we now
-    // dispatch 200*120 = 24,000 threads instead of 200 threads each doing
-    // 120 iterations sequentially.
-    // -------------------------------------------------------------------------
-    let MAX_PAIRS_PER_BUCKET: u32 = 120u; // 16*(16-1)/2
-    let bucket_slot = dispatch_idx / MAX_PAIRS_PER_BUCKET;
-    let pair_slot   = dispatch_idx % MAX_PAIRS_PER_BUCKET;
-
-    let occupied_count = atomicLoad(&occupied_grid_count[0]);
-    if (bucket_slot < occupied_count) {
-        let grid_idx  = occupied_grid_cells[bucket_slot];
-        let raw_count = spatial_grid_counts[grid_idx];
-
-        if (raw_count <= MAX_CELLS_PER_GRID) {
-            // Normal bucket: dispatch one thread per pair.
-            process_bucket_pair(grid_idx, raw_count, pair_slot);
-        } else {
-            // Overflow (dense) bucket: only let pair_slot==0 run the phase-
-            // sampled dense path so we don't repeat it 120 times per bucket.
-            if (pair_slot == 0u) {
-                process_same_bucket(grid_idx, raw_count);
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Pass C: cross-bucket neighbor pairs — one thread per occupied bucket.
-    // Rotation-grouped across 3 frames to reduce per-frame work by ~3x.
-    // -------------------------------------------------------------------------
-    let bucket_idx = dispatch_idx;
-    if (bucket_idx < occupied_count) {
-        let grid_idx  = occupied_grid_cells[bucket_idx];
-        let raw_count = spatial_grid_counts[grid_idx];
-        let count     = min(raw_count, MAX_CELLS_PER_GRID);
-
-        if (count > 0u) {
-            let coords = grid_index_to_coords(grid_idx, params.grid_resolution);
-
-            if (raw_count > MEDIUM_BUCKET_THRESHOLD) {
-                // Dense bucket: all 3 face neighbors, every frame.
-                for (var n = 0u; n < 3u; n++) {
-                    let offset = FORWARD_FACE_NEIGHBOR_OFFSETS_3D[n];
-                    let nx = coords.x + offset.x;
-                    let ny = coords.y + offset.y;
-                    let nz = coords.z + offset.z;
-                    if (nx < 0 || ny < 0 || nz < 0 ||
-                        nx >= params.grid_resolution ||
-                        ny >= params.grid_resolution ||
-                        nz >= params.grid_resolution) {
-                        continue;
-                    }
-                    let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
-                    let neighbor_count = spatial_grid_counts[neighbor_grid_idx];
-                    if (neighbor_count == 0u) { continue; }
-                    process_neighbor_bucket(grid_idx, raw_count, neighbor_grid_idx, neighbor_count);
-                }
-            } else {
-                // Normal bucket: rotate through 3 groups of ~4-5 forward neighbors.
-                let rotation_group = u32(params.current_frame) % 3u;
-                let n_start = ROTATION_GROUP_START[rotation_group];
-                let n_end   = ROTATION_GROUP_END[rotation_group];
-                for (var n = n_start; n < n_end; n++) {
-                    let offset = FORWARD_NEIGHBOR_OFFSETS_3D[n];
-                    let nx = coords.x + offset.x;
-                    let ny = coords.y + offset.y;
-                    let nz = coords.z + offset.z;
-                    if (nx < 0 || ny < 0 || nz < 0 ||
-                        nx >= params.grid_resolution ||
-                        ny >= params.grid_resolution ||
-                        nz >= params.grid_resolution) {
-                        continue;
-                    }
-                    let neighbor_grid_idx = grid_coords_to_index(nx, ny, nz, params.grid_resolution);
-                    let neighbor_count = spatial_grid_counts[neighbor_grid_idx];
-                    if (neighbor_count == 0u) { continue; }
-                    process_neighbor_bucket(grid_idx, raw_count, neighbor_grid_idx, neighbor_count);
-                }
-            }
+        if (live_cell(dispatch_idx) && cell_grid_slot[dispatch_idx] < MAX_CELLS_PER_GRID) {
+            let grid_idx = cell_grid_indices[dispatch_idx];
+            resolve_intra_bucket(dispatch_idx, grid_idx);
+            resolve_cross_bucket(dispatch_idx, grid_idx);
         }
     }
 

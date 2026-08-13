@@ -539,6 +539,24 @@ pub struct CanonicalState {
     /// Always 0.0 for non-Memorocyte cells.
     pub memo_state: Vec<f32>,
 
+    /// Processor output committed at the preceding 15 Hz signal tick.
+    pub signal_processor_output: Vec<f32>,
+    pub signal_processor_channel: Vec<u8>,
+    /// Hash of the processor configuration that produced the stored state.
+    pub signal_processor_config: Vec<u64>,
+    /// Authoritative preview light sample used by conditional Photocyte source
+    /// evaluation. Scene lighting updates this without touching topology.
+    pub signal_light_samples: Vec<f32>,
+    /// Fixed-clock state; consumers retain the most recently published field
+    /// between signal ticks.
+    pub signal_tick_accumulator: f32,
+    pub signal_tick_index: u64,
+    /// Source-independent CPU topology cache. Phase 4 will replace signature
+    /// detection with explicit generation commits and incremental repair.
+    pub signal_topology_signature: u64,
+    pub signal_cached_forest: Option<crate::simulation::signal_backbone_bench::CachedForest>,
+    pub signal_invalid_processor_outputs: u64,
+
     /// Per-cell internal water reserve for slow physiology.
     pub cell_water: Vec<f32>,
 
@@ -550,10 +568,6 @@ pub struct CanonicalState {
 
     /// Thermal state enum stored compactly on CPU; GPU uses u32 storage.
     pub cell_thermal_state: Vec<u8>,
-
-    /// Track actual signal flow paths for visualization
-    /// Maps (source_cell, target_cell) -> true if signal flowed from source to target
-    pub signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker,
 }
 
 impl CanonicalState {
@@ -825,7 +839,6 @@ impl CanonicalState {
             signal_channels: vec![None; capacity * 16],
             has_any_signal: false,
             muscle_contractions: vec![0.0; capacity],
-            signal_flow_tracker: crate::simulation::signal_system::SignalFlowTracker::new(),
 
             // Reserve - zero by default; set to 65535 for initial Embryocyte cells
             reserves: vec![0u32; capacity],
@@ -836,6 +849,15 @@ impl CanonicalState {
 
             // Memorocyte leaky-integrator state - 0.0 for all cells initially
             memo_state: vec![0.0f32; capacity],
+            signal_processor_output: vec![0.0; capacity],
+            signal_processor_channel: vec![0; capacity],
+            signal_processor_config: vec![0; capacity],
+            signal_light_samples: vec![0.0; capacity],
+            signal_tick_accumulator: 0.0,
+            signal_tick_index: 0,
+            signal_topology_signature: 0,
+            signal_cached_forest: None,
+            signal_invalid_processor_outputs: 0,
 
             // Hidden physiology state. Temperature starts in the ideal band:
             // heat_energy / (dry_mass + water * water_mass_factor) = 105.
@@ -957,6 +979,10 @@ impl CanonicalState {
         self.embryocyte_timers[index] = 0.0;
         self.stemocyte_delay_timers[index] = 0.0;
         self.memo_state[index] = 0.0;
+        self.signal_processor_output[index] = 0.0;
+        self.signal_processor_channel[index] = 0;
+        self.signal_processor_config[index] = 0;
+        self.signal_light_samples[index] = 0.0;
         self.cell_water[index] = 1.0;
         self.cell_heat_energy[index] = 210.0;
         self.cell_cached_temperature[index] = 105.0;
@@ -1083,6 +1109,10 @@ impl CanonicalState {
         self.embryocyte_timers[slot_index] = 0.0;
         self.stemocyte_delay_timers[slot_index] = 0.0;
         self.memo_state[slot_index] = 0.0;
+        self.signal_processor_output[slot_index] = 0.0;
+        self.signal_processor_channel[slot_index] = 0;
+        self.signal_processor_config[slot_index] = 0;
+        self.signal_light_samples[slot_index] = 0.0;
         self.cell_water[slot_index] = 1.0;
         self.cell_heat_energy[slot_index] = 210.0;
         self.cell_cached_temperature[slot_index] = 105.0;
@@ -1157,6 +1187,10 @@ impl CanonicalState {
             self.embryocyte_timers[cell_index] = self.embryocyte_timers[last_index];
             self.stemocyte_delay_timers[cell_index] = self.stemocyte_delay_timers[last_index];
             self.memo_state[cell_index] = self.memo_state[last_index];
+            self.signal_processor_output[cell_index] = self.signal_processor_output[last_index];
+            self.signal_processor_channel[cell_index] = self.signal_processor_channel[last_index];
+            self.signal_processor_config[cell_index] = self.signal_processor_config[last_index];
+            self.signal_light_samples[cell_index] = self.signal_light_samples[last_index];
 
             // Swap signal channels (16 channels per cell)
             for ch in 0..16 {
@@ -1266,9 +1300,13 @@ impl CanonicalState {
         // Low bits: XOR of key parameters from first mode of each genome
         let mut new_hash = (genomes.len() as u64) << 48 | (total_modes as u64) << 32;
         for genome in genomes {
-            if let Some(m) = genome.modes.first() {
-                // Hash key adhesion parameter (scaled to avoid float precision issues)
-                new_hash ^= (m.adhesion_settings.linear_spring_stiffness * 1000.0) as u64;
+            for mode in &genome.modes {
+                // Every mode participates: a mutated backbone-creation bit must
+                // invalidate the cache before that mode can create another bond.
+                new_hash = new_hash.rotate_left(7)
+                    ^ u64::from(mode.adhesion_settings.linear_spring_stiffness.to_bits());
+                new_hash =
+                    new_hash.rotate_left(7) ^ u64::from(mode.adhesion_settings.creates_backbone);
             }
         }
 
@@ -1281,6 +1319,7 @@ impl CanonicalState {
                 for mode in &genome.modes {
                     // Copy all adhesion settings for fast access during physics
                     self.cached_adhesion_settings.push(AdhesionSettings {
+                        creates_backbone: mode.adhesion_settings.creates_backbone,
                         can_break: mode.adhesion_settings.can_break,
                         break_force: mode.adhesion_settings.break_force,
                         rest_length: mode.adhesion_settings.rest_length,

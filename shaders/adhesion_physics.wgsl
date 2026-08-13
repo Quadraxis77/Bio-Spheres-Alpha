@@ -594,6 +594,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let switch_grace_b = (params.current_time - mode_switch_time[connection.cell_b_index]) < 1.5;
             if (!bond_grace && !switch_grace_a && !switch_grace_b) {
                 adhesion_connections[adhesion_idx].is_active = 0u;
+                adhesion_connections[adhesion_idx].bond_flags &= ~8u;
                 continue;
             }
         }

@@ -17,7 +17,7 @@
 //! - **Max** (5): `max(A, B)`
 //! - **Average** (6): `(A + B) / 2`
 //!
-//! ## Comparison - output 1.0 (true) or 0.0 (false)
+//! ## Comparison - output +1000 (true) or 0 (false)
 //! - **GreaterThan** (7): `A > B`
 //! - **LessThan** (8): `A < B`
 //! - **Equal** (9): `|A - B| < epsilon`
@@ -34,11 +34,11 @@
 //!
 //! If any required input channel has no signal, the cell emits nothing.
 //! NOT only requires channel A. All other operations require both A and B.
-//! This is enforced at the call site in `signal_system::process_cognocytes`.
+//! This is enforced by the shared cached-backbone processor stage.
 //!
 //! # Composability
 //!
-//! Clean 1.0/0.0 outputs from comparisons and boolean ops feed naturally into
+//! Clean +1000/0 outputs from comparisons and boolean ops feed naturally into
 //! downstream arithmetic or boolean cells. A chain like:
 //!
 //! ```text
@@ -72,17 +72,20 @@ pub const OP_SELECT: i32 = 13;
 /// Two cells at phase 0.0 and 0.5 are fully complementary for left/right gating.
 pub const OP_OSCILLATE: i32 = 14;
 
-/// Steps the emission hop-reach from 1 up to `step_count` over one cycle, then resets.
-/// Cells at hop k first receive the signal during step k of the cycle, creating a
-/// natural phase gradient along the chain without per-cell phase settings.
-/// Reuses rate, phase, and strength fields; uses `step_count` for the step count.
-pub const OP_HOPS_OSCILLATE: i32 = 15;
+/// Emits a sawtooth strength envelope from zero to the configured peak.
+/// Routing remains topology-driven; the wave never carries a reach budget.
+pub const OP_WAVE_OSCILLATE: i32 = 15;
+pub const OP_ABS: i32 = 16;
+pub const OP_NEGATE: i32 = 17;
+pub const OP_POSITIVE: i32 = 18;
+pub const OP_NEGATIVE: i32 = 19;
 
 /// Number of defined operations.
-pub const OP_COUNT: i32 = 16;
+pub const OP_COUNT: i32 = 20;
 
 /// Tolerance used by the Equal operation.
-const EQUAL_EPSILON: f32 = 1e-4;
+pub const SIGNAL_DECISION_EPSILON: f32 = 0.1;
+pub const BOOLEAN_TRUE: f32 = 1000.0;
 
 /// Behavior implementation for Cognocyte (signal-processing) cells.
 pub struct CognocyteBehavior;
@@ -104,12 +107,12 @@ pub fn evaluate(op: i32, a: f32, b: f32) -> f32 {
     match op {
         OP_ADD => a + b,
         OP_SUBTRACT => a - b,
-        OP_MULTIPLY => a * b,
+        OP_MULTIPLY => a * b / 1000.0,
         OP_DIVIDE => {
-            if b.abs() < EQUAL_EPSILON {
+            if b.abs() <= SIGNAL_DECISION_EPSILON {
                 0.0
             } else {
-                a / b
+                a * 1000.0 / b
             }
         }
         OP_MIN => a.min(b),
@@ -117,35 +120,35 @@ pub fn evaluate(op: i32, a: f32, b: f32) -> f32 {
         OP_AVERAGE => (a + b) * 0.5,
         OP_GREATER_THAN => {
             if a > b {
-                1.0
+                BOOLEAN_TRUE
             } else {
                 0.0
             }
         }
         OP_LESS_THAN => {
             if a < b {
-                1.0
+                BOOLEAN_TRUE
             } else {
                 0.0
             }
         }
         OP_EQUAL => {
-            if (a - b).abs() < EQUAL_EPSILON {
-                1.0
+            if (a - b).abs() <= SIGNAL_DECISION_EPSILON {
+                BOOLEAN_TRUE
             } else {
                 0.0
             }
         }
         OP_AND => {
             if a > 0.0 && b > 0.0 {
-                1.0
+                BOOLEAN_TRUE
             } else {
                 0.0
             }
         }
         OP_OR => {
             if a > 0.0 || b > 0.0 {
-                1.0
+                BOOLEAN_TRUE
             } else {
                 0.0
             }
@@ -154,7 +157,7 @@ pub fn evaluate(op: i32, a: f32, b: f32) -> f32 {
             if a > 0.0 {
                 0.0
             } else {
-                1.0
+                BOOLEAN_TRUE
             }
         } // b ignored
         OP_SELECT => {
@@ -164,6 +167,10 @@ pub fn evaluate(op: i32, a: f32, b: f32) -> f32 {
                 0.0
             }
         }
+        OP_ABS => a.abs(),
+        OP_NEGATE => -a,
+        OP_POSITIVE => a.max(0.0),
+        OP_NEGATIVE => a.min(0.0),
         _ => 0.0,
     }
 }
@@ -186,7 +193,11 @@ pub fn op_name(op: i32) -> &'static str {
         OP_NOT => "NOT",
         OP_SELECT => "Select",
         OP_OSCILLATE => "Oscillate",
-        OP_HOPS_OSCILLATE => "Hops Oscillate",
+        OP_WAVE_OSCILLATE => "Wave Oscillate",
+        OP_ABS => "ABS",
+        OP_NEGATE => "Negate",
+        OP_POSITIVE => "Positive",
+        OP_NEGATIVE => "Negative",
         _ => "Unknown",
     }
 }
@@ -199,8 +210,8 @@ mod tests {
     fn arithmetic_ops() {
         assert_eq!(evaluate(OP_ADD, 3.0, 2.0), 5.0);
         assert_eq!(evaluate(OP_SUBTRACT, 3.0, 2.0), 1.0);
-        assert_eq!(evaluate(OP_MULTIPLY, 3.0, 2.0), 6.0);
-        assert_eq!(evaluate(OP_DIVIDE, 6.0, 2.0), 3.0);
+        assert_eq!(evaluate(OP_MULTIPLY, 500.0, -500.0), -250.0);
+        assert_eq!(evaluate(OP_DIVIDE, 500.0, 250.0), 2000.0);
         assert_eq!(evaluate(OP_MIN, 3.0, 2.0), 2.0);
         assert_eq!(evaluate(OP_MAX, 3.0, 2.0), 3.0);
         assert_eq!(evaluate(OP_AVERAGE, 3.0, 1.0), 2.0);
@@ -213,28 +224,38 @@ mod tests {
 
     #[test]
     fn comparison_ops() {
-        assert_eq!(evaluate(OP_GREATER_THAN, 3.0, 2.0), 1.0);
+        assert_eq!(evaluate(OP_GREATER_THAN, 3.0, 2.0), BOOLEAN_TRUE);
         assert_eq!(evaluate(OP_GREATER_THAN, 1.0, 2.0), 0.0);
-        assert_eq!(evaluate(OP_LESS_THAN, 1.0, 2.0), 1.0);
+        assert_eq!(evaluate(OP_LESS_THAN, 1.0, 2.0), BOOLEAN_TRUE);
         assert_eq!(evaluate(OP_LESS_THAN, 3.0, 2.0), 0.0);
-        assert_eq!(evaluate(OP_EQUAL, 2.0, 2.0), 1.0);
+        assert_eq!(evaluate(OP_EQUAL, 2.0, 2.0), BOOLEAN_TRUE);
         assert_eq!(evaluate(OP_EQUAL, 2.0, 3.0), 0.0);
     }
 
     #[test]
     fn boolean_ops() {
-        assert_eq!(evaluate(OP_AND, 1.0, 1.0), 1.0);
+        assert_eq!(evaluate(OP_AND, 1.0, 1.0), BOOLEAN_TRUE);
         assert_eq!(evaluate(OP_AND, 1.0, 0.0), 0.0);
-        assert_eq!(evaluate(OP_OR, 0.0, 1.0), 1.0);
+        assert_eq!(evaluate(OP_OR, 0.0, 1.0), BOOLEAN_TRUE);
         assert_eq!(evaluate(OP_OR, 0.0, 0.0), 0.0);
         assert_eq!(evaluate(OP_NOT, 1.0, 0.0), 0.0); // b ignored
-        assert_eq!(evaluate(OP_NOT, 0.0, 9.0), 1.0); // b ignored
+        assert_eq!(evaluate(OP_NOT, 0.0, 9.0), BOOLEAN_TRUE); // b ignored
     }
 
     #[test]
     fn select_op() {
         assert_eq!(evaluate(OP_SELECT, 1.0, 7.0), 7.0); // A true -> B
         assert_eq!(evaluate(OP_SELECT, 0.0, 7.0), 0.0); // A false -> 0
+    }
+
+    #[test]
+    fn signed_unary_ops() {
+        assert_eq!(evaluate(OP_ABS, -250.0, 0.0), 250.0);
+        assert_eq!(evaluate(OP_NEGATE, -250.0, 0.0), 250.0);
+        assert_eq!(evaluate(OP_POSITIVE, -250.0, 0.0), 0.0);
+        assert_eq!(evaluate(OP_POSITIVE, 250.0, 0.0), 250.0);
+        assert_eq!(evaluate(OP_NEGATIVE, 250.0, 0.0), 0.0);
+        assert_eq!(evaluate(OP_NEGATIVE, -250.0, 0.0), -250.0);
     }
 
     #[test]

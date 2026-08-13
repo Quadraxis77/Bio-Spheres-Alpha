@@ -18,7 +18,6 @@
 //!   Values > 1 can drive the memory above the raw signal level.
 //! - **input_channel** (0-15): channel to read. If absent the memory just decays.
 //! - **output_channel** (0-15): channel the memory value is emitted on.
-//! - **output_hops** (1-20): adhesion hops the emitted signal travels.
 //!
 //! # Uses
 //!

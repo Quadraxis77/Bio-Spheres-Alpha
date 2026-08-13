@@ -257,7 +257,7 @@ var<storage, read_write> signal_settings_v3: array<vec4<f32>>;
 @group(2) @binding(28)
 var<storage, read_write> signal_settings_v4: array<vec4<f32>>;
 
-// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
+// Per-mode regulation emission parameters: [emit_channel(u32), emit_value_bits(u32), reserved, padding(u32)]
 @group(2) @binding(29)
 var<storage, read_write> regulation_params_buf: array<vec4<u32>>;
 
@@ -273,6 +273,16 @@ var<storage, read_write> mode_properties_v10: array<vec4<f32>>;
 
 @group(2) @binding(34)
 var<storage, read_write> mode_properties_v11: array<vec4<f32>>;
+
+// Signal-listener controls that live in cell-specific property buffers.
+@group(2) @binding(35)
+var<storage, read_write> mode_properties_v5: array<vec4<f32>>;
+@group(2) @binding(36)
+var<storage, read_write> mode_properties_v7: array<vec4<f32>>;
+@group(2) @binding(37)
+var<storage, read_write> mode_properties_v14: array<vec4<f32>>;
+@group(2) @binding(38)
+var<storage, read_write> glueocyte_cell_adhesion_flags: array<u32>;
 
 const MUTATION_NOOP: u32 = 0xFFFFFFFFu;
 
@@ -643,6 +653,15 @@ fn clone_genome_modes(
         mode_properties_v9[dst] = mode_properties_v9[src];
         mode_properties_v10[dst] = mode_properties_v10[src];
         mode_properties_v11[dst] = mode_properties_v11[src];
+        mode_properties_v5[dst] = mode_properties_v5[src];
+        mode_properties_v7[dst] = mode_properties_v7[src];
+        mode_properties_v14[dst] = mode_properties_v14[src];
+        let glue_src = src * 4u;
+        let glue_dst = dst * 4u;
+        glueocyte_cell_adhesion_flags[glue_dst] = glueocyte_cell_adhesion_flags[glue_src];
+        glueocyte_cell_adhesion_flags[glue_dst + 1u] = glueocyte_cell_adhesion_flags[glue_src + 1u];
+        glueocyte_cell_adhesion_flags[glue_dst + 2u] = glueocyte_cell_adhesion_flags[glue_src + 2u];
+        glueocyte_cell_adhesion_flags[glue_dst + 3u] = glueocyte_cell_adhesion_flags[glue_src + 3u];
 
         // mode_colors and mode_emissive: 1 vec4<f32> per mode each
         mode_colors[dst] = mode_colors[src];
@@ -864,6 +883,13 @@ fn ensure_initial_development_cycle(dst_base: u32, new_genome_id: u32, cell_id: 
         mode_properties_v9[cycle_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         mode_properties_v10[cycle_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         mode_properties_v11[cycle_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        mode_properties_v5[cycle_abs] = vec4<f32>(0.0);
+        mode_properties_v7[cycle_abs] = vec4<f32>(0.0);
+        mode_properties_v14[cycle_abs] = vec4<f32>(0.0);
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u] = 0u;
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u + 1u] = 0xFFFFFFFFu;
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u + 2u] = bitcast<u32>(1.0);
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u + 3u] = 0u;
         glueocyte_env_adhesion_flags[cycle_abs] = 0u;
         oculocyte_params_buf[cycle_abs] = vec4<u32>(1u, 0u, 0u, 0u);
 
@@ -1079,6 +1105,75 @@ fn specialize_mode_cell_type(mode_abs: u32, cell_type: u32) {
     mode_properties_v4[mode_abs] = p4;
     mode_colors[mode_abs] = color;
     mode_emissive[mode_abs] = emissive;
+}
+
+fn mutate_listener_response(mode_abs: u32, listener: u32, cell_id: u32, salt: u32) -> bool {
+    let cell_type = mode_cell_types[mode_abs];
+    if ((listener == 10u) != (cell_type == 16u) && (listener == 3u || listener == 10u)) {
+        return false;
+    }
+    if ((listener == 12u) != (cell_type == 19u) && (listener == 4u || listener == 12u)) {
+        return false;
+    }
+
+    var current = 0u;
+    if (listener == 0u) {
+        current = min((glueocyte_cell_adhesion_flags[mode_abs * 4u + 3u] >> 2u) & 3u, 2u);
+    } else if (listener == 1u) {
+        current = min(u32(round(max(mode_properties_v3[mode_abs].z, 0.0))) / 2u, 2u);
+    } else if (listener == 2u) {
+        current = min(u32(round(max(mode_properties_v5[mode_abs].z, 0.0))) / 2u, 2u);
+    } else if (listener == 3u) {
+        current = min(u32(round(max(mode_properties_v7[mode_abs].y, 0.0))) / 2u, 2u);
+    } else if (listener == 4u || listener == 10u) {
+        current = min(u32(round(max(select(mode_properties_v10[mode_abs].w, mode_properties_v7[mode_abs].y, listener == 10u), 0.0))), 2u);
+    } else if (listener == 5u) {
+        current = min(u32(round(max(signal_settings_v0[mode_abs].z, 0.0))) / 2u, 2u);
+    } else if (listener == 6u) {
+        current = min(u32(round(max(signal_settings_v1[mode_abs].y, 0.0))) / 2u, 2u);
+    } else if (listener == 7u || listener == 8u) {
+        let encoded = select(signal_settings_v1[mode_abs].z, signal_settings_v2[mode_abs].z, listener == 8u);
+        if (encoded < 0.0) { return false; }
+        current = min(u32(round(encoded)) / 16u, 2u);
+    } else if (listener == 9u) {
+        current = min(u32(round(max(signal_settings_v4[mode_abs].y, 0.0))) / 2u, 2u);
+    } else if (listener == 11u) {
+        current = min(u32(max(mode_properties_v14[mode_abs].w, 0.0)) / 262144u, 2u);
+    } else {
+        current = min(u32(round(max(mode_properties_v9[mode_abs].y, 0.0))) / 2u, 2u);
+    }
+    let response = (current + 1u + (rng_u32(cell_id, salt) & 1u)) % 3u;
+
+    if (listener == 0u) {
+        let idx = mode_abs * 4u + 3u;
+        glueocyte_cell_adhesion_flags[idx] = (glueocyte_cell_adhesion_flags[idx] & ~12u) | (response << 2u);
+    } else if (listener == 1u) {
+        mode_properties_v3[mode_abs].z = f32((u32(round(max(mode_properties_v3[mode_abs].z, 0.0))) & 1u) + response * 2u);
+    } else if (listener == 2u) {
+        mode_properties_v5[mode_abs].z = f32((u32(round(max(mode_properties_v5[mode_abs].z, 0.0))) & 1u) + response * 2u);
+    } else if (listener == 3u) {
+        mode_properties_v7[mode_abs].y = f32((u32(round(max(mode_properties_v7[mode_abs].y, 0.0))) & 1u) + response * 2u);
+    } else if (listener == 4u) {
+        mode_properties_v10[mode_abs].w = f32(response);
+    } else if (listener == 5u) {
+        signal_settings_v0[mode_abs].z = f32((u32(round(max(signal_settings_v0[mode_abs].z, 0.0))) & 1u) + response * 2u);
+    } else if (listener == 6u) {
+        signal_settings_v1[mode_abs].y = f32((u32(round(max(signal_settings_v1[mode_abs].y, 0.0))) & 1u) + response * 2u);
+    } else if (listener == 7u) {
+        signal_settings_v1[mode_abs].z = f32(u32(round(signal_settings_v1[mode_abs].z)) % 16u + response * 16u);
+    } else if (listener == 8u) {
+        signal_settings_v2[mode_abs].z = f32(u32(round(signal_settings_v2[mode_abs].z)) % 16u + response * 16u);
+    } else if (listener == 9u) {
+        signal_settings_v4[mode_abs].y = f32((u32(round(max(signal_settings_v4[mode_abs].y, 0.0))) & 1u) + response * 2u);
+    } else if (listener == 10u) {
+        mode_properties_v7[mode_abs].y = f32(response);
+    } else if (listener == 11u) {
+        let packed = u32(max(mode_properties_v14[mode_abs].w, 0.0));
+        mode_properties_v14[mode_abs].w = f32((packed % 262144u) + response * 262144u);
+    } else {
+        mode_properties_v9[mode_abs].y = f32((u32(round(max(mode_properties_v9[mode_abs].y, 0.0))) & 1u) + response * 2u);
+    }
+    return true;
 }
 
 // ============================================================
@@ -1551,7 +1646,7 @@ fn apply_mutation(
         // element_offset encodes: sub-buffer = offset / 4, component = offset % 4
         //   offsets 0-3  -> adhesion_settings_v0 (can_break, break_force, rest_length, linear_spring_stiffness)
         //   offsets 4-7  -> adhesion_settings_v1 (linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation)
-        //   offsets 8-11 -> adhesion_settings_v2 (twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding)
+        //   offsets 8-11 -> adhesion_settings_v2 (twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, creates_backbone)
         case 11u: {
             let sub_buf = entry.element_offset / 4u;
             let comp = entry.element_offset % 4u;
@@ -1565,9 +1660,11 @@ fn apply_mutation(
             }
 
             switch (entry.data_type) {
-                // Boolean flip (can_break at offset 0, enable_twist_constraint at offset 10)
+                // Boolean flip. Adhesion buffers are physically vec4<f32>, so
+                // preserve the IEEE representation while accessed through u32.
                 case 2u: {
-                    raw[comp] = select(1u, 0u, raw[comp] > 0u);
+                    let old_bool = bitcast<f32>(raw[comp]) > 0.5;
+                    raw[comp] = bitcast<u32>(select(1.0, 0.0, old_bool));
                 }
                 // Continuous f32 (stored as bitcast u32)
                 default: {
@@ -1613,7 +1710,7 @@ fn apply_mutation(
                 let receiver_abs = dst_base + receiver_local;
 
                 // --- Wire emitter: set regulation_params on emitter mode ---
-                // regulation_params: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding]
+                // regulation_params: [emit_channel(u32), emit_value_bits(u32), reserved, padding]
                 var reg = regulation_params_buf[emitter_abs];
                 reg.x = channel;
                 // Set a reasonable default emit value if currently 0
@@ -1621,10 +1718,7 @@ fn apply_mutation(
                 if (current_value < 1.0) {
                     reg.y = bitcast<u32>(10.0); // Default emit value
                 }
-                // Set reasonable hops if currently 0
-                if (reg.z == 0u) {
-                    reg.z = 3u; // Default 3 hops
-                }
+                reg.z = 0u;
                 regulation_params_buf[emitter_abs] = reg;
 
                 // --- Wire receiver: set the appropriate signal conditional channel ---
@@ -1748,14 +1842,14 @@ fn apply_mutation(
         }
 
         // buffer_id 13: regulation_params (vec4<u32> per mode)
-        // [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding(u32)]
-        // element_offset 0 = channel (integer), 1 = value (f32 as bits), 2 = hops (integer)
+        // [emit_channel(u32), emit_value_bits(u32), reserved, padding(u32)]
+        // element_offset 0 = channel (integer), 1 = value (f32 as bits)
         case 13u: {
             var p = regulation_params_buf[mode_abs];
             let comp = entry.element_offset;
             switch (entry.data_type) {
                 case 1u: {
-                    // integer (channel or hops)
+                    // integer channel
                     let old_val = f32(p[comp]);
                     p[comp] = u32(clamp(round(old_val + delta), entry.min_value, entry.max_value));
                 }
@@ -1847,6 +1941,13 @@ fn apply_mutation(
                 mode_properties_v9[new_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
                 mode_properties_v10[new_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
                 mode_properties_v11[new_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+                mode_properties_v5[new_abs] = vec4<f32>(0.0);
+                mode_properties_v7[new_abs] = vec4<f32>(0.0);
+                mode_properties_v14[new_abs] = vec4<f32>(0.0);
+                glueocyte_cell_adhesion_flags[new_abs * 4u] = 0u;
+                glueocyte_cell_adhesion_flags[new_abs * 4u + 1u] = 0xFFFFFFFFu;
+                glueocyte_cell_adhesion_flags[new_abs * 4u + 2u] = bitcast<u32>(1.0);
+                glueocyte_cell_adhesion_flags[new_abs * 4u + 3u] = 0u;
                 glueocyte_env_adhesion_flags[new_abs] = 0u;
                 oculocyte_params_buf[new_abs] = vec4<u32>(1u, 0u, 0u, 0u);
 
@@ -1878,6 +1979,18 @@ fn apply_mutation(
 
                 // Unreferenced - safe to trim
                 genome_meta[new_genome_id].x = last_local;
+            }
+        }
+
+        // buffer_id 15: signed listener response mode mutation.
+        case 15u: {
+            if (!mutate_listener_response(
+                mode_abs,
+                min(entry.element_offset, 12u),
+                cell_id,
+                salt_base + 990u
+            )) {
+                return MUTATION_NOOP;
             }
         }
 

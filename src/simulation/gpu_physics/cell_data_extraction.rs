@@ -130,16 +130,10 @@ impl InspectedCellData {
         glam::Vec3::new(self.velocity[0], self.velocity[1], self.velocity[2])
     }
 
-    /// Decoded 11-bit signal strength for one channel.
-    pub fn signal_strength(&self, channel: usize) -> u32 {
-        self.signal_channels.get(channel).copied().unwrap_or(0) & 0x7ff
-    }
-
-    /// Whether this cell directly emits the signal currently on this channel.
-    pub fn signal_is_source(&self, channel: usize) -> bool {
-        self.signal_channels
-            .get(channel)
-            .is_some_and(|word| word & (1 << 24) != 0)
+    /// Decode the signed 11-bit two's-complement public signal payload.
+    pub fn signal_value(&self, channel: usize) -> i32 {
+        let payload = self.signal_channels.get(channel).copied().unwrap_or(0) & 0x7ff;
+        ((payload << 21) as i32) >> 21
     }
 }
 
@@ -148,15 +142,13 @@ mod tests {
     use super::InspectedCellData;
 
     #[test]
-    fn decodes_signal_strength_and_source_flag() {
+    fn decodes_signed_signal_payload() {
         let mut data = InspectedCellData::default();
-        data.signal_channels[8] = (1 << 24) | 1536;
+        data.signal_channels[8] = (-512i32 as u32) & 0x7ff;
         data.signal_channels[9] = 42;
 
-        assert_eq!(data.signal_strength(8), 1536);
-        assert!(data.signal_is_source(8));
-        assert_eq!(data.signal_strength(9), 42);
-        assert!(!data.signal_is_source(9));
+        assert_eq!(data.signal_value(8), -512);
+        assert_eq!(data.signal_value(9), 42);
     }
 }
 

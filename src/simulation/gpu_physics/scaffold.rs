@@ -73,6 +73,9 @@ impl GpuScaffoldSystem {
                 buffer_entry(3, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(4, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(5, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(6, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(7, false, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(8, true, true, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let adhesion_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -83,6 +86,7 @@ impl GpuScaffoldSystem {
                 buffer_entry(2, false, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(3, false, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(4, false, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(5, true, true, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let rule_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -246,6 +250,18 @@ impl GpuScaffoldSystem {
                     binding: 5,
                     resource: buffers.organism_cell_ids.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.cell_ids.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.nutrients_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
+                },
             ],
         });
         let adhesion_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -271,6 +287,10 @@ impl GpuScaffoldSystem {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adhesion_buffers.adhesion_settings_v2.as_entire_binding(),
                 },
             ],
         });

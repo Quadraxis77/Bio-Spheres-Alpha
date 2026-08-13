@@ -175,6 +175,17 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 @group(2) @binding(9)
 var<storage, read> signal_flags: array<atomic<u32>>;
 
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
+}
+
+fn listener_active(value: f32, threshold: f32, response_mode: u32) -> bool {
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    return response > 0.0 && response >= max(threshold, 0.0);
+}
+
 // Cilia mode properties
 @group(2) @binding(10)
 var<storage, read> mode_properties_v5: array<vec4<f32>>;
@@ -400,12 +411,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Resolve effective_speed (fixed or signal-reactive)
     var effective_speed: f32;
-    if (v5.z >= 0.5) { // cilia_use_signal
+    let signal_control = u32(round(max(v5.z, 0.0)));
+    if ((signal_control & 1u) != 0u) { // cilia_use_signal
         // Signal-based mode: read from the specific channel
         let sig_channel = clamp(u32(v5.w), 0u, 7u);
         let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + sig_channel]);
-        let signal_value = f32(raw_signal & 2047u); // Extract value component
-        if (signal_value >= v6.z) { // cilia_threshold
+        let signal_value = decode_signal(raw_signal);
+        if (listener_active(signal_value, v6.z, min(signal_control / 2u, 2u))) {
             effective_speed = v6.y; // cilia_speed_above
         } else {
             effective_speed = v6.x; // cilia_speed_below

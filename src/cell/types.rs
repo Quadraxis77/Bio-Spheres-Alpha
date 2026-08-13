@@ -1173,7 +1173,6 @@ impl CellType {
                 mode.vascular_outlet = false;
                 mode.vascular_signal_transport = false;
                 mode.vascular_signal_exchange = false;
-                mode.vascular_signal_capacity = 10.0;
             }
             CellType::Gametocyte => {
                 // Gametocytes behave like Embryocytes: nutrients go into reserve,
@@ -1202,7 +1201,6 @@ impl CellType {
                 mode.cognocyte_input_channel_a = 0;
                 mode.cognocyte_input_channel_b = 1;
                 mode.cognocyte_output_channel = 8;
-                mode.cognocyte_output_hops = 5;
             }
             CellType::Memorocyte => {
                 mode.nutrient_priority = 2.0;
@@ -1211,7 +1209,6 @@ impl CellType {
                 mode.memorocyte_rate = 0.1;
                 mode.memorocyte_input_channel = 0;
                 mode.memorocyte_output_channel = 9;
-                mode.memorocyte_output_hops = 5;
             }
             CellType::Luminocyte => {
                 mode.nutrient_priority = 1.6;

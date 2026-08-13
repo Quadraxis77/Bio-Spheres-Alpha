@@ -24,6 +24,51 @@ pub enum GenomeDeserializeError {
     Parse(#[from] serde_yaml::Error),
     #[error("Invalid mode index: {0}")]
     InvalidModeIndex(usize),
+    #[error(
+        "Unsupported legacy signal field '{0}'; rebuild the genome with the signed backbone schema"
+    )]
+    UnsupportedLegacySignalField(String),
+}
+
+const DEPRECATED_SIGNAL_FIELDS: [&str; 8] = [
+    "oculocyte_signal_hops",
+    "regulation_emit_hops",
+    "photocyte_emit_hops",
+    "lipocyte_emit_hops",
+    "cognocyte_output_hops",
+    "memorocyte_output_hops",
+    "vascular_signal_capacity",
+    "cognocyte_oscillator_step_count",
+];
+
+fn reject_legacy_signal_fields(yaml: &str) -> Result<(), GenomeDeserializeError> {
+    fn find(value: &serde_yaml::Value) -> Option<&str> {
+        match value {
+            serde_yaml::Value::Mapping(mapping) => {
+                for (key, value) in mapping {
+                    if let Some(key) = key.as_str() {
+                        if DEPRECATED_SIGNAL_FIELDS.contains(&key) {
+                            return Some(key);
+                        }
+                    }
+                    if let Some(field) = find(value) {
+                        return Some(field);
+                    }
+                }
+                None
+            }
+            serde_yaml::Value::Sequence(sequence) => sequence.iter().find_map(find),
+            _ => None,
+        }
+    }
+
+    let value: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+    if let Some(field) = find(&value) {
+        return Err(GenomeDeserializeError::UnsupportedLegacySignalField(
+            field.to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Serializable cell address selector.
@@ -209,6 +254,8 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_b_after_split_keep_adhesion: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_response_modes: Option<[i32; super::SIGNAL_LISTENER_COUNT]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_cell_adhesion: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glueocyte_self_adhesion: Option<bool>,
@@ -241,8 +288,6 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub photocyte_emit_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub photocyte_emit_hops: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub photocyte_emit_threshold: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub photocyte_emit_mode: Option<i32>,
@@ -252,8 +297,6 @@ pub struct SerializableModeSettings {
     pub lipocyte_emit_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lipocyte_emit_channel: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lipocyte_emit_hops: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lipocyte_emit_threshold: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -267,8 +310,6 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_signal_value: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub oculocyte_signal_hops: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_ray_length: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oculocyte_light_target_color: Option<[f32; 3]>,
@@ -278,8 +319,6 @@ pub struct SerializableModeSettings {
     pub regulation_emit_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regulation_emit_value: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub regulation_emit_hops: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub division_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -380,8 +419,6 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vascular_signal_exchange: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vascular_signal_capacity: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub gametocyte_merge_range: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memorocyte_rate: Option<f32>,
@@ -389,8 +426,6 @@ pub struct SerializableModeSettings {
     pub memorocyte_input_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memorocyte_output_channel: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub memorocyte_output_hops: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cognocyte_operation: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -400,15 +435,13 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cognocyte_output_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cognocyte_output_hops: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub cognocyte_oscillator_rate: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cognocyte_oscillator_phase: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cognocyte_oscillator_strength: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cognocyte_oscillator_step_count: Option<i32>,
+    pub cognocyte_oscillator_polarity: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub luminocyte_signal_channel: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -468,6 +501,8 @@ pub struct SerializableChildSettings {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SerializableAdhesionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub creates_backbone: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub can_break: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub break_force: Option<f32>,
@@ -508,6 +543,7 @@ impl Genome {
     /// Load genome from a YAML file (.genome).
     pub fn load_from_file(path: &Path) -> Result<Self, GenomeDeserializeError> {
         let yaml = std::fs::read_to_string(path)?;
+        reject_legacy_signal_fields(&yaml)?;
         let serializable: SerializableGenome = serde_yaml::from_str(&yaml)?;
         let genome = Self::from_serializable(serializable)?;
         log::info!("Loaded genome from {:?}", path);
@@ -523,6 +559,7 @@ impl Genome {
 
     /// Deserialise a genome from a YAML string (for restoring from snapshots).
     pub fn from_yaml_string(yaml: &str) -> Result<Self, GenomeDeserializeError> {
+        reject_legacy_signal_fields(yaml)?;
         let serializable: SerializableGenome = serde_yaml::from_str(yaml)?;
         Self::from_serializable(serializable)
     }
@@ -711,6 +748,8 @@ fn mode_to_serializable(
             mode.child_b_after_split_keep_adhesion,
             default.child_b_after_split_keep_adhesion,
         ),
+        signal_response_modes: (mode.signal_response_modes != default.signal_response_modes)
+            .then_some(mode.signal_response_modes),
         glueocyte_cell_adhesion: diff_bool(
             mode.glueocyte_cell_adhesion,
             default.glueocyte_cell_adhesion,
@@ -763,7 +802,6 @@ fn mode_to_serializable(
             mode.photocyte_emit_channel,
             default.photocyte_emit_channel,
         ),
-        photocyte_emit_hops: diff_i32(mode.photocyte_emit_hops, default.photocyte_emit_hops),
         photocyte_emit_threshold: diff_f32(
             mode.photocyte_emit_threshold,
             default.photocyte_emit_threshold,
@@ -772,7 +810,6 @@ fn mode_to_serializable(
         photocyte_emit_value: diff_f32(mode.photocyte_emit_value, default.photocyte_emit_value),
         lipocyte_emit_enabled: diff_bool(mode.lipocyte_emit_enabled, default.lipocyte_emit_enabled),
         lipocyte_emit_channel: diff_i32(mode.lipocyte_emit_channel, default.lipocyte_emit_channel),
-        lipocyte_emit_hops: diff_i32(mode.lipocyte_emit_hops, default.lipocyte_emit_hops),
         lipocyte_emit_threshold: diff_f32(
             mode.lipocyte_emit_threshold,
             default.lipocyte_emit_threshold,
@@ -788,7 +825,6 @@ fn mode_to_serializable(
             mode.oculocyte_signal_value,
             default.oculocyte_signal_value,
         ),
-        oculocyte_signal_hops: diff_i32(mode.oculocyte_signal_hops, default.oculocyte_signal_hops),
         oculocyte_ray_length: diff_f32(mode.oculocyte_ray_length, default.oculocyte_ray_length),
         oculocyte_light_target_color: diff_vec3(
             &mode.oculocyte_light_target_color,
@@ -803,7 +839,6 @@ fn mode_to_serializable(
             default.regulation_emit_channel,
         ),
         regulation_emit_value: diff_f32(mode.regulation_emit_value, default.regulation_emit_value),
-        regulation_emit_hops: diff_i32(mode.regulation_emit_hops, default.regulation_emit_hops),
         division_signal_channel: diff_i32(
             mode.division_signal_channel,
             default.division_signal_channel,
@@ -946,10 +981,6 @@ fn mode_to_serializable(
             mode.vascular_signal_exchange,
             default.vascular_signal_exchange,
         ),
-        vascular_signal_capacity: diff_f32(
-            mode.vascular_signal_capacity,
-            default.vascular_signal_capacity,
-        ),
         gametocyte_merge_range: diff_f32(
             mode.gametocyte_merge_range,
             default.gametocyte_merge_range,
@@ -962,10 +993,6 @@ fn mode_to_serializable(
         memorocyte_output_channel: diff_i32(
             mode.memorocyte_output_channel,
             default.memorocyte_output_channel,
-        ),
-        memorocyte_output_hops: diff_i32(
-            mode.memorocyte_output_hops,
-            default.memorocyte_output_hops,
         ),
         cognocyte_operation: diff_i32(mode.cognocyte_operation, default.cognocyte_operation),
         cognocyte_input_channel_a: diff_i32(
@@ -980,7 +1007,6 @@ fn mode_to_serializable(
             mode.cognocyte_output_channel,
             default.cognocyte_output_channel,
         ),
-        cognocyte_output_hops: diff_i32(mode.cognocyte_output_hops, default.cognocyte_output_hops),
         cognocyte_oscillator_rate: diff_f32(
             mode.cognocyte_oscillator_rate,
             default.cognocyte_oscillator_rate,
@@ -993,9 +1019,9 @@ fn mode_to_serializable(
             mode.cognocyte_oscillator_strength,
             default.cognocyte_oscillator_strength,
         ),
-        cognocyte_oscillator_step_count: diff_i32(
-            mode.cognocyte_oscillator_step_count,
-            default.cognocyte_oscillator_step_count,
+        cognocyte_oscillator_polarity: diff_i32(
+            mode.cognocyte_oscillator_polarity,
+            default.cognocyte_oscillator_polarity,
         ),
         luminocyte_signal_channel: diff_i32(
             mode.luminocyte_signal_channel,
@@ -1077,6 +1103,7 @@ impl SerializableModeSettings {
             || self.child_b_after_split_orientation.is_some()
             || self.child_a_after_split_keep_adhesion.is_some()
             || self.child_b_after_split_keep_adhesion.is_some()
+            || self.signal_response_modes.is_some()
             || self.glueocyte_cell_adhesion.is_some()
             || self.glueocyte_self_adhesion.is_some()
             || self.glueocyte_env_adhesion.is_some()
@@ -1093,26 +1120,22 @@ impl SerializableModeSettings {
             || self.buoyancy_force.is_some()
             || self.photocyte_emit_enabled.is_some()
             || self.photocyte_emit_channel.is_some()
-            || self.photocyte_emit_hops.is_some()
             || self.photocyte_emit_threshold.is_some()
             || self.photocyte_emit_mode.is_some()
             || self.photocyte_emit_value.is_some()
             || self.lipocyte_emit_enabled.is_some()
             || self.lipocyte_emit_channel.is_some()
-            || self.lipocyte_emit_hops.is_some()
             || self.lipocyte_emit_threshold.is_some()
             || self.lipocyte_emit_mode.is_some()
             || self.lipocyte_emit_value.is_some()
             || self.oculocyte_sense_type.is_some()
             || self.oculocyte_signal_channel.is_some()
             || self.oculocyte_signal_value.is_some()
-            || self.oculocyte_signal_hops.is_some()
             || self.oculocyte_ray_length.is_some()
             || self.oculocyte_light_target_color.is_some()
             || self.oculocyte_light_color_tolerance.is_some()
             || self.regulation_emit_channel.is_some()
             || self.regulation_emit_value.is_some()
-            || self.regulation_emit_hops.is_some()
             || self.division_signal_channel.is_some()
             || self.division_signal_threshold.is_some()
             || self.division_signal_invert.is_some()
@@ -1162,21 +1185,18 @@ impl SerializableModeSettings {
             || self.vascular_outlet.is_some()
             || self.vascular_signal_transport.is_some()
             || self.vascular_signal_exchange.is_some()
-            || self.vascular_signal_capacity.is_some()
             || self.gametocyte_merge_range.is_some()
             || self.memorocyte_rate.is_some()
             || self.memorocyte_input_channel.is_some()
             || self.memorocyte_output_channel.is_some()
-            || self.memorocyte_output_hops.is_some()
             || self.cognocyte_operation.is_some()
             || self.cognocyte_input_channel_a.is_some()
             || self.cognocyte_input_channel_b.is_some()
             || self.cognocyte_output_channel.is_some()
-            || self.cognocyte_output_hops.is_some()
             || self.cognocyte_oscillator_rate.is_some()
             || self.cognocyte_oscillator_phase.is_some()
             || self.cognocyte_oscillator_strength.is_some()
-            || self.cognocyte_oscillator_step_count.is_some()
+            || self.cognocyte_oscillator_polarity.is_some()
             || self.luminocyte_signal_channel.is_some()
             || self.luminocyte_threshold.is_some()
             || self.luminocyte_invert.is_some()
@@ -1231,6 +1251,7 @@ fn adhesion_to_serializable(
     default: &AdhesionSettings,
 ) -> Option<SerializableAdhesionSettings> {
     let ser = SerializableAdhesionSettings {
+        creates_backbone: diff_bool(adhesion.creates_backbone, default.creates_backbone),
         can_break: diff_bool(adhesion.can_break, default.can_break),
         break_force: diff_f32(adhesion.break_force, default.break_force),
         rest_length: diff_f32(adhesion.rest_length, default.rest_length),
@@ -1268,7 +1289,8 @@ fn adhesion_to_serializable(
         ),
     };
 
-    if ser.can_break.is_some()
+    if ser.creates_backbone.is_some()
+        || ser.can_break.is_some()
         || ser.break_force.is_some()
         || ser.rest_length.is_some()
         || ser.linear_spring_stiffness.is_some()
@@ -1363,6 +1385,9 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(keep_adhesion) = ser.child_b_after_split_keep_adhesion {
         mode.child_b_after_split_keep_adhesion = keep_adhesion;
     }
+    if let Some(response_modes) = ser.signal_response_modes {
+        mode.signal_response_modes = response_modes.map(|value| value.clamp(0, 2));
+    }
     if let Some(v) = ser.glueocyte_cell_adhesion {
         mode.glueocyte_cell_adhesion = v;
     }
@@ -1414,9 +1439,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(value) = ser.oculocyte_signal_value {
         mode.oculocyte_signal_value = value;
     }
-    if let Some(hops) = ser.oculocyte_signal_hops {
-        mode.oculocyte_signal_hops = hops;
-    }
     if let Some(len) = ser.oculocyte_ray_length {
         mode.oculocyte_ray_length = len;
     }
@@ -1431,9 +1453,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.regulation_emit_value {
         mode.regulation_emit_value = v;
-    }
-    if let Some(v) = ser.regulation_emit_hops {
-        mode.regulation_emit_hops = v;
     }
     if let Some(v) = ser.division_signal_channel {
         mode.division_signal_channel = v;
@@ -1630,9 +1649,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.photocyte_emit_channel {
         mode.photocyte_emit_channel = v;
     }
-    if let Some(v) = ser.photocyte_emit_hops {
-        mode.photocyte_emit_hops = v;
-    }
     if let Some(v) = ser.photocyte_emit_threshold {
         mode.photocyte_emit_threshold = v;
     }
@@ -1647,9 +1663,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.lipocyte_emit_channel {
         mode.lipocyte_emit_channel = v;
-    }
-    if let Some(v) = ser.lipocyte_emit_hops {
-        mode.lipocyte_emit_hops = v;
     }
     if let Some(v) = ser.lipocyte_emit_threshold {
         mode.lipocyte_emit_threshold = v;
@@ -1666,9 +1679,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.vascular_signal_exchange {
         mode.vascular_signal_exchange = v;
     }
-    if let Some(v) = ser.vascular_signal_capacity {
-        mode.vascular_signal_capacity = v;
-    }
     if let Some(v) = ser.memorocyte_rate {
         mode.memorocyte_rate = v;
     }
@@ -1677,9 +1687,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     }
     if let Some(v) = ser.memorocyte_output_channel {
         mode.memorocyte_output_channel = v;
-    }
-    if let Some(v) = ser.memorocyte_output_hops {
-        mode.memorocyte_output_hops = v;
     }
     if let Some(v) = ser.cognocyte_operation {
         mode.cognocyte_operation = v;
@@ -1693,9 +1700,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.cognocyte_output_channel {
         mode.cognocyte_output_channel = v;
     }
-    if let Some(v) = ser.cognocyte_output_hops {
-        mode.cognocyte_output_hops = v;
-    }
     if let Some(v) = ser.cognocyte_oscillator_rate {
         mode.cognocyte_oscillator_rate = v;
     }
@@ -1705,8 +1709,8 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.cognocyte_oscillator_strength {
         mode.cognocyte_oscillator_strength = v;
     }
-    if let Some(v) = ser.cognocyte_oscillator_step_count {
-        mode.cognocyte_oscillator_step_count = v;
+    if let Some(v) = ser.cognocyte_oscillator_polarity {
+        mode.cognocyte_oscillator_polarity = v.clamp(0, 2);
     }
     if let Some(v) = ser.luminocyte_signal_channel {
         mode.luminocyte_signal_channel = v;
@@ -1744,6 +1748,9 @@ fn apply_child_settings(child: &mut ChildSettings, ser: &SerializableChildSettin
 }
 
 fn apply_adhesion_settings(adhesion: &mut AdhesionSettings, ser: &SerializableAdhesionSettings) {
+    if let Some(creates_backbone) = ser.creates_backbone {
+        adhesion.creates_backbone = creates_backbone;
+    }
     if let Some(can_break) = ser.can_break {
         adhesion.can_break = can_break;
     }
@@ -1938,5 +1945,80 @@ modified_modes:
         assert_eq!(loaded.modes[0].stemocyte_thresholds, [5, 25, 70, 95]);
         assert_eq!(loaded.modes[0].stemocyte_delay_mode, 3);
         assert_eq!(loaded.modes[0].stemocyte_delay_value, 2.5);
+    }
+
+    #[test]
+    fn signed_oscillator_polarity_round_trip() {
+        let mut genome = Genome::new_with_mode_count(1);
+        genome.modes[0].cognocyte_oscillator_polarity = 2;
+        genome.modes[0].adhesion_settings.creates_backbone = true;
+        let yaml = genome.to_yaml_string().unwrap();
+        let loaded = Genome::from_yaml_string(&yaml).unwrap();
+        assert_eq!(loaded.modes[0].cognocyte_oscillator_polarity, 2);
+        assert!(loaded.modes[0].adhesion_settings.creates_backbone);
+    }
+
+    #[test]
+    fn listener_response_modes_round_trip_without_unsigned_migration() {
+        let mut genome = Genome::new_with_mode_count(1);
+        genome.modes[0].signal_response_modes = [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 1];
+
+        let yaml = genome.to_yaml_string().unwrap();
+        let loaded = Genome::from_yaml_string(&yaml).unwrap();
+
+        assert_eq!(
+            loaded.modes[0].signal_response_modes,
+            genome.modes[0].signal_response_modes
+        );
+    }
+
+    #[test]
+    fn signed_signal_schema_omits_deprecated_reach_and_capacity_fields() {
+        let mut genome = Genome::new_with_mode_count(1);
+        let mode = &mut genome.modes[0];
+        mode.oculocyte_signal_value = -750.0;
+        mode.regulation_emit_value = -500.0;
+        mode.cognocyte_operation = crate::cell::behaviors::cognocyte::OP_WAVE_OSCILLATE;
+        mode.cognocyte_oscillator_polarity = 2;
+        mode.cognocyte_oscillator_strength = 1000.0;
+
+        let yaml = genome.to_yaml_string().unwrap();
+        for removed in [
+            "signal_hops",
+            "emit_hops",
+            "output_hops",
+            "signal_capacity",
+            "oscillator_step_count",
+        ] {
+            assert!(
+                !yaml.contains(removed),
+                "deprecated field leaked: {removed}"
+            );
+        }
+
+        let loaded = Genome::from_yaml_string(&yaml).unwrap();
+        assert_eq!(loaded.modes[0].oculocyte_signal_value, -750.0);
+        assert_eq!(loaded.modes[0].regulation_emit_value, -500.0);
+        assert_eq!(loaded.modes[0].cognocyte_operation, 15);
+        assert_eq!(loaded.modes[0].cognocyte_oscillator_polarity, 2);
+        assert_eq!(loaded.modes[0].cognocyte_oscillator_strength, 1000.0);
+    }
+
+    #[test]
+    fn deprecated_signal_schema_is_rejected_instead_of_silently_migrated() {
+        let yaml = r#"
+name: Unsupported Signal Genome
+mode_count: 1
+modified_modes:
+- index: 0
+  oculocyte_signal_hops: 12
+"#;
+
+        let error = Genome::from_yaml_string(yaml).unwrap_err();
+        assert!(matches!(
+            error,
+            GenomeDeserializeError::UnsupportedLegacySignalField(field)
+                if field == "oculocyte_signal_hops"
+        ));
     }
 }

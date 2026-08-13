@@ -50,6 +50,8 @@ var<storage, read> cell_count_buffer: array<u32>;
 var<storage, read> signal_flags: array<atomic<u32>>;
 
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
+const BOND_FLAG_SIGNAL_BACKBONE: u32 = 4u;
+const BOND_FLAG_SIGNAL_ACTIVE: u32 = 8u;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -115,48 +117,15 @@ fn vs_main(
     let pos_b = positions[connection.cell_b_index].xyz;
     let midpoint = (pos_a + pos_b) * 0.5;
     
-    // Signal outline color: yellow only when signal actually flowed through this bond.
-    // Both endpoints having signal is not sufficient - two 1-hop neighbours of the same
-    // source both have signal but the connection between them was never traversed.
-    // Instead, signal flowed along this bond only if the hop counts differ by exactly 1
-    // (the upstream cell has one more remaining hop than the downstream cell).
-    // With 16 channels, check ALL channels and highlight if ANY channel has flow.
-    var signal_flowed_through = false;
-    for (var ch = 0u; ch < 16u; ch++) {
-        let signal_a = atomicLoad(&signal_flags[connection.cell_a_index * 16u + ch]);
-        let signal_b = atomicLoad(&signal_flags[connection.cell_b_index * 16u + ch]);
-
-        // Decode scaled travel budgets (bits 11-23) and values (bits 0-10)
-        let hops_a = ((signal_a >> 11u) & 8191u) / 4u;
-        let hops_b = ((signal_b >> 11u) & 8191u) / 4u;
-        let value_a = signal_a & 2047u;
-        let value_b = signal_b & 2047u;
-
-        // Signal flowed along this bond if both ends have signal and their hop counts
-        // differ by exactly 1 (one is exactly one step upstream of the other).
-        //
-        // Two adjacent emitters start with the same travel budget. Regulation-emitter
-        // chains intentionally reinforce across that equal-budget bond, so source-to-source
-        // links must also be shown as active or an emitting Stemocyte line appears silent.
-        let both_have_signal = (value_a != 0u) && (value_b != 0u);
-        let hops_differ_by_one = (hops_a == hops_b + 1u) || (hops_b == hops_a + 1u);
-        let both_are_sources =
-            (signal_a & (1u << 24u)) != 0u &&
-            (signal_b & (1u << 24u)) != 0u;
-        if (both_have_signal && (hops_differ_by_one || both_are_sources)) {
-            signal_flowed_through = true;
-            break;
-        }
-    }
-    
-    var sig_color: vec4<f32>;
-    if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
-        sig_color = vec4<f32>(1.0, 1.0, 1.0, 1.0); // White outline
-    } else if (signal_flowed_through) {
-        sig_color = vec4<f32>(1.0, 1.0, 0.0, 1.0); // Bright yellow
-    } else {
-        sig_color = vec4<f32>(0.0, 0.0, 0.0, 0.6); // Black
-    }
+    // Routing is visible even while silent: selected backbone edges are yellow,
+    // valid redundant standby edges are black. Signal magnitude never changes it.
+    let is_backbone = (connection.bond_flags & BOND_FLAG_SIGNAL_BACKBONE) != 0u;
+    let route_active = (connection.bond_flags & BOND_FLAG_SIGNAL_ACTIVE) != 0u;
+    let sig_color = select(
+        vec4<f32>(0.0, 0.0, 0.0, 1.0),
+        vec4<f32>(1.0, 1.0, 0.0, 1.0),
+        is_backbone && route_active
+    );
     
     // Compute billboard perpendicular direction
     let line_dir = normalize(pos_b - pos_a);
@@ -178,7 +147,16 @@ fn vs_main(
     var seg_end: vec3<f32>;
     var zone_col: vec4<f32>;
     
-    if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
+    if (is_backbone) {
+        if (half_seg == 0u) {
+            seg_start = pos_a;
+            seg_end = midpoint;
+        } else {
+            seg_start = midpoint;
+            seg_end = pos_b;
+        }
+        zone_col = sig_color;
+    } else if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
         if (half_seg == 0u) {
             seg_start = pos_a;
             seg_end = midpoint;

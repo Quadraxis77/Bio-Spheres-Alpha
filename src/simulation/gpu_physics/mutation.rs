@@ -147,6 +147,7 @@ pub mod buffer_id {
     /// Structural genome mutations: MODE_APPEND (data_type 10) and MODE_TRIM (data_type 11).
     /// element_offset is unused for both.
     pub const GENOME_STRUCTURE: u32 = 14;
+    pub const LISTENER_RESPONSE: u32 = 15;
 }
 
 /// Uniform params matching the WGSL MutationParams struct
@@ -521,6 +522,11 @@ impl MutationSystem {
                 Self::storage_rw_entry(33),
                 // binding 34: mode_properties_v11 (Stemocyte thresholds)
                 Self::storage_rw_entry(34),
+                // bindings 35-38: cell-specific listener property buffers
+                Self::storage_rw_entry(35),
+                Self::storage_rw_entry(36),
+                Self::storage_rw_entry(37),
+                Self::storage_rw_entry(38),
             ],
         });
 
@@ -976,7 +982,7 @@ impl MutationSystem {
     ///   0.5 = binary flips and sense-type changes - significant behavioral shift
     ///   0.3 = cell_type re-roll - completely rewires cell behavior, should be rare
     fn build_default_vulnerability_table() -> Vec<MutationParamEntry> {
-        vec![
+        let mut entries = vec![
             // --- Visual ---
             // Dramatic color: re-rolls all 3 RGB components. element_offset 0xFF = full re-roll.
             MutationParamEntry {
@@ -1256,17 +1262,6 @@ impl MutationSystem {
                 max_value: 63.0,
                 data_type: data_type::INTEGER,
             },
-            // oculocyte_signal_hops [1, 20]: nudge by 1-3
-            MutationParamEntry {
-                buffer_id: buffer_id::OCULOCYTE_PARAMS,
-                element_offset: 2,
-                weight: 0.7,
-                min_delta: 1.0,
-                max_delta: 3.0,
-                min_value: 1.0,
-                max_value: 20.0,
-                data_type: data_type::INTEGER,
-            },
             // oculocyte_signal_channel [0, 7]: nudge by 1-2 (sensory channels)
             MutationParamEntry {
                 buffer_id: buffer_id::OCULOCYTE_PARAMS,
@@ -1292,27 +1287,16 @@ impl MutationSystem {
                 max_value: 15.0,
                 data_type: data_type::INTEGER,
             },
-            // regulation_emit_value [0.0, 2047.0]: nudge by 10-100 (f32 stored as bits)
+            // regulation_emit_value [-1000.0, 1000.0]: signed f32 stored as bits
             MutationParamEntry {
                 buffer_id: buffer_id::REGULATION_PARAMS,
                 element_offset: 1,
                 weight: 0.7,
                 min_delta: 10.0,
                 max_delta: 100.0,
-                min_value: 0.0,
-                max_value: 2047.0,
+                min_value: -1000.0,
+                max_value: 1000.0,
                 data_type: data_type::CONTINUOUS_F32,
-            },
-            // regulation_emit_hops [1, 20]: nudge by 1-3
-            MutationParamEntry {
-                buffer_id: buffer_id::REGULATION_PARAMS,
-                element_offset: 2,
-                weight: 0.7,
-                min_delta: 1.0,
-                max_delta: 3.0,
-                min_value: 1.0,
-                max_value: 20.0,
-                data_type: data_type::INTEGER,
             },
             // --- Glueocyte settings ---
 
@@ -1643,6 +1627,17 @@ impl MutationSystem {
                 max_value: 1.0,
                 data_type: data_type::BOOLEAN,
             },
+            // creates_backbone: heritable boolean affecting future bonds only (v2.w)
+            MutationParamEntry {
+                buffer_id: buffer_id::ADHESION_SETTINGS,
+                element_offset: 11,
+                weight: 0.3,
+                min_delta: 0.0,
+                max_delta: 0.0,
+                min_value: 0.0,
+                max_value: 1.0,
+                data_type: data_type::BOOLEAN,
+            },
             // --- Signal-conditional settings (buffer_id 12) ---
             // Stored as vec4<f32> in signal_settings_v0..v4.
             // element_offset encodes sub-buffer (offset / 4) and component (offset % 4).
@@ -1663,15 +1658,15 @@ impl MutationSystem {
                 max_value: 15.0,
                 data_type: data_type::INTEGER,
             },
-            // division_signal_threshold [-50.0, 50.0]: delta ~2-10% (v0.y, element_offset 1)
+            // division_signal_threshold [0.0, 1000.0] (v0.y, element_offset 1)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS,
                 element_offset: 1,
                 weight: 0.5,
-                min_delta: 1.0,
-                max_delta: 5.0,
-                min_value: -50.0,
-                max_value: 50.0,
+                min_delta: 10.0,
+                max_delta: 100.0,
+                min_value: 0.0,
+                max_value: 1000.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
             // division_signal_invert: boolean flip (v0.z, element_offset 2)
@@ -1696,15 +1691,15 @@ impl MutationSystem {
                 max_value: 15.0,
                 data_type: data_type::INTEGER,
             },
-            // apoptosis_signal_threshold [-50.0, 50.0]: delta ~2-10% (v1.x, element_offset 4)
+            // apoptosis_signal_threshold [0.0, 1000.0] (v1.x, element_offset 4)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS,
                 element_offset: 4,
                 weight: 0.5,
-                min_delta: 1.0,
-                max_delta: 5.0,
-                min_value: -50.0,
-                max_value: 50.0,
+                min_delta: 10.0,
+                max_delta: 100.0,
+                min_value: 0.0,
+                max_value: 1000.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
             // apoptosis_signal_invert: boolean flip (v1.y, element_offset 5)
@@ -1729,15 +1724,15 @@ impl MutationSystem {
                 max_value: 15.0,
                 data_type: data_type::INTEGER,
             },
-            // signal_child_a_threshold [-50.0, 50.0] (v1.w, element_offset 7)
+            // signal_child_a_threshold [0.0, 1000.0] (v1.w, element_offset 7)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS,
                 element_offset: 7,
                 weight: 0.5,
-                min_delta: 1.0,
-                max_delta: 5.0,
-                min_value: -50.0,
-                max_value: 50.0,
+                min_delta: 10.0,
+                max_delta: 100.0,
+                min_value: 0.0,
+                max_value: 1000.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
             // signal_child_a_mode_above [-1, 39]: mode index (v2.x, element_offset 8)
@@ -1773,15 +1768,15 @@ impl MutationSystem {
                 max_value: 15.0,
                 data_type: data_type::INTEGER,
             },
-            // signal_child_b_threshold [-50.0, 50.0] (v2.w, element_offset 11)
+            // signal_child_b_threshold [0.0, 1000.0] (v2.w, element_offset 11)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS,
                 element_offset: 11,
                 weight: 0.5,
-                min_delta: 1.0,
-                max_delta: 5.0,
-                min_value: -50.0,
-                max_value: 50.0,
+                min_delta: 10.0,
+                max_delta: 100.0,
+                min_value: 0.0,
+                max_value: 1000.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
             // signal_child_b_mode_above [-1, 39]: mode index (v3.x, element_offset 12)
@@ -1817,15 +1812,15 @@ impl MutationSystem {
                 max_value: 15.0,
                 data_type: data_type::INTEGER,
             },
-            // mode_switch_signal_threshold [-50.0, 50.0] (v3.w, element_offset 15)
+            // mode_switch_signal_threshold [0.0, 1000.0] (v3.w, element_offset 15)
             MutationParamEntry {
                 buffer_id: buffer_id::SIGNAL_SETTINGS,
                 element_offset: 15,
                 weight: 0.5,
-                min_delta: 1.0,
-                max_delta: 5.0,
-                min_value: -50.0,
-                max_value: 50.0,
+                min_delta: 10.0,
+                max_delta: 100.0,
+                min_value: 0.0,
+                max_value: 1000.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
             // mode_switch_target [-1, 39]: mode index (v4.x, element_offset 16)
@@ -1939,7 +1934,22 @@ impl MutationSystem {
                 max_value: 0.0,
                 data_type: data_type::MODE_TRIM,
             },
-        ]
+        ];
+        entries.extend(Self::listener_response_entries(0.3));
+        entries
+    }
+
+    fn listener_response_entries(weight: f32) -> impl Iterator<Item = MutationParamEntry> {
+        (0..crate::genome::SIGNAL_LISTENER_COUNT as u32).map(move |listener| MutationParamEntry {
+            buffer_id: buffer_id::LISTENER_RESPONSE,
+            element_offset: listener,
+            weight,
+            min_delta: 0.0,
+            max_delta: 0.0,
+            min_value: 0.0,
+            max_value: 2.0,
+            data_type: data_type::INTEGER,
+        })
     }
 
     /// Reset mutation system state for scene restart.
@@ -1999,7 +2009,7 @@ impl MutationSystem {
     /// adhesion counts, max_splits - anything that causes a discrete or structural jump.
     pub fn set_subtle_mutations(&mut self, queue: &wgpu::Queue, subtle: bool) {
         self.subtle_mutations = subtle;
-        let entries = if subtle {
+        let mut entries = if subtle {
             vec![
                 // Color: per-channel nudge instead of full re-roll
                 MutationParamEntry {
@@ -2470,9 +2480,21 @@ impl MutationSystem {
                     max_value: 50.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
+                // creates_backbone is deliberately allowed to evolve; existing
+                // physical bond classifications remain immutable.
+                MutationParamEntry {
+                    buffer_id: buffer_id::ADHESION_SETTINGS,
+                    element_offset: 11,
+                    weight: 0.15,
+                    min_delta: 0.0,
+                    max_delta: 0.0,
+                    min_value: 0.0,
+                    max_value: 1.0,
+                    data_type: data_type::BOOLEAN,
+                },
                 // --- Signal settings (subtle: thresholds only, small nudges) ---
 
-                // division_signal_threshold [0.0, 2047.0] (v0.y, element_offset 1)
+                // division_signal_threshold [0.0, 1000.0] (v0.y, element_offset 1)
                 MutationParamEntry {
                     buffer_id: buffer_id::SIGNAL_SETTINGS,
                     element_offset: 1,
@@ -2480,10 +2502,10 @@ impl MutationSystem {
                     min_delta: 10.0,
                     max_delta: 50.0,
                     min_value: 0.0,
-                    max_value: 2047.0,
+                    max_value: 1000.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
-                // apoptosis_signal_threshold [0.0, 2047.0] (v1.x, element_offset 4)
+                // apoptosis_signal_threshold [0.0, 1000.0] (v1.x, element_offset 4)
                 MutationParamEntry {
                     buffer_id: buffer_id::SIGNAL_SETTINGS,
                     element_offset: 4,
@@ -2491,10 +2513,10 @@ impl MutationSystem {
                     min_delta: 10.0,
                     max_delta: 50.0,
                     min_value: 0.0,
-                    max_value: 2047.0,
+                    max_value: 1000.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
-                // signal_child_a_threshold [0.0, 2047.0] (v1.w, element_offset 7)
+                // signal_child_a_threshold [0.0, 1000.0] (v1.w, element_offset 7)
                 MutationParamEntry {
                     buffer_id: buffer_id::SIGNAL_SETTINGS,
                     element_offset: 7,
@@ -2502,10 +2524,10 @@ impl MutationSystem {
                     min_delta: 10.0,
                     max_delta: 50.0,
                     min_value: 0.0,
-                    max_value: 2047.0,
+                    max_value: 1000.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
-                // signal_child_b_threshold [0.0, 2047.0] (v2.w, element_offset: 11)
+                // signal_child_b_threshold [0.0, 1000.0] (v2.w, element_offset: 11)
                 MutationParamEntry {
                     buffer_id: buffer_id::SIGNAL_SETTINGS,
                     element_offset: 11,
@@ -2513,10 +2535,10 @@ impl MutationSystem {
                     min_delta: 10.0,
                     max_delta: 50.0,
                     min_value: 0.0,
-                    max_value: 2047.0,
+                    max_value: 1000.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
-                // mode_switch_signal_threshold [0.0, 2047.0] (v3.w, element_offset: 15)
+                // mode_switch_signal_threshold [0.0, 1000.0] (v3.w, element_offset: 15)
                 MutationParamEntry {
                     buffer_id: buffer_id::SIGNAL_SETTINGS,
                     element_offset: 15,
@@ -2524,37 +2546,29 @@ impl MutationSystem {
                     min_delta: 10.0,
                     max_delta: 50.0,
                     min_value: 0.0,
-                    max_value: 2047.0,
+                    max_value: 1000.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
-                // --- Regulation emission (subtle: value and hops only, no channel changes) ---
+                // --- Regulation emission (subtle: value only, no channel changes) ---
 
-                // regulation_emit_value [0.0, 2047.0]: small nudge
+                // regulation_emit_value [-1000.0, 1000.0]: small signed nudge
                 MutationParamEntry {
                     buffer_id: buffer_id::REGULATION_PARAMS,
                     element_offset: 1,
                     weight: 0.4,
                     min_delta: 10.0,
                     max_delta: 50.0,
-                    min_value: 0.0,
-                    max_value: 2047.0,
+                    min_value: -1000.0,
+                    max_value: 1000.0,
                     data_type: data_type::CONTINUOUS_F32,
-                },
-                // regulation_emit_hops [1, 20]: nudge by 1-2
-                MutationParamEntry {
-                    buffer_id: buffer_id::REGULATION_PARAMS,
-                    element_offset: 2,
-                    weight: 0.4,
-                    min_delta: 1.0,
-                    max_delta: 2.0,
-                    min_value: 1.0,
-                    max_value: 20.0,
-                    data_type: data_type::INTEGER,
                 },
             ]
         } else {
             Self::build_default_vulnerability_table()
         };
+        if subtle {
+            entries.extend(Self::listener_response_entries(0.2));
+        }
         self.update_vulnerability_table(queue, entries);
     }
 
@@ -2678,6 +2692,10 @@ impl MutationSystem {
         mode_properties_v9_buffer: &wgpu::Buffer,
         mode_properties_v10_buffer: &wgpu::Buffer,
         mode_properties_v11_buffer: &wgpu::Buffer,
+        mode_properties_v5_buffer: &wgpu::Buffer,
+        mode_properties_v7_buffer: &wgpu::Buffer,
+        mode_properties_v14_buffer: &wgpu::Buffer,
+        glueocyte_cell_adhesion_flags_buffer: &wgpu::Buffer,
     ) {
         self.params_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mutation Params Bind Group"),
@@ -2880,6 +2898,22 @@ impl MutationSystem {
                 wgpu::BindGroupEntry {
                     binding: 34,
                     resource: mode_properties_v11_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 35,
+                    resource: mode_properties_v5_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 36,
+                    resource: mode_properties_v7_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 37,
+                    resource: mode_properties_v14_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 38,
+                    resource: glueocyte_cell_adhesion_flags_buffer.as_entire_binding(),
                 },
             ],
         }));
@@ -3377,6 +3411,20 @@ mod tests {
         });
         assert!(has_append, "mode append mutation should be present");
         assert!(has_trim, "mode trim mutation should be present");
+
+        let listener_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.buffer_id == buffer_id::LISTENER_RESPONSE)
+            .collect();
+        assert_eq!(
+            listener_entries.len(),
+            crate::genome::SIGNAL_LISTENER_COUNT,
+            "every signed listener must remain independently mutable"
+        );
+        assert!(
+            entries.len() <= 128,
+            "mutation table exceeds GPU allocation"
+        );
     }
 
     #[test]

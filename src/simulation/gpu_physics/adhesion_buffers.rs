@@ -14,7 +14,7 @@
 //! ### Adhesion Settings (split into 3 x 16-byte sub-buffers per mode)
 //! - `adhesion_settings_v0`: [can_break, break_force, rest_length, linear_spring_stiffness]
 //! - `adhesion_settings_v1`: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
-//! - `adhesion_settings_v2`: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding]
+//! - `adhesion_settings_v2`: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, creates_backbone]
 //!
 //! ### Adhesion Counts
 //! - `adhesion_counts`: [total_count, live_count, free_top, padding]
@@ -38,7 +38,7 @@ pub struct AdhesionBuffers {
     /// Per-mode adhesion settings split into 3 x vec4 sub-buffers (16 bytes each).
     /// v0: [can_break, break_force, rest_length, linear_spring_stiffness]
     /// v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
-    /// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, _padding]
+    /// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, creates_backbone]
     pub adhesion_settings_v0: wgpu::Buffer,
     pub adhesion_settings_v1: wgpu::Buffer,
     pub adhesion_settings_v2: wgpu::Buffer,
@@ -91,22 +91,11 @@ pub struct AdhesionBuffers {
     /// Whether buffers need sync to GPU
     needs_sync: bool,
 
-    /// Per-cell signal channels: 16 u32 per cell (channels 0-7 sensory, 8-15 developmental/regulation)
-    /// Each u32 encodes: bit 24 = source flag, bits 11-23 = scaled travel budget, bits 0-10 = signal value
+    /// Public per-cell signal channels: 16 packed signed u32 values per cell.
+    /// Bits 0-10 are signed two's-complement `-1000..=1000`; the remaining
+    /// low diagnostic bits are defined by the cached-backbone design.
     /// Size: cell_capacity * 16 * 4 bytes
     pub signal_flags: wgpu::Buffer,
-
-    /// Second signal flags buffer for double-buffered propagation.
-    /// During propagation: read from signal_flags, write to signal_flags_next, then swap.
-    pub signal_flags_next: wgpu::Buffer,
-
-    /// Snapshot of the low-index-to-high-index propagation sweep. A reverse
-    /// sweep is combined with this so same-mode emitters accumulate from both sides.
-    pub signal_flags_forward: wgpu::Buffer,
-
-    /// Snapshot of direct emissions immediately after sensing. The reverse
-    /// sweep starts from this instead of re-running the full sense shader.
-    pub signal_flags_seed: wgpu::Buffer,
 
     /// Current allocated size of the adhesion settings mode pool (in number of modes).
     /// Matches the physical mutation mode pool so GPU-mutated mode indices remain in range.
@@ -200,23 +189,6 @@ impl AdhesionBuffers {
             "Signal Flags (16 channels)",
         );
 
-        // Second signal flags buffer for double-buffered propagation
-        let signal_flags_next = Self::create_storage_buffer(
-            device,
-            cell_capacity as u64 * 16 * 4,
-            "Signal Flags Next (16 channels)",
-        );
-        let signal_flags_forward = Self::create_storage_buffer(
-            device,
-            cell_capacity as u64 * 16 * 4,
-            "Signal Flags Forward Sweep (16 channels)",
-        );
-        let signal_flags_seed = Self::create_storage_buffer(
-            device,
-            cell_capacity as u64 * 16 * 4,
-            "Signal Flags Seed (16 channels)",
-        );
-
         // Initialize CPU-side caches
         let connections_cache = vec![GpuAdhesionConnection::inactive(); max_connections as usize];
         let cell_indices_cache = vec![CellAdhesionIndices::default(); cell_capacity as usize];
@@ -244,9 +216,6 @@ impl AdhesionBuffers {
             cell_indices_cache,
             needs_sync: true,
             signal_flags,
-            signal_flags_next,
-            signal_flags_forward,
-            signal_flags_seed,
             adhesion_mode_pool_capacity: initial_mode_pool_size,
         }
     }
@@ -374,7 +343,7 @@ impl AdhesionBuffers {
                     s.twist_constraint_stiffness,
                     s.twist_constraint_damping,
                     if s.enable_twist_constraint { 1.0 } else { 0.0 },
-                    0.0,
+                    if s.creates_backbone { 1.0 } else { 0.0 },
                 ]);
             }
         }

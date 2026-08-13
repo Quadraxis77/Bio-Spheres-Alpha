@@ -12,6 +12,12 @@ pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 pub const ANCHOR_OVERLAP_COS: f32 = 0.99;
 pub const BOND_FLAG_GLUEOCYTE: u32 = 1 << 0;
 pub const BOND_FLAG_BARRIER_BALL: u32 = 1 << 1;
+/// Immutable signal classification. Phase 2 consumes this explicit forest;
+/// Phase 4 owns creation eligibility, economics, and incremental repair.
+pub const BOND_FLAG_SIGNAL_BACKBONE: u32 = 1 << 2;
+/// Mutable routing selection. This bit is meaningful only when
+/// `BOND_FLAG_SIGNAL_BACKBONE` is also set; absence means valid standby.
+pub const BOND_FLAG_SIGNAL_ACTIVE: u32 = 1 << 3;
 
 /// Legacy constant - actual capacity is computed dynamically as cell_capacity * MAX_ADHESIONS_PER_CELL / 2
 /// Kept for backwards compatibility with code that references it
@@ -34,6 +40,12 @@ pub struct AdhesionConnections {
     pub zone_b: Vec<u8>,
     /// Bond flags: glueocyte-created, barrier ball joint, etc.
     pub bond_flags: Vec<u32>,
+    /// Stable identity of the cell that paid one-time signal construction.
+    /// Zero for mechanical-only bonds.
+    pub signal_creator_identity: Vec<u32>,
+    /// Incremented whenever a physical connection slot is reused. Together with
+    /// the slot index this is the stable bond identity used for exact tie breaks.
+    pub slot_generation: Vec<u32>,
 
     /// Per-connection rest length override. Values <= 0 use the mode adhesion setting.
     pub rest_length_overrides: Vec<f32>,
@@ -72,6 +84,8 @@ impl AdhesionConnections {
             zone_a: vec![0; capacity],
             zone_b: vec![0; capacity],
             bond_flags: vec![0; capacity],
+            signal_creator_identity: vec![0; capacity],
+            slot_generation: vec![0; capacity],
             rest_length_overrides: vec![0.0; capacity],
             scaffold_rule_id: vec![0; capacity],
             anchor_direction_a: vec![Vec3::X; capacity],

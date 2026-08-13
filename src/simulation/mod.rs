@@ -8,6 +8,9 @@ pub mod fluid_simulation;
 pub mod gpu_physics;
 pub mod physics_config;
 pub mod preview_physics;
+/// Isolated CPU oracle and synthetic-scene support for the benchmark-gated
+/// Cached Signal Backbone prototype. This is not wired into live simulation.
+pub mod signal_backbone_bench;
 pub mod signal_system;
 pub mod spatial_grid;
 

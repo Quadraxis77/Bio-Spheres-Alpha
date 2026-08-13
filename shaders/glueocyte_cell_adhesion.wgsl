@@ -80,6 +80,8 @@ const SIGNAL_CHANNELS: u32 = 16u;
 const GLUEOCYTE_CELL_TYPE: u32 = 6u;
 const BOND_FLAG_GLUEOCYTE: u32 = 1u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
+const BOND_FLAG_SIGNAL_BACKBONE: u32 = 4u;
+const BACKBONE_CONSTRUCTION_FRACTION: f32 = 0.05;
 
 // ---- Group 0: Physics ----
 
@@ -107,7 +109,7 @@ const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 @group(3) @binding(1) var<storage, read> mode_cell_types: array<u32>;
 // 4 u32 per mode: [enabled, signal_channel, signal_threshold_bits, flags(bit0=self_adhesion, bit1=invert)]
 @group(3) @binding(2) var<storage, read> glueocyte_cell_adhesion_flags: array<u32>;
-// Per-cell signal flags (packed u32: bits 0-10 = value, bits 11-23 = scaled travel budget, bit 24 = source)
+// Per-cell finalized signal field (bits 0-10 = signed 11-bit value).
 @group(3) @binding(3) var<storage, read> signal_flags: array<u32>;
 // Per-cell genome orientations (pure genome chain, no physics perturbation)
 @group(3) @binding(4) var<storage, read> genome_orientations: array<vec4<f32>>;
@@ -115,6 +117,11 @@ const BOND_FLAG_BARRIER_BALL: u32 = 2u;
 @group(3) @binding(5) var<storage, read_write> death_flags: array<u32>;
 // Per-cell organism labels (for self-adhesion filtering)
 @group(3) @binding(6) var<storage, read> organism_labels: array<u32>;
+@group(3) @binding(7) var<storage, read> adhesion_settings_v2: array<vec4<f32>>;
+@group(3) @binding(8) var<storage, read> cell_ids: array<u32>;
+@group(3) @binding(9) var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
+@group(3) @binding(10) var<storage, read> split_nutrient_thresholds: array<f32>;
+
 // ---- Helpers ----
 
 fn quat_conjugate(q: vec4<f32>) -> vec4<f32> {
@@ -191,6 +198,22 @@ fn count_active_adhesions(cell_idx: u32) -> u32 {
     return count;
 }
 
+// Reserve the complete one-time construction charge before allocating a bond.
+// The compare/exchange loop makes affordability exact when multiple creators
+// contend for the same nutrient account. Callers refund on allocation failure.
+fn try_reserve_construction(cell_idx: u32, cost: i32) -> bool {
+    if (cost <= 0i) { return true; }
+    loop {
+        let available = atomicLoad(&nutrients_buffer[cell_idx]);
+        if (available < cost) { return false; }
+        let result = atomicCompareExchangeWeak(
+            &nutrients_buffer[cell_idx], available, available - cost
+        );
+        if (result.exchanged) { return true; }
+    }
+    return false;
+}
+
 // Check whether two cells are already connected.
 fn already_connected(cell_a: u32, cell_b: u32) -> bool {
     let base = cell_a * MAX_ADHESIONS_PER_CELL;
@@ -211,7 +234,15 @@ fn already_connected(cell_a: u32, cell_b: u32) -> bool {
 // Read the signal value for a cell on a given channel (lower 11 bits).
 fn read_signal(cell_idx: u32, channel: u32) -> f32 {
     let raw = signal_flags[cell_idx * SIGNAL_CHANNELS + channel];
-    return f32(raw & 0x7FFu);
+    return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
+}
+
+fn listener_active(value: f32, threshold: f32, response_mode: u32, invert: bool) -> bool {
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, invert);
 }
 
 // Determine whether a glueocyte is currently "active" (should form/keep bonds).
@@ -237,7 +268,7 @@ fn is_glueocyte_active(mode_idx: u32, cell_idx: u32) -> bool {
     let sig = read_signal(cell_idx, clamp(channel, 0u, 7u));
     let flags = glueocyte_cell_adhesion_flags[base + 3u];
     let invert = (flags & 2u) != 0u;
-    return select(sig >= threshold, sig < threshold, invert);
+    return listener_active(sig, threshold, min((flags >> 2u) & 3u, 2u), invert);
 }
 
 // ---- Entry point 1: bond_create ----
@@ -330,9 +361,26 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let other_count = count_active_adhesions(other_idx);
                     if (other_count >= MAX_ADHESIONS_PER_CELL) { continue; }
 
+                    let creates_backbone = mode_idx < arrayLength(&adhesion_settings_v2)
+                        && adhesion_settings_v2[mode_idx].w > 0.5;
+                    let construction_cost_fixed = i32(round(
+                        max(split_nutrient_thresholds[cell_idx], 0.0)
+                            * BACKBONE_CONSTRUCTION_FRACTION * 1000.0
+                    ));
+                    let construction_reserved = !creates_backbone
+                        || try_reserve_construction(cell_idx, construction_cost_fixed);
+                    if (!construction_reserved) {
+                        continue;
+                    }
+
                     // Allocate slot
                     let slot = allocate_adhesion_slot();
-                    if (slot == 0xFFFFFFFFu) { return; } // at capacity
+                    if (slot == 0xFFFFFFFFu) {
+                        if (creates_backbone) {
+                            atomicAdd(&nutrients_buffer[cell_idx], construction_cost_fixed);
+                        }
+                        return;
+                    } // at capacity
 
                     // Compute local-space anchor directions
                     let dist = sqrt(dist_sq);
@@ -351,8 +399,9 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     conn.is_active    = 1u;
                     conn.zone_a       = 2u; // ZoneC (equatorial - no zone preference)
                     conn.zone_b       = 2u;
-                    conn.bond_flags   = BOND_FLAG_GLUEOCYTE | BOND_FLAG_BARRIER_BALL;
-                    conn._align_pad1  = 0u;
+                    conn.bond_flags   = BOND_FLAG_GLUEOCYTE | BOND_FLAG_BARRIER_BALL
+                        | select(0u, BOND_FLAG_SIGNAL_BACKBONE, creates_backbone);
+                    conn._align_pad1  = select(0u, cell_ids[cell_idx], creates_backbone);
                     conn.anchor_direction_a = vec4<f32>(anchor_a, 0.0);
                     conn.anchor_direction_b = vec4<f32>(anchor_b, 0.0);
                     // Identity quaternions for twist references (no twist constraint)
@@ -375,6 +424,9 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         atomicSub(&adhesion_counts[1], 1u);
                         let free_top = atomicAdd(&adhesion_counts[2], 1u);
                         free_adhesion_slots[free_top] = slot;
+                        if (creates_backbone) {
+                            atomicAdd(&nutrients_buffer[cell_idx], construction_cost_fixed);
+                        }
                     }
 
                     // Only form one new bond per frame per glueocyte to avoid
@@ -418,7 +470,7 @@ fn bond_release(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let sig = read_signal(cell_idx, clamp(channel, 0u, 7u));
     let flags = glueocyte_cell_adhesion_flags[base + 3u];
     let invert = (flags & 2u) != 0u;
-    let still_active = select(sig >= threshold, sig < threshold, invert);
+    let still_active = listener_active(sig, threshold, min((flags >> 2u) & 3u, 2u), invert);
     if (still_active) { return; } // still active - don't release
 
     // Glueocyte is inactive: release all bonds it created
@@ -439,6 +491,7 @@ fn bond_release(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Mark inactive
         adhesion_connections[adh_idx].is_active = 0u;
+        adhesion_connections[adh_idx].bond_flags &= ~8u;
 
         // Remove from both cells' index arrays
         atomicStore(&cell_adhesion_indices[adh_base + i], -1i);

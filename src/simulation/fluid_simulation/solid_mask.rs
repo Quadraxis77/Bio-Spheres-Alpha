@@ -110,6 +110,10 @@ impl SolidMaskGenerator {
             // Preserve a full inner voxel layer at the world sphere. Fluid uses
             // this shell for containment, so fragment cleanup must never punch it.
             let protected_shell_radius = (self.world_radius - cell_size * 1.5).max(0.0);
+            // Fragment removal is followed by one six-neighbor erosion pass.
+            // Keep its inputs one cell farther inward so that erosion cannot
+            // indirectly remove a protected containment voxel.
+            let fragment_clear_radius = (protected_shell_radius - cell_size).max(0.0);
             let projection_margin = Vec3::splat(cell_size * 0.25);
             let mut cleared = 0usize;
 
@@ -120,9 +124,11 @@ impl SolidMaskGenerator {
                         if solid_mask[i] == 0 {
                             continue;
                         }
-                        let center =
-                            grid_origin + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
-                        if (center - self.world_center).length() >= protected_shell_radius {
+                        let center = grid_origin
+                            + (Vec3::new(x as f32, y as f32, z as f32)
+                                + Vec3::splat(0.5))
+                                * cell_size;
+                        if (center - self.world_center).length() >= fragment_clear_radius {
                             continue;
                         }
                         let inside_culled_fragment = culled_fragments.iter().any(|fragment| {
@@ -400,7 +406,9 @@ mod tests {
         for z in 0..grid_size {
             for y in 0..grid_size {
                 for x in 0..grid_size {
-                    let center = grid_origin + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
+                    let center = grid_origin
+                        + (Vec3::new(x as f32, y as f32, z as f32) + Vec3::splat(0.5))
+                            * cell_size;
                     if center.length() >= protected_shell_radius {
                         let i = x + y * grid_size + z * grid_size * grid_size;
                         assert!(

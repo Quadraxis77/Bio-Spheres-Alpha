@@ -24,6 +24,8 @@ pub mod mutation;
 pub mod organism_labels;
 pub mod phagocyte_consumption;
 pub mod scaffold;
+pub mod signal_backbone_topology;
+pub mod signal_backbone_v2;
 pub mod triple_buffer;
 
 pub use adhesion_buffers::AdhesionBuffers;
@@ -45,7 +47,7 @@ pub use gpu_cell_inspector::{
 };
 pub use gpu_scene_integration::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
-    execute_signal_system, DivisionAudioCollectDispatch, PhysicsFeatureFlags,
+    DivisionAudioCollectDispatch, PhysicsFeatureFlags,
 };
 pub use gpu_tool_operations::GpuToolOperations;
 pub use light_field::LightFieldSystem;
@@ -55,4 +57,12 @@ pub use mutation::MutationSystem;
 pub use organism_labels::OrganismLabelSystem;
 pub use phagocyte_consumption::PhagocyteConsumptionSystem;
 pub use scaffold::GpuScaffoldSystem;
+pub use signal_backbone_topology::{
+    GpuBackboneTopologyBond, GpuBackboneTopologyControl, GpuBackboneTopologyJob,
+    SignalBackboneTopologyPipeline,
+};
+pub use signal_backbone_v2::{
+    GpuSignalProcessorConfig, GpuSignalProcessorState, GpuSignalSourceMeta,
+    SignalBackboneValuePipeline, SignalTickClock,
+};
 pub use triple_buffer::GpuTripleBufferSystem;

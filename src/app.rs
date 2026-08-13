@@ -3384,18 +3384,6 @@ impl App {
                                 }
                             })
                             .unwrap_or(10.0);
-                        let signal_hops = mode
-                            .map(|m| {
-                                if is_photocyte {
-                                    m.photocyte_emit_hops.clamp(1, 20) as usize
-                                } else if is_lipocyte_s {
-                                    m.lipocyte_emit_hops.clamp(1, 20) as usize
-                                } else {
-                                    m.oculocyte_signal_hops.clamp(1, 20) as usize
-                                }
-                            })
-                            .unwrap_or(3);
-
                         // Compute metabolism rates (nutrients/sec)
                         // Matches preview_physics.rs logic
                         const BASE_METABOLISM_RATE: f32 = 1.0;
@@ -3435,7 +3423,16 @@ impl App {
                                 let threshold_c = mode_settings
                                     .map(|m| m.flagellocyte_threshold_c)
                                     .unwrap_or(0.0);
-                                if signal_value >= threshold_c {
+                                if mode_settings.is_some_and(|m| {
+                                    crate::simulation::signal_system::listener_active(
+                                        signal_value,
+                                        threshold_c,
+                                        m.signal_response_mode(
+                                            crate::genome::SIGNAL_LISTENER_FLAGELLOCYTE,
+                                        ),
+                                        false,
+                                    )
+                                }) {
                                     mode_settings.map(|m| m.flagellocyte_speed_b).unwrap_or(0.0)
                                 } else {
                                     mode_settings.map(|m| m.flagellocyte_speed_a).unwrap_or(0.0)
@@ -3534,8 +3531,14 @@ impl App {
                                 .map(|m| {
                                     let ch = m.luminocyte_signal_channel.clamp(0, 7) as usize;
                                     let sig_val = cell_signals[ch].unwrap_or(0.0);
-                                    let above = sig_val >= m.luminocyte_threshold;
-                                    above != m.luminocyte_invert
+                                    crate::simulation::signal_system::listener_active(
+                                        sig_val,
+                                        m.luminocyte_threshold,
+                                        m.signal_response_mode(
+                                            crate::genome::SIGNAL_LISTENER_LUMINOCYTE,
+                                        ),
+                                        m.luminocyte_invert,
+                                    )
                                 })
                                 .unwrap_or(false);
 
@@ -3894,12 +3897,15 @@ impl App {
                                 source_cell: cell_idx,
                                 channel: signal_channel,
                                 value: signal_value,
-                                hops: signal_hops,
                             };
                             // Add to persistent test signal emissions
                             self.test_signal_emissions.push(emission);
-                            log::info!("Started test signal from cell {} on channel {} (value={}, hops={})",
-                                cell_idx, signal_channel, signal_value, signal_hops);
+                            log::info!(
+                                "Started test signal from cell {} on channel {} (value={})",
+                                cell_idx,
+                                signal_channel,
+                                signal_value
+                            );
                             self.test_signals_changed = true;
                         }
 
@@ -4861,9 +4867,10 @@ impl App {
                 .and_then(|s| s.rain_splash_particle_renderer.as_ref())
                 .map_or(0, |r| r.particle_count());
             let cell_count = gpu_scene.map_or(0, |s| s.current_cell_count);
+            let physics_steps = gpu_scene.map_or(0, |s| s.last_physics_steps);
 
             log::warn!(
-                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms | {segments_str} | rain_intensity={rain_intensity:.2} splash_particles={splash_particles} cells={cell_count}"
+                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms physics_steps={physics_steps} | {segments_str} | rain_intensity={rain_intensity:.2} splash_particles={splash_particles} cells={cell_count}"
             );
 
             self.frame_count = 0;

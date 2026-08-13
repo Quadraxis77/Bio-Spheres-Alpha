@@ -1573,7 +1573,6 @@ impl GpuScene {
         // Rebuild derived genome caches.
         self.parent_make_adhesion_flags.clear();
         self.has_oculocytes = false;
-        self.max_signal_hops = 0;
         for genome in &self.genomes {
             for mode in &genome.modes {
                 self.parent_make_adhesion_flags
@@ -1581,8 +1580,6 @@ impl GpuScene {
                 if mode.cell_type == 7 {
                     // Oculocyte
                     self.has_oculocytes = true;
-                    self.max_signal_hops =
-                        self.max_signal_hops.max(mode.oculocyte_signal_hops as u32);
                 }
             }
         }

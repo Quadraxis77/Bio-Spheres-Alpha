@@ -10,6 +10,20 @@
 
 const SIGNAL_CHANNELS: u32 = 16u;
 
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
+}
+
+fn listener_active(value: f32, threshold: f32, control: f32) -> bool {
+    let packed = u32(round(max(control, 0.0)));
+    let response_mode = min(packed / 2u, 2u);
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, (packed & 1u) != 0u);
+}
+
 struct PhysicsParamsMin {
     delta_time:    f32,
     current_time:  f32,
@@ -64,7 +78,7 @@ var<storage, read_write> stiffnesses: array<f32>;
 @group(0) @binding(13)
 var<storage, read_write> cell_types: array<u32>;
 
-// Per-cell signal flags (packed u32: bits 0-10 = value, bits 11-23 = scaled travel budget, bit 24 = source flag)
+// Per-cell signal field (bits 0-10 = signed 11-bit finalized received value).
 @group(1) @binding(0)
 var<storage, read> signal_flags: array<u32>;
 
@@ -76,7 +90,7 @@ var<storage, read> signal_settings_v3: array<vec4<f32>>;
 @group(1) @binding(2)
 var<storage, read> signal_settings_v4: array<vec4<f32>>;
 
-// Per-mode regulation emission params: [emit_channel(u32), emit_value_bits(u32), emit_hops(u32), padding]
+// Per-mode regulation emission params: [emit_channel(u32), emit_value_bits(u32), reserved, padding]
 // Used to detect self-trigger: skip mode switch if this cell is itself emitting on the switch channel.
 @group(1) @binding(3)
 var<storage, read> regulation_params: array<vec4<u32>>;
@@ -131,32 +145,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Read signal value from packed u32 (lower 11 bits)
     let ch = clamp(u32(switch_channel), 8u, 15u);
     let raw_signal = signal_flags[cell_idx * SIGNAL_CHANNELS + ch];
-    let signal_value = f32(raw_signal & 0x7FFu);
-
-    // Self-trigger guard: if this cell itself emits on the switch channel, its own emission
-    // populates its signal slot every frame and would fire the switch unconditionally.
-    // Skip if the only source of signal could be the cell's own regulation emit.
-    // We detect this by checking: is the cell an emitter on this channel AND the signal has
-    // the source flag set (bit 24), meaning it originated here rather than arriving from a neighbor.
-    if (mode_idx < arrayLength(&regulation_params)) {
-        let reg_ch = regulation_params[mode_idx].x;
-        if (reg_ch == ch) {
-            // Cell emits on the same channel it watches for mode switching.
-            // Require the source flag (bit 24) to be CLEAR — meaning the signal arrived
-            // from at least one propagation hop away (an external source).
-            // If bit 24 is set, the signal is from this cell's own sense pass; ignore it.
-            if ((raw_signal & (1u << 24u)) != 0u) { return; }
-        }
-    }
+    let signal_value = decode_signal(raw_signal);
 
     // Compare against threshold.
     // Non-inverted: require signal_value > 0 in addition to >= threshold.
     // This prevents threshold = 0 from firing unconditionally with no signal present
     // (0 >= 0 would always be true).  Any threshold ≥ 1 is unaffected since
     // signal_value >= 1 already implies signal_value > 0.
-    let has_signal = signal_value > 0.0;
-    let above = has_signal && (signal_value >= switch_threshold);
-    let should_switch = select(above, !above, switch_invert > 0.5);
+    let should_switch = listener_active(signal_value, switch_threshold, switch_invert);
 
     if (!should_switch) { return; }
 

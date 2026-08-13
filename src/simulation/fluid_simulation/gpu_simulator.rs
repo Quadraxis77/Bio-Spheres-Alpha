@@ -1358,14 +1358,8 @@ impl GpuFluidSimulator {
             flow_audio_sources: std::cell::RefCell::new(Vec::new()),
             rain_audio_sources: std::cell::RefCell::new(Vec::new()),
             rain_audio_intensity: std::cell::Cell::new(0.0),
-            flow_bucket_strength: std::cell::RefCell::new(vec![
-                0.0;
-                WATER_AUDIO_BUCKET_COUNT
-            ]),
-            rain_bucket_strength: std::cell::RefCell::new(vec![
-                0.0;
-                WATER_AUDIO_BUCKET_COUNT
-            ]),
+            flow_bucket_strength: std::cell::RefCell::new(vec![0.0; WATER_AUDIO_BUCKET_COUNT]),
+            rain_bucket_strength: std::cell::RefCell::new(vec![0.0; WATER_AUDIO_BUCKET_COUNT]),
             bucket_strength_smoothed_at: std::cell::Cell::new(std::time::Instant::now()),
             listener_grid_index: std::cell::Cell::new(None),
             listener_water_staging_buffer,
@@ -1731,7 +1725,8 @@ impl GpuFluidSimulator {
             self.listener_water_fraction.set(0.0);
             return;
         }
-        let index = x as u32 + y as u32 * GRID_RESOLUTION + z as u32 * GRID_RESOLUTION * GRID_RESOLUTION;
+        let index =
+            x as u32 + y as u32 * GRID_RESOLUTION + z as u32 * GRID_RESOLUTION * GRID_RESOLUTION;
         self.listener_grid_index.set(Some(index));
     }
 
@@ -1785,7 +1780,10 @@ impl GpuFluidSimulator {
         match result {
             Ok(Ok(())) => {
                 {
-                    let data = self.listener_water_staging_buffer.slice(..).get_mapped_range();
+                    let data = self
+                        .listener_water_staging_buffer
+                        .slice(..)
+                        .get_mapped_range();
                     let value: &[u32] = bytemuck::cast_slice(&data);
                     let state = value.first().copied().unwrap_or(0);
                     let is_water = (state & 0x7) == 1;
@@ -1798,8 +1796,8 @@ impl GpuFluidSimulator {
                         .as_secs_f32();
                     self.listener_water_smoothed_at.set(now);
                     let alpha = 1.0 - (-dt / LISTENER_WATER_SMOOTH_TIME_CONSTANT).exp();
-                    let smoothed =
-                        self.listener_water_fraction.get() + (sample - self.listener_water_fraction.get()) * alpha;
+                    let smoothed = self.listener_water_fraction.get()
+                        + (sample - self.listener_water_fraction.get()) * alpha;
                     self.listener_water_fraction.set(smoothed);
 
                     let next = if self.listener_underwater.get() {
@@ -2144,7 +2142,8 @@ impl GpuFluidSimulator {
         // wall-clock delay here, so the (now much cheaper, see
         // WATER_AUDIO_SAMPLE_STRIDE) cost is spread evenly across frames
         // instead of concentrated into a periodic spike.
-        if self.water_audio_copy_pending.get() || self.water_audio_readback_receiver.borrow().is_some()
+        if self.water_audio_copy_pending.get()
+            || self.water_audio_readback_receiver.borrow().is_some()
         {
             return;
         }
@@ -2176,8 +2175,8 @@ impl GpuFluidSimulator {
             // Every dispatched thread examines one voxel, spaced
             // WATER_AUDIO_SAMPLE_STRIDE apart along each axis - see the
             // shader for the sparse-sampling math and count reweighting.
-            let sampled_resolution = (GRID_RESOLUTION + WATER_AUDIO_SAMPLE_STRIDE - 1)
-                / WATER_AUDIO_SAMPLE_STRIDE;
+            let sampled_resolution =
+                (GRID_RESOLUTION + WATER_AUDIO_SAMPLE_STRIDE - 1) / WATER_AUDIO_SAMPLE_STRIDE;
             let workgroup_count = (sampled_resolution + 3) / 4;
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }

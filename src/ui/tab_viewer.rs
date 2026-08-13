@@ -594,7 +594,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                     thermal_state: data.cell_thermal_state,
                     adhesion_count: data.adhesion_count,
                     active_signal_channels: (0..16)
-                        .filter(|&channel| data.signal_strength(channel) > 0)
+                        .filter(|&channel| data.signal_value(channel) != 0)
                         .count() as u32,
                 };
                 if let Some(report) = render_specimen_report(
@@ -786,12 +786,14 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                     .show(ui, |ui| {
                         for row in 0..8 {
                             for channel in [row, row + 8] {
-                                let strength = data.signal_strength(channel);
-                                let is_source = data.signal_is_source(channel);
-                                let value_color = if is_source {
-                                    palette().accent_secondary
-                                } else if strength > 0 {
-                                    palette().status_warn
+                                let value = data.signal_value(channel);
+                                let brightness =
+                                    (value.unsigned_abs() as f32 / 1000.0).clamp(0.0, 1.0);
+                                let component = (70.0 + 185.0 * brightness).round() as u8;
+                                let value_color = if value > 0 {
+                                    egui::Color32::from_rgb(component, 45, 45)
+                                } else if value < 0 {
+                                    egui::Color32::from_rgb(45, 90, component)
                                 } else {
                                     palette().text_dim
                                 };
@@ -801,13 +803,8 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                                         .size(10.0)
                                         .color(palette().text_secondary),
                                 );
-                                let value = if is_source {
-                                    format!("{strength}  emit")
-                                } else {
-                                    strength.to_string()
-                                };
                                 ui.label(
-                                    egui::RichText::new(value)
+                                    egui::RichText::new(format!("{value:+}"))
                                         .size(10.0)
                                         .monospace()
                                         .color(value_color),
@@ -819,7 +816,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
                 ui.label(
                     egui::RichText::new(
-                        "emit = direct source · other values are received strength",
+                        "red = positive · blue = negative · brightness = magnitude",
                     )
                     .size(9.0)
                     .color(palette().text_dim),
@@ -3705,7 +3702,10 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         section_header(ui, "GPU TIMING");
 
         const SEGMENT_COLORS: [egui::Color32; crate::scene::gpu_timer::SEGMENT_COUNT] = [
-            egui::Color32::from_rgb(80, 160, 220),  // Physics & Compute
+            egui::Color32::from_rgb(80, 160, 220),  // Physics Setup
+            egui::Color32::from_rgb(40, 210, 170),  // Topology Repair
+            egui::Color32::from_rgb(240, 210, 40),  // Signal Processing
+            egui::Color32::from_rgb(90, 130, 180),  // Physics & Lifecycle
             egui::Color32::from_rgb(120, 200, 120), // Instance Build & Culling
             egui::Color32::from_rgb(220, 180, 60),  // Opaque Render
             egui::Color32::from_rgb(220, 120, 200), // Skins & Water Mesh
@@ -8743,6 +8743,8 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     child_b_after_split_orientation: glam::Quat::IDENTITY,
                     child_a_after_split_keep_adhesion: true,
                     child_b_after_split_keep_adhesion: true,
+                    signal_response_modes: [crate::genome::SignalResponseMode::Positive as i32;
+                        crate::genome::SIGNAL_LISTENER_COUNT],
                     glueocyte_cell_adhesion: false,
                     glueocyte_self_adhesion: false,
                     glueocyte_env_adhesion: true,
@@ -8784,27 +8786,23 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     buoyancy_force: 0.5,
                     photocyte_emit_enabled: false,
                     photocyte_emit_channel: 0,
-                    photocyte_emit_hops: 5,
                     photocyte_emit_threshold: 0.5,
                     photocyte_emit_mode: 0,
                     photocyte_emit_value: 10.0,
                     lipocyte_emit_enabled: false,
                     lipocyte_emit_channel: 0,
-                    lipocyte_emit_hops: 5,
                     lipocyte_emit_threshold: 0.8,
                     lipocyte_emit_mode: 1,
                     lipocyte_emit_value: 10.0,
                     oculocyte_sense_type: 1, // bit0 = Cell
                     oculocyte_signal_channel: 0,
                     oculocyte_signal_value: 10.0,
-                    oculocyte_signal_hops: 3,
                     oculocyte_ray_length: 20.0,
                     oculocyte_light_target_color: glam::Vec3::new(1.0, 0.95, 0.78),
                     oculocyte_light_color_tolerance: 0.18,
                     membrane_stiffness: 50.0,
                     regulation_emit_channel: -1,
                     regulation_emit_value: 10.0,
-                    regulation_emit_hops: 3,
                     division_signal_channel: -1,
                     division_signal_threshold: 1.0,
                     division_signal_invert: false,
@@ -8829,21 +8827,18 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     vascular_outlet: false,
                     vascular_signal_transport: false,
                     vascular_signal_exchange: false,
-                    vascular_signal_capacity: 10.0,
                     gametocyte_merge_range: 0.5,
                     memorocyte_rate: 0.1,
                     memorocyte_input_channel: 0,
                     memorocyte_output_channel: 9,
-                    memorocyte_output_hops: 5,
                     cognocyte_operation: 0,
                     cognocyte_input_channel_a: 0,
                     cognocyte_input_channel_b: 1,
                     cognocyte_output_channel: 8,
-                    cognocyte_output_hops: 5,
                     cognocyte_oscillator_rate: 1.0,
                     cognocyte_oscillator_phase: 0.0,
                     cognocyte_oscillator_strength: 1.0,
-                    cognocyte_oscillator_step_count: 4,
+                    cognocyte_oscillator_polarity: 0,
                     luminocyte_signal_channel: 0,
                     luminocyte_threshold: 1.0,
                     luminocyte_invert: false,
@@ -9587,6 +9582,18 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             let mode = &mut context.genome.modes[selected_idx];
 
+            group_container(ui, "Signal Backbone", egui::Color32::from_rgb(220, 190, 70), |ui| {
+                ui.checkbox(
+                    &mut mode.adhesion_settings.creates_backbone,
+                    "Create Signal Backbone Bonds",
+                )
+                .on_hover_text(
+                    "Affordable cell-to-cell bonds created by this mode become permanent signal-capable backbone bonds. Redundant bonds remain available as automatic standby routes.",
+                );
+                ui.label("Backbone display: yellow = active route, black = standby route.");
+                ui.label("Creation costs 5% of the creator's next-division nutrient requirement once; transport has no bond maintenance charge.");
+            });
+
             // Breaking Properties Group (Red)
             group_container(ui, "Breaking Properties", egui::Color32::from_rgb(200, 100, 100), |ui| {
                 ui.checkbox(&mut mode.adhesion_settings.can_break, "Adhesion Can Break")
@@ -9708,6 +9715,7 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
             if !secondary_indices.is_empty() {
                 for other_idx in secondary_indices {
                     let other = &mut context.genome.modes[other_idx].adhesion_settings;
+                    if updated.creates_backbone != snapshot.creates_backbone { other.creates_backbone = updated.creates_backbone; }
                     if updated.can_break != snapshot.can_break { other.can_break = updated.can_break; }
                     if (updated.break_force - snapshot.break_force).abs() > f32::EPSILON { other.break_force = updated.break_force; }
                     if (updated.rest_length - snapshot.rest_length).abs() > f32::EPSILON { other.rest_length = updated.rest_length; }
@@ -9805,18 +9813,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, -100.0..=100.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(0.1).range(-100.0..=100.0));
-                        });
-
-                        ui.label("Signal Hops:")
-                            .on_hover_text("How many adhesion hops the signal propagates");
-                        ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_hops, 1..=20).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_hops).speed(0.1).range(1..=20));
+                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, -1000.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(1.0).range(-1000.0..=1000.0));
                         });
 
                         ui.separator();
@@ -9860,8 +9858,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.luminocyte_threshold, 0.0..=2047.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.luminocyte_threshold).speed(0.5).range(0.0..=2047.0));
+                        ui.add(egui::Slider::new(&mut mode.luminocyte_threshold, 0.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.luminocyte_threshold).speed(0.5).range(0.0..=1000.0));
                     });
 
                     ui.checkbox(&mut mode.luminocyte_invert, "On without signal")
@@ -9942,8 +9940,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.siphon_signal_threshold, 0.0..=2047.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.siphon_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                            ui.add(egui::Slider::new(&mut mode.siphon_signal_threshold, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.siphon_signal_threshold).speed(1.0).range(0.0..=1000.0));
                         });
 
                         ui.checkbox(&mut mode.siphon_signal_invert, "Invert")
@@ -10032,11 +10030,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             }
                             4 => {
                                 mode.stemocyte_delay_value =
-                                    mode.stemocyte_delay_value.clamp(0.0, 2047.0);
+                                    mode.stemocyte_delay_value.clamp(0.0, 1000.0);
                                 ui.add(
                                     egui::DragValue::new(&mut mode.stemocyte_delay_value)
                                         .speed(1.0)
-                                        .range(0.0..=2047.0),
+                                        .range(0.0..=1000.0),
                                 );
                             }
                             _ => {
@@ -10079,18 +10077,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, -100.0..=100.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(0.1).range(-100.0..=100.0));
-                        });
-
-                        ui.label("Signal Hops:")
-                            .on_hover_text("How many adhesion hops the signal propagates");
-                        ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_hops, 1..=20).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_hops).speed(0.1).range(1..=20));
+                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, -1000.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(1.0).range(-1000.0..=1000.0));
                         });
 
                         ui.separator();
@@ -10156,7 +10144,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                         }
                                     }
                                 });
-                            ui.add(egui::Slider::new(&mut mode.glueocyte_cell_adhesion_signal_threshold, 0.0..=2047.0)
+                            ui.add(egui::Slider::new(&mut mode.glueocyte_cell_adhesion_signal_threshold, 0.0..=1000.0)
                                 .logarithmic(false))
                                 .on_hover_text("Signal strength threshold");
                             ui.horizontal(|ui| {
@@ -10298,24 +10286,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Signal Value
                     ui.label("Signal Value:")
-                        .on_hover_text("Strength of the signal emitted when the ray detects its target. The signal attenuates by half at each adhesion hop away from this cell");
+                        .on_hover_text("Signed strength emitted when the ray detects its target. Normal backbone edges retain 95%; vascular-road edges retain 98.75%");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, 1.0..=2047.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(1.0..=2047.0));
-                    });
-
-                    // Signal Hops
-                    ui.label("Signal Hops:")
-                        .on_hover_text("How many adhesion bonds the signal travels through. Signal strength halves at each hop beyond the first. 3 hops = 25% strength at the 3rd cell away");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_hops, 1..=20).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_hops).speed(0.1).range(1..=20));
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, -1000.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(-1000.0..=1000.0));
                     });
 
                     // Ray Length
@@ -10658,8 +10635,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=2047.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=2047.0));
+                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=1000.0));
                         });
                     }
 
@@ -10734,8 +10711,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
-                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=2047.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=2047.0));
+                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=1000.0));
                         });
                     }
                     if !mode.embryocyte_use_timer && !mode.embryocyte_use_threshold && !mode.embryocyte_use_signal {
@@ -10779,20 +10756,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     };
                     ui.colored_label(egui::Color32::from_rgb(120, 220, 255), nutrient_label);
                     ui.colored_label(egui::Color32::from_rgb(120, 255, 180), signal_label);
-                    // Signal capacity (only relevant when signal transport or exchange is on)
-                    if mode.vascular_signal_transport || mode.vascular_signal_exchange {
-                        ui.add_space(4.0);
-                        ui.separator();
-                        ui.label("Signal Capacity:")
-                            .on_hover_text("Maximum signal value this node forwards per tick. Caps output regardless of how many upstream paths converge here, preventing junction amplification. Set higher for a main trunk, lower for branches.");
-                        ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.vascular_signal_capacity, 0.1..=100.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.vascular_signal_capacity).speed(0.1).range(0.1..=100.0));
-                        });
-                    }
                 });
             } else if mode.cell_type == 11 { // Devorocyte (cell_type == 11)
                 group_container(ui, "Devorocyte Functions", egui::Color32::from_rgb(200, 60, 60), |ui| {
@@ -10831,9 +10794,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         "Min", "Max", "Average",
                         "Greater Than", "Less Than", "Equal",
                         "AND", "OR", "NOT", "Select",
-                        "Oscillate", "Hops Oscillate",
+                        "Oscillate", "Wave Oscillate", "ABS", "Negate", "Positive", "Negative",
                     ];
-                    let current_op = mode.cognocyte_operation.clamp(0, 15) as usize;
+                    let current_op = mode.cognocyte_operation.clamp(0, 19) as usize;
                     ui.label("Operation:")
                         .on_hover_text("Arithmetic: result = A op B.  Comparison: outputs 1.0 (true) or 0.0 (false).  Boolean: treats any value > 0 as true.  NOT uses only Input A.  Select: if A > 0 outputs B, else 0.  Oscillate: generates a half-rectified sine wave from time — no inputs needed.");
                     egui::ComboBox::from_id_salt("cognocyte_op")
@@ -10869,14 +10832,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_phase).speed(0.01).range(0.0..=1.0));
                         });
                         if mode.cognocyte_operation == 15 {
-                            ui.label("Steps:")
+                            ui.label("Envelope: Sawtooth ramp")
                                 .on_hover_text("Number of discrete steps per cycle (also the maximum hop reach). The signal propagates 1 hop on step 1, 2 hops on step 2, and so on. Cells at hop k only receive the signal during steps k–N of each cycle, creating a natural phase gradient along the chain.");
                             ui.horizontal(|ui| {
                                 let available = ui.available_width();
                                 let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                                 ui.style_mut().spacing.slider_width = slider_width;
-                                ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_step_count, 1..=20).show_value(false));
-                                ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_step_count).speed(0.1).range(1..=20));
+                                ui.label("Strength ramps from zero to the configured peak, then resets.");
                             });
                         }
                         ui.label("Signal Strength:")
@@ -10885,9 +10847,17 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_strength, 0.0..=100.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_strength).speed(0.1).range(0.0..=100.0));
+                            ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_strength, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_strength).speed(1.0).range(0.0..=1000.0));
                         });
+                        ui.label("Polarity:");
+                        egui::ComboBox::from_id_salt("cognocyte_oscillator_polarity")
+                            .selected_text(["Positive", "Negative", "Bipolar"][mode.cognocyte_oscillator_polarity.clamp(0, 2) as usize])
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut mode.cognocyte_oscillator_polarity, 0, "Positive");
+                                ui.selectable_value(&mut mode.cognocyte_oscillator_polarity, 1, "Negative");
+                                ui.selectable_value(&mut mode.cognocyte_oscillator_polarity, 2, "Bipolar");
+                            });
                     } else {
                         let input_a_label = match mode.cognocyte_operation {
                             13 => "Condition Channel:",
@@ -10913,7 +10883,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_a).speed(0.1).range(0..=15));
                         });
 
-                        if mode.cognocyte_operation != 12 {
+                        if !matches!(mode.cognocyte_operation, 12 | 16 | 17 | 18 | 19) {
                             let input_b_label = match mode.cognocyte_operation {
                                 13 => "Value Channel:",
                                 10 | 11 => "Input B - Boolean Channel:",
@@ -10940,7 +10910,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                 ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_b).speed(0.1).range(0..=15));
                             });
                         } else {
-                            ui.label(egui::RichText::new("Input B unused for NOT").small());
+                            ui.label(egui::RichText::new("Input B unused for unary operations").small());
                         }
                     }
 
@@ -10957,16 +10927,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.cognocyte_output_channel).speed(0.1).range(0..=15));
                     });
 
-                    // Output Hops
-                    ui.label("Output Hops:")
-                        .on_hover_text("How many adhesion bonds the result signal propagates. Signal halves in strength each hop beyond the first");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.cognocyte_output_hops, 1..=20).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.cognocyte_output_hops).speed(0.1).range(1..=20));
-                    });
+                    ui.label("Boolean true: +1000")
+                        .on_hover_text("After one normal edge it is 950; after one vascular-road edge it is 987.5. Choose receiver thresholds with attenuation in mind.");
                 });
             } else if mode.cell_type == 15 { // Memorocyte (cell_type == 15)
                 group_container(ui, "Memorocyte Functions", egui::Color32::from_rgb(180, 140, 220), |ui| {
@@ -11008,18 +10970,37 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::DragValue::new(&mut mode.memorocyte_output_channel).speed(0.1).range(0..=15));
                     });
 
-                    // Output Hops
-                    ui.label("Output Hops:")
-                        .on_hover_text("How many adhesion bonds the memory signal propagates. Signal halves in strength each hop beyond the first");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.memorocyte_output_hops, 1..=20).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.memorocyte_output_hops).speed(0.1).range(1..=20));
-                    });
                 });
             }
+
+            group_container(ui, "Signal Listener Polarity", egui::Color32::from_rgb(130, 110, 200), |ui| {
+                ui.label("Choose which sign each receiver treats as activation. Magnitude responds equally to positive and negative signals.");
+                let listeners = [
+                    "Glueocyte adhesion", "Flagellocyte speed", "Ciliocyte motion",
+                    "Myocyte contraction", "Embryocyte release", "Division gate",
+                    "Apoptosis gate", "Child A routing", "Child B routing",
+                    "Mode switch", "Luminocyte", "Siphonocyte", "Stemocyte",
+                ];
+                for (listener, label) in listeners.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(*label);
+                        let response = &mut mode.signal_response_modes[listener];
+                        let selected = match *response {
+                            1 => "Negative",
+                            2 => "Magnitude",
+                            _ => "Positive",
+                        };
+                        egui::ComboBox::from_id_salt(("signal_response_mode", listener))
+                            .selected_text(selected)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(response, 0, "Positive");
+                                ui.selectable_value(response, 1, "Negative");
+                                ui.selectable_value(response, 2, "Magnitude");
+                            });
+                    });
+                }
+                ui.label("Reference: +1000 becomes 950 after one normal edge, or 987.5 after one vascular-road edge.");
+            });
 
             // Division Settings Group (Yellow)
             group_container(ui, "Division Settings", egui::Color32::from_rgb(200, 180, 80), |ui| {
@@ -11113,23 +11094,22 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 if mode.regulation_emit_channel >= 8 {
                     ui.label("Emit Value:")
-                        .on_hover_text("Signal strength broadcast from this cell. Attenuates by half at each adhesion hop. A value of 50 with 20 hops reaches every connected cell at ≥1.0 strength");
+                        .on_hover_text("Signed signal strength broadcast from this cell. Normal backbone edges retain 95%; vascular-road edges retain 98.75%");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, 0.0..=2047.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(0.0..=2047.0));
+                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, -1000.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(-1000.0..=1000.0));
                     });
 
-                    ui.label("Emit Hops:")
-                        .on_hover_text("How many adhesion bonds the signal travels through. Signal halves at each hop beyond the first. 3 hops = 25% strength at the 3rd cell. Use 15–20 for body-wide flood signals");
+                    ui.label("Network Reach:")
+                        .on_hover_text("Signals follow every connected active backbone route. Reach is determined by attenuation and receiver threshold, not a hop budget");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.regulation_emit_hops, 1..=20).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_hops).speed(0.1).range(1..=20));
+                        ui.label("Reach follows every connected active backbone route; there is no hop limit.");
                     });
                 }
             });
@@ -11160,9 +11140,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.division_signal_threshold, 0.0..=2047.0).show_value(false))
+                        ui.add(egui::Slider::new(&mut mode.division_signal_threshold, 0.0..=1000.0).show_value(false))
                             .on_hover_text("Signal strength threshold. The cell divides when the channel value is above this level (or below it if Invert is checked)");
-                        ui.add(egui::DragValue::new(&mut mode.division_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                        ui.add(egui::DragValue::new(&mut mode.division_signal_threshold).speed(1.0).range(0.0..=1000.0));
                     });
                     ui.checkbox(&mut mode.division_signal_invert, "Invert (divide below threshold)")
                         .on_hover_text("Absence gating: when checked, the cell divides when the signal is BELOW the threshold (i.e. when the signal is absent). Use for hunger-driven growth, damage response, or juvenile-only growth that stops when a maturation signal arrives");
@@ -11187,9 +11167,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.apoptosis_signal_threshold, 0.0..=2047.0).show_value(false))
+                        ui.add(egui::Slider::new(&mut mode.apoptosis_signal_threshold, 0.0..=1000.0).show_value(false))
                             .on_hover_text("Signal strength threshold for triggering death");
-                        ui.add(egui::DragValue::new(&mut mode.apoptosis_signal_threshold).speed(1.0).range(0.0..=2047.0));
+                        ui.add(egui::DragValue::new(&mut mode.apoptosis_signal_threshold).speed(1.0).range(0.0..=1000.0));
                     });
                     ui.checkbox(&mut mode.apoptosis_signal_invert, "Invert (die below threshold)")
                         .on_hover_text("Absence gating: when checked, the cell dies when the signal is BELOW the threshold. Use for cells that survive only while a support signal is present (e.g. leaf cells that die when the maturation signal disappears)");
@@ -11214,8 +11194,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.signal_child_a_threshold, 0.0..=2047.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.signal_child_a_threshold).speed(1.0).range(0.0..=2047.0));
+                        ui.add(egui::Slider::new(&mut mode.signal_child_a_threshold, 0.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.signal_child_a_threshold).speed(1.0).range(0.0..=1000.0));
                     });
                     // Mode above threshold
                     {
@@ -11290,8 +11270,8 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.signal_child_b_threshold, 0.0..=2047.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.signal_child_b_threshold).speed(1.0).range(0.0..=2047.0));
+                        ui.add(egui::Slider::new(&mut mode.signal_child_b_threshold, 0.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.signal_child_b_threshold).speed(1.0).range(0.0..=1000.0));
                     });
                     // Mode above threshold
                     {
@@ -11366,9 +11346,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 1.0..=2047.0).show_value(false))
+                        ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 0.0..=1000.0).show_value(false))
                             .on_hover_text("Signal strength threshold for triggering the mode switch. Minimum 1 — a threshold of 0 would fire unconditionally with no signal present");
-                        ui.add(egui::DragValue::new(&mut mode.mode_switch_signal_threshold).speed(1.0).range(1.0..=2047.0));
+                        ui.add(egui::DragValue::new(&mut mode.mode_switch_signal_threshold).speed(1.0).range(0.0..=1000.0));
                     });
                     ui.checkbox(&mut mode.mode_switch_invert, "Invert (switch below threshold)")
                         .on_hover_text("Absence gating: when checked, the cell switches mode when the signal is BELOW the threshold. Use for starvation responses or dormancy when a support signal disappears");
@@ -11816,6 +11796,10 @@ fn sync_mode_changes_to_others(
             other.membrane_stiffness = updated.membrane_stiffness;
         }
 
+        if updated.signal_response_modes != snapshot.signal_response_modes {
+            other.signal_response_modes = updated.signal_response_modes;
+        }
+
         // Glueocyte
         if updated.glueocyte_cell_adhesion != snapshot.glueocyte_cell_adhesion {
             other.glueocyte_cell_adhesion = updated.glueocyte_cell_adhesion;
@@ -11883,9 +11867,6 @@ fn sync_mode_changes_to_others(
         }
         if (updated.oculocyte_signal_value - snapshot.oculocyte_signal_value).abs() > f32::EPSILON {
             other.oculocyte_signal_value = updated.oculocyte_signal_value;
-        }
-        if updated.oculocyte_signal_hops != snapshot.oculocyte_signal_hops {
-            other.oculocyte_signal_hops = updated.oculocyte_signal_hops;
         }
         if (updated.oculocyte_ray_length - snapshot.oculocyte_ray_length).abs() > f32::EPSILON {
             other.oculocyte_ray_length = updated.oculocyte_ray_length;
@@ -11998,9 +11979,6 @@ fn sync_mode_changes_to_others(
         }
         if (updated.regulation_emit_value - snapshot.regulation_emit_value).abs() > f32::EPSILON {
             other.regulation_emit_value = updated.regulation_emit_value;
-        }
-        if updated.regulation_emit_hops != snapshot.regulation_emit_hops {
-            other.regulation_emit_hops = updated.regulation_emit_hops;
         }
 
         // Signal conditions - division
@@ -12116,11 +12094,6 @@ fn sync_mode_changes_to_others(
         }
         if updated.vascular_signal_exchange != snapshot.vascular_signal_exchange {
             other.vascular_signal_exchange = updated.vascular_signal_exchange;
-        }
-        if (updated.vascular_signal_capacity - snapshot.vascular_signal_capacity).abs()
-            > f32::EPSILON
-        {
-            other.vascular_signal_capacity = updated.vascular_signal_capacity;
         }
 
         // Gametocyte

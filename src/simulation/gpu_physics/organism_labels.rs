@@ -39,9 +39,6 @@ struct LabelState {
 
 const _: () = assert!(std::mem::size_of::<LabelState>() == 32);
 
-#[allow(dead_code)]
-const MAX_STABLE_ID: u32 = 512;
-
 // -- Public system -------------------------------------------------------------
 
 pub struct OrganismLabelSystem {

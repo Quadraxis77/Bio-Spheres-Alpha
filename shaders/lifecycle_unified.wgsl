@@ -129,10 +129,27 @@ var<storage, read> mode_properties_v3: array<vec4<f32>>; // [flagellocyte_speed_
 @group(2) @binding(15)
 var<storage, read> mode_properties_v4: array<vec4<f32>>; // [max_adhesions, mode_a_after_splits, mode_b_after_splits, padding]
 
-// Per-cell signal flags (packed u32: bits encode signal value, hops, direction)
+// Per-cell signal flags (packed u32: signed signal payload plus listener metadata)
 // Non-zero means cell has received a signal from the oculocyte sensing system
 @group(2) @binding(16)
 var<storage, read> signal_flags_read: array<u32>;
+
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
+}
+
+fn listener_response(value: f32, response_mode: u32) -> f32 {
+    if (response_mode == 1u) { return max(-value, 0.0); }
+    if (response_mode == 2u) { return abs(value); }
+    return max(value, 0.0);
+}
+
+fn listener_active(value: f32, threshold: f32, control: f32) -> bool {
+    let packed = u32(round(max(control, 0.0)));
+    let response = listener_response(value, min(packed / 2u, 2u));
+    let normal = response > 0.0 && response >= max(threshold, 0.0);
+    return select(normal, !normal, (packed & 1u) != 0u);
+}
 
 // Per-mode signal-conditional settings (5 vec4<f32> sub-buffers)
 // v0: [division_signal_channel, division_signal_threshold, division_signal_invert, apoptosis_signal_channel]
@@ -144,8 +161,8 @@ var<storage, read> signal_settings_v0_read: array<vec4<f32>>;
 var<storage, read> signal_settings_v1_read: array<vec4<f32>>;
 
 // Binding 19: Embryocyte reserve buffer (read-write atomic<u32> per cell).
-// death_scan: burns reserve for free Embryocytes and uses it for death detection.
-// reserve == 0 -> Embryocyte dies (reserve is its sole energy source).
+// death_scan uses reserve for Embryocyte death detection.
+// reserve == 0 -> Embryocyte dies after a short newborn feed grace.
 @group(2) @binding(19)
 var<storage, read_write> embryocyte_reserves: array<atomic<u32>>;
 
@@ -316,12 +333,20 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Embryocyte reserve management:
     // - Reserve burn rate: 10 units/sec when free (no adhesions - checked in division_scan).
     //   death_scan does not have adhesion data, so burn is applied in division_scan.
-    // - Death: Embryocytes die when reserve == 0 (reserve is their sole energy source).
+    // - Death: Embryocytes die when reserve == 0 after a short newborn feed grace.
     // Non-Embryocyte cells: die when nutrients < threshold AND reserve == 0.
     let reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
     var is_dead: bool;
     if (is_embryocyte) {
-        is_dead = reserve == 0u || has_invalid_mode;
+        // Newly budded attached Embryocytes can be born with zero reserve once
+        // the parent organism no longer has inherited startup reserve. Division
+        // execute also marks both children split-deferred for a few frames, so
+        // nutrient_transport may be unable to fill the new egg before this death
+        // scan runs. Give empty newborn eggs a short non-nutrient grace window;
+        // if they are not fed after deferral clears, they die normally.
+        let cell_age = params.current_time - birth_times[cell_idx];
+        let newborn_feed_grace = cell_age < 0.2;
+        is_dead = (reserve == 0u && !newborn_feed_grace) || has_invalid_mode;
     } else {
         // Normal cells: can survive on reserve even if nutrients < threshold
         is_dead = (nutrients < DEATH_NUTRIENT_THRESHOLD && reserve == 0u) || has_invalid_mode;
@@ -337,7 +362,7 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // a chance to propagate a survival signal to them. Without this grace period,
     // a cell born in physics step 1 of a frame would have death_scan run on it in
     // steps 2-4 of the same frame, all reading last frame's signal_flags where the
-    // new cell's slot was zero (recycled slot, cleared by signal_clear last frame).
+    // The recycled destination slot is initialized before its first signal tick.
     var apoptosis_triggered = false;
     if (!is_dead && !was_dead) {
         let mode_idx = mode_indices[cell_idx];
@@ -361,13 +386,12 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // 16 channels per cell: signal_flags_read[cell_idx * 16 + channel]
                     let apoptosis_ch = clamp(u32(apoptosis_channel), 8u, 15u);
                     let raw_signal = signal_flags_read[cell_idx * 16u + apoptosis_ch];
-                    let signal_value = f32(raw_signal & 0x7FFu);
+                    let signal_value = decode_signal(raw_signal);
 
                     // Check threshold: if invert=0, trigger when signal >= threshold
                     //                   if invert=1, trigger when signal < threshold
                     // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
-                    let above_threshold = signal_value > 0.0 && signal_value >= apoptosis_threshold;
-                    apoptosis_triggered = select(above_threshold, !above_threshold, apoptosis_invert > 0.5);
+                    apoptosis_triggered = listener_active(signal_value, apoptosis_threshold, apoptosis_invert);
                 }
             }
         }
@@ -451,8 +475,10 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let stem_v10 = embryocyte_mode_v10[mode_idx];
         let signal_ch = clamp(u32(stem_v9.x), 8u, 15u);
         let raw_signal = signal_flags_read[cell_idx * 16u + signal_ch];
-        let signal_value = f32(raw_signal & 0x7FFu);
-        let normalized_signal = clamp(signal_value / 2047.0, 0.0, 1.0);
+        let raw_signal_value = decode_signal(raw_signal);
+        let stem_control = u32(round(max(stem_v9.y, 0.0)));
+        let signal_value = listener_response(raw_signal_value, min(stem_control / 2u, 2u));
+        let normalized_signal = clamp(signal_value / 1000.0, 0.0, 1.0);
         let packed_delay = max(stem_v10.w, 0.0);
         let delay_mode = u32(floor(packed_delay / 4096.0));
         let delay_value = packed_delay - f32(delay_mode) * 4096.0;
@@ -481,7 +507,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             else if (normalized_signal < thresholds.y) { weak_band = 1u; }
             else if (normalized_signal < thresholds.z) { weak_band = 2u; }
             else if (normalized_signal < thresholds.w) { weak_band = 3u; }
-            let band = select(4u - weak_band, weak_band, stem_v9.y > 0.5);
+            let band = select(4u - weak_band, weak_band, (stem_control & 1u) != 0u);
 
             var outcome = -1.0;
             if (band == 0u) { outcome = stem_v9.z; }
@@ -604,8 +630,9 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 any_trigger_enabled = true;
                 let sig_ch = clamp(u32(v10.y), 0u, 15u);
                 let raw_signal = signal_flags_read[cell_idx * 16u + sig_ch];
-                let signal_value = f32(raw_signal & 0x7FFu);
-                if (signal_value < v10.z) {
+                let signal_value = decode_signal(raw_signal);
+                let response = listener_response(signal_value, min(u32(max(v10.w, 0.0)), 2u));
+                if (!(response > 0.0 && response >= max(v10.z, 0.0))) {
                     all_triggers_met = false;
                 }
             }
@@ -667,14 +694,13 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // 16 channels per cell: signal_flags_read[cell_idx * 16 + channel]
             let div_ch = clamp(u32(div_channel), 8u, 15u);
             let raw_signal = signal_flags_read[cell_idx * 16u + div_ch];
-            let signal_value = f32(raw_signal & 0x7FFu);
+            let signal_value = decode_signal(raw_signal);
             
             // Check threshold: if invert=0, allow division when signal >= threshold
             //                   if invert=1, allow division when signal < threshold
             // Matches CPU: signal_val = unwrap_or(0.0), then compare against threshold.
             // No separate has_signal guard - a zero signal simply fails a positive threshold.
-            let above_threshold = signal_value > 0.0 && signal_value >= div_threshold;
-            let division_allowed = select(above_threshold, !above_threshold, div_invert > 0.5);
+            let division_allowed = listener_active(signal_value, div_threshold, div_invert);
             
             if (!division_allowed) {
                 division_flags[cell_idx] = 0u;

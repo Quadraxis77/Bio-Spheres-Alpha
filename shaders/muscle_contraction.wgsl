@@ -72,6 +72,17 @@ var<storage, read> type_behaviors: array<CellTypeBehaviorFlags>;
 @group(1) @binding(3)
 var<storage, read> signal_flags: array<atomic<u32>>;
 
+fn decode_signal(raw: u32) -> f32 {
+    return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
+}
+
+fn listener_active(value: f32, threshold: f32, response_mode: u32) -> bool {
+    var response = max(value, 0.0);
+    if (response_mode == 1u) { response = max(-value, 0.0); }
+    if (response_mode == 2u) { response = abs(value); }
+    return response > 0.0 && response >= max(threshold, 0.0);
+}
+
 // Myocyte mode properties
 // v7: [myocyte_contraction, myocyte_use_signal, myocyte_signal_channel, myocyte_threshold]
 // v8: [myocyte_contraction_above, myocyte_contraction_below, myocyte_pulse_rate, myocyte_pulse_phase]
@@ -131,7 +142,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let myo_v8 = mode_properties_v8[mode_idx];
     
     let fixed_contraction = myo_v7.x;  // myocyte_contraction (used in pulse mode)
-    let use_signal = myo_v7.y;         // myocyte_use_signal (0.0 or 1.0)
+    let signal_control = u32(round(max(myo_v7.y, 0.0)));
     let signal_channel = myo_v7.z;     // myocyte_signal_channel
     let threshold = myo_v7.w;          // myocyte_threshold
     let contraction_above = myo_v8.x;  // myocyte_contraction_above
@@ -141,13 +152,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Determine effective contraction amount
     var contraction: f32;
-    if (use_signal >= 0.5) {
+    if ((signal_control & 1u) != 0u) {
         // Signal-based mode: read from the specific channel
         let sig_channel = clamp(u32(signal_channel), 0u, 15u);
         let raw_signal = atomicLoad(&signal_flags[cell_idx * 16u + sig_channel]);
-        let signal_value = f32(raw_signal & 2047u); // Extract value component
+        let signal_value = decode_signal(raw_signal);
         
-        if (signal_value >= threshold) {
+        if (listener_active(signal_value, threshold, min(signal_control / 2u, 2u))) {
             contraction = contraction_above;
         } else {
             contraction = contraction_below;

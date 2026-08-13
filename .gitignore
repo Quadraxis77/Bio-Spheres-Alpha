@@ -25,6 +25,11 @@ nul
 # Crash logs
 crash_log_*.txt
 
+# Reproducible signal benchmark runs generate hundreds of raw samples. Keep the
+# compact acceptance reports, matrix definitions, and scripts under version
+# control; raw samples remain local and can be regenerated from the matrix.
+/benchmarks/signal_backbone/results/raw-*/
+
 # UI state files
 dock_state*.ron
 ui_settings.json

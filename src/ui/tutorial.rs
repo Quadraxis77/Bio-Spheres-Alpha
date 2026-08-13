@@ -628,14 +628,14 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
         title: "How Signals Travel — Summation",
         body: "Each propagation step, a cell looks at every bonded neighbor \
                and SUMS the attenuated contributions it can receive on that \
-               channel. Hops is the maximum across all contributors.\n\n\
+               channel. Positive and negative contributions cancel before final saturation.\n\n\
                This means signal strength reflects how many sources are \
                nearby, not just whether any single source is strong enough. \
                Two cells each emitting value 10 combine to produce value ~20 \
                at a shared neighbor.\n\n\
-               Signal attenuates 50% per bond-hop beyond the emitter, so \
+               Signal attenuates on every backbone edge, so \
                distant sources contribute less than close ones. The combined \
-               value is clamped at 2047 (the 11-bit maximum).\n\n\
+               value is saturated to the signed -1000..1000 range.\n\n\
                Practical implication: set a threshold higher than any single \
                emitter's value and the receiver only fires when a cluster of \
                emitters surrounds it — quorum sensing.",
@@ -657,8 +657,8 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                the network is visible and spread out. The signal lighting \
                still works in this mode.\n\n\
                If a bond is not lighting up, the signal is not reaching \
-               that cell — either the hops ran out, the channel numbers \
-               don't match, or there is no adhesion path between the \
+               that cell — either the channel or listener polarity does \
+               not match, or there is no active backbone path between the \
                emitter and receiver.",
         gate_hint: "",
         gate:       StepGate::None,
@@ -675,8 +675,8 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
                threshold. Division and mode-switching can be gated the \
                same way — a cell only divides when it receives the cue.\n\n\
                The receiver and emitter must share the same channel number \
-               and be connected by an unbroken chain of adhesion bonds \
-               within the hops limit. If any of those three conditions \
+               and be connected by an unbroken active signal backbone. \
+               If any of those conditions \
                isn't met, the receiver sees nothing regardless of what \
                the emitter does.\n\n\
                Invert threshold — check 'Invert' to flip the logic: the \

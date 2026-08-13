@@ -92,7 +92,15 @@ var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
 @group(1) @binding(11)
 var<storage, read_write> death_flags: array<u32>;
 
+// Per-cell slot within its bucket's fixed spatial_grid_cells array, or
+// SENTINEL_OVERFLOW if the cell missed the fixed slots and went to the
+// overflow side list instead. Read by collision detection to dispatch
+// intra/cross-bucket pair resolution per cell.
+@group(1) @binding(12)
+var<storage, read_write> cell_grid_slot: array<u32>;
+
 const MAX_CELLS_PER_GRID: u32 = 16u;
+const SENTINEL_OVERFLOW: u32 = 0xFFFFFFFFu;
 const OCCUPATION_CELL_CULL_THRESHOLD: u32 = 16u;
 
 fn world_pos_to_grid_index(pos: vec3<f32>, world_size: f32, grid_cell_size: f32, grid_resolution: i32) -> u32 {
@@ -136,11 +144,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     if (slot < OCCUPATION_CELL_CULL_THRESHOLD) {
         spatial_grid_cells[grid_idx * MAX_CELLS_PER_GRID + slot] = cell_idx;
+        cell_grid_slot[cell_idx] = slot;
     } else {
         let overflow_slot = atomicAdd(&spatial_grid_overflow_count[0], 1u);
         if (overflow_slot < params.cell_capacity) {
             spatial_grid_overflow_cells[overflow_slot] = cell_idx;
             spatial_grid_overflow_grid_indices[overflow_slot] = grid_idx;
         }
+        cell_grid_slot[cell_idx] = SENTINEL_OVERFLOW;
     }
 }
