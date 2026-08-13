@@ -2723,10 +2723,6 @@ impl GpuPhysicsPipelines {
                     binding: 2,
                     resource: buffers.mode_properties_v2.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: buffers.mode_properties_v12.as_entire_binding(),
-                },
             ],
         });
 

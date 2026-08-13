@@ -9732,6 +9732,26 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
         });
 }
 
+fn signal_response_mode_control(ui: &mut Ui, response: &mut i32, id: &'static str) {
+    ui.horizontal(|ui| {
+        ui.label("Response:").on_hover_text(
+            "Which signal values activate this setting. Positive accepts values above zero, Negative accepts values below zero, and Magnitude responds to either sign.",
+        );
+        let selected = match *response {
+            1 => "Negative",
+            2 => "Magnitude",
+            _ => "Positive",
+        };
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(response, 0, "Positive");
+                ui.selectable_value(response, 1, "Negative");
+                ui.selectable_value(response, 2, "Magnitude");
+            });
+    });
+}
+
 /// Render the ParentSettings panel (placeholder).
 fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
     // Record panel rect for the tutorial pointer.
@@ -9851,6 +9871,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.add(egui::Slider::new(&mut mode.luminocyte_signal_channel, 0..=7).show_value(false));
                         ui.add(egui::DragValue::new(&mut mode.luminocyte_signal_channel).speed(0.1).range(0..=7));
                     });
+                    signal_response_mode_control(
+                        ui,
+                        &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_LUMINOCYTE],
+                        "luminocyte_signal_response",
+                    );
 
                     ui.label("Threshold:")
                         .on_hover_text("Signal value required to switch state.");
@@ -9933,6 +9958,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.add(egui::Slider::new(&mut mode.siphon_signal_channel, 0..=15).show_value(false));
                             ui.add(egui::DragValue::new(&mut mode.siphon_signal_channel).speed(0.1).range(0..=15));
                         });
+                        signal_response_mode_control(
+                            ui,
+                            &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_SIPHONOCYTE],
+                            "siphon_signal_response",
+                        );
 
                         ui.label("Signal Threshold:")
                             .on_hover_text("Signal value required by signal-gated siphon modes.");
@@ -9979,6 +10009,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             egui::DragValue::new(&mut mode.stemocyte_signal_channel)
                                 .speed(0.1)
                                 .range(8..=15),
+                        );
+                        signal_response_mode_control(
+                            ui,
+                            &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_STEMOCYTE],
+                            "stemocyte_signal_response",
                         );
                         ui.separator();
                         ui.small("Drag dividers · click a response");
@@ -10144,6 +10179,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                         }
                                     }
                                 });
+                            signal_response_mode_control(
+                                ui,
+                                &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_GLUEOCYTE],
+                                "glueocyte_signal_response",
+                            );
                             ui.add(egui::Slider::new(&mut mode.glueocyte_cell_adhesion_signal_threshold, 0.0..=1000.0)
                                 .logarithmic(false))
                                 .on_hover_text("Signal strength threshold");
@@ -10202,6 +10242,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                         }
                                     });
                             });
+                            signal_response_mode_control(
+                                ui,
+                                &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_FLAGELLOCYTE],
+                                "flagellocyte_signal_response",
+                            );
                         }
 
                         ui.label("Speed A (signal < C):")
@@ -10379,6 +10424,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                         }
                                     });
                             });
+                            signal_response_mode_control(
+                                ui,
+                                &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_CILIOCYTE],
+                                "ciliocyte_signal_response",
+                            );
                         }
 
                         ui.label("Speed Below (signal < threshold):")
@@ -10492,6 +10542,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                         }
                                     });
                             });
+                            signal_response_mode_control(
+                                ui,
+                                &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_MYOCYTE],
+                                "myocyte_signal_response",
+                            );
                         }
 
                         ui.label("Contraction Below (signal < threshold):")
@@ -10628,6 +10683,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                     }
                                 });
                         });
+                        signal_response_mode_control(
+                            ui,
+                            &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_EMBRYOCYTE],
+                            "embryocyte_signal_response",
+                        );
 
                         ui.label("Release when signal >=:")
                             .on_hover_text("Minimum signal strength required on the chosen channel before the egg will release");
@@ -10708,6 +10768,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                                     }
                                 });
                         });
+                        signal_response_mode_control(
+                            ui,
+                            &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_EMBRYOCYTE],
+                            "gametocyte_signal_response",
+                        );
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
@@ -10973,35 +11038,6 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             }
 
-            group_container(ui, "Signal Listener Polarity", egui::Color32::from_rgb(130, 110, 200), |ui| {
-                ui.label("Choose which sign each receiver treats as activation. Magnitude responds equally to positive and negative signals.");
-                let listeners = [
-                    "Glueocyte adhesion", "Flagellocyte speed", "Ciliocyte motion",
-                    "Myocyte contraction", "Embryocyte release", "Division gate",
-                    "Apoptosis gate", "Child A routing", "Child B routing",
-                    "Mode switch", "Luminocyte", "Siphonocyte", "Stemocyte",
-                ];
-                for (listener, label) in listeners.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(*label);
-                        let response = &mut mode.signal_response_modes[listener];
-                        let selected = match *response {
-                            1 => "Negative",
-                            2 => "Magnitude",
-                            _ => "Positive",
-                        };
-                        egui::ComboBox::from_id_salt(("signal_response_mode", listener))
-                            .selected_text(selected)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(response, 0, "Positive");
-                                ui.selectable_value(response, 1, "Negative");
-                                ui.selectable_value(response, 2, "Magnitude");
-                            });
-                    });
-                }
-                ui.label("Reference: +1000 becomes 950 after one normal edge, or 987.5 after one vascular-road edge.");
-            });
-
             // Division Settings Group (Yellow)
             group_container(ui, "Division Settings", egui::Color32::from_rgb(200, 180, 80), |ui| {
                 // Display nutrient threshold: nutrients = (split_mass - 1.0) * 100.0
@@ -11136,6 +11172,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     });
                 if mode.division_signal_channel >= 8 {
+                    signal_response_mode_control(
+                        ui,
+                        &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_DIVISION],
+                        "division_signal_response",
+                    );
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -11163,6 +11204,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     });
                 if mode.apoptosis_signal_channel >= 8 {
+                    signal_response_mode_control(
+                        ui,
+                        &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_APOPTOSIS],
+                        "apoptosis_signal_response",
+                    );
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -11190,6 +11236,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     });
                 if mode.signal_child_a_channel >= 8 {
+                    signal_response_mode_control(
+                        ui,
+                        &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_CHILD_A],
+                        "child_a_signal_response",
+                    );
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -11266,6 +11317,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     });
                 if mode.signal_child_b_channel >= 8 {
+                    signal_response_mode_control(
+                        ui,
+                        &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_CHILD_B],
+                        "child_b_signal_response",
+                    );
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -11342,6 +11398,11 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         }
                     });
                 if mode.mode_switch_signal_channel >= 8 {
+                    signal_response_mode_control(
+                        ui,
+                        &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_MODE_SWITCH],
+                        "mode_switch_signal_response",
+                    );
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
