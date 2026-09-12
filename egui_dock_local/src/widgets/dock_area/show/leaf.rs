@@ -117,10 +117,8 @@ impl<Tab> DockArea<'_, Tab> {
         // If all tabs are hidden, don't render the tab bar at all
         if all_tabs_hidden {
             // Return an empty rect with zero height
-            let empty_rect = Rect::from_min_size(
-                ui.cursor().left_top(),
-                vec2(ui.available_width(), 0.0),
-            );
+            let empty_rect =
+                Rect::from_min_size(ui.cursor().left_top(), vec2(ui.available_width(), 0.0));
             return empty_rect;
         }
 
@@ -324,7 +322,7 @@ impl<Tab> DockArea<'_, Tab> {
                 .with((node_index, "node"))
                 .with((tab_index, "tab"));
             let tab_index = TabIndex(tab_index);
-            
+
             // Check if this tab's button should be hidden
             let (should_hide, is_draggable) = {
                 let leaf = self.dock_state[surface_index][node_index]
@@ -332,15 +330,15 @@ impl<Tab> DockArea<'_, Tab> {
                     .expect("This node must be a leaf");
                 (
                     tab_viewer.hide_tab_button(&leaf.tabs[tab_index.0]),
-                    tab_viewer.is_draggable(&leaf.tabs[tab_index.0])
+                    tab_viewer.is_draggable(&leaf.tabs[tab_index.0]),
                 )
             };
-            
+
             // Skip rendering this tab button if it should be hidden
             if should_hide {
                 continue;
             }
-            
+
             let is_being_dragged = tabs_ui.ctx().is_being_dragged(id)
                 && tabs_ui.input(|i| i.pointer.is_decidedly_dragging())
                 && self.draggable_tabs
@@ -1094,48 +1092,47 @@ impl<Tab> DockArea<'_, Tab> {
             // shaped by `glow_aspect` so the ellipse can be flattened into a
             // horizontal lozenge regardless of the tab's height.
             let ry_max = text_rect_for_glow.height() * 0.5 * tab_style.glow_radius_factor;
-            let ry     = (rx * tab_style.glow_aspect).min(ry_max);
+            let ry = (rx * tab_style.glow_aspect).min(ry_max);
 
             // Skip if the resulting ellipse has no area.
             if rx > 0.5 && ry > 0.5 {
+                // 32-segment fan is plenty for a smooth ellipse at typical tab sizes.
+                const SEGMENTS: usize = 32;
+                let mut mesh = epaint::Mesh::default();
 
-            // 32-segment fan is plenty for a smooth ellipse at typical tab sizes.
-            const SEGMENTS: usize = 32;
-            let mut mesh = epaint::Mesh::default();
-
-            // Centre vertex — full glow colour.
-            mesh.vertices.push(epaint::Vertex {
-                pos: center,
-                uv: epaint::WHITE_UV,
-                color: tab_style.glow_color,
-            });
-
-            // Perimeter vertices — fully transparent so colour fades out.
-            let edge_color = Color32::from_rgba_unmultiplied(
-                tab_style.glow_color.r(),
-                tab_style.glow_color.g(),
-                tab_style.glow_color.b(),
-                0,
-            );
-            for i in 0..SEGMENTS {
-                let a = (i as f32) * std::f32::consts::TAU / (SEGMENTS as f32);
-                let p = pos2(center.x + a.cos() * rx, center.y + a.sin() * ry);
+                // Centre vertex — full glow colour.
                 mesh.vertices.push(epaint::Vertex {
-                    pos: p,
+                    pos: center,
                     uv: epaint::WHITE_UV,
-                    color: edge_color,
+                    color: tab_style.glow_color,
                 });
-            }
 
-            // Triangle fan — connect centre (0) to each pair of consecutive
-            // perimeter vertices. Indices are 1..=SEGMENTS, wrapping at the end.
-            for i in 0..SEGMENTS {
-                let a = 1 + i as u32;
-                let b = 1 + ((i + 1) % SEGMENTS) as u32;
-                mesh.indices.extend_from_slice(&[0, a, b]);
-            }
+                // Perimeter vertices — fully transparent so colour fades out.
+                let edge_color = Color32::from_rgba_unmultiplied(
+                    tab_style.glow_color.r(),
+                    tab_style.glow_color.g(),
+                    tab_style.glow_color.b(),
+                    0,
+                );
+                for i in 0..SEGMENTS {
+                    let a = (i as f32) * std::f32::consts::TAU / (SEGMENTS as f32);
+                    let p = pos2(center.x + a.cos() * rx, center.y + a.sin() * ry);
+                    mesh.vertices.push(epaint::Vertex {
+                        pos: p,
+                        uv: epaint::WHITE_UV,
+                        color: edge_color,
+                    });
+                }
 
-            ui.painter().add(Shape::mesh(mesh));
+                // Triangle fan — connect centre (0) to each pair of consecutive
+                // perimeter vertices. Indices are 1..=SEGMENTS, wrapping at the end.
+                for i in 0..SEGMENTS {
+                    let a = 1 + i as u32;
+                    let b = 1 + ((i + 1) % SEGMENTS) as u32;
+                    mesh.indices.extend_from_slice(&[0, a, b]);
+                }
+
+                ui.painter().add(Shape::mesh(mesh));
             }
         }
 

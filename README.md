@@ -21,6 +21,17 @@ The project uses local forks of egui and egui_dock for the user interface, with 
 
 ## Building
 
+### Linux prerequisites
+
+On Debian, Ubuntu, or Linux Mint, install the native libraries used by the windowing, audio,
+and GPU backends before building:
+
+```bash
+sudo apt update
+sudo apt install pkg-config libasound2-dev libx11-dev libxcursor-dev libxrandr-dev \
+	libxi-dev libwayland-dev libxkbcommon-dev libvulkan-dev libudev-dev
+```
+
 ```bash
 cargo build --release
 ```

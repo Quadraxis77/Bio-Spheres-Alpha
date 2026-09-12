@@ -1301,12 +1301,8 @@ impl CanonicalState {
         let mut new_hash = (genomes.len() as u64) << 48 | (total_modes as u64) << 32;
         for genome in genomes {
             for mode in &genome.modes {
-                // Every mode participates: a mutated backbone-creation bit must
-                // invalidate the cache before that mode can create another bond.
                 new_hash = new_hash.rotate_left(7)
                     ^ u64::from(mode.adhesion_settings.linear_spring_stiffness.to_bits());
-                new_hash =
-                    new_hash.rotate_left(7) ^ u64::from(mode.adhesion_settings.creates_backbone);
             }
         }
 
@@ -1319,7 +1315,6 @@ impl CanonicalState {
                 for mode in &genome.modes {
                     // Copy all adhesion settings for fast access during physics
                     self.cached_adhesion_settings.push(AdhesionSettings {
-                        creates_backbone: mode.adhesion_settings.creates_backbone,
                         can_break: mode.adhesion_settings.can_break,
                         break_force: mode.adhesion_settings.break_force,
                         rest_length: mode.adhesion_settings.rest_length,

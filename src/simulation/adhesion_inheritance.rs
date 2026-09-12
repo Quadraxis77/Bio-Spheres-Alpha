@@ -26,8 +26,7 @@ pub fn inherit_adhesions_on_division(
     current_time: f32,
     parent_split_count: i32,
     parent_radius: f32,
-    backbone_duplicate_budget: usize,
-    parent_creator_identity: u32,
+    signal_bond_duplicate_budget: usize,
 ) -> usize {
     let parent_mode = match genome.modes.get(parent_mode_idx) {
         Some(mode) => mode,
@@ -155,7 +154,7 @@ pub fn inherit_adhesions_on_division(
     // Track adhesion counts for each child
     let mut child_a_adhesion_count: usize = 0;
     let mut child_b_adhesion_count: usize = 0;
-    let mut backbone_duplicates_created = 0usize;
+    let mut signal_bond_duplicates_created = 0usize;
 
     // Process inherited adhesions (matches GPU lines 722-943)
     for &connection_idx in &parent_connections {
@@ -343,8 +342,12 @@ pub fn inherit_adhesions_on_division(
             {
                 continue;
             }
-            let duplicate_is_backbone = parent_mode.adhesion_settings.creates_backbone;
-            if duplicate_is_backbone && backbone_duplicates_created >= backbone_duplicate_budget {
+            // Barrier-ball joints are filtered above; every duplicated ordinary
+            // cell-to-cell adhesion is signal-capable.
+            let duplicate_is_signal_bond = true;
+            if duplicate_is_signal_bond
+                && signal_bond_duplicates_created >= signal_bond_duplicate_budget
+            {
                 continue;
             }
             let dup_idx = find_free_connection_slot(&state.adhesion_connections);
@@ -409,7 +412,6 @@ pub fn inherit_adhesions_on_division(
                 state.adhesion_connections.mode_index[dup_idx] = original_mode_index;
                 state.adhesion_connections.is_active[dup_idx] = 1;
                 state.adhesion_connections.bond_flags[dup_idx] = 0;
-                state.adhesion_connections.signal_creator_identity[dup_idx] = 0;
                 state.adhesion_connections.slot_generation[dup_idx] =
                     state.adhesion_connections.slot_generation[dup_idx]
                         .wrapping_add(1)
@@ -435,25 +437,19 @@ pub fn inherit_adhesions_on_division(
                         break;
                     }
                 }
-                if duplicate_is_backbone {
-                    crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
-                        &mut state.adhesion_connections,
-                        dup_idx,
-                        parent_creator_identity,
-                        false,
-                    );
-                    backbone_duplicates_created += 1;
+                if duplicate_is_signal_bond {
+                    signal_bond_duplicates_created += 1;
                 }
             }
         }
     }
-    backbone_duplicates_created
+    signal_bond_duplicates_created
 }
 
 /// Count equatorial inherited bonds that need a new physical duplicate. This
 /// runs while the parent still exists so division can reserve the parent's
 /// construction funds before splitting its nutrient pool.
-pub fn count_backbone_duplicates_on_division(
+pub fn count_signal_bond_duplicates_on_division(
     state: &CanonicalState,
     genome: &Genome,
     parent_mode_idx: usize,
@@ -463,9 +459,6 @@ pub fn count_backbone_duplicates_on_division(
     let Some(mode) = genome.modes.get(parent_mode_idx) else {
         return 0;
     };
-    if !mode.adhesion_settings.creates_backbone {
-        return 0;
-    }
     let reaches_limit = mode.max_splits >= 0 && parent_split_count + 1 >= mode.max_splits;
     let keep_a = if reaches_limit {
         mode.child_a_after_split_keep_adhesion

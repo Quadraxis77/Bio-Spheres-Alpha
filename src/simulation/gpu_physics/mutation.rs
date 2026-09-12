@@ -1627,17 +1627,6 @@ impl MutationSystem {
                 max_value: 1.0,
                 data_type: data_type::BOOLEAN,
             },
-            // creates_backbone: heritable boolean affecting future bonds only (v2.w)
-            MutationParamEntry {
-                buffer_id: buffer_id::ADHESION_SETTINGS,
-                element_offset: 11,
-                weight: 0.3,
-                min_delta: 0.0,
-                max_delta: 0.0,
-                min_value: 0.0,
-                max_value: 1.0,
-                data_type: data_type::BOOLEAN,
-            },
             // --- Signal-conditional settings (buffer_id 12) ---
             // Stored as vec4<f32> in signal_settings_v0..v4.
             // element_offset encodes sub-buffer (offset / 4) and component (offset % 4).
@@ -2479,18 +2468,6 @@ impl MutationSystem {
                     min_value: 0.0,
                     max_value: 50.0,
                     data_type: data_type::CONTINUOUS_F32,
-                },
-                // creates_backbone is deliberately allowed to evolve; existing
-                // physical bond classifications remain immutable.
-                MutationParamEntry {
-                    buffer_id: buffer_id::ADHESION_SETTINGS,
-                    element_offset: 11,
-                    weight: 0.15,
-                    min_delta: 0.0,
-                    max_delta: 0.0,
-                    min_value: 0.0,
-                    max_value: 1.0,
-                    data_type: data_type::BOOLEAN,
                 },
                 // --- Signal settings (subtle: thresholds only, small nudges) ---
 

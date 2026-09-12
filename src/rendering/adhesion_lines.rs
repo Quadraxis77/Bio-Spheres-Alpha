@@ -337,25 +337,23 @@ impl AdhesionLineRenderer {
             };
             let is_barrier_ball =
                 (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) != 0;
-            let is_backbone = (connections.bond_flags[i]
-                & crate::cell::adhesion::BOND_FLAG_SIGNAL_BACKBONE)
-                != 0;
-            let route_active = (connections.bond_flags[i]
-                & crate::cell::adhesion::BOND_FLAG_SIGNAL_ACTIVE)
-                != 0;
+            let is_signal_capable =
+                (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) == 0;
+            let route_active =
+                (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_SIGNAL_ACTIVE) != 0;
             let route_color = if route_active {
                 [1.0, 1.0, 0.0, 1.0]
             } else {
                 [0.0, 0.0, 0.0, 1.0]
             };
-            let zone_color_a = if is_backbone {
+            let zone_color_a = if is_signal_capable {
                 route_color
             } else if is_barrier_ball {
                 [0.0, 0.0, 0.0, 1.0]
             } else {
                 get_zone_color(zone_a)
             };
-            let zone_color_b = if is_backbone {
+            let zone_color_b = if is_signal_capable {
                 route_color
             } else if is_barrier_ball {
                 [0.0, 0.0, 0.0, 1.0]
@@ -364,7 +362,7 @@ impl AdhesionLineRenderer {
             };
 
             // Backbone routing is visible even while silent.
-            let signal_color = if is_backbone {
+            let signal_color = if is_signal_capable {
                 route_color
             } else if is_barrier_ball {
                 [0.0, 0.0, 0.0, 1.0]

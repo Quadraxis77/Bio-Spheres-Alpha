@@ -50,8 +50,7 @@ var<storage, read> cell_count_buffer: array<u32>;
 var<storage, read> signal_flags: array<atomic<u32>>;
 
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
-const BOND_FLAG_SIGNAL_BACKBONE: u32 = 4u;
-const BOND_FLAG_SIGNAL_ACTIVE: u32 = 8u;
+const BOND_FLAG_SIGNAL_ACTIVE: u32 = 4u;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -117,14 +116,14 @@ fn vs_main(
     let pos_b = positions[connection.cell_b_index].xyz;
     let midpoint = (pos_a + pos_b) * 0.5;
     
-    // Routing is visible even while silent: selected backbone edges are yellow,
-    // valid redundant standby edges are black. Signal magnitude never changes it.
-    let is_backbone = (connection.bond_flags & BOND_FLAG_SIGNAL_BACKBONE) != 0u;
+    // Routing is visible even while silent: selected signal routes are yellow,
+    // valid redundant standby routes are black. Signal magnitude never changes it.
+    let is_signal_capable = (connection.bond_flags & BOND_FLAG_BARRIER_BALL) == 0u;
     let route_active = (connection.bond_flags & BOND_FLAG_SIGNAL_ACTIVE) != 0u;
     let sig_color = select(
         vec4<f32>(0.0, 0.0, 0.0, 1.0),
         vec4<f32>(1.0, 1.0, 0.0, 1.0),
-        is_backbone && route_active
+        is_signal_capable && route_active
     );
     
     // Compute billboard perpendicular direction
@@ -147,7 +146,7 @@ fn vs_main(
     var seg_end: vec3<f32>;
     var zone_col: vec4<f32>;
     
-    if (is_backbone) {
+    if (is_signal_capable) {
         if (half_seg == 0u) {
             seg_start = pos_a;
             seg_end = midpoint;

@@ -4990,7 +4990,7 @@ impl GpuPhysicsPipelines {
     /// Create division execute adhesion bind group layout (Group 3 in lifecycle division execute shader)
     /// Matches shader: binding 0 = adhesion_connections, binding 1 = cell_adhesion_indices,
     /// binding 2 = next_adhesion_id, binding 3 = free_adhesion_slots, binding 4 = adhesion_counts,
-    /// binding 5 = adhesion_settings_v2 (creates_backbone in .w)
+    /// binding 5 = adhesion_settings_v2
     fn create_division_execute_adhesion_bind_group_layout(
         device: &wgpu::Device,
     ) -> wgpu::BindGroupLayout {
@@ -8559,9 +8559,8 @@ impl GpuPhysicsPipelines {
         })
     }
 
-    /// Group 3 for glueocyte_cell_adhesion: mode_indices, mode_cell_types,
-    /// glueocyte flags, signals, orientations, death/organism identity, backbone
-    /// eligibility, stable cell IDs, nutrients, and split requirements.
+    /// Group 3 for glueocyte_cell_adhesion: mode indices/types, glueocyte flags,
+    /// signals, orientations, and death/organism identity.
     fn create_cell_adhesion_mode_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         let ro = |binding: u32| wgpu::BindGroupLayoutEntry {
             binding,
@@ -8585,19 +8584,7 @@ impl GpuPhysicsPipelines {
         };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Cell Adhesion Mode Layout"),
-            entries: &[
-                ro(0),
-                ro(1),
-                ro(2),
-                ro(3),
-                ro(4),
-                rw(5),
-                ro(6),
-                ro(7),
-                ro(8),
-                rw(9),
-                ro(10),
-            ],
+            entries: &[ro(0), ro(1), ro(2), ro(3), ro(4), rw(5), ro(6)],
         })
     }
 
@@ -8714,22 +8701,6 @@ impl GpuPhysicsPipelines {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: label_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: adhesion_buffers.adhesion_settings_v2.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: triple_buffers.cell_ids.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: triple_buffers.nutrients_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: triple_buffers.split_nutrient_thresholds.as_entire_binding(),
                 },
             ],
         })

@@ -24,7 +24,7 @@ This design deliberately removes or redefines features that prevent scalable agg
 - Per-source hard hop limits are removed.
 - Vascular signal capacity is removed.
 - `Hops Oscillate` becomes a strength-ramp wave oscillator.
-- Only selected backbone bonds carry signals; incidental mechanical cross-links do not.
+- Every ordinary cell-to-cell adhesion carries signals; explicitly mechanical-only barrier, environment, and boulder joints do not.
 - Zero is the sole representation of silence.
 - Signals are signed in the range `-1000..1000`.
 - Signal production and one-time backbone construction consume nutrients.
@@ -35,8 +35,8 @@ The following visible semantics were approved before implementation:
 
 | Area | Approved decision |
 |---|---|
-| Signal topology | Only bonds explicitly classified as backbone bonds at creation carry signals. Mechanical-only bonds never carry signals and can never be promoted. |
-| Backbone creation | Any cell-to-cell bond operation may have a heritable `creates backbone bond` property. Every affordable qualifying bond becomes an immutable backbone bond, including cycle-forming redundant bonds. If construction is unaffordable, the physical bond is not created. Environment and boulder bonds are never eligible. |
+| Signal topology | Every ordinary cell-to-cell adhesion is immutably signal-capable at creation. Explicit barrier-ball, environment, boundary, boulder, and other mechanical-only joints never carry signals. |
+| Backbone creation | There is no authored or heritable backbone-creation setting. Ordinary cell-to-cell adhesion creation always creates a signal-capable bond; Vasculocyte-to-Vasculocyte bonds are automatically low-resistance backbone roads. If construction is unaffordable, the physical bond is not created. |
 | Active routing | Backbone cycles are reduced to one cached active propagation forest. Active edges are yellow and redundant standby edges are black, including while the active route is silent. Routing is automatic and never genome-authored. |
 | Route selection | Route resistance is the sum of fixed-point `-ln(retention)` edge costs. A new cycle path is selected only when its total resistance is strictly lower than the active route it bypasses; exact ties preserve the established route. |
 | Damage and repair | Breaking an active backbone stops transmission immediately. The lowest-resistance valid standby reconnection activates at the next signal tick; the network remains split only when no redundant backbone route reconnects it. Mechanical-only bonds are never searched or promoted. |
@@ -57,7 +57,7 @@ The following visible semantics were approved before implementation:
 | Legacy genomes | No automatic unsigned-to-signed scaling is performed. Legacy genomes require explicit manual signal review. |
 | Debug visualization | Adhesion routing uses yellow for the selected active backbone and black for redundant standby backbone bonds. The separate channel inspector uses red for positive values, blue for negative values, and brightness for magnitude. |
 | Topology timing | Broken edges stop transmitting immediately. New backbone edges activate on the next signal tick. |
-| Economics | Construction costs 5% of the creator's next-division requirement exactly once when the physical backbone bond forms. There is no continuous per-bond maintenance cost. Full-strength one-channel emission costs 25% of reference baseline metabolism per second. |
+| Economics | Construction costs 5% of the creator's next-division requirement exactly once when an ordinary signal-capable adhesion forms. There is no continuous per-bond maintenance cost. Full-strength one-channel emission costs 25% of reference baseline metabolism per second. |
 | Creator attribution | The creator pays the one-time construction cost. Routing, standby state, inheritance, organism boundaries, and later mode changes add no continuing per-bond charge. Ordinary emission uses proportional analog brownout and is paid only by its sender. |
 | Creator selection | The initiating cell creates dynamic contact bonds; the parent creates and pays for developmental sibling bonds and newly duplicated inherited bonds before its nutrients are divided; authored scaffold endpoint A creates scaffold bonds. Future symmetric operations choose one initiator before affordability using stable cell identity as the simultaneous-initiation tie-breaker. An unaffordable chosen creator is not replaced by the other endpoint. |
 
@@ -68,13 +68,14 @@ Performance-driven implementation choices that do not alter these visible semant
 The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** describe implementation requirements.
 
 - A **signal tick** is one complete source, propagation, consumption, and processor-update cycle.
-- A **backbone edge** is an adhesion bond immutably classified as signal-capable at creation.
+- A **signal-capable edge** is an ordinary cell-to-cell adhesion, immutably classified at creation.
+- A **vascular backbone road** is a signal-capable edge whose two endpoints are Vasculocytes. It receives the approved lower resistance automatically.
 - An **active backbone edge** is a backbone edge selected into the cached propagation forest.
 - A **standby backbone edge** is a valid redundant backbone edge excluded from the active forest to prevent cyclic multipath amplification.
 - A **mechanical edge** is any active adhesion bond, whether or not it is a backbone edge.
 - A **signal tree** is one connected tree of active backbone edges.
 - A **signal forest** is the cached collection of all active signal trees in the scene.
-- A **backbone graph** is the complete active-plus-standby graph of valid backbone bonds.
+- A **signal routing graph** is the complete active-plus-standby graph of valid signal-capable bonds.
 - A **microtree** is a bounded connected portion of a signal tree used for GPU evaluation and incremental maintenance.
 - A **processor output** is a Cognocyte or Memorocyte emission stored from the preceding signal tick.
 - A **pathological source** is a source, such as heat-stroke screaming, that may bypass ordinary funding rules.
@@ -244,28 +245,25 @@ Legacy hop settings require migration as described in Section 21.
 - Signal classification is immutable for the lifetime of a bond.
 - Active/standby routing state is mutable cached topology and MUST NOT be confused with immutable backbone classification.
 - A mechanical-only bond MUST never be promoted, even after a topology split.
-- Breaking a non-backbone bond MUST NOT require signal topology work.
+- Breaking a mechanical-only bond MUST NOT require signal topology work.
 - Creating or breaking a mechanical-only cross-link MUST NOT reorganize signal routing.
 - Backbone membership MUST be inspectable and visualized.
 
-### 7.2 Backbone creation eligibility
+### 7.2 Signal-capable bond creation
 
-- Each cell-to-cell bond-forming operation MAY carry a heritable `creates backbone bond` property.
-- This property applies independently to developmental and dynamic contact-adhesion operations.
-- Environment, boundary, boulder, and other non-cell bonds MUST never be eligible.
+- Every ordinary cell-to-cell adhesion operation creates a signal-capable bond; genomes do not author or mutate eligibility.
+- Explicit barrier-ball, environment, boundary, boulder, and other mechanical-only joints are never signal-capable.
 - Classification occurs exactly once when the bond is created.
-- Every affordable eligible cell-to-cell bond becomes a backbone bond.
-- A backbone bond connecting two active trees becomes active at the next signal tick.
-- A backbone bond whose endpoints are already active-signal-connected becomes a standby candidate and is evaluated by Section 7.3; it MUST NOT become mechanical-only merely because it forms a cycle.
-- If the designated creator cannot afford construction, the cell-to-cell bond operation is dropped and no physical bond is created.
+- A signal-capable bond connecting two active trees becomes active at the next signal tick.
+- A signal-capable bond whose endpoints are already active-signal-connected becomes a standby candidate and is evaluated by Section 7.3; it MUST NOT become mechanical-only merely because it forms a cycle.
+- If the designated creator cannot afford construction, the ordinary cell-to-cell bond operation is dropped and no physical bond is created.
 - Simultaneous candidates MUST be resolved in deterministic bond/cell order, never GPU race order.
-- Mutation may add or remove eligibility for bonds created in the future but MUST NOT alter existing bond classifications.
 
 ### 7.3 Cross-links
 
-- Glueocyte and other dynamic bonds are mechanical-only unless their creating operation is explicitly eligible and the new bond passes the creation rules above.
+- Glueocyte, scaffold, environment, and other explicit barrier-ball joints are mechanical-only.
 - Mechanical-only cross-links MUST NOT be searched, promoted, or used as replacements.
-- Eligible affordable cross-links are backbone bonds from creation and pay the same one-time construction cost whether they initially become active or standby.
+- Affordable ordinary cell-to-cell cross-links are signal-capable from creation and pay the same one-time construction cost whether they initially become active or standby.
 - The active edges MUST remain a forest; standby edges MUST NOT propagate and therefore never add duplicate physical-path contributions.
 - Edge resistance is derived from attenuation as `-ln(retention)`. Route resistance is the sum of edge resistance. Implementations MUST use approved fixed-point constants for CPU/GPU deterministic comparison rather than runtime floating-point logarithms.
 - When a newly formed backbone edge closes an active cycle, compare its resistance with the total resistance of the existing active path between its endpoints. It becomes active only when it is strictly lower.
@@ -280,7 +278,7 @@ Legacy hop settings require migration as described in Section 21.
 
 ### 7.4 Inter-organism backbones
 
-- An eligible cell-to-cell bond may connect different organisms.
+- An ordinary cell-to-cell bond may connect different organisms.
 - All 16 channels cross such an edge bidirectionally.
 - The two signal trees become one signal tree regardless of organism identity.
 - Signals may therefore enable symbiosis, interference, parasitism, cancellation, and heat-stroke contamination across organisms.
@@ -296,17 +294,13 @@ Legacy hop settings require migration as described in Section 21.
 
 ### 7.5 Vascular traversal
 
-The existing symmetric transport/exchange intent remains:
-
-- Nonvascular to nonvascular: traversable.
-- Vascular to vascular: traversable only when both endpoints enable signal transport.
-- Vascular to nonvascular: traversable only when the vascular endpoint enables signal exchange.
-- Nonvascular to vascular: the same exchange rule, bidirectionally.
-- A vascular-to-vascular road uses reduced attenuation.
+- Every signal-capable edge is traversable bidirectionally regardless of endpoint type.
+- A Vasculocyte-to-Vasculocyte road automatically uses reduced attenuation and is therefore the preferred backbone route.
+- Vasculocyte signal transport and exchange are not authored settings; nutrient transport and nutrient exchange remain independently configurable.
 - Vascular signal capacity is removed.
 - The lower vascular-road resistance makes vascular routes automatic signal conductors. Approximately four vascular edges have less total resistance than one normal edge; selection always uses the exact approved fixed-point constants.
 
-Changing transport or exchange may invalidate backbone edges and MUST schedule topology repair.
+Changing a cell's type into or out of Vasculocyte changes incident edge resistance and MUST schedule topology repair.
 
 ### 7.6 Oculocytes
 
@@ -320,7 +314,7 @@ Oculocytes are source-only attachments:
 
 An Oculocyte with neighbors in two separate trees may emit into both but MUST NOT bridge them.
 
-- Only eligible backbone-classified bonds incident to the Oculocyte carry its emission.
+- Only signal-capable bonds incident to the Oculocyte carry its emission.
 - Such bonds are represented as source-attachment edges outside the relay forest. They may attach one Oculocyte to multiple trees without unioning those trees or creating a relay cycle.
 
 ### 7.7 Dead and invalid cells
@@ -468,21 +462,21 @@ paid_cost = min(available_nutrients, total_requested_cost)
 - All ordinary channels from one cell brown out by the same fraction, avoiding channel-order priority.
 - Heat-stroke screaming is evaluated first, consumes whatever nutrients are available, and remains full-strength; ordinary sources from the same critical cell therefore receive no remaining funding that tick.
 
-#### 10.8.3 Backbone construction cost
+#### 10.8.3 Signal-capable adhesion construction cost
 
-- Creating a backbone bond costs 5% of the creating cell's next-division nutrient requirement.
+- Creating an ordinary signal-capable cell-to-cell adhesion costs 5% of the creating cell's next-division nutrient requirement.
 - The creator pays once at bond creation.
 - Construction is transactional. If the designated creator cannot pay the complete cost, the physical bond is not created and no nutrients are charged.
 - Developmental division SHOULD reserve the construction amount before other nonessential division spending so genetically intended wiring is deterministic.
 - The parent pays before nutrient division for each new physical bond produced by division, including a sibling bond and each equatorial inherited-bond duplicate. A transferred existing bond is not charged again.
 - Construction payment is not refunded when the bond breaks.
-- Active and standby backbone bonds pay the identical construction cost.
+- Active and standby signal-capable bonds pay the identical construction cost.
 
 #### 10.8.4 No continuous per-bond maintenance
 
-- A backbone bond has no continuous nutrient or metabolic maintenance cost after construction.
+- A signal-capable bond has no continuous nutrient or metabolic maintenance cost after construction.
 - Active and standby routing states have identical zero maintenance cost.
-- Rerouting, failover, organism boundaries, transfer of an existing inherited bond, and mode changes add no bond charge. A newly allocated inherited duplicate is a new physical bond and pays the one-time construction cost.
+- Rerouting, failover, organism boundaries, transfer of an existing inherited bond, and mode changes add no bond charge. A newly allocated inherited duplicate is a new physical signal-capable bond and pays the one-time construction cost.
 - Creator identity MAY remain recorded for deterministic diagnostics and construction attribution, but creates no ongoing obligation and never requires transfer.
 - Ordinary physical invalidation still follows the normal death and adhesion lifecycle.
 
@@ -829,7 +823,7 @@ Dirty seed events include:
 - Vascular transport/exchange change affecting an incident edge.
 - Explicit user topology edits.
 
-Non-backbone bond churn does not dirty signal topology.
+Mechanical-only bond churn does not dirty signal topology.
 
 - A backbone break writes an immediate invalid-edge mask in the same ordered GPU workload that deactivates the physical bond; it cannot transmit in the next propagation even if structural repair metadata is pending.
 - A newly created backbone is staged and becomes active only when topology commits at the next 15 Hz signal-tick boundary.
@@ -842,8 +836,8 @@ The following SHOULD avoid regional reconstruction:
 - Remove a dead non-branching leaf.
 - Change source values or channels.
 - Change processor operations or channels.
-- Add or remove a non-backbone cross-link.
-- Join two different signal trees with one newly created eligible backbone bond.
+- Add or remove a mechanical-only cross-link.
+- Join two different signal trees with one newly created ordinary signal-capable bond.
 
 ### 19.3 Fragmentation and compaction
 
@@ -866,13 +860,13 @@ Schedule compaction when a block crosses documented fragmentation thresholds. Co
 
 ### 19.5 No promotion or replacement search
 
-- A broken active backbone edge masks immediately and splits its active tree until a
-  bounded topology commit selects a valid standby backbone edge across the cut.
+- A broken active signal route masks immediately and splits its active tree until a
+  bounded topology commit selects a valid standby signal-capable edge across the cut.
 - Existing mechanical-only bonds are irrelevant to repair and MUST NOT be searched.
 - No topology job may promote or reinterpret an existing bond: failover candidates
-  are limited to bonds classified as backbone bonds when they were created.
-- If no standby backbone crosses the cut, reconnection requires a newly formed
-  eligible and affordable backbone bond.
+  are limited to ordinary bonds classified as signal-capable when they were created.
+- If no standby signal-capable bond crosses the cut, reconnection requires a newly
+  formed affordable ordinary cell-to-cell adhesion.
 - These restrictions are both gameplay constraints and performance guarantees.
 
 ## 20. Performance Model and Budgets
@@ -1039,7 +1033,7 @@ Test exact expected results for:
 - Cancellation does not refund either source.
 - Heat screaming remains full-strength without nutrients.
 - Backbone construction consumes 5% of next-division requirement.
-- Unaffordable eligible cell-to-cell bond operations create no physical bond and charge no nutrients.
+- Unaffordable ordinary cell-to-cell bond operations create no physical bond and charge no nutrients.
 - Backbone bonds incur no continuous per-bond maintenance cost across any organism boundary.
 
 ### 24.3 Consumer tests
@@ -1174,7 +1168,7 @@ Gate: CPU/GPU parity and performance targets pass.
 
 - Implement developmental leaf attachment.
 - Implement immediate invalid masks.
-- Implement immutable active/standby backbone classification for affordable eligible cycle bonds.
+- Implement immutable active/standby routing for affordable signal-capable cycle bonds.
 - Implement deterministic fixed-point route resistance, strictly-better cycle exchange, split-on-break behavior, and standby failover.
 - Implement microtree repair, compaction, generations, and budgeting.
 - Keep normal propagation and topology repair separately timed and diagnosed.
@@ -1252,10 +1246,11 @@ Performance regressions MUST be detectable without external profiling tools.
 
 Owner review resolved the following decisions:
 
-- [x] Signals travel only along explicitly created backbone bonds.
+- [x] Signals travel along every ordinary signal-capable cell-to-cell adhesion; explicit mechanical-only joints never transmit.
 - [x] Mechanical-only bonds never carry signals and can never be promoted.
-- [x] Any eligible cell-to-cell bond operation may create a backbone at birth, including across organisms.
-- [x] Affordable cycle-forming eligible bonds remain immutable standby backbones and may replace an active route only when strictly lower resistance.
+- [x] Any ordinary cell-to-cell bond operation creates a signal-capable edge at birth, including across organisms; no per-mode eligibility setting exists.
+- [x] Vasculocyte-to-Vasculocyte edges automatically use lower resistance and are preferred over longer-resistance ordinary routes.
+- [x] Affordable cycle-forming signal-capable bonds remain immutable standby routes and may replace an active route only when strictly lower resistance.
 - [x] Breaking an active backbone masks immediately; bounded next-tick repair selects the lowest-resistance valid standby reconnection when one exists.
 - [x] Inter-organism backbone links carry all 16 channels bidirectionally.
 - [x] Signed same-channel sources add, cancel, and saturate symmetrically at `-1000..1000`.

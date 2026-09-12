@@ -101,11 +101,12 @@ fn find_scaffold_connection_between(
 
 fn create_or_update_scaffold_bond(
     state: &mut CanonicalState,
-    genome: &Genome,
+    _genome: &Genome,
     ca: usize,
     cb: usize,
     rule_id: u32,
     rest_length: f32,
+    max_formation_range: f32,
     current_time: f32,
 ) {
     use crate::cell::adhesion::BOND_FLAG_BARRIER_BALL;
@@ -113,6 +114,10 @@ fn create_or_update_scaffold_bond(
     if let Some(conn_idx) = find_scaffold_connection_between(state, ca, cb) {
         state.adhesion_connections.scaffold_rule_id[conn_idx] = rule_id;
         state.adhesion_connections.rest_length_overrides[conn_idx] = rest_length.max(0.001);
+        return;
+    }
+
+    if state.positions[ca].distance(state.positions[cb]) > max_formation_range.max(0.0) {
         return;
     }
 
@@ -125,21 +130,6 @@ fn create_or_update_scaffold_bond(
     }
 
     let mode_index = state.mode_indices[ca];
-    let creates_backbone = genome
-        .modes
-        .get(mode_index)
-        .is_some_and(|mode| mode.adhesion_settings.creates_backbone);
-    let funded_nutrients = if creates_backbone {
-        crate::simulation::signal_system::reserve_backbone_construction(
-            state.nutrients[ca],
-            state.split_nutrient_thresholds[ca],
-        )
-    } else {
-        Some(state.nutrients[ca])
-    };
-    let Some(funded_nutrients) = funded_nutrients else {
-        return;
-    };
     let conn_idx = state.adhesion_manager.add_ball_joint_with_rest_length(
         &mut state.adhesion_connections,
         ca,
@@ -151,16 +141,6 @@ fn create_or_update_scaffold_bond(
     );
     if let Some(idx) = conn_idx {
         state.adhesion_connections.scaffold_rule_id[idx] = rule_id;
-        if creates_backbone {
-            state.nutrients[ca] = funded_nutrients;
-            let owner_identity = state.cell_ids[ca];
-            crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
-                &mut state.adhesion_connections,
-                idx,
-                owner_identity,
-                false,
-            );
-        }
     }
 }
 
@@ -310,6 +290,7 @@ pub fn resolve_scaffold_rules(
                     cb,
                     rule.id,
                     rule.rest_length,
+                    rule.max_formation_range,
                     current_time,
                 );
             }
@@ -368,6 +349,7 @@ pub fn resolve_scaffold_rules(
                             cb,
                             rule.id,
                             rule.rest_length,
+                            rule.max_formation_range,
                             current_time,
                         );
                     }
@@ -387,6 +369,10 @@ pub fn resolve_scaffold_rules(
                         .iter()
                         .copied()
                         .filter(|&cb| cb != ca && state.organism_ids[ca] == state.organism_ids[cb])
+                        .filter(|&cb| {
+                            state.positions[ca].distance(state.positions[cb])
+                                <= rule.max_formation_range.max(0.0)
+                        })
                         .min_by(|&cb1, &cb2| {
                             let preferred_delta = rule.preferred_generation_delta.unsigned_abs();
                             let generation_error = |cb: usize| {
@@ -411,6 +397,7 @@ pub fn resolve_scaffold_rules(
                         cb,
                         rule.id,
                         rule.rest_length,
+                        rule.max_formation_range,
                         current_time,
                     );
                 }
@@ -1723,27 +1710,8 @@ pub fn form_glueocyte_contact_bonds(
             continue;
         }
 
-        let (creator, glue_mode) = if is_glue_a {
-            (idx_a, mode_a)
-        } else {
-            (idx_b, mode_b)
-        };
-        let creates_backbone = genome
-            .modes
-            .get(glue_mode)
-            .is_some_and(|mode| mode.adhesion_settings.creates_backbone);
-        let funded_nutrients = if creates_backbone {
-            crate::simulation::signal_system::reserve_backbone_construction(
-                state.nutrients[creator],
-                state.split_nutrient_thresholds[creator],
-            )
-        } else {
-            Some(state.nutrients[creator])
-        };
-        let Some(funded_nutrients) = funded_nutrients else {
-            continue;
-        };
-        let result = state.adhesion_manager.add_ball_joint(
+        let glue_mode = if is_glue_a { mode_a } else { mode_b };
+        state.adhesion_manager.add_ball_joint(
             &mut state.adhesion_connections,
             idx_a,
             idx_b,
@@ -1752,18 +1720,6 @@ pub fn form_glueocyte_contact_bonds(
             crate::cell::adhesion::BOND_FLAG_GLUEOCYTE
                 | crate::cell::adhesion::BOND_FLAG_BARRIER_BALL,
         );
-        if creates_backbone {
-            if let Some(connection_index) = result {
-                state.nutrients[creator] = funded_nutrients;
-                let owner_identity = state.cell_ids[creator];
-                crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
-                    &mut state.adhesion_connections,
-                    connection_index,
-                    owner_identity,
-                    false,
-                );
-            }
-        }
     }
 }
 

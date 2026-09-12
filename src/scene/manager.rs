@@ -184,6 +184,13 @@ impl SceneManager {
             }
         }
 
+        let new_world_radius = world_diameter * 0.5;
+        let world_radius_unchanged = self
+            .gpu_scene
+            .as_ref()
+            .map(|scene| (scene.config.sphere_radius - new_world_radius).abs() < 0.5)
+            .unwrap_or(false);
+
         log::info!("Recreating GPU scene with capacity: {}", capacity);
         let mut gpu_scene = GpuScene::with_capacity_and_radius(
             device,
@@ -203,7 +210,13 @@ impl SceneManager {
             .as_ref()
             .map(|s| s.fluid_simulator.is_some())
             .unwrap_or(false);
-        if had_fluid {
+        // Fluid grids, their solid-mask generator, and the surface extraction
+        // coordinates are all radius-dependent. Moving them into a differently
+        // sized world mixes the old grid with the new renderer and produces
+        // malformed normals/surfaces that appear unnaturally glossy. Preserve
+        // these resources only for a capacity-only recreation.
+        let can_transfer_fluid = had_fluid && world_radius_unchanged;
+        if can_transfer_fluid {
             // Move the fluid simulator and all visual renderers from the old scene.
             // Without this, light field / fog / DOF / sun / voxel systems remain None
             // on the new scene, causing them to disappear after a capacity/radius reset.
@@ -230,6 +243,15 @@ impl SceneManager {
                 gpu_scene.show_moss = old_scene.show_moss;
                 gpu_scene.show_sun = old_scene.show_sun;
                 gpu_scene.show_dof = old_scene.show_dof;
+
+                // Cell capacity does not affect the water surface renderer. Keep
+                // it (including its density history and reflection cubemap) when
+                // only capacity changed so Reset Everything cannot abruptly alter
+                // the water's appearance. A radius change still rebuilds it below.
+                if world_radius_unchanged {
+                    gpu_scene.transfer_water_surface_renderer_from(old_scene);
+                }
+
                 // Rebuild bind groups that reference fluid buffers in the new scene
                 if let Some(ref simulator) = gpu_scene.fluid_simulator {
                     gpu_scene.cached_bind_groups.update_water_buffers(
@@ -249,7 +271,8 @@ impl SceneManager {
                 }
             }
         } else {
-            // No prior fluid - initialize fresh
+            // No prior fluid, or the world radius changed: initialize a fluid
+            // grid and all radius-dependent rendering resources at the new size.
             let camera_bind_group_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("Voxel Camera Layout"),

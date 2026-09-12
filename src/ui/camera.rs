@@ -756,9 +756,8 @@ impl CameraController {
                             + dt / MEMBRANE_PUSH_THROUGH_SECONDS)
                             .min(1.0);
                     } else {
-                        self.boundary_push_progress = (self.boundary_push_progress
-                            - dt / MEMBRANE_RELEASE_SECONDS)
-                            .max(0.0);
+                        self.boundary_push_progress =
+                            (self.boundary_push_progress - dt / MEMBRANE_RELEASE_SECONDS).max(0.0);
                     }
 
                     // Fully resisted at progress 0 (can still nudge the membrane

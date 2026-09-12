@@ -261,6 +261,11 @@ pub struct GpuScene {
     /// Frame counter throttling water mesh extraction. The voxel simulation
     /// still runs every frame; this only decimates render-mesh rebuilds.
     fluid_mesh_extract_counter: u32,
+    /// Extra water-only rebuilds after a static fill/phase transition. Water
+    /// density smoothing has temporal history, so one rebuild is not enough
+    /// to converge after a genuine change; this short burst replaces the old
+    /// perpetual every-other-frame work.
+    static_water_smoothing_rebuilds_remaining: u8,
     /// Water freezing threshold (internal 0-255 scale, default 65 = 0°C)
     pub freeze_threshold: u32,
     /// Ice melting threshold (internal 0-255 scale, default 75 = 5°C)
@@ -453,15 +458,8 @@ pub struct GpuScene {
     /// submit-to-map latency be measured directly rather than guessed at, if
     /// this pipeline needs diagnosing again in the future.
     division_audio_readback_claimed_at: Vec<Option<std::time::Instant>>,
-    /// Whether the division-audio candidate buffer has already been cleared
-    /// this render frame. Multiple `run_physics` steps can execute per frame
-    /// (fixed-timestep catch-up); only the first should clear the buffer so
-    /// later steps' candidates accumulate instead of clobbering earlier ones.
-    division_audio_cleared_this_frame: bool,
-    /// Readback staging buffer index selected for this render frame's division-
-    /// audio collection. Chosen once per frame (not per physics step) so every
-    /// catch-up step within the frame accumulates into the same buffer instead
-    /// of exhausting the pool after just a couple of steps.
+    /// Readback staging buffer index selected for this render frame's single
+    /// division-audio collection on the final encoded fixed step.
     division_audio_frame_readback_index: Option<usize>,
     /// Whether any physics step this frame actually dispatched the division-
     /// audio collector using `division_audio_frame_readback_index`.
@@ -972,6 +970,7 @@ impl GpuScene {
             snow_compact_rate: 1.0,
             thermal_inertia: 4.0,
             fluid_mesh_extract_counter: 0,
+            static_water_smoothing_rebuilds_remaining: 0,
             freeze_threshold: 65,
             melt_threshold: 75,
             snow_threshold: 60,
@@ -1075,7 +1074,6 @@ impl GpuScene {
             division_audio_bind_group,
             division_audio_dummy_water_params_buffer,
             division_audio_dummy_water_bitfield_buffer,
-            division_audio_cleared_this_frame: false,
             division_audio_frame_readback_index: None,
             division_audio_frame_readback_used: false,
             pending_audio_events: Vec::new(),
@@ -1197,11 +1195,11 @@ impl GpuScene {
         self.division_audio_readback_claimed_at =
             vec![None; self.division_audio_readback_buffers.len()];
         self.division_audio_readback_write_index = 0;
-        self.division_audio_cleared_this_frame = false;
         self.division_audio_frame_readback_index = None;
         self.division_audio_frame_readback_used = false;
         self.pending_audio_events.clear();
         self.fluid_mesh_extract_counter = 0;
+        self.static_water_smoothing_rebuilds_remaining = 0;
         self.paused = false;
         self.first_frame = true;
         self.dragged_cell_index = u32::MAX;
@@ -1587,7 +1585,7 @@ impl GpuScene {
                             twist_constraint_stiffness: c[0],
                             twist_constraint_damping: c[1],
                             enable_twist_constraint: c[2] as i32,
-                            creates_backbone: c[3] as i32,
+                            _padding: 0,
                         }
                     })
                     .collect(),
@@ -1758,8 +1756,6 @@ impl GpuScene {
                 devorocyte_consume_rate: 30.0,
                 vascular_nutrient_transport: true,
                 vascular_outlet: false,
-                vascular_signal_transport: false,
-                vascular_signal_exchange: false,
                 gametocyte_merge_range: 0.5,
                 memorocyte_rate: 0.1,
                 memorocyte_input_channel: 0,
@@ -1817,7 +1813,6 @@ impl GpuScene {
                 adhesion_settings: {
                     let gpu_as = &adhesion_settings_raw[i];
                     crate::genome::AdhesionSettings {
-                        creates_backbone: gpu_as.creates_backbone != 0,
                         can_break: gpu_as.can_break != 0,
                         break_force: gpu_as.break_force,
                         rest_length: gpu_as.rest_length,
@@ -2179,6 +2174,45 @@ impl GpuScene {
         self.radiation_level > 0.0 && !self.subtle_mutations
     }
 
+    /// CPU cell-count readback trails GPU division by a few frames. Specialized
+    /// per-cell passes use this conservative bound instead of full world capacity;
+    /// the guard covers short newborn bursts without making established worlds
+    /// pay for every never-used slot.
+    fn conservative_cell_dispatch_slots(&self) -> u32 {
+        const ASYNC_NEWBORN_SLOT_GUARD: u32 = 8192;
+        self.total_cell_slots
+            .max(self.current_cell_count)
+            .max(1)
+            .saturating_add(ASYNC_NEWBORN_SLOT_GUARD)
+            .min(self.gpu_triple_buffers.capacity)
+    }
+
+    fn populate_nutrients_for_physics_frame(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        delta_time: f32,
+    ) {
+        let type_mutations_enabled = self.type_mutations_enabled();
+        if !(self.has_phagocytes || type_mutations_enabled || self.show_nutrient_particles) {
+            return;
+        }
+        if let Some(ref simulator) = self.fluid_simulator {
+            simulator.populate_nutrients(
+                device,
+                queue,
+                encoder,
+                self.nutrient_density,
+                delta_time,
+                self.nutrient_epoch_duration,
+                self.nutrient_epoch_spacing,
+                self.nutrient_spawn_end,
+                self.nutrient_despawn_start,
+            );
+        }
+    }
+
     /// Run physics step using GPU compute shaders with zero CPU involvement.
     fn run_physics(
         &mut self,
@@ -2187,6 +2221,7 @@ impl GpuScene {
         queue: &wgpu::Queue,
         delta_time: f32,
         world_diameter: f32,
+        collect_division_audio: bool,
     ) {
         // Note: No CPU-side early-out on current_cell_count here.
         // The GPU shaders check cell_count_buffer[0] (high water mark) internally.
@@ -2194,31 +2229,12 @@ impl GpuScene {
         // when the readback lags behind the actual GPU state.
 
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
-        // Repopulate nutrient voxels each physics step so phagocyte intake scales with
-        // sim speed. At Nx speed the physics loop runs N steps per frame; phagocytes
-        // consume voxel nutrients each step via atomic CAS (1->2), so populate must
-        // also run each step to reset consumed voxels back to available.
         let type_mutations_enabled = self.type_mutations_enabled();
         let has_phagocytes = self.has_phagocytes || type_mutations_enabled;
         let has_photocytes = self.has_photocytes || type_mutations_enabled;
         let has_devorocytes = self.has_devorocytes || type_mutations_enabled;
         let has_gametocytes = self.has_gametocytes || type_mutations_enabled;
 
-        if has_phagocytes || self.show_nutrient_particles {
-            if let Some(ref simulator) = self.fluid_simulator {
-                simulator.populate_nutrients(
-                    device,
-                    queue,
-                    encoder,
-                    self.nutrient_density,
-                    delta_time,
-                    self.nutrient_epoch_duration,
-                    self.nutrient_epoch_spacing,
-                    self.nutrient_spawn_end,
-                    self.nutrient_despawn_start,
-                );
-            }
-        }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         if has_phagocytes {
             self.run_phagocyte_consumption(device, encoder, queue);
@@ -2313,56 +2329,42 @@ impl GpuScene {
         // This handles death detection, free slot compaction, and cell division
         // Cell count is updated on GPU by division shader
         //
-        // Up to `max_physics_steps_per_frame` steps can run per render() call (fixed-
-        // timestep catch-up). The candidate readback only happens once per frame, after
-        // all steps complete, but every step still needs to contribute its dividing
-        // cells - otherwise only the first step of each frame is ever heard, and once
-        // the population plateaus at capacity (so each step only produces a handful of
-        // divisions via slot recycling) that 1-in-N sampling made division audio nearly
-        // silent even though cells kept dividing and dying every step. So the collect
-        // pass now runs on *every* step, and only the first step of the frame clears the
-        // candidate buffer - later steps' candidates accumulate on top instead of
-        // clobbering them.
-        //
-        // The readback buffer index is chosen ONCE per render() call (in the caller,
-        // before the physics catch-up loop), not per step here. Toggling it per step
-        // exhausted the 2-buffer pool after just 2 steps, silently skipping the collect
-        // dispatch (and losing that step's divisions) on any frame needing 3+ catch-up
-        // steps - which defeated the "every step contributes" guarantee above.
-        let clear_before_collect = !self.division_audio_cleared_this_frame;
+        // Candidate collection is cosmetic and scans the complete cell range.
+        // The render loop enables it only for the final fixed step encoded this
+        // frame, while division itself continues on every catch-up step.
         let audio_readback_index = self.division_audio_frame_readback_index;
-        let division_audio_collect = if known_cell_slots > 0 && audio_readback_index.is_some() {
-            let params = DivisionAudioParams {
-                listener_position: self.camera.position().to_array(),
-                search_radius_cells: DIVISION_AUDIO_SEARCH_RADIUS_CELLS,
-                grid_resolution: DIVISION_AUDIO_GRID_RESOLUTION,
-                max_cells_per_grid: DIVISION_AUDIO_MAX_CELLS_PER_GRID,
-                max_candidates: DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32,
-                _pad0: 0,
-            };
-            queue.write_buffer(
-                &self.division_audio_params_buffer,
-                0,
-                bytemuck::bytes_of(&params),
-            );
+        let division_audio_collect =
+            if collect_division_audio && known_cell_slots > 0 && audio_readback_index.is_some() {
+                let params = DivisionAudioParams {
+                    listener_position: self.camera.position().to_array(),
+                    search_radius_cells: DIVISION_AUDIO_SEARCH_RADIUS_CELLS,
+                    grid_resolution: DIVISION_AUDIO_GRID_RESOLUTION,
+                    max_cells_per_grid: DIVISION_AUDIO_MAX_CELLS_PER_GRID,
+                    max_candidates: DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32,
+                    _pad0: 0,
+                };
+                queue.write_buffer(
+                    &self.division_audio_params_buffer,
+                    0,
+                    bytemuck::bytes_of(&params),
+                );
 
-            let collector_threads = known_cell_slots.min(self.gpu_triple_buffers.capacity);
-            Some(DivisionAudioCollectDispatch {
-                pipeline: &self.gpu_physics_pipelines.division_audio_collect,
-                bind_group: &self.division_audio_bind_group,
-                candidate_buffer: &self.division_audio_candidates_buffer,
-                candidate_count_buffer: &self.division_audio_candidate_count_buffer,
-                readback_buffer: &self.division_audio_readback_buffers
-                    [audio_readback_index.unwrap_or(0)],
-                dispatch_workgroups: (collector_threads + 63) / 64,
-                copy_bytes: std::mem::size_of::<DivisionAudioCandidate>() as u64
-                    * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
-                clear_before_collect,
-            })
-        } else {
-            None
-        };
-        self.division_audio_cleared_this_frame = true;
+                let collector_threads = known_cell_slots.min(self.gpu_triple_buffers.capacity);
+                Some(DivisionAudioCollectDispatch {
+                    pipeline: &self.gpu_physics_pipelines.division_audio_collect,
+                    bind_group: &self.division_audio_bind_group,
+                    candidate_buffer: &self.division_audio_candidates_buffer,
+                    candidate_count_buffer: &self.division_audio_candidate_count_buffer,
+                    readback_buffer: &self.division_audio_readback_buffers
+                        [audio_readback_index.unwrap_or(0)],
+                    dispatch_workgroups: (collector_threads + 63) / 64,
+                    copy_bytes: std::mem::size_of::<DivisionAudioCandidate>() as u64
+                        * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
+                })
+            } else {
+                None
+            };
+        let division_audio_collect_ran = division_audio_collect.is_some();
 
         let division_pipeline_ran = execute_lifecycle_pipeline(
             device,
@@ -2379,11 +2381,9 @@ impl GpuScene {
             physics_features,
             division_audio_collect,
         );
-        if division_pipeline_ran && audio_readback_index.is_some() {
+        if division_pipeline_ran && division_audio_collect_ran {
             self.division_audio_frame_readback_used = true;
         }
-
-        self.dispatch_scaffold_rules(device, encoder, queue);
 
         // Mutation pass: collect candidates from division results, then apply mutations.
         // Runs after division execute so division_flags and division_slot_assignments are set.
@@ -2520,14 +2520,11 @@ impl GpuScene {
             &self.phagocyte_physics_bind_groups,
             &self.phagocyte_nutrient_bind_group,
         ) {
-            // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
-            // Using total_cell_slots (async readback, lags 1-3 frames) would under-dispatch
-            // and miss cells at higher slot indices during the lag window.
             consumption_system.run(
                 encoder,
                 &physics_bgs[output_idx],
                 nutrient_bg,
-                self.gpu_triple_buffers.capacity,
+                self.conservative_cell_dispatch_slots(),
             );
         }
     }
@@ -2616,11 +2613,9 @@ impl GpuScene {
         }
         let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
 
-        // Dispatch at capacity and let the shader read cell_count_buffer[0].
-        // The CPU live count is async and can lag the GPU-side high-water mark,
-        // which would leave the light field with an empty occupancy grid.
         if self.total_cell_slots > 0 || self.current_cell_count > 0 {
-            let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+            let dispatch_slots = self.conservative_cell_dispatch_slots();
+            let cell_workgroups = (dispatch_slots + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Build Cell Occupancy"),
                 timestamp_writes: None,
@@ -2718,14 +2713,15 @@ impl GpuScene {
         let photocyte_physics_bg =
             &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
 
-        // Dispatch at full capacity - the shader reads cell_count_buffer[0] (the GPU-side
-        // high-water mark) for its own bounds check. Using total_cell_slots (the async
-        // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
-        // at higher slot indices during the lag window, causing them to receive no light.
-        let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+        let dispatch_slots = self.conservative_cell_dispatch_slots();
+        let cell_workgroups = (dispatch_slots + 255) / 256;
 
         // Clear glow_flags so dead/off luminocytes don't leave stale values.
-        encoder.clear_buffer(&light_field.glow_flags_buffer, 0, None);
+        encoder.clear_buffer(
+            &light_field.glow_flags_buffer,
+            0,
+            Some(dispatch_slots as u64 * 4),
+        );
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2769,15 +2765,16 @@ impl GpuScene {
         // For cell insertion, we write to ALL 3 buffer sets, so any buffer index works
         // For physics output, we use output_buffer_index which is where physics wrote
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        // Always copy full capacity so that child B slots created by division are
-        // included even when the GPU-side high-water mark (cell_count_buffer[0]) has
-        // advanced beyond total_cell_slots (which lags 1-3 frames behind the async
-        // readback). If we truncated to total_cell_slots, a new child B at a higher
-        // slot index would not be copied and the instance builder would render stale
-        // data from the previous occupant - causing garbage cells to flicker.
-        // The instance builder shader uses cell_count_buffer[0] (always current) for
-        // its own bounds check, so bytes beyond the true high-water mark are never read.
-        let copy_slots = self.gpu_triple_buffers.capacity as usize;
+        // One division scan can add at most one child per scanned parent. Double
+        // the persistent CPU high-water mark to cover all newborn slots while
+        // avoiding full-capacity copies in young worlds. At larger populations
+        // this naturally saturates at capacity.
+        let copy_slots = self
+            .total_cell_slots
+            .max(self.current_cell_count)
+            .max(1)
+            .saturating_mul(2)
+            .min(self.gpu_triple_buffers.capacity) as usize;
         let vec4_copy_size = (copy_slots * 16) as u64; // Vec4<f32> = 16 bytes
         let u32_copy_size = (copy_slots * 4) as u64; // u32 = 4 bytes
 
@@ -3373,19 +3370,23 @@ impl GpuScene {
     }
 
     fn dispatch_scaffold_rules(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
+        let Some(label_system) = self.organism_label_system.as_ref() else {
+            return;
+        };
         self.scaffold_system.dispatch(
             device,
             encoder,
             queue,
             &self.gpu_triple_buffers,
             &self.adhesion_buffers,
+            &label_system.label_buffer,
             self.gpu_triple_buffers.output_buffer_index(),
-            self.gpu_triple_buffers.capacity.max(1),
+            self.total_cell_slots.max(1),
         );
     }
 
@@ -5603,6 +5604,23 @@ impl GpuScene {
         log::info!("GPU surface nets renderer initialized");
     }
 
+    /// Move the existing water surface renderer into a replacement scene.
+    ///
+    /// This is safe for capacity-only scene recreation because the renderer is
+    /// sized from the viewport and fluid grid, not the cell capacity. Keeping it
+    /// also keeps its smoothed density history and captured reflection cubemap,
+    /// avoiding a sudden change in the water's apparent opacity/reflectivity.
+    pub(crate) fn transfer_water_surface_renderer_from(&mut self, old_scene: &mut Self) -> bool {
+        let Some(surface_nets) = old_scene.gpu_surface_nets.take() else {
+            return false;
+        };
+
+        self.gpu_surface_nets = Some(surface_nets);
+        self.reflection_cubemap_captured = old_scene.reflection_cubemap_captured;
+        self.show_gpu_density_mesh = old_scene.show_gpu_density_mesh;
+        true
+    }
+
     /// Initialize the organism skin renderer.
     /// Safe to call multiple times - no-op if already initialized.
     pub fn initialize_organism_skin(
@@ -6077,6 +6095,7 @@ impl GpuScene {
         self.show_gpu_density_mesh = true;
         self.water_shadow_bind_group_set = false;
         self.fluid_mesh_extract_counter = 0;
+        self.static_water_smoothing_rebuilds_remaining = 0;
     }
 
     /// Initialize the phagocyte nutrient consumption system
@@ -6260,21 +6279,19 @@ impl GpuScene {
             ]);
         }
 
-        // Cache cell data bind group (depends on organism_label_system)
+        // Cache cell data bind group.
         if self.gametocyte_cell_data_bind_group.is_none() {
             let bufs = &self.gpu_triple_buffers;
-            if let Some(org_system) = self.organism_label_system.as_ref() {
-                self.gametocyte_cell_data_bind_group = Some(system.create_cell_data_bind_group(
-                    device,
-                    &bufs.cell_types,
-                    &bufs.death_flags,
-                    &org_system.label_buffer,
-                    &bufs.genome_ids,
-                    &bufs.mode_indices,
-                    &bufs.mode_properties_v13,
-                    &bufs.embryocyte_reserve_buffer,
-                ));
-            }
+            self.gametocyte_cell_data_bind_group = Some(system.create_cell_data_bind_group(
+                device,
+                &bufs.cell_types,
+                &bufs.death_flags,
+                &bufs.development_addresses,
+                &bufs.genome_ids,
+                &bufs.mode_indices,
+                &bufs.mode_properties_v13,
+                &bufs.embryocyte_reserve_buffer,
+            ));
         }
 
         // Cache spatial bind group
@@ -6785,13 +6802,12 @@ impl GpuScene {
             &self.moss_consume_physics_bind_groups,
             &self.moss_consume_moss_bind_group,
         ) {
-            // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
             moss.run_consumption(
                 encoder,
                 queue,
                 &physics_bgs[output_idx],
                 moss_bg,
-                self.gpu_triple_buffers.capacity,
+                self.conservative_cell_dispatch_slots(),
             );
         }
     }
@@ -6843,10 +6859,9 @@ impl GpuScene {
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
 
-            // NOTE: Nutrient population moved into run_physics() so it executes every
-            // physics step. At high sim speeds the physics loop runs N steps per frame;
-            // phagocytes consume voxel nutrients each step, so populate must also run
-            // each step to reset consumed voxels and keep supply balanced with demand.
+            // Nutrient epoch population is encoded once before the rendered
+            // frame's fixed-step batch. Repeating it here or inside every catch-up
+            // step would evaluate the same fluid time and epoch state.
         }
     }
 
@@ -7242,7 +7257,7 @@ impl GpuScene {
             renderer.snapshot_death_flags(
                 encoder,
                 &self.gpu_triple_buffers.death_flags,
-                self.gpu_triple_buffers.capacity,
+                self.conservative_cell_dispatch_slots(),
             );
         }
     }
@@ -7277,7 +7292,7 @@ impl GpuScene {
             )
         };
 
-        let capacity = self.gpu_triple_buffers.capacity;
+        let capacity = self.conservative_cell_dispatch_slots();
         if let Some(ref mut renderer) = self.death_particle_renderer {
             renderer.update(encoder, queue, &compute_bind_group, capacity, dt);
         }
@@ -8566,14 +8581,17 @@ impl Scene for GpuScene {
             let max_steps =
                 (self.max_physics_steps_per_frame as f32 * self.time_scale).ceil() as i32;
 
-            // Reset once per frame so the first `run_physics` step below clears the
-            // division-audio candidate buffer and later steps in this frame accumulate.
-            self.division_audio_cleared_this_frame = false;
+            // Fluid time advances once per rendered frame, and consumed nutrient
+            // voxels remain marked for the epoch. Re-running this full 128^3 noise
+            // field for every catch-up step produced identical results. Populate
+            // once when this frame will actually encode at least one fixed step.
+            if max_steps > 0 && self.time_accumulator >= fixed_dt {
+                self.populate_nutrients_for_physics_frame(device, &mut encoder, queue, fixed_dt);
+            }
 
-            // Pick the division-audio readback buffer once for the whole frame, not per
-            // step - see the comment in `run_physics` for why toggling per step silently
-            // dropped divisions on frames with 3+ catch-up steps. Scan the whole ring
-            // (not just 2 slots) starting from the round-robin cursor.
+            // Pick one division-audio readback buffer for the final encoded fixed
+            // step. Scan the whole ring from the round-robin cursor so a slow map
+            // on one staging buffer cannot starve the others.
             let buffer_count = self.division_audio_readback_buffers.len();
             self.division_audio_frame_readback_index = (0..buffer_count)
                 .map(|offset| (self.division_audio_readback_write_index + offset) % buffer_count)
@@ -8586,7 +8604,17 @@ impl Scene for GpuScene {
             self.division_audio_frame_readback_used = false;
 
             while self.time_accumulator >= fixed_dt && physics_steps < max_steps {
-                self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
+                let remaining_after_step = self.time_accumulator - fixed_dt;
+                let final_encoded_step =
+                    remaining_after_step < fixed_dt || physics_steps + 1 >= max_steps;
+                self.run_physics(
+                    device,
+                    &mut encoder,
+                    queue,
+                    fixed_dt,
+                    world_diameter,
+                    final_encoded_step,
+                );
 
                 // Wrap current_time to prevent f32 precision loss in long runs.
                 // f32 loses sub-second precision above ~8M seconds. Wrapping at 65536s
@@ -8613,19 +8641,6 @@ impl Scene for GpuScene {
             if physics_steps >= max_steps {
                 self.time_accumulator = 0.0;
             }
-
-            // Organism label pass: runs ONCE per render frame after all physics steps
-            // complete, not inside run_physics. Previously it ran every physics step
-            // (up to 4x/frame), making it 5-7 dispatches x 4 steps = 20-28 dispatches
-            // per render frame. Labels change slowly (bonds form/break over many frames)
-            // so one update per render frame is sufficient.
-            if let Some(label_system) = &mut self.organism_label_system {
-                label_system.encode_frame(
-                    &mut encoder,
-                    self.total_cell_slots,
-                    self.show_organism_skins,
-                );
-            }
         } else if is_dragging {
             // Paused but dragging: run mechanics-only physics step so adhesion-connected
             // cells follow via spring forces. Skips nutrient transport, mass accumulation,
@@ -8634,9 +8649,32 @@ impl Scene for GpuScene {
             self.run_mechanics_only(device, &mut encoder, queue, fixed_dt, world_diameter);
         }
 
-        if physics_steps == 0 {
-            self.dispatch_scaffold_rules(device, &mut encoder, queue);
+        // End of repeated fixed-step mechanics/lifecycle work; start work that
+        // runs once per rendered frame regardless of catch-up step count.
+        if self.gpu_timing_enabled {
+            if let Some(ref timer) = self.gpu_timer {
+                timer.write_timestamp(&mut encoder, 4);
+            }
         }
+
+        // Organism label pass: runs ONCE per render frame after all physics steps
+        // complete, not inside run_physics. Labels change slowly, and scaffold
+        // matching below consumes the resulting current-component labels.
+        if !self.paused {
+            if let Some(label_system) = &mut self.organism_label_system {
+                label_system.encode_frame(
+                    &mut encoder,
+                    self.total_cell_slots,
+                    self.show_organism_skins,
+                );
+            }
+        }
+
+        // Scaffold matching must run after the developmental-component label pass.
+        // Development addresses describe ancestry, while labels describe current
+        // normal-adhesion connectivity. Requiring both prevents detached fragments
+        // with shared ancestry from being pulled back together by a scaffold rule.
+        self.dispatch_scaffold_rules(device, &mut encoder, queue);
 
         // Execute non-drag pending position updates (e.g. from other tools)
         let position_updated =
@@ -8685,10 +8723,10 @@ impl Scene for GpuScene {
             self.copy_buffers_to_instance_builder(&mut encoder);
         }
 
-        // End of "Physics & Lifecycle" segment.
+        // End of once-per-frame physics maintenance.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 4);
+                timer.write_timestamp(&mut encoder, 5);
             }
         }
 
@@ -8704,7 +8742,7 @@ impl Scene for GpuScene {
             // then resolve before submitting.
             if self.gpu_timing_enabled {
                 if let Some(ref mut timer) = self.gpu_timer {
-                    for boundary in 5..=crate::scene::gpu_timer::SEGMENT_COUNT {
+                    for boundary in 6..=crate::scene::gpu_timer::SEGMENT_COUNT {
                         timer.write_timestamp(&mut encoder, boundary);
                     }
                     timer.resolve(&mut encoder);
@@ -8831,7 +8869,7 @@ impl Scene for GpuScene {
         // End of "Instance Build & Culling" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 5);
+                timer.write_timestamp(&mut encoder, 6);
             }
         }
 
@@ -9145,7 +9183,7 @@ impl Scene for GpuScene {
         // End of "Opaque Render" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 6);
+                timer.write_timestamp(&mut encoder, 7);
             }
         }
 
@@ -9289,21 +9327,65 @@ impl Scene for GpuScene {
 
         // Extract and render GPU density mesh if enabled
         if self.show_gpu_density_mesh {
-            // Only re-extract the mesh when the fluid state has actually changed.
-            // When the simulation is paused and there are no cells (nothing can disturb
-            // the fluid), the density field is static - re-running extract_to_surface_nets,
-            // smooth_density, and extract_mesh every frame wastes ~100K workgroups for
-            // an identical result. We still render the last extracted mesh every frame.
-            let fluid_changed = !self.paused || self.current_cell_count > 0;
+            let static_water_world = self
+                .fluid_simulator
+                .as_ref()
+                .map(|sim| sim.is_static_water_world_enabled())
+                .unwrap_or(false);
+            let static_surface_changed = static_water_world
+                && self
+                    .fluid_simulator
+                    .as_ref()
+                    .map(|sim| sim.take_static_surface_mesh_changed())
+                    .unwrap_or(false);
+
+            // Static water skips motion/weather, so an unpaused scene is not
+            // evidence that its density changed. The simulator raises a dirty
+            // signal for the initial fill and for confirmed water<->ice phase
+            // transitions. Run a few water-only follow-up rebuilds so temporal
+            // density smoothing converges, then leave the cached mesh alone.
+            if static_surface_changed {
+                self.static_water_smoothing_rebuilds_remaining = 3;
+            }
+
+            // Dynamic water keeps its existing decimated cadence. Paused water
+            // with no cells and settled static water both reuse the last mesh.
+            let fluid_changed = if static_water_world {
+                self.static_water_smoothing_rebuilds_remaining > 0
+            } else {
+                !self.paused || self.current_cell_count > 0
+            };
 
             if fluid_changed {
-                self.fluid_mesh_extract_counter = self.fluid_mesh_extract_counter.wrapping_add(1);
-                let rebuild_water_mesh = self.fluid_mesh_extract_counter % 2 == 1;
-                // % 8 == 1 so the very first frame extracts immediately.
-                let rebuild_ice_mesh = self.fluid_mesh_extract_counter % 8 == 1;
+                let (prepare_water_mesh, finalize_water_mesh, prepare_ice_mesh, finalize_ice_mesh) =
+                    if static_water_world {
+                        self.static_water_smoothing_rebuilds_remaining = self
+                            .static_water_smoothing_rebuilds_remaining
+                            .saturating_sub(1);
+                        // Ice smoothing has no temporal history, so it only needs
+                        // the first rebuild in each dirty burst.
+                        (true, true, static_surface_changed, static_surface_changed)
+                    } else {
+                        self.fluid_mesh_extract_counter =
+                            self.fluid_mesh_extract_counter.wrapping_add(1);
+                        let initial_mesh = self.fluid_mesh_extract_counter == 1;
+
+                        // Preserve the existing 30 Hz water / 7.5 Hz ice mesh
+                        // cadence, but put density preparation and surface-nets
+                        // extraction on adjacent frames. This flattens the GPU
+                        // workload without changing simulation resolution or the
+                        // rendered mesh. Build the first mesh immediately so water
+                        // never flashes missing when a scene starts or is reset.
+                        (
+                            initial_mesh || self.fluid_mesh_extract_counter % 2 == 0,
+                            initial_mesh || self.fluid_mesh_extract_counter % 2 == 1,
+                            initial_mesh || self.fluid_mesh_extract_counter % 8 == 0,
+                            initial_mesh || self.fluid_mesh_extract_counter % 8 == 1,
+                        )
+                    };
 
                 // First extract density from fluid simulator to surface nets buffers
-                if rebuild_water_mesh || rebuild_ice_mesh {
+                if prepare_water_mesh || prepare_ice_mesh {
                     if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) =
                         (&self.fluid_simulator, &self.gpu_surface_nets)
                     {
@@ -9319,10 +9401,12 @@ impl Scene for GpuScene {
                 }
 
                 if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
-                    if rebuild_water_mesh {
+                    if prepare_water_mesh {
                         // Smooth the raw density: spatial blur + temporal blend
                         gpu_surface_nets.smooth_density(&mut encoder);
+                    }
 
+                    if finalize_water_mesh {
                         // Run compute shaders to extract mesh from smoothed density buffer
                         gpu_surface_nets.extract_mesh(&mut encoder);
                     }
@@ -9332,13 +9416,15 @@ impl Scene for GpuScene {
                     // through slow freeze/melt events, so re-extracting every
                     // 8th frame (~130ms latency) is visually identical and
                     // skips a full second surface-nets extraction per frame.
-                    if rebuild_ice_mesh {
+                    if prepare_ice_mesh {
                         // Blur the binary ice density field before extraction
                         // so surface-nets can place vertices off the voxel
                         // grid, removing the staircase look on the base
                         // surface (crystal facets are layered on top in the
                         // ice shader).
                         gpu_surface_nets.smooth_ice_density(&mut encoder);
+                    }
+                    if finalize_ice_mesh {
                         gpu_surface_nets.extract_ice_mesh(&mut encoder);
                     }
                 }
@@ -9378,7 +9464,7 @@ impl Scene for GpuScene {
         // old combined "Skins & Effects" segment is actually expensive.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 7);
+                timer.write_timestamp(&mut encoder, 8);
             }
         }
 
@@ -9564,7 +9650,7 @@ impl Scene for GpuScene {
         // End of "Particles & Fog" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 8);
+                timer.write_timestamp(&mut encoder, 9);
             }
         }
 
@@ -9615,7 +9701,7 @@ impl Scene for GpuScene {
         // End of "Post-Process" segment, and final resolve for this frame's queries.
         if self.gpu_timing_enabled {
             if let Some(ref mut timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 9);
+                timer.write_timestamp(&mut encoder, 10);
                 timer.resolve(&mut encoder);
             }
         }

@@ -8,7 +8,7 @@
 use std::sync::mpsc::Receiver;
 
 /// Number of timed segments per frame.
-pub const SEGMENT_COUNT: usize = 9;
+pub const SEGMENT_COUNT: usize = 10;
 
 /// Number of timestamp writes per frame (one per segment boundary).
 const TIMESTAMP_COUNT: usize = SEGMENT_COUNT + 1;
@@ -21,16 +21,15 @@ const RESOLVE_ALIGNMENT: u64 = 256;
 
 /// Human-readable labels for each timed segment, in order.
 ///
-/// "Physics Setup", "Signal Processing", and "Physics & Lifecycle" used to be
-/// one combined "Physics & Compute" segment. Cached signal evaluation is split
-/// out into its
-/// own segment so the performance monitor can isolate cached-backbone work from
-/// bounded topology repair.
+/// Physics setup, cached signal evaluation, repeated fixed steps, and
+/// once-per-render-frame physics maintenance are separated so catch-up cost
+/// cannot hide label/scaffold/copy work (or vice versa).
 pub const SEGMENT_LABELS: [&str; SEGMENT_COUNT] = [
     "Physics Setup",
     "Topology Repair",
     "Signal Processing",
-    "Physics & Lifecycle",
+    "Physics/Lifecycle Steps",
+    "Physics Frame Maintenance",
     "Instance Build & Culling",
     "Opaque Render",
     "Skins & Water Mesh",

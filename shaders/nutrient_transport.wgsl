@@ -450,6 +450,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Without this, the compression boost would only apply to the myocyte<->lipocyte
     // connection itself, not to the lipocyte's downstream connections.
     var max_compression_a: f32 = 0.0;
+    var has_transport_connection = false;
     for (var i = 0; i < 20; i++) {
         let adh_idx = adhesion_list[i];
         if (adh_idx < 0 || adh_idx >= i32(arrayLength(&adhesion_connections))) {
@@ -471,10 +472,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
             continue;
         }
+        if ((adh.bond_flags & BOND_FLAG_BARRIER_BALL) == 0u) {
+            has_transport_connection = true;
+        }
         let pos_n  = positions_in[neighbor_idx].xyz;
         let mass_n = positions_in[neighbor_idx].w;
         let comp   = adhesion_compression(pos_a, mass_a, pos_n, mass_n);
         max_compression_a = max(max_compression_a, comp);
+    }
+    // Metabolism above still applies to isolated cells, but there is no
+    // transport work to perform. Avoid two additional twenty-slot scans.
+    if (!has_transport_connection) {
+        return;
     }
     // Global outflow multiplier for this cell - applied to all connections uniformly.
     let cell_pump_mult = 1.0 + max_compression_a * PUMP_AMPLIFICATION;

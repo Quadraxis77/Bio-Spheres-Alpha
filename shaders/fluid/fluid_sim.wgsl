@@ -77,7 +77,8 @@ struct ExtractParams {
 @group(0) @binding(2) var<storage, read> solid_mask: array<u32>;
 @group(0) @binding(3) var<storage, read_write> water_velocity: array<atomic<u32>>;
 // Rolling-average accumulator:
-// [water_temp_sum, water_count, air_temp_sum, air_count, humidity_sum, humidity_count].
+// [water_temp_sum, water_count, air_temp_sum, air_count, humidity_sum,
+//  humidity_count, static_water_phase_changes].
 // Temperatures are stored as round(celsius) + 50 (range 0..200) to keep sums
 // safely within u32 range without needing 64-bit atomics. Humidity is stored
 // as 0..255 units from the atmospheric humidity field.
@@ -2691,6 +2692,7 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
             let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
+                atomicAdd(&temp_stats[6], 1u);
                 phase_debt[idx] = 0.0;
                 atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
                 return;
@@ -2709,6 +2711,7 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
             let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
+                atomicAdd(&temp_stats[6], 1u);
                 phase_debt[idx] = 0.0;
                 atomicStore(&temp_field[idx], encode_field_temp(FREEZE_POINT_C));
                 return;

@@ -3705,7 +3705,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             egui::Color32::from_rgb(80, 160, 220),  // Physics Setup
             egui::Color32::from_rgb(40, 210, 170),  // Topology Repair
             egui::Color32::from_rgb(240, 210, 40),  // Signal Processing
-            egui::Color32::from_rgb(90, 130, 180),  // Physics & Lifecycle
+            egui::Color32::from_rgb(90, 130, 180),  // Physics/Lifecycle Steps
+            egui::Color32::from_rgb(80, 105, 165),  // Physics Frame Maintenance
             egui::Color32::from_rgb(120, 200, 120), // Instance Build & Culling
             egui::Color32::from_rgb(220, 180, 60),  // Opaque Render
             egui::Color32::from_rgb(220, 120, 200), // Skins & Water Mesh
@@ -8825,8 +8826,6 @@ fn render_modes(ui: &mut Ui, context: &mut PanelContext) {
                     devorocyte_consume_rate: 30.0,
                     vascular_nutrient_transport: true,
                     vascular_outlet: false,
-                    vascular_signal_transport: false,
-                    vascular_signal_exchange: false,
                     gametocyte_merge_range: 0.5,
                     memorocyte_rate: 0.1,
                     memorocyte_input_channel: 0,
@@ -9582,18 +9581,6 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
 
             let mode = &mut context.genome.modes[selected_idx];
 
-            group_container(ui, "Signal Backbone", egui::Color32::from_rgb(220, 190, 70), |ui| {
-                ui.checkbox(
-                    &mut mode.adhesion_settings.creates_backbone,
-                    "Create Signal Backbone Bonds",
-                )
-                .on_hover_text(
-                    "Affordable cell-to-cell bonds created by this mode become permanent signal-capable backbone bonds. Redundant bonds remain available as automatic standby routes.",
-                );
-                ui.label("Backbone display: yellow = active route, black = standby route.");
-                ui.label("Creation costs 5% of the creator's next-division nutrient requirement once; transport has no bond maintenance charge.");
-            });
-
             // Breaking Properties Group (Red)
             group_container(ui, "Breaking Properties", egui::Color32::from_rgb(200, 100, 100), |ui| {
                 ui.checkbox(&mut mode.adhesion_settings.can_break, "Adhesion Can Break")
@@ -9715,7 +9702,6 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
             if !secondary_indices.is_empty() {
                 for other_idx in secondary_indices {
                     let other = &mut context.genome.modes[other_idx].adhesion_settings;
-                    if updated.creates_backbone != snapshot.creates_backbone { other.creates_backbone = updated.creates_backbone; }
                     if updated.can_break != snapshot.can_break { other.can_break = updated.can_break; }
                     if (updated.break_force - snapshot.break_force).abs() > f32::EPSILON { other.break_force = updated.break_force; }
                     if (updated.rest_length - snapshot.rest_length).abs() > f32::EPSILON { other.rest_length = updated.rest_length; }
@@ -10331,7 +10317,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Signal Value
                     ui.label("Signal Value:")
-                        .on_hover_text("Signed strength emitted when the ray detects its target. Normal backbone edges retain 95%; vascular-road edges retain 98.75%");
+                        .on_hover_text("Signed strength emitted when the ray detects its target. Ordinary signal routes retain 95%; Vasculocyte-to-Vasculocyte roads retain 98.75%");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -10708,7 +10694,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 13 { // Gametocyte (cell_type == 13)
                 group_container(ui, "Gametocyte Functions", egui::Color32::from_rgb(200, 120, 200), |ui| {
-                    ui.label("Accumulates reserve while attached. When release triggers fire, it detaches and seeks a compatible partner. On contact, both gametes die and their combined reserve seeds a new Embryocyte with a crossover genome.")
+                    ui.label("Accumulates reserve while attached. When release triggers fire, it detaches and seeks a compatible gamete produced by another organism. On contact, both gametes die and their combined reserve seeds a new Embryocyte with a crossover genome.")
                         .on_hover_text("Gametocytes never split. Split mass, split interval, and max splits do not make this cell type divide.");
                     ui.separator();
                     ui.horizontal(|ui| {
@@ -10719,7 +10705,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             .on_hover_text("Extra contact distance beyond cell radii that triggers a merge (0 = must physically touch).");
                     });
                     ui.colored_label(egui::Color32::from_rgb(180, 140, 180),
-                        "  ▸ Only merges with genomes of similar cell-type structure.");
+                        "  ▸ Requires a different parent organism and similar genome structure.");
                     ui.separator();
 
                     // Release triggers - identical to Embryocyte
@@ -10787,7 +10773,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 });
             } else if mode.cell_type == 12 { // Vasculocyte (cell_type == 12)
                 group_container(ui, "Vasculocyte Functions", egui::Color32::from_rgb(60, 160, 200), |ui| {
-                    ui.label("Forms high-throughput conduits through the organism. Can carry nutrients, signals, or both.");
+                    ui.label("Forms high-throughput conduits through the organism.");
                     ui.label("Physical compression (e.g. from Myocytes) boosts transport rate.");
                     ui.separator();
 
@@ -10799,28 +10785,17 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             .on_hover_text("Bidirectional inlet/outlet: can receive nutrients from adjacent non-vascular tissue and release nutrients back into it.");
                     });
 
-                    ui.label("Signals:");
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut mode.vascular_signal_transport, "Transport")
-                            .on_hover_text("Carries signals efficiently between connected vasculocytes. A vascular-to-vascular step costs 0.25 travel points instead of 1.0.");
-                        ui.checkbox(&mut mode.vascular_signal_exchange, "Exchange Port")
-                            .on_hover_text("Bidirectional inlet/outlet: can receive signals from adjacent non-vascular tissue and release signals back into it.");
-                    });
-
                     let nutrient_label = match (mode.vascular_nutrient_transport, mode.vascular_outlet) {
                         (true, true) => "Nutrients: pipe with tissue exchange.",
                         (true, false) => "Nutrients: sealed pipe.",
                         (false, true) => "Nutrients: local exchange port only.",
                         (false, false) => "Nutrients: closed.",
                     };
-                    let signal_label = match (mode.vascular_signal_transport, mode.vascular_signal_exchange) {
-                        (true, true) => "Signals: road with tissue exchange.",
-                        (true, false) => "Signals: sealed road.",
-                        (false, true) => "Signals: local exchange port only.",
-                        (false, false) => "Signals: closed.",
-                    };
                     ui.colored_label(egui::Color32::from_rgb(120, 220, 255), nutrient_label);
-                    ui.colored_label(egui::Color32::from_rgb(120, 255, 180), signal_label);
+                    ui.colored_label(
+                        egui::Color32::from_rgb(120, 255, 180),
+                        "Signals: automatic preferred road between bonded Vasculocytes.",
+                    );
                 });
             } else if mode.cell_type == 11 { // Devorocyte (cell_type == 11)
                 group_container(ui, "Devorocyte Functions", egui::Color32::from_rgb(200, 60, 60), |ui| {
@@ -11130,7 +11105,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 if mode.regulation_emit_channel >= 8 {
                     ui.label("Emit Value:")
-                        .on_hover_text("Signed signal strength broadcast from this cell. Normal backbone edges retain 95%; vascular-road edges retain 98.75%");
+                        .on_hover_text("Signed signal strength broadcast from this cell. Ordinary signal routes retain 95%; Vasculocyte-to-Vasculocyte roads retain 98.75%");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
@@ -11140,12 +11115,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
 
                     ui.label("Network Reach:")
-                        .on_hover_text("Signals follow every connected active backbone route. Reach is determined by attenuation and receiver threshold, not a hop budget");
+                        .on_hover_text("Signals follow the selected active routes across ordinary cell-to-cell adhesions. Reach is determined by attenuation and receiver threshold, not a hop budget");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.label("Reach follows every connected active backbone route; there is no hop limit.");
+                        ui.label("Reach follows every connected active signal route; there is no hop limit.");
                     });
                 }
             });
@@ -12149,12 +12124,6 @@ fn sync_mode_changes_to_others(
         }
         if updated.vascular_outlet != snapshot.vascular_outlet {
             other.vascular_outlet = updated.vascular_outlet;
-        }
-        if updated.vascular_signal_transport != snapshot.vascular_signal_transport {
-            other.vascular_signal_transport = updated.vascular_signal_transport;
-        }
-        if updated.vascular_signal_exchange != snapshot.vascular_signal_exchange {
-            other.vascular_signal_exchange = updated.vascular_signal_exchange;
         }
 
         // Gametocyte

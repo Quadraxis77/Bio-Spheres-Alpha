@@ -389,6 +389,10 @@ pub struct GpuFluidSimulator {
     temp_stats_copy_pending: std::cell::Cell<bool>,
     temp_stats_map_receiver:
         std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
+    /// Set when the static-water fill or phase pass actually changes water/ice
+    /// occupancy. The renderer consumes this to avoid rebuilding surface nets
+    /// continuously for an otherwise motionless static-water world.
+    static_surface_mesh_changed: std::cell::Cell<bool>,
     /// Exponential moving average of water temperature, in Celsius.
     avg_water_temp_c: std::cell::Cell<f32>,
     /// Exponential moving average of air (empty-voxel) temperature, in Celsius.
@@ -607,10 +611,12 @@ impl GpuFluidSimulator {
             ],
         });
 
-        // Climate accumulator: 6 atomic u32 slots (24 bytes), cleared and
+        // Climate accumulator: 7 atomic u32 slots (28 bytes), cleared and
         // accumulated each tick by update_temperature, then copied to a small
         // staging buffer for async CPU readback to drive the rolling averages.
-        const TEMP_STATS_SIZE: u64 = 6 * std::mem::size_of::<u32>() as u64;
+        // Slot 6 is a static-water phase-change counter written by the phase
+        // shader; keeping it in this existing readback avoids another map.
+        const TEMP_STATS_SIZE: u64 = 7 * std::mem::size_of::<u32>() as u64;
         let temp_stats_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Temperature Stats Buffer"),
             size: TEMP_STATS_SIZE,
@@ -1405,6 +1411,7 @@ impl GpuFluidSimulator {
             temp_stats_staging_buffer,
             temp_stats_copy_pending: std::cell::Cell::new(false),
             temp_stats_map_receiver: std::cell::RefCell::new(None),
+            static_surface_mesh_changed: std::cell::Cell::new(false),
             avg_water_temp_c: std::cell::Cell::new(0.0),
             avg_air_temp_c: std::cell::Cell::new(0.0),
             avg_humidity: std::cell::Cell::new(0.0),
@@ -1978,20 +1985,15 @@ impl GpuFluidSimulator {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
-        // Must run before the static-water-world early return below - that
-        // branch returns before reaching the calls at the end of this
-        // function, which otherwise left rain/flow audio state (and the
-        // listener-underwater poll) permanently frozen at whatever they were
-        // the instant static water world was switched on. water_velocity was
-        // just cleared above and stays all-zero for the whole static-mode
-        // step (no swap pass ever runs to repopulate it), so both correctly
-        // settle toward "no flow, no rain" via their existing smoothing
-        // instead of the old sound looping forever with no way to decay.
-        self.update_water_audio_summary(queue, encoder);
-        self.update_listener_water_query(encoder);
-
         if self.static_water_world_enabled.get() {
+            // Static water has no flow or rain. Keep sampling only while old
+            // dynamic audio state is decaying; once it reaches silence there
+            // is no reason to scan the 128^3 fluid volume again.
+            if self.has_environmental_audio_state() {
+                self.update_water_audio_summary(queue, encoder);
+            }
             if self.static_water_world_needs_fill.replace(false) {
+                self.static_surface_mesh_changed.set(true);
                 let bind_group = self.create_bind_group(_device);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Fluid Fill Static Water World"),
@@ -2003,7 +2005,12 @@ impl GpuFluidSimulator {
             }
 
             if run_temperature {
-                encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
+                // Clear the six rolling-stat slots, but leave the phase-change
+                // counter intact until it has been copied. If a prior async map
+                // is still busy, changes accumulate instead of being lost.
+                const ROLLING_STATS_SIZE: u64 = 6 * std::mem::size_of::<u32>() as u64;
+                const PHASE_CHANGE_OFFSET: u64 = ROLLING_STATS_SIZE;
+                encoder.clear_buffer(&self.temp_stats_buffer, 0, Some(ROLLING_STATS_SIZE));
                 {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("Static Water Update Temperature Pass"),
@@ -2013,6 +2020,19 @@ impl GpuFluidSimulator {
                     pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
                     pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
                 }
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Static Water Ice Melt Phase Pass"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&self.static_water_phase_pipeline);
+                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                    pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+                }
+
+                // Copy after the phase pass so slot 6 includes this tick's
+                // successful water<->ice transitions. Reset only after a copy
+                // is queued; otherwise the counter survives readback pressure.
                 if !self.temp_stats_copy_pending.get()
                     && self.temp_stats_map_receiver.borrow().is_none()
                 {
@@ -2023,17 +2043,12 @@ impl GpuFluidSimulator {
                         0,
                         self.temp_stats_buffer.size(),
                     );
+                    encoder.clear_buffer(
+                        &self.temp_stats_buffer,
+                        PHASE_CHANGE_OFFSET,
+                        Some(std::mem::size_of::<u32>() as u64),
+                    );
                     self.temp_stats_copy_pending.set(true);
-                }
-
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Static Water Ice Melt Phase Pass"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&self.static_water_phase_pipeline);
-                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
-                    pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
                 }
             }
             return;
@@ -2135,13 +2150,38 @@ impl GpuFluidSimulator {
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
         }
+
+        // Spatial loop sources are heavily smoothed and their handles update
+        // distance/pan every render frame, so refreshing the expensive voxel
+        // summary at 15 Hz is perceptually equivalent to doing it at 60 Hz.
+        // Run after the swap passes: water_velocity now describes this step's
+        // motion (the previous ordering sampled immediately after clearing it).
+        if climate_phase == 1 {
+            self.update_water_audio_summary(queue, encoder);
+        }
+        self.update_listener_water_query(encoder);
+    }
+
+    fn has_environmental_audio_state(&self) -> bool {
+        !self.flow_audio_sources.borrow().is_empty()
+            || !self.rain_audio_sources.borrow().is_empty()
+            || self.rain_audio_intensity.get() > 0.001
+            || self
+                .flow_bucket_strength
+                .borrow()
+                .iter()
+                .any(|strength| *strength > 0.001)
+            || self
+                .rain_bucket_strength
+                .borrow()
+                .iter()
+                .any(|strength| *strength > 0.001)
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        // Skip only while a previous sample is still being consumed - no
-        // wall-clock delay here, so the (now much cheaper, see
-        // WATER_AUDIO_SAMPLE_STRIDE) cost is spread evenly across frames
-        // instead of concentrated into a periodic spike.
+        // Skip while the previous sample is still being consumed. Dynamic
+        // callers already schedule this at 15 Hz; static mode may call more
+        // often briefly while old flow/rain sources decay toward silence.
         if self.water_audio_copy_pending.get()
             || self.water_audio_readback_receiver.borrow().is_some()
         {
@@ -2493,7 +2533,9 @@ impl GpuFluidSimulator {
     }
 
     /// Populate nutrients in water voxels using drifting noise pattern
-    /// Called every physics step to keep supply balanced with phagocyte consumption
+    /// Called once before a rendered frame's fixed-step batch. Fluid time advances
+    /// once per rendered frame, and consumed voxels remain marked for the epoch, so
+    /// repeating this full-volume pass inside catch-up would be identical work.
     pub fn populate_nutrients(
         &self,
         _device: &wgpu::Device,
@@ -2602,6 +2644,9 @@ impl GpuFluidSimulator {
                             self.avg_humidity
                                 .set(prev + (avg - prev) * HUMIDITY_EMA_RATE);
                         }
+                        if stats.len() >= 7 && stats[6] > 0 {
+                            self.static_surface_mesh_changed.set(true);
+                        }
                     }
                     self.temp_stats_staging_buffer.unmap();
                     finished = true;
@@ -2616,6 +2661,12 @@ impl GpuFluidSimulator {
         if finished {
             *self.temp_stats_map_receiver.borrow_mut() = None;
         }
+    }
+
+    /// Consume the static-water surface invalidation raised by the initial
+    /// fill or by an asynchronously confirmed water/ice phase transition.
+    pub fn take_static_surface_mesh_changed(&self) -> bool {
+        self.static_surface_mesh_changed.replace(false)
     }
 
     /// Rolling average water temperature, in Celsius.

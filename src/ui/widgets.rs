@@ -937,6 +937,11 @@ pub fn modes_buttons(
     (copy_into_clicked, reset_clicked)
 }
 
+#[inline]
+fn mode_marquee_id_seed(button_x: f32, index: usize) -> u64 {
+    button_x.to_bits() as u64 ^ (index as u64).wrapping_mul(0x9e3779b97f4a7c15)
+}
+
 /// Modes list items widget with full functionality
 /// Returns (selection_changed, initial_changed, rename_completed, color_change, row_rects, reorder)
 /// reorder: Some((from, to)) when the user drag-reordered a mode row.
@@ -1185,8 +1190,7 @@ pub fn modes_list_items(
                     // Marquee state: (scroll_offset_px, hover_timer_secs)
                     // scroll_offset_px: how many pixels the text has scrolled left
                     // hover_timer_secs: accumulated hover time (used for start delay + loop pause)
-                    let marquee_id =
-                        button_rect.min.x.to_bits() as u64 ^ (index as u64 * 0x9e3779b97f4a7c15);
+                    let marquee_id = mode_marquee_id_seed(button_rect.min.x, index);
                     let marquee_id = egui::Id::new(("marquee", marquee_id));
 
                     // Scroll speed and timing constants
@@ -1630,6 +1634,15 @@ mod tests {
         assert!(modes_count > 0);
         assert!(selected_index < modes_count);
         assert!(initial_mode < modes_count);
+    }
+
+    #[test]
+    fn mode_marquee_ids_wrap_for_high_mode_indices() {
+        let button_x = 123.5_f32;
+        let expected =
+            button_x.to_bits() as u64 ^ (usize::MAX as u64).wrapping_mul(0x9e3779b97f4a7c15);
+
+        assert_eq!(mode_marquee_id_seed(button_x, usize::MAX), expected);
     }
 
     #[test]

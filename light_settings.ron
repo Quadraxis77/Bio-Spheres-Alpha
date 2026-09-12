@@ -14,7 +14,7 @@
     light_field_step_size: 1.5,
     light_field_absorption_solid: 20.0,
     light_field_absorption_cell: 5.0,
-    light_field_ambient_floor: 0.2,
+    light_field_ambient_floor: 0.0,
     water_light_attenuation: 1.0,
     show_sun: true,
     sun_color: (0.8307159, 0.7089912, 0.48764104),

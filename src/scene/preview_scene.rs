@@ -15,7 +15,6 @@ use crate::ui::camera::CameraController;
 
 const PREVIEW_LIGHT_COLOR: [f32; 3] = [5.2, 5.0, 4.6];
 const PREVIEW_LIGHT_DIR: [f32; 3] = [0.35, -0.78, -0.52];
-const PREVIEW_CELL_AMBIENT: f32 = 0.32;
 const SCRUB_TICK_INTERVAL_SECONDS: f32 = 0.25;
 const MAX_SCRUB_TICKS_PER_FRAME: usize = 8;
 
@@ -91,7 +90,6 @@ impl PreviewScene {
         let mut renderer = CellRenderer::new(device, queue, surface_config, capacity);
         renderer.set_light_color(PREVIEW_LIGHT_COLOR);
         renderer.set_light_dir(PREVIEW_LIGHT_DIR);
-        renderer.set_ambient(PREVIEW_CELL_AMBIENT);
         let adhesion_renderer =
             AdhesionLineRenderer::new(device, queue, surface_config, capacity * 20); // 20 adhesions per cell max
         let gizmo_renderer = OrientationGizmoRenderer::new(device, queue, surface_config);

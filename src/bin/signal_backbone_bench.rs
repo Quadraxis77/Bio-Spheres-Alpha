@@ -1,5 +1,9 @@
 use std::num::NonZeroU64;
 
+use bio_spheres::simulation::gpu_physics::{
+    GpuSignalProcessorConfig, GpuSignalProcessorState, GpuSignalSourceMeta,
+    SignalBackboneValuePipeline,
+};
 use bio_spheres::simulation::signal_backbone_bench::{
     populate_workload, synthetic_forest, BoundaryInputKind, Channels, GpuCellTopology,
     GpuMicrotreeTopology, MacroStrategy, MicrotreeSchedule, SignalWorkload, SyntheticShape,
@@ -7,10 +11,6 @@ use bio_spheres::simulation::signal_backbone_bench::{
 };
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
-use bio_spheres::simulation::gpu_physics::{
-    GpuSignalProcessorConfig, GpuSignalProcessorState, GpuSignalSourceMeta,
-    SignalBackboneValuePipeline,
-};
 
 const WORKGROUP_SIZE: u32 = 256;
 const PARAM_ALIGNMENT: u64 = 256;
@@ -348,10 +348,21 @@ async fn run() -> Result<(), String> {
 
     if args.strategy == Strategy::Integrated {
         let integrated_expected = if args.workload == SignalWorkload::HeatScreamAllChannels {
-            cached.propagate_with_local_overlay(&forest.sources, Some(&forest.sources))
+            cached
+                .propagate_with_local_overlay(&forest.sources, Some(&forest.sources))
                 .map_err(|error| format!("heat CPU oracle: {error:?}"))?
-        } else { expected };
-        return run_integrated_value_pipeline(&device, &queue, &args, &forest.sources, &cached, &integrated_expected).await;
+        } else {
+            expected
+        };
+        return run_integrated_value_pipeline(
+            &device,
+            &queue,
+            &args,
+            &forest.sources,
+            &cached,
+            &integrated_expected,
+        )
+        .await;
     }
 
     if args.strategy == Strategy::General && !general_uses_optimized_kernel {
@@ -1164,30 +1175,48 @@ async fn run_integrated_value_pipeline(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
-    let mut pipeline = SignalBackboneValuePipeline::new(device, cell_count, &nutrients, &packed_public);
+    let mut pipeline =
+        SignalBackboneValuePipeline::new(device, cell_count, &nutrients, &packed_public);
     pipeline.set_static_forest(device, cached);
 
     let requested = flatten_sources(sources);
-    let metadata = sources.iter().enumerate().map(|(cell, channels)| GpuSignalSourceMeta {
-        identity: cell as u32,
-        flags: 1 | if args.workload == SignalWorkload::HeatScreamAllChannels { 2 } else { 0 },
-        requested_absolute: channels.iter().map(|value| value.abs()).sum(),
-        _padding: 0,
-    }).collect::<Vec<_>>();
+    let metadata = sources
+        .iter()
+        .enumerate()
+        .map(|(cell, channels)| GpuSignalSourceMeta {
+            identity: cell as u32,
+            flags: 1 | if args.workload == SignalWorkload::HeatScreamAllChannels {
+                2
+            } else {
+                0
+            },
+            requested_absolute: channels.iter().map(|value| value.abs()).sum(),
+            _padding: 0,
+        })
+        .collect::<Vec<_>>();
     let configs = match args.workload {
-        SignalWorkload::EveryCellCognocyte => (0..args.cells).map(|cell| {
-            GpuSignalProcessorConfig::new(1, 0, 0, 1, (cell % 16) as u32, 1, 0, 0.0, 0.0, 0.0)
-        }).collect(),
-        SignalWorkload::EveryCellMemorocyte => (0..args.cells).map(|cell| {
-            GpuSignalProcessorConfig::new(2, 0, 0, 0, (cell % 16) as u32, 1, 0, 0.5, 0.0, 0.0)
-        }).collect(),
+        SignalWorkload::EveryCellCognocyte => (0..args.cells)
+            .map(|cell| {
+                GpuSignalProcessorConfig::new(1, 0, 0, 1, (cell % 16) as u32, 1, 0, 0.0, 0.0, 0.0)
+            })
+            .collect(),
+        SignalWorkload::EveryCellMemorocyte => (0..args.cells)
+            .map(|cell| {
+                GpuSignalProcessorConfig::new(2, 0, 0, 0, (cell % 16) as u32, 1, 0, 0.5, 0.0, 0.0)
+            })
+            .collect(),
         _ => vec![GpuSignalProcessorConfig::default(); args.cells],
     };
     queue.write_buffer(&pipeline.source_field, 0, bytemuck::cast_slice(&requested));
     queue.write_buffer(&pipeline.source_meta, 0, bytemuck::cast_slice(&metadata));
-    queue.write_buffer(&pipeline.processor_config, 0, bytemuck::cast_slice(&configs));
+    queue.write_buffer(
+        &pipeline.processor_config,
+        0,
+        bytemuck::cast_slice(&configs),
+    );
     let active_group_mask = active_groups(args.workload)
-        .iter().fold(0u32, |mask, group| mask | (1 << group));
+        .iter()
+        .fold(0u32, |mask, group| mask | (1 << group));
     pipeline.write_params(queue, 0, cell_count, 77, active_group_mask);
 
     device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1197,17 +1226,20 @@ async fn run_integrated_value_pipeline(
         count: 4,
     });
     let query_resolve = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Integrated Signal Query Resolve"), size: 256,
+        label: Some("Integrated Signal Query Resolve"),
+        size: 256,
         usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
     let query_readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Integrated Signal Query Readback"), size: 32,
+        label: Some("Integrated Signal Query Readback"),
+        size: 32,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
     let output_readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Integrated Signal Output Readback"), size: field_bytes,
+        label: Some("Integrated Signal Output Readback"),
+        size: field_bytes,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -1218,29 +1250,48 @@ async fn run_integrated_value_pipeline(
         mapped_at_creation: false,
     });
     if let Some(error) = device.pop_error_scope().await {
-        return Err(format!("integrated WGSL/pipeline validation failed: {error}"));
+        return Err(format!(
+            "integrated WGSL/pipeline validation failed: {error}"
+        ));
     }
     println!("integrated_wgsl_pipeline_creation=pass");
 
     let encode_tick = |encoder: &mut wgpu::CommandEncoder, timed: bool| {
-        if timed { encoder.write_timestamp(&query_set, 0); }
+        if timed {
+            encoder.write_timestamp(&query_set, 0);
+        }
         pipeline.encode_sources(encoder, 0, cell_count);
-        if timed { encoder.write_timestamp(&query_set, 1); }
+        if timed {
+            encoder.write_timestamp(&query_set, 1);
+        }
         pipeline.encode_propagation(encoder, active_group_mask, 0);
-        if timed { encoder.write_timestamp(&query_set, 2); }
+        if timed {
+            encoder.write_timestamp(&query_set, 2);
+        }
         pipeline.encode_finalize_and_processors(
             encoder,
             0,
             cell_count,
-            matches!(args.workload, SignalWorkload::EveryCellCognocyte | SignalWorkload::EveryCellMemorocyte),
+            matches!(
+                args.workload,
+                SignalWorkload::EveryCellCognocyte | SignalWorkload::EveryCellMemorocyte
+            ),
         );
-        if timed { encoder.write_timestamp(&query_set, 3); }
+        if timed {
+            encoder.write_timestamp(&query_set, 3);
+        }
     };
     for _ in 0..args.warmup {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Integrated Signal Warmup") });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Integrated Signal Warmup"),
+        });
         encode_tick(&mut encoder, false);
         let submission = queue.submit(std::iter::once(encoder.finish()));
-        device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None })
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
             .map_err(|error| format!("integrated warmup wait: {error:?}"))?;
     }
 
@@ -1250,18 +1301,35 @@ async fn run_integrated_value_pipeline(
     let mut processor_ms = Vec::with_capacity(args.samples);
     let mut total_ms = Vec::with_capacity(args.samples);
     for sample in 0..args.samples {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Integrated Signal Timed") });
-        if sample + 1 == args.samples && matches!(args.workload, SignalWorkload::EveryCellCognocyte | SignalWorkload::EveryCellMemorocyte) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Integrated Signal Timed"),
+        });
+        if sample + 1 == args.samples
+            && matches!(
+                args.workload,
+                SignalWorkload::EveryCellCognocyte | SignalWorkload::EveryCellMemorocyte
+            )
+        {
             pipeline.copy_processor_state_to(&mut encoder, &processor_state_readback, cell_count);
         }
         encode_tick(&mut encoder, true);
         encoder.resolve_query_set(&query_set, 0..4, &query_resolve, 0);
         encoder.copy_buffer_to_buffer(&query_resolve, 0, &query_readback, 0, 32);
         if sample + 1 == args.samples {
-            encoder.copy_buffer_to_buffer(&pipeline.finalized_field, 0, &output_readback, 0, field_bytes);
+            encoder.copy_buffer_to_buffer(
+                &pipeline.finalized_field,
+                0,
+                &output_readback,
+                0,
+                field_bytes,
+            );
         }
         let submission = queue.submit(std::iter::once(encoder.finish()));
-        device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None })
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
             .map_err(|error| format!("integrated timed wait: {error:?}"))?;
         let timestamp = map_read::<u64>(device, &query_readback)?;
         let elapsed = |from: usize, to: usize| {
@@ -1272,7 +1340,12 @@ async fn run_integrated_value_pipeline(
         processor_ms.push(elapsed(2, 3));
         total_ms.push(elapsed(0, 3));
     }
-    for timings in [&mut source_ms, &mut propagation_ms, &mut processor_ms, &mut total_ms] {
+    for timings in [
+        &mut source_ms,
+        &mut propagation_ms,
+        &mut processor_ms,
+        &mut total_ms,
+    ] {
         timings.sort_by(f64::total_cmp);
     }
     let percentile = |values: &[f64], fraction: f64| {
@@ -1288,7 +1361,9 @@ async fn run_integrated_value_pipeline(
     );
     println!(
         "gpu_ms_p50={:.4} gpu_ms_p95={:.4} gpu_ms_worst={:.4}",
-        percentile(&total_ms, 0.5), percentile(&total_ms, 0.95), total_ms[total_ms.len() - 1]
+        percentile(&total_ms, 0.5),
+        percentile(&total_ms, 0.95),
+        total_ms[total_ms.len() - 1]
     );
 
     let actual = map_read::<[f32; 4]>(device, &output_readback)?;
@@ -1297,7 +1372,10 @@ async fn run_integrated_value_pipeline(
     // snapshot; this diagnostic copy is outside the timestamp interval and is
     // not part of the gameplay command path.
     let temporal_expected;
-    let expected = if matches!(args.workload, SignalWorkload::EveryCellCognocyte | SignalWorkload::EveryCellMemorocyte) {
+    let expected = if matches!(
+        args.workload,
+        SignalWorkload::EveryCellCognocyte | SignalWorkload::EveryCellMemorocyte
+    ) {
         let prior = map_read::<GpuSignalProcessorState>(device, &processor_state_readback)?;
         let mut tick_sources = sources.to_vec();
         for (cell, state) in prior.iter().enumerate() {
@@ -1305,7 +1383,8 @@ async fn run_integrated_value_pipeline(
             tick_sources[cell][channel] =
                 (tick_sources[cell][channel] + state.output).clamp(-1000.0, 1000.0);
         }
-        temporal_expected = cached.propagate(&tick_sources)
+        temporal_expected = cached
+            .propagate(&tick_sources)
             .map_err(|error| format!("temporal CPU oracle: {error:?}"))?;
         &temporal_expected
     } else {
@@ -1316,10 +1395,16 @@ async fn run_integrated_value_pipeline(
     let mut first_mismatch: Option<(usize, usize, f32, f32)> = None;
     for cell in 0..args.cells {
         for channel in 0..CHANNEL_COUNT {
-            let error = (actual[cell * 4 + channel / 4][channel % 4] - expected[cell][channel]).abs();
+            let error =
+                (actual[cell * 4 + channel / 4][channel % 4] - expected[cell][channel]).abs();
             max_error = max_error.max(error);
             if error > PARITY_TOLERANCE {
-                first_mismatch.get_or_insert((cell, channel, expected[cell][channel], actual[cell * 4 + channel / 4][channel % 4]));
+                first_mismatch.get_or_insert((
+                    cell,
+                    channel,
+                    expected[cell][channel],
+                    actual[cell * 4 + channel / 4][channel % 4],
+                ));
                 mismatches += 1;
             }
         }
@@ -1348,7 +1433,11 @@ async fn run_integrated_value_pipeline(
         if memory_pass { "PASS" } else { "FAIL" },
         if correctness_pass { "PASS" } else { "FAIL" },
         if timing_pass { "PASS" } else { "FAIL" },
-        if memory_pass && correctness_pass && timing_pass { "PASS" } else { "FAIL" },
+        if memory_pass && correctness_pass && timing_pass {
+            "PASS"
+        } else {
+            "FAIL"
+        },
     );
     Ok(())
 }

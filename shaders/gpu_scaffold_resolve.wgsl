@@ -57,12 +57,15 @@ struct ScaffoldParams {
     rule_count: u32,
     cell_slots: u32,
     pass_index: u32,
-    _pad0: u32,
+    source_phase: u32,
 }
 
 @group(0) @binding(0) var<uniform> physics: PhysicsParams;
 @group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read> cell_count_buffer: array<u32>;
+@group(0) @binding(3) var<storage, read> spatial_grid_counts: array<u32>;
+@group(0) @binding(4) var<storage, read> spatial_grid_cells: array<u32>;
+@group(0) @binding(5) var<storage, read> cell_grid_indices: array<u32>;
 
 @group(1) @binding(0) var<storage, read> mode_indices: array<u32>;
 @group(1) @binding(1) var<storage, read> genome_ids: array<u32>;
@@ -70,43 +73,89 @@ struct ScaffoldParams {
 @group(1) @binding(3) var<storage, read> death_flags: array<u32>;
 @group(1) @binding(4) var<storage, read> parent_lineage_hashes: array<vec2<u32>>;
 @group(1) @binding(5) var<storage, read> organism_cell_ids: array<u32>;
-@group(1) @binding(6) var<storage, read> cell_ids: array<u32>;
-@group(1) @binding(7) var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
-@group(1) @binding(8) var<storage, read> split_nutrient_thresholds: array<f32>;
+// Current connected component through normal developmental adhesions only.
+// Barrier-ball scaffold bonds are deliberately excluded by organism_label.wgsl.
+@group(1) @binding(9) var<storage, read> organism_labels: array<u32>;
 
 @group(2) @binding(0) var<storage, read_write> adhesion_connections: array<AdhesionConnection>;
 @group(2) @binding(1) var<storage, read_write> cell_adhesion_indices: array<atomic<i32>>;
 @group(2) @binding(2) var<storage, read_write> next_adhesion_id: array<atomic<u32>>;
 @group(2) @binding(3) var<storage, read_write> free_adhesion_slots: array<u32>;
 @group(2) @binding(4) var<storage, read_write> adhesion_counts: array<atomic<u32>>;
-@group(2) @binding(5) var<storage, read> adhesion_settings_v2: array<vec4<f32>>;
 
 @group(3) @binding(0) var<storage, read> scaffold_rules: array<ScaffoldRule>;
 @group(3) @binding(1) var<uniform> scaffold_params: ScaffoldParams;
 
 const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
-const BOND_FLAG_SIGNAL_BACKBONE: u32 = 4u;
-const BACKBONE_CONSTRUCTION_FRACTION: f32 = 0.05;
 const SELECTOR_ANY: u32 = 0u;
 const SELECTOR_MODE: u32 = 1u;
 const SELECTOR_LINEAGE: u32 = 2u;
 const SELECTOR_LINEAGE_OR_MODE: u32 = 3u;
 const SELECTOR_ORGANISM_CELL_ID: u32 = 4u;
+const INVALID_ORGANISM_LABEL: u32 = 0xFFFFFFFFu;
+const INVALID_CELL: u32 = 0xFFFFFFFFu;
+const MAX_CELLS_PER_GRID: u32 = 16u;
+const SCAFFOLD_SOURCE_PHASE_COUNT: u32 = 8u;
 
-// Reserve the one-time construction charge atomically. The caller refunds it
-// if no complete physical bond is committed.
-fn try_reserve_construction(cell_idx: u32, cost: i32) -> bool {
-    if (cost <= 0i) { return true; }
-    loop {
-        let available = atomicLoad(&nutrients_buffer[cell_idx]);
-        if (available < cost) { return false; }
-        let result = atomicCompareExchangeWeak(
-            &nutrients_buffer[cell_idx], available, available - cost
-        );
-        if (result.exchanged) { return true; }
+fn is_in_scaffold_scope(cell_idx: u32, organism_id: u32, component_label: u32) -> bool {
+    return development_addresses[cell_idx].x == organism_id
+        && organism_labels[cell_idx] == component_label;
+}
+
+fn rule_formation_range(rule: ScaffoldRule) -> f32 {
+    return max(bitcast<f32>(rule.max_range_bits), 0.0);
+}
+
+fn neighborhood_radius(max_range: f32) -> u32 {
+    let cell_size = max(physics.grid_cell_size, 0.001);
+    return min(u32(ceil(max_range / cell_size)), u32(max(physics.grid_resolution - 1, 0)));
+}
+
+fn neighborhood_slot_capacity(max_range: f32) -> u32 {
+    let radius = neighborhood_radius(max_range);
+    let side = radius * 2u + 1u;
+    return side * side * side * MAX_CELLS_PER_GRID;
+}
+
+// Map a compact ordinal to one of the fixed spatial-grid occupants in the
+// source's formation-range neighborhood. This replaces the old all-live-cell
+// scan. Overflow occupants are intentionally deferred until the grid's
+// overcrowding cull makes room in the fixed bucket on a later frame.
+fn neighborhood_candidate(source: u32, ordinal: u32, max_range: f32) -> u32 {
+    let resolution = u32(max(physics.grid_resolution, 1));
+    let source_grid = cell_grid_indices[source];
+    let source_x = source_grid % resolution;
+    let source_y = (source_grid / resolution) % resolution;
+    let source_z = source_grid / (resolution * resolution);
+    let radius = neighborhood_radius(max_range);
+    let side = radius * 2u + 1u;
+    let bucket_ordinal = ordinal / MAX_CELLS_PER_GRID;
+    let occupant_slot = ordinal % MAX_CELLS_PER_GRID;
+    let local_x = bucket_ordinal % side;
+    let local_y = (bucket_ordinal / side) % side;
+    let local_z = bucket_ordinal / (side * side);
+    let grid_x = i32(source_x) + i32(local_x) - i32(radius);
+    let grid_y = i32(source_y) + i32(local_y) - i32(radius);
+    let grid_z = i32(source_z) + i32(local_z) - i32(radius);
+    let resolution_i = i32(resolution);
+    if (grid_x < 0 || grid_y < 0 || grid_z < 0
+        || grid_x >= resolution_i || grid_y >= resolution_i || grid_z >= resolution_i) {
+        return INVALID_CELL;
     }
-    return false;
+
+    let grid_index = u32(grid_x) + u32(grid_y) * resolution
+        + u32(grid_z) * resolution * resolution;
+    let occupant_count = min(spatial_grid_counts[grid_index], MAX_CELLS_PER_GRID);
+    if (occupant_slot >= occupant_count) {
+        return INVALID_CELL;
+    }
+    return spatial_grid_cells[grid_index * MAX_CELLS_PER_GRID + occupant_slot];
+}
+
+fn is_within_formation_range(source: u32, candidate: u32, max_range: f32) -> bool {
+    let delta = positions[candidate].xyz - positions[source].xyz;
+    return dot(delta, delta) <= max_range * max_range;
 }
 
 fn selector_matches(cell_idx: u32, kind: u32, mode_idx: u32, hash_lo: u32, hash_hi: u32, branch_slot: u32) -> bool {
@@ -163,28 +212,6 @@ fn abs_i32(value: i32) -> i32 {
     return select(value, -value, value < 0);
 }
 
-fn is_first_structural_match(cell_idx: u32, live_slots: u32, rule: ScaffoldRule, kind: u32, mode_idx: u32, hash_lo: u32, hash_hi: u32, branch_slot: u32, organism_id: u32) -> bool {
-    let rank = structural_match_rank(cell_idx, kind, mode_idx, hash_lo, hash_hi, branch_slot);
-    if (rank == 0u) {
-        return false;
-    }
-
-    for (var candidate = 0u; candidate < live_slots; candidate++) {
-        if (candidate == cell_idx) {
-            return true;
-        }
-        if (death_flags[candidate] != 0u) { continue; }
-        if (genome_ids[candidate] != rule.genome_id) { continue; }
-        if (development_addresses[candidate].x != organism_id) { continue; }
-
-        let candidate_rank = structural_match_rank(candidate, kind, mode_idx, hash_lo, hash_hi, branch_slot);
-        if (candidate_rank >= rank) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // Follow the preferred-branch lineage chain from `root_hash_lo/hi` and return the
 // index of the current living tip cell, or 0xFFFFFFFF if not found.
 //
@@ -202,6 +229,9 @@ fn find_preferred_chain_tip(
     live_slots: u32,
     genome_id: u32,
     organism_id: u32,
+    component_label: u32,
+    source: u32,
+    max_range: f32,
     root_hash_lo: u32,
     root_hash_hi: u32,
     preferred_branch_slot: u32,
@@ -209,35 +239,42 @@ fn find_preferred_chain_tip(
 ) -> u32 {
     var cur_lo = root_hash_lo;
     var cur_hi = root_hash_hi;
+    let neighbor_slots = neighborhood_slot_capacity(max_range);
 
     for (var gen = 0u; gen < 24u; gen++) {
         // Step 1: living cell with exact lineage hash.
-        for (var i = 0u; i < live_slots; i++) {
-            if (death_flags[i] != 0u) { continue; }
-            if (genome_ids[i] != genome_id) { continue; }
-            if (development_addresses[i].x != organism_id) { continue; }
-            let dev = development_addresses[i];
+        for (var ordinal = 0u; ordinal < neighbor_slots; ordinal++) {
+            let candidate = neighborhood_candidate(source, ordinal, max_range);
+            if (candidate == INVALID_CELL || candidate >= live_slots) { continue; }
+            if (!is_within_formation_range(source, candidate, max_range)) { continue; }
+            if (death_flags[candidate] != 0u) { continue; }
+            if (genome_ids[candidate] != genome_id) { continue; }
+            if (!is_in_scaffold_scope(candidate, organism_id, component_label)) { continue; }
+            let dev = development_addresses[candidate];
             if (dev.y == cur_lo && dev.z == cur_hi) {
-                return i;
+                return candidate;
             }
         }
 
         // Step 2: cell with this hash has divided — follow preferred child.
         var preferred_child = 0xFFFFFFFFu;
         var any_child = 0xFFFFFFFFu;
-        for (var i = 0u; i < live_slots; i++) {
-            if (death_flags[i] != 0u) { continue; }
-            if (genome_ids[i] != genome_id) { continue; }
-            if (development_addresses[i].x != organism_id) { continue; }
-            let ph = parent_lineage_hashes[i];
+        for (var ordinal = 0u; ordinal < neighbor_slots; ordinal++) {
+            let candidate = neighborhood_candidate(source, ordinal, max_range);
+            if (candidate == INVALID_CELL || candidate >= live_slots) { continue; }
+            if (!is_within_formation_range(source, candidate, max_range)) { continue; }
+            if (death_flags[candidate] != 0u) { continue; }
+            if (genome_ids[candidate] != genome_id) { continue; }
+            if (!is_in_scaffold_scope(candidate, organism_id, component_label)) { continue; }
+            let ph = parent_lineage_hashes[candidate];
             if (ph.x != cur_lo || ph.y != cur_hi) { continue; }
-            let cell_branch = development_addresses[i].w & 0xFFFFu;
+            let cell_branch = development_addresses[candidate].w & 0xFFFFu;
             if (cell_branch == preferred_branch_slot) {
-                preferred_child = i;
+                preferred_child = candidate;
                 break;
             }
             if (any_child == 0xFFFFFFFFu) {
-                any_child = i;
+                any_child = candidate;
             }
         }
 
@@ -252,39 +289,18 @@ fn find_preferred_chain_tip(
 
     // Step 3: mode-only fallback — mirrors CPU step 3.
     if (fallback_mode != 0xFFFFFFFFu) {
-        for (var i = 0u; i < live_slots; i++) {
-            if (death_flags[i] != 0u) { continue; }
-            if (genome_ids[i] != genome_id) { continue; }
-            if (development_addresses[i].x != organism_id) { continue; }
-            if (mode_indices[i] == fallback_mode) { return i; }
+        for (var ordinal = 0u; ordinal < neighbor_slots; ordinal++) {
+            let candidate = neighborhood_candidate(source, ordinal, max_range);
+            if (candidate == INVALID_CELL || candidate >= live_slots) { continue; }
+            if (!is_within_formation_range(source, candidate, max_range)) { continue; }
+            if (death_flags[candidate] != 0u) { continue; }
+            if (genome_ids[candidate] != genome_id) { continue; }
+            if (!is_in_scaffold_scope(candidate, organism_id, component_label)) { continue; }
+            if (mode_indices[candidate] == fallback_mode) { return candidate; }
         }
     }
 
     return 0xFFFFFFFFu;
-}
-
-fn find_best_structural_match(live_slots: u32, rule: ScaffoldRule, kind: u32, mode_idx: u32, hash_lo: u32, hash_hi: u32, branch_slot: u32, organism_id: u32, exclude: u32) -> u32 {
-    var best = 0xFFFFFFFFu;
-    var best_rank = 0u;
-    var best_delta_error = 0x7FFFFFFF;
-    let source_depth = lineage_depth(exclude);
-
-    for (var candidate = 0u; candidate < live_slots; candidate++) {
-        if (candidate == exclude) { continue; }
-        if (death_flags[candidate] != 0u) { continue; }
-        if (genome_ids[candidate] != rule.genome_id) { continue; }
-        if (development_addresses[candidate].x != organism_id) { continue; }
-
-        let rank = structural_match_rank(candidate, kind, mode_idx, hash_lo, hash_hi, branch_slot);
-        let generation_delta = abs_i32(lineage_depth(candidate) - source_depth);
-        let delta_error = abs_i32(generation_delta - abs_i32(rule.preferred_generation_delta));
-        if (rank > best_rank || (rank == best_rank && delta_error < best_delta_error)) {
-            best_rank = rank;
-            best_delta_error = delta_error;
-            best = candidate;
-        }
-    }
-    return best;
 }
 
 // Returns the slot of an existing SCAFFOLD (barrier-ball) bond between a and b,
@@ -375,6 +391,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (source >= live_slots || rule_idx >= scaffold_params.rule_count) {
         return;
     }
+    // Persistent scaffold bonds do not need every eligible source to search on
+    // every rendered frame. Deterministically shard sources so both endpoint
+    // passes cover the whole population once every eight frames without spikes.
+    if ((source % SCAFFOLD_SOURCE_PHASE_COUNT) != scaffold_params.source_phase) {
+        return;
+    }
 
     let rule = scaffold_rules[rule_idx];
     if (death_flags[source] != 0u) {
@@ -385,38 +407,42 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let source_org = development_addresses[source].x;
-    if (source_org == 0u) {
+    let source_component = organism_labels[source];
+    if (source_org == 0u || source_component == INVALID_ORGANISM_LABEL) {
         return;
     }
+    let max_range = rule_formation_range(rule);
+    if (max_range <= 0.0) {
+        return;
+    }
+    let neighbor_slots = neighborhood_slot_capacity(max_range);
 
     if (rule.endpoint_a_kind == SELECTOR_ORGANISM_CELL_ID && rule.endpoint_b_kind == SELECTOR_ORGANISM_CELL_ID) {
         if (scaffold_params.pass_index == 1u) {
             return;
         }
-
-        for (var candidate = 0u; candidate < source; candidate++) {
-            if (death_flags[candidate] != 0u) { continue; }
-            if (genome_ids[candidate] != rule.genome_id) { continue; }
-            if (development_addresses[candidate].x == source_org) {
-                return;
-            }
+        // Exact organism-cell IDs have one authoritative source per organism;
+        // no global "first source" scan is needed.
+        if (organism_cell_ids[source] != rule.endpoint_a_hash_lo) {
+            return;
         }
 
-        var endpoint_a = 0xFFFFFFFFu;
+        let endpoint_a = source;
         var endpoint_b = 0xFFFFFFFFu;
-        for (var candidate = 0u; candidate < live_slots; candidate++) {
+        for (var ordinal = 0u; ordinal < neighbor_slots; ordinal++) {
+            let candidate = neighborhood_candidate(source, ordinal, max_range);
+            if (candidate == INVALID_CELL || candidate >= live_slots) { continue; }
+            if (!is_within_formation_range(source, candidate, max_range)) { continue; }
             if (death_flags[candidate] != 0u) { continue; }
             if (genome_ids[candidate] != rule.genome_id) { continue; }
-            if (development_addresses[candidate].x != source_org) { continue; }
+            if (!is_in_scaffold_scope(candidate, source_org, source_component)) { continue; }
             let cell_id = organism_cell_ids[candidate];
-            if (cell_id == rule.endpoint_a_hash_lo) {
-                endpoint_a = candidate;
-            }
             if (cell_id == rule.endpoint_b_hash_lo) {
                 endpoint_b = candidate;
+                break;
             }
         }
-        if (endpoint_a != 0xFFFFFFFFu && endpoint_b != 0xFFFFFFFFu && endpoint_a != endpoint_b) {
+        if (endpoint_b != 0xFFFFFFFFu && endpoint_a != endpoint_b) {
             create_or_update_scaffold_connection(endpoint_a, endpoint_b, rule);
         }
         return;
@@ -453,7 +479,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         // source_mode / target_mode carry the fallback mode index for step 3.
         let tip_a = find_preferred_chain_tip(
-            live_slots, rule.genome_id, source_org,
+            live_slots, rule.genome_id, source_org, source_component,
+            source, max_range,
             source_hash_lo, source_hash_hi, source_branch_slot,
             source_mode,
         );
@@ -461,7 +488,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             return;
         }
         let tip_b = find_preferred_chain_tip(
-            live_slots, rule.genome_id, source_org,
+            live_slots, rule.genome_id, source_org, source_component,
+            source, max_range,
             target_hash_lo, target_hash_hi, target_branch_slot,
             target_mode,
         );
@@ -484,11 +512,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var first_cell = 0xFFFFFFFFu;
         var first_cell_id = 0xFFFFFFFFu;
 
-        for (var candidate = 0u; candidate < live_slots; candidate++) {
+        for (var ordinal = 0u; ordinal < neighbor_slots; ordinal++) {
+            let candidate = neighborhood_candidate(source, ordinal, max_range);
+            if (candidate == INVALID_CELL || candidate >= live_slots) { continue; }
             if (candidate == source) { continue; }
+            if (!is_within_formation_range(source, candidate, max_range)) { continue; }
             if (death_flags[candidate] != 0u) { continue; }
             if (genome_ids[candidate] != rule.genome_id) { continue; }
-            if (development_addresses[candidate].x != source_org) { continue; }
+            if (!is_in_scaffold_scope(candidate, source_org, source_component)) { continue; }
             if (!selector_matches(candidate, target_kind, target_mode, target_hash_lo, target_hash_hi, target_branch_slot)) {
                 continue;
             }
@@ -520,11 +551,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let source_depth = lineage_depth(source);
     let preferred_delta = abs_i32(rule.preferred_generation_delta);
 
-    for (var candidate = 0u; candidate < live_slots; candidate++) {
+    for (var ordinal = 0u; ordinal < neighbor_slots; ordinal++) {
+        let candidate = neighborhood_candidate(source, ordinal, max_range);
+        if (candidate == INVALID_CELL || candidate >= live_slots) { continue; }
         if (candidate == source) { continue; }
+        if (!is_within_formation_range(source, candidate, max_range)) { continue; }
         if (death_flags[candidate] != 0u) { continue; }
         if (genome_ids[candidate] != rule.genome_id) { continue; }
-        if (development_addresses[candidate].x != source_org) { continue; }
+        if (!is_in_scaffold_scope(candidate, source_org, source_component)) { continue; }
         if (!selector_matches(candidate, target_kind, target_mode, target_hash_lo, target_hash_hi, target_branch_slot)) {
             continue;
         }
@@ -554,28 +588,17 @@ fn create_or_update_scaffold_connection(source: u32, best_target: u32, rule: Sca
         return;
     }
 
+    if (!is_within_formation_range(source, best_target, rule_formation_range(rule))) {
+        return;
+    }
+
     if (existing_connection(source, best_target) != 0xFFFFFFFFu) {
         return;
     }
 
     let source_mode = mode_indices[source];
-    let creates_backbone = source_mode < arrayLength(&adhesion_settings_v2)
-        && adhesion_settings_v2[source_mode].w > 0.5;
-    let construction_cost_fixed = i32(round(
-        max(split_nutrient_thresholds[source], 0.0)
-            * BACKBONE_CONSTRUCTION_FRACTION * 1000.0
-    ));
-    let construction_reserved = !creates_backbone
-        || try_reserve_construction(source, construction_cost_fixed);
-    if (!construction_reserved) {
-        return;
-    }
-
     let adhesion_id = allocate_adhesion_slot();
     if (adhesion_id == 0xFFFFFFFFu) {
-        if (creates_backbone) {
-            atomicAdd(&nutrients_buffer[source], construction_cost_fixed);
-        }
         return;
     }
 
@@ -586,9 +609,8 @@ fn create_or_update_scaffold_connection(source: u32, best_target: u32, rule: Sca
     conn.is_active = 1u;
     conn.zone_a = 2u;
     conn.zone_b = 2u;
-    conn.bond_flags = BOND_FLAG_BARRIER_BALL
-        | select(0u, BOND_FLAG_SIGNAL_BACKBONE, creates_backbone);
-    conn._align_pad1 = select(0u, cell_ids[source], creates_backbone);
+    conn.bond_flags = BOND_FLAG_BARRIER_BALL;
+    conn._align_pad1 = 0u;
     conn.anchor_direction_a = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     conn.anchor_direction_b = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     conn.twist_reference_a = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -607,9 +629,6 @@ fn create_or_update_scaffold_connection(source: u32, best_target: u32, rule: Sca
         let free_top = atomicAdd(&adhesion_counts[2], 1u);
         if (free_top < arrayLength(&free_adhesion_slots)) {
             free_adhesion_slots[free_top] = adhesion_id;
-        }
-        if (creates_backbone) {
-            atomicAdd(&nutrients_buffer[source], construction_cost_fixed);
         }
     }
 }

@@ -121,18 +121,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    let pos = positions_in[cell_idx].xyz;
-    let mass = positions_in[cell_idx].w;
-    
-    // Calculate and store grid index (collision shader reads this)
-    let grid_idx = world_pos_to_grid_index(pos, params.world_size, params.grid_cell_size, params.grid_resolution);
-    cell_grid_indices[cell_idx] = grid_idx;
-    
     // Skip dead cells - don't insert into spatial grid.
     // This saves grid slots for live cells and avoids collision checks against dead cells.
+    let mass = positions_in[cell_idx].w;
     if (death_flags[cell_idx] != 0u || mass < 0.5) {
         return;
     }
+
+    let pos = positions_in[cell_idx].xyz;
+    // Calculate and store grid index only for cells that can participate in
+    // collision or neighborhood work this step.
+    let grid_idx = world_pos_to_grid_index(pos, params.world_size, params.grid_cell_size, params.grid_resolution);
+    cell_grid_indices[cell_idx] = grid_idx;
     
     // Atomically claim a slot in this grid cell and insert
     let slot = atomicAdd(&spatial_grid_counts[grid_idx], 1u);
