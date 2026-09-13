@@ -2187,11 +2187,10 @@ impl GpuScene {
             .min(self.gpu_triple_buffers.capacity)
     }
 
-    fn populate_nutrients_for_physics_frame(
+    fn populate_nutrients_for_physics_step(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
         delta_time: f32,
     ) {
         let type_mutations_enabled = self.type_mutations_enabled();
@@ -2201,7 +2200,7 @@ impl GpuScene {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.populate_nutrients(
                 device,
-                queue,
+                self.current_time,
                 encoder,
                 self.nutrient_density,
                 delta_time,
@@ -2234,6 +2233,10 @@ impl GpuScene {
         let has_photocytes = self.has_photocytes || type_mutations_enabled;
         let has_devorocytes = self.has_devorocytes || type_mutations_enabled;
         let has_gametocytes = self.has_gametocytes || type_mutations_enabled;
+
+        // Renew food on the same fixed clock as metabolism, including catch-up steps.
+        self.populate_nutrients_for_physics_step(device, encoder, delta_time);
+        self.run_moss_growth(device, encoder, delta_time);
 
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         if has_phagocytes {
@@ -6711,7 +6714,6 @@ impl GpuScene {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
         delta_time: f32,
     ) {
         if !self.show_moss {
@@ -6742,7 +6744,7 @@ impl GpuScene {
         if let (Some(ref mut moss), Some(ref growth_bg)) =
             (&mut self.moss_system, &self.moss_growth_bind_group)
         {
-            moss.run_growth(encoder, queue, growth_bg, delta_time, world_radius);
+            moss.run_growth(encoder, device, growth_bg, delta_time, world_radius);
         }
     }
 
@@ -6859,9 +6861,7 @@ impl GpuScene {
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
 
-            // Nutrient epoch population is encoded once before the rendered
-            // frame's fixed-step batch. Repeating it here or inside every catch-up
-            // step would evaluate the same fluid time and epoch state.
+            // Nutrient renewal uses the cell clock in run_physics, not fluid time.
         }
     }
 
@@ -6869,13 +6869,13 @@ impl GpuScene {
     pub fn repopulate_nutrients(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
     ) {
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.populate_nutrients(
                 device,
-                queue,
+                self.current_time,
                 encoder,
                 self.nutrient_density,
                 0.016,
@@ -8486,14 +8486,6 @@ impl Scene for GpuScene {
             self.light_field_needs_update = false;
         }
 
-        // NOTE: Moss growth is dispatched AFTER the cave render pass (near queue.submit)
-        // to avoid a read-after-write pipeline stall on moss_density_buffer.
-        // The cave fragment shader reads moss_density; if growth runs before the render
-        // pass in the same encoder, the GPU serializes them - stalling the render pass
-        // until the 32K-workgroup compute finishes. Moving it after rendering means the
-        // write lands in the buffer that the NEXT frame's render pass will read, which
-        // is a 1-frame lag that is completely invisible for a slowly-changing moss field.
-
         let is_dragging = self.dragged_cell_index != u32::MAX;
 
         // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it.
@@ -8580,14 +8572,6 @@ impl Scene for GpuScene {
             let fixed_dt = self.config.fixed_timestep;
             let max_steps =
                 (self.max_physics_steps_per_frame as f32 * self.time_scale).ceil() as i32;
-
-            // Fluid time advances once per rendered frame, and consumed nutrient
-            // voxels remain marked for the epoch. Re-running this full 128^3 noise
-            // field for every catch-up step produced identical results. Populate
-            // once when this frame will actually encode at least one fixed step.
-            if max_steps > 0 && self.time_accumulator >= fixed_dt {
-                self.populate_nutrients_for_physics_frame(device, &mut encoder, queue, fixed_dt);
-            }
 
             // Pick one division-audio readback buffer for the final encoded fixed
             // step. Scan the whole ring from the round-robin cursor so a slow map
@@ -8759,16 +8743,6 @@ impl Scene for GpuScene {
 
             if self.follow_organism_id.is_some() {
                 self.tick_follow_camera_post_submit();
-            }
-
-            if !self.paused && self.show_moss {
-                let mut moss_encoder =
-                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Headless Moss Growth Encoder"),
-                    });
-                let dt = self.config.fixed_timestep;
-                self.run_moss_growth(device, &mut moss_encoder, queue, dt);
-                queue.submit(std::iter::once(moss_encoder.finish()));
             }
 
             if let Some(label_system) = &mut self.organism_label_system {
@@ -9720,19 +9694,6 @@ impl Scene for GpuScene {
         // encoder (wgpu validation error: "buffer is still mapped").
         if self.follow_organism_id.is_some() {
             self.tick_follow_camera_post_submit();
-        }
-
-        // Moss growth runs in a SEPARATE submit after the main frame.
-        // This prevents it from competing with rendering on the GPU timeline -
-        // the driver can schedule it in background while the CPU prepares the next frame.
-        // The 1-frame lag on moss_density is invisible for a slowly-changing field.
-        if !self.paused && self.show_moss {
-            let mut moss_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Moss Growth Encoder"),
-            });
-            let dt = self.config.fixed_timestep;
-            self.run_moss_growth(device, &mut moss_encoder, queue, dt);
-            queue.submit(std::iter::once(moss_encoder.finish()));
         }
 
         // Debug: poll label buffer readback.

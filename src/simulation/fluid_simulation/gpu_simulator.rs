@@ -2532,14 +2532,11 @@ impl GpuFluidSimulator {
         &self.nutrient_voxels_buffer
     }
 
-    /// Populate nutrients in water voxels using drifting noise pattern
-    /// Called once before a rendered frame's fixed-step batch. Fluid time advances
-    /// once per rendered frame, and consumed voxels remain marked for the epoch, so
-    /// repeating this full-volume pass inside catch-up would be identical work.
+    /// Populate nutrients using cell simulation time, independent of fluid/render cadence.
     pub fn populate_nutrients(
         &self,
         _device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        simulation_time: f32,
         encoder: &mut wgpu::CommandEncoder,
         nutrient_density: f32,
         delta_time: f32,
@@ -2552,14 +2549,6 @@ impl GpuFluidSimulator {
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
 
-        // Use the fluid sim's own time directly. The fluid sim already wraps at 65536s
-        // (well within f32 precision), and that wrap is a fixed constant so the epoch
-        // counter resets cleanly at the same point every time. A separate wrap period
-        // based on epoch_spacing caused misaligned discontinuities: when the fluid sim
-        // time crossed a multiple of (epoch_spacing * 8192) the nutrient time would
-        // jump, clearing all nutrients for one frame.
-        let wrapped_time = self.time.get();
-
         let params = NutrientPopulateParams {
             grid_resolution: GRID_RESOLUTION,
             cell_size,
@@ -2568,7 +2557,7 @@ impl GpuFluidSimulator {
             grid_origin_z: grid_origin.z,
             world_radius: self.world_radius,
             nutrient_density,
-            time: wrapped_time,
+            time: simulation_time,
             delta_time,
             epoch_duration,
             epoch_spacing,
@@ -2576,10 +2565,11 @@ impl GpuFluidSimulator {
             despawn_start,
             _pad: [0.0; 3],
         };
-        queue.write_buffer(
+        crate::simulation::gpu_upload::encode_buffer_write(
+            _device,
+            encoder,
             &self.nutrient_populate_params_buffer,
-            0,
-            bytemuck::cast_slice(&[params]),
+            bytemuck::bytes_of(&params),
         );
 
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;

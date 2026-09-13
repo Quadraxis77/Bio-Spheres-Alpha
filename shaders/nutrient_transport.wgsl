@@ -284,9 +284,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Test cells (cell_type 0) have no metabolism - they auto-gain from nutrient_gain_rate
     // Phagocytes (cell_type 2) and Photocytes (cell_type 3) use specialized shaders for gain
     // but still need base metabolism to starve when not consuming/absorbing
-    // Embryocytes (cell_type 10) skip ALL normal metabolism - energy comes only from reserve
+    // Embryocytes and Gametocytes (types 10 and 13) skip ALL normal metabolism - energy comes only from reserve
     // All other cells (including invalid mode cells) have base metabolism
-    let is_embryocyte = mode_valid && cell_type == 10u;
+    let is_embryocyte = mode_valid && (cell_type == 10u || cell_type == 13u);
     let auto_gain_cell = mode_valid && cell_type == 0u;
     if (!auto_gain_cell && !is_embryocyte && mode_idx < arrayLength(&mode_properties_v0)) {
         let mode_v1 = mode_properties_v1[mode_idx];
@@ -584,7 +584,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Embryocyte receivers: scale rate by their nutrient_priority so the setting
         // actually controls how fast the reserve fills. Priority 4.0 -> 4x base rate.
-        let cell_b_is_embryocyte_check = cell_b_type == 10u;
+        let cell_b_is_embryocyte_check = cell_b_type == 10u || cell_b_type == 13u;
         if (cell_b_is_embryocyte_check && mode_b_idx < arrayLength(&mode_properties_v1)) {
             let embryo_priority = mode_properties_v1[mode_b_idx].y;
             effective_rate *= max(embryo_priority, 1.0);
@@ -616,7 +616,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Instead, use effective_rate directly as desired so the sender drains into
         // the embryocyte as fast as the rate cap allows.
         var desired: f32;
-        if (cell_b_type == 10u) {
+        if (cell_b_type == 10u || cell_b_type == 13u) {
             // Embryocyte receiver: always push at full effective_rate (A->B)
             desired = effective_rate;
         } else {
@@ -680,7 +680,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let mode_b_idx = mode_indices[cell_b_idx];
         var cell_b_is_embryocyte = false;
         if (mode_b_idx < arrayLength(&mode_cell_types)) {
-            cell_b_is_embryocyte = mode_cell_types[mode_b_idx] == 10u;
+            cell_b_is_embryocyte = mode_cell_types[mode_b_idx] == 10u || mode_cell_types[mode_b_idx] == 13u;
         }
 
         // Clamp by available donor nutrients. Normal nutrient transport is

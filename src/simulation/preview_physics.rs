@@ -1066,7 +1066,7 @@ pub fn consume_swim_nutrients(state: &mut CanonicalState, genome: &Genome, dt: f
 /// they must receive nutrients through adhesion connections from other cells.
 /// Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 ///
-/// Embryocytes (cell_type == 10) skip this function entirely - their energy
+/// Embryocytes and Gametocytes (cell types 10 and 13) skip this function entirely - their energy
 /// comes exclusively from the reserve field (see `update_embryocyte_reserve_burn`
 /// and `transport_nutrients_through_adhesions`).
 ///
@@ -1080,8 +1080,8 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
-            // Embryocytes skip normal metabolism entirely - reserve-only energy system
-            if mode.cell_type == 10 {
+            // Embryocytes and Gametocytes skip normal metabolism entirely - reserve-only energy system
+            if matches!(mode.cell_type, 10 | 13) {
                 continue;
             }
 
@@ -1203,8 +1203,8 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
     }
 }
 
-/// Burn Embryocyte reserve for free (detached) Embryocytes at 10 units/sec,
-/// and tick the accumulation timer for attached Embryocytes.
+/// Burn reserve for detached Embryocytes and Gametocytes at 10 units/sec,
+/// and tick the release timer while attached.
 ///
 /// - **Attached** (>=1 active adhesion): increment `embryocyte_timers[i]` by `dt`.
 /// - **Free** (no adhesions): burn `reserve` at 10 units/sec.
@@ -1219,7 +1219,7 @@ pub fn update_embryocyte_reserve_burn(state: &mut CanonicalState, genome: &Genom
         let Some(mode) = genome.modes.get(mode_index) else {
             continue;
         };
-        if mode.cell_type != 10 {
+        if !matches!(mode.cell_type, 10 | 13) {
             continue;
         }
 
@@ -1239,7 +1239,7 @@ pub fn update_embryocyte_reserve_burn(state: &mut CanonicalState, genome: &Genom
     }
 }
 
-/// Check AND-logic release triggers for attached Embryocytes.
+/// Check AND-logic release triggers for attached Embryocytes and Gametocytes.
 ///
 /// All *enabled* triggers must be satisfied simultaneously for release to occur.
 /// When triggered, all adhesions for the cell are dropped (it becomes free).
@@ -1258,7 +1258,7 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
         let Some(mode) = genome.modes.get(mode_index) else {
             continue;
         };
-        if mode.cell_type != 10 {
+        if !matches!(mode.cell_type, 10 | 13) {
             continue;
         }
 
@@ -1379,8 +1379,8 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let nutrients_a = state.nutrients[cell_a];
         let nutrients_b = state.nutrients[cell_b];
 
-        let is_embryo_a_pass1 = mode_a.cell_type == 10;
-        let is_embryo_b_pass1 = mode_b.cell_type == 10;
+        let is_embryo_a_pass1 = matches!(mode_a.cell_type, 10 | 13);
+        let is_embryo_b_pass1 = matches!(mode_b.cell_type, 10 | 13);
 
         // Embryocyte fill rate: scale the rate cap by priority so high-priority
         // embryocytes can receive faster than the base 30/sec.
@@ -1484,8 +1484,8 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         } else {
             0.0
         };
-        let is_embryo_a = mode_a.cell_type == 10;
-        let is_embryo_b = mode_b.cell_type == 10;
+        let is_embryo_a = matches!(mode_a.cell_type, 10 | 13);
+        let is_embryo_b = matches!(mode_b.cell_type, 10 | 13);
 
         let transfer_blocked = (transfer > 0.0 && is_embryo_a) || (transfer < 0.0 && is_embryo_b);
         if transfer_blocked {

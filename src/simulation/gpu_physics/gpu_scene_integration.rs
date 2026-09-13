@@ -159,9 +159,10 @@ pub fn execute_gpu_physics_step(
         solo_metabolism_multiplier,
         _padding: [0.0; 47],
     };
-    queue.write_buffer(
+    crate::simulation::gpu_upload::encode_buffer_write(
+        _device,
+        encoder,
         &triple_buffers.physics_params,
-        0,
         bytemuck::bytes_of(&params),
     );
 
@@ -633,7 +634,7 @@ pub fn execute_gpu_physics_step(
 pub fn execute_gpu_mechanics_step(
     _device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
-    queue: &wgpu::Queue,
+    _queue: &wgpu::Queue,
     pipelines: &GpuPhysicsPipelines,
     triple_buffers: &mut GpuTripleBufferSystem,
     cached_bind_groups: &CachedBindGroups,
@@ -675,9 +676,10 @@ pub fn execute_gpu_mechanics_step(
         solo_metabolism_multiplier: 1.0, // Not used in mechanics step
         _padding: [0.0; 47],
     };
-    queue.write_buffer(
+    crate::simulation::gpu_upload::encode_buffer_write(
+        _device,
+        encoder,
         &triple_buffers.physics_params,
-        0,
         bytemuck::bytes_of(&params),
     );
 

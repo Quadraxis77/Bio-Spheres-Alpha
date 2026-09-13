@@ -6,6 +6,7 @@ pub mod adhesion_inheritance;
 pub mod canonical_state;
 pub mod fluid_simulation;
 pub mod gpu_physics;
+pub(crate) mod gpu_upload;
 pub mod physics_config;
 pub mod preview_physics;
 /// Isolated CPU oracle and synthetic-scene support for the benchmark-gated

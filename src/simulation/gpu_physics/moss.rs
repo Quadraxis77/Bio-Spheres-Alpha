@@ -80,9 +80,9 @@ pub struct MossSystem {
     cell_size: f32,
     grid_origin: [f32; 3],
 
-    // Frame counter for throttle (run every 4th frame)
+    // Fixed-step counter for growth throttling.
     frame_counter: u32,
-    /// How many rendered frames to skip between growth dispatches (default 3 = run every 4th frame)
+    /// Fixed simulation steps to skip between growth dispatches (default 3).
     pub growth_frame_skip: u32,
 }
 
@@ -524,11 +524,11 @@ impl MossSystem {
     }
 
     /// Run the moss growth/erosion compute pass.
-    /// Throttled to every `growth_frame_skip + 1` frames (default: every 4th frame).
+    /// Throttled to every `growth_frame_skip + 1` fixed simulation steps.
     pub fn run_growth(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
+        device: &wgpu::Device,
         growth_bind_group: &wgpu::BindGroup,
         delta_time: f32,
         world_radius: f32,
@@ -558,10 +558,11 @@ impl MossSystem {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(
+        crate::simulation::gpu_upload::encode_buffer_write(
+            device,
+            encoder,
             &self.growth_params_buffer,
-            0,
-            bytemuck::cast_slice(&[params]),
+            bytemuck::bytes_of(&params),
         );
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
