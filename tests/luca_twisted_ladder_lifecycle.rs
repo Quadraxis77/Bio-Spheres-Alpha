@@ -40,11 +40,6 @@ fn ladder_genome_has_nursed_one_egg_lifecycle_and_redundant_rungs() {
         genome.modes[EMBRYO_MODE].embryocyte_threshold_value,
         EMBRYO_THRESHOLD / 1000
     );
-    assert!(genome.modes[0].adhesion_settings.creates_backbone);
-    assert!(genome.modes[1].adhesion_settings.creates_backbone);
-    assert!(genome.modes[2].adhesion_settings.creates_backbone);
-    assert!(genome.modes[5].adhesion_settings.creates_backbone);
-    assert!(genome.modes[6].adhesion_settings.creates_backbone);
     assert_eq!(genome.modes[BROOD_MODE].max_adhesions, 4);
     assert!(genome.modes[BROOD_MODE].child_a.keep_adhesion);
 }

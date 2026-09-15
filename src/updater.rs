@@ -191,6 +191,7 @@ fn read_canonical_path() -> Option<PathBuf> {
 }
 
 /// Write the canonical exe path to AppData.
+#[cfg(target_os = "windows")]
 fn write_canonical_path(exe_path: &Path) {
     let path = crate::app_dirs::config_file("install_path.txt");
     if let Err(e) = std::fs::write(&path, exe_path.to_string_lossy().as_bytes()) {

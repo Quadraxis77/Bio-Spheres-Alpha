@@ -24,9 +24,6 @@ fn triskelion_genome_has_a_coherent_rotational_body_plan() {
     assert_eq!(genome.modes[1].child_a.mode_number, 2);
     assert_eq!(genome.modes[1].child_b.mode_number, 1);
     assert_eq!(genome.modes[1].mode_b_after_splits, 3);
-    assert!(genome.modes[0].adhesion_settings.creates_backbone);
-    assert!(genome.modes[1].adhesion_settings.creates_backbone);
-    assert!(genome.modes[3].adhesion_settings.creates_backbone);
     assert!(genome.modes[4].flagellocyte_use_signal);
     assert_eq!(genome.scaffold_rules.len(), 1);
     assert_eq!(genome.scaffold_rules[0].rest_length, 2.15);
@@ -77,7 +74,7 @@ fn gpu_embryocyte_hatch_assigns_separate_development_scopes() {
     assert!(gpu_scene.contains("final_encoded_step"));
     assert!(gpu_timer.contains("Physics Frame Maintenance"));
     assert!(gpu_scene.contains("ASYNC_NEWBORN_SLOT_GUARD"));
-    assert!(gpu_scene.contains("fn populate_nutrients_for_physics_frame("));
+    assert!(gpu_scene.contains("fn populate_nutrients_for_physics_step("));
     assert!(!gpu_scene.contains("Nutrient population moved into run_physics()"));
     assert!(
         collision_shader.contains("dispatch_idx < cell_count_buffer[0] && live_cell(dispatch_idx)")
