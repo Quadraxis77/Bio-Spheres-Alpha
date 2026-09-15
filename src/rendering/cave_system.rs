@@ -303,11 +303,11 @@ pub struct CaveSystemRenderer {
     width: u32,
     height: u32,
 
-    // SDF collision (no mesh buffers needed)
+    // Density-grid collision (no triangle buffers needed)
     collision_bind_group: wgpu::BindGroup,
     collision_pipeline: wgpu::ComputePipeline,
     collision_layout: Arc<wgpu::BindGroupLayout>,
-    collision_solid_mask: wgpu::Buffer,
+    collision_density: wgpu::Buffer,
 
     // Shadow field bind group (set each frame from light field system)
     shadow_bind_group: Option<wgpu::BindGroup>,
@@ -328,7 +328,8 @@ impl CaveSystemRenderer {
         params.world_radius = world_radius;
 
         // Generate initial cave mesh with correct world size
-        let (vertices, indices, culled_fragment_regions) = Self::generate_cave_mesh(&params);
+        let (vertices, indices, culled_fragment_regions, collision_density) =
+            Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
 
         // Create parameter buffer
@@ -679,8 +680,7 @@ impl CaveSystemRenderer {
             ],
         });
 
-        // Create collision bind group layout. The solid mask mirrors the cave mesh
-        // and geothermal vent carving; a 1-voxel dummy is bound until fluid buffers exist.
+        // Collision samples the same density grid used for marching cubes, including vents.
         let collision_layout = Arc::new(device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label: Some("Cave Collision Layout"),
@@ -709,9 +709,9 @@ impl CaveSystemRenderer {
             },
         ));
 
-        let collision_solid_mask = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Dummy Cave Collision Solid Mask"),
-            contents: bytemuck::cast_slice(&[0u32]),
+        let collision_density = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Collision Density"),
+            contents: bytemuck::cast_slice(&collision_density),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
@@ -726,7 +726,7 @@ impl CaveSystemRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: collision_solid_mask.as_entire_binding(),
+                    resource: collision_density.as_entire_binding(),
                 },
             ],
         });
@@ -784,7 +784,7 @@ impl CaveSystemRenderer {
             collision_bind_group,
             collision_pipeline,
             collision_layout,
-            collision_solid_mask,
+            collision_density,
             shadow_bind_group: None,
         }
     }
@@ -797,7 +797,8 @@ impl CaveSystemRenderer {
         mut params: CaveParams,
     ) {
         // Regenerate mesh
-        let (vertices, indices, culled_fragment_regions) = Self::generate_cave_mesh(&params);
+        let (vertices, indices, culled_fragment_regions, collision_density) =
+            Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
 
         self.params = params;
@@ -805,8 +806,12 @@ impl CaveSystemRenderer {
         // Update uniform buffer
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        // Recreate collision bind group so it sees the updated params buffer while
-        // preserving the current solid-mask buffer binding.
+        // Replace density along with the mesh, including changes in grid resolution.
+        self.collision_density = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Collision Density"),
+            contents: bytemuck::cast_slice(&collision_density),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &self.collision_layout,
@@ -817,7 +822,7 @@ impl CaveSystemRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: self.collision_solid_mask.as_entire_binding(),
+                    resource: self.collision_density.as_entire_binding(),
                 },
             ],
         });
@@ -1048,29 +1053,11 @@ impl CaveSystemRenderer {
     /// Build spatial grid for collision detection
     /// This should be called after mesh generation or parameter updates
     // Spatial grid building is no longer needed with SDF-based collision
-    // The SDF is evaluated directly at runtime without precomputation
+    // Collision density is uploaded when the mesh is generated.
 
     /// Get collision bind group for physics integration
     pub fn collision_bind_group(&self) -> &wgpu::BindGroup {
         &self.collision_bind_group
-    }
-
-    pub fn set_collision_solid_mask(&mut self, device: &wgpu::Device, solid_mask: &wgpu::Buffer) {
-        self.collision_solid_mask = solid_mask.clone();
-        self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cave Collision Bind Group"),
-            layout: &self.collision_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.collision_solid_mask.as_entire_binding(),
-                },
-            ],
-        });
     }
 
     /// Get cave params buffer for bind group creation (e.g. cilia force spatial group)
@@ -1521,7 +1508,7 @@ impl CaveSystemRenderer {
     /// Generate cave mesh using marching cubes
     fn generate_cave_mesh(
         params: &CaveParams,
-    ) -> (Vec<CaveVertex>, Vec<u32>, Vec<CulledCaveFragment>) {
+    ) -> (Vec<CaveVertex>, Vec<u32>, Vec<CulledCaveFragment>, Vec<f32>) {
         let resolution = params.grid_resolution as usize;
         let world_center = Vec3::from(params.world_center);
         let world_radius = params.world_radius;
@@ -1643,7 +1630,23 @@ impl CaveSystemRenderer {
             params.mesh_smooth_normals != 0,
         );
 
-        (vertices, indices, culled_fragment_regions)
+        // Flatten with X contiguous, matching the GPU sampler. Clear regions
+        // removed by post-mesh fragment culling to avoid invisible colliders.
+        let mut collision_density = vec![0.0; grid_size * grid_size * grid_size];
+        let origin = world_center - Vec3::splat(cave_generation_radius);
+        for z in 0..grid_size {
+            for y in 0..grid_size {
+                for x in 0..grid_size {
+                    let pos = origin + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
+                    let culled = culled_fragment_regions.iter().any(|fragment| {
+                        pos.cmpge(fragment.min).all() && pos.cmple(fragment.max).all()
+                    });
+                    collision_density[x + y * grid_size + z * grid_size * grid_size] =
+                        if culled { params.threshold - 0.5 } else { density_grid[x][y][z] };
+                }
+            }
+        }
+        (vertices, indices, culled_fragment_regions, collision_density)
     }
 
     /// Seal tiny closed boundary loops left by ambiguous marching-cubes cases.
@@ -2940,3 +2943,50 @@ const TRI_TABLE: [[u8; 16]; 256] = [
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     ],
 ];
+
+#[cfg(test)]
+mod vent_collision_tests {
+    use super::*;
+
+    #[test]
+    fn vent_walls_are_in_uploaded_collision_density() {
+        let mut params = CaveParams::default();
+        params.world_radius = 32.0;
+        params.grid_resolution = 64;
+        params.density = 1.0;
+        params.flat_ground_enabled = 1;
+        params.geothermal_enabled = 1;
+        params.isolated_chunk_cull_volume = 0.0;
+        let (_, _, _, density) = CaveSystemRenderer::generate_cave_mesh(&params);
+        let size = params.grid_resolution as usize + 1;
+        assert_eq!(density.len(), size * size * size);
+        let extent = params.world_radius + 3.0;
+        let spacing = 2.0 * extent / params.grid_resolution as f32;
+        let origin = Vec3::from(params.world_center) - Vec3::splat(extent);
+        let mut added_walls = 0;
+        for z in 0..size {
+            for y in 0..size {
+                for x in 0..size {
+                    let pos = origin + Vec3::new(x as f32, y as f32, z as f32) * spacing;
+                    if density[x + y * size + z * size * size] > params.threshold
+                        && CaveSystemRenderer::sample_density(pos, &params) < params.threshold
+                    {
+                        added_walls += 1;
+                    }
+                }
+            }
+        }
+        assert!(added_walls > 0, "vent walls must collide even where procedural terrain is empty");
+    }
+
+    #[test]
+    fn cave_collision_shader_validates() {
+        let source = include_str!("../../shaders/cave_collision.wgsl");
+        let module = wgpu::naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(source)));
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        ).validate(&module).expect("cave collision shader must validate");
+    }
+}

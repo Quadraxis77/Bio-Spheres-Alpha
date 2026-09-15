@@ -4737,11 +4737,6 @@ impl GpuScene {
                 CaveSystemRenderer::new(device, surface_format, width, height, world_radius);
 
             self.cave_renderer = Some(cave_renderer);
-            if let (Some(ref mut cave_renderer), Some(ref fluid_buffers)) =
-                (&mut self.cave_renderer, &self.fluid_buffers)
-            {
-                cave_renderer.set_collision_solid_mask(device, fluid_buffers.solid_mask());
-            }
             // Reset shadow bind group flag so it gets recreated with the new cave renderer
             self.cave_shadow_bind_group_set = false;
 
@@ -5193,11 +5188,6 @@ impl GpuScene {
         self.voxel_renderer = Some(voxel_renderer);
         self.show_fluid_voxels = true;
 
-        if let (Some(ref mut cave_renderer), Some(ref fluid_buffers)) =
-            (&mut self.cave_renderer, &self.fluid_buffers)
-        {
-            cave_renderer.set_collision_solid_mask(device, fluid_buffers.solid_mask());
-        }
 
         // Create solid mask generator
         let solid_mask_generator = SolidMaskGenerator::new(

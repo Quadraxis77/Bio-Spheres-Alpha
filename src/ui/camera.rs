@@ -92,6 +92,8 @@ pub struct CameraController {
     // Configuration (matches BioSpheres-Q defaults)
     pub move_speed: f32,
     pub sprint_multiplier: f32,
+    pub alternate_speed_multiplier: f32,
+    pub alternate_speed_active: bool,
     pub mouse_sensitivity: f32,
     pub roll_speed: f32,
     pub zoom_speed: f32,
@@ -114,7 +116,8 @@ struct KeyState {
     c: bool,
     q: bool,
     e: bool,
-    shift: bool,
+    shift_left: bool,
+    shift_right: bool,
     tab: bool,
 }
 
@@ -152,7 +155,9 @@ impl CameraController {
             boundary_push_progress: 0.0,
             last_boundary_crossing: None,
             move_speed: 15.0,
-            sprint_multiplier: 6.0, // Normal FreeFly run speed multiplier; Shift walks.
+            sprint_multiplier: 6.0,
+            alternate_speed_multiplier: 1.0,
+            alternate_speed_active: false,
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
@@ -193,6 +198,8 @@ impl CameraController {
             last_boundary_crossing: None,
             move_speed: 15.0,
             sprint_multiplier: 6.0,
+            alternate_speed_multiplier: 1.0,
+            alternate_speed_active: false,
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
@@ -233,6 +240,8 @@ impl CameraController {
             last_boundary_crossing: None,
             move_speed: 15.0,
             sprint_multiplier: 6.0,
+            alternate_speed_multiplier: 1.0,
+            alternate_speed_active: false,
             mouse_sensitivity: 0.003,
             roll_speed: 1.5,
             zoom_speed: 0.2,
@@ -476,7 +485,7 @@ impl CameraController {
         }
     }
 
-    /// Handle mouse scroll for zooming in Orbit mode, or changing run speed in FreeFly mode.
+    /// Handle mouse scroll for zooming in Orbit mode, or adjusting the selected speed in FreeFly mode.
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         let scroll_amount = match delta {
             MouseScrollDelta::LineDelta(_x, y) => y,
@@ -487,8 +496,12 @@ impl CameraController {
             self.accumulated_scroll += scroll_amount;
         } else if self.mode == CameraMode::FreeFly && scroll_amount.abs() > f32::EPSILON {
             let factor = 1.12_f32.powf(scroll_amount);
-            self.sprint_multiplier = (self.sprint_multiplier * factor).clamp(1.0, 20.0);
-            log::info!("FreeFly run speed: {:.1}x", self.sprint_multiplier);
+            let multiplier = if self.alternate_speed_active {
+                &mut self.alternate_speed_multiplier
+            } else {
+                &mut self.sprint_multiplier
+            };
+            *multiplier = (*multiplier * factor).clamp(0.05, 20.0);
         }
     }
 
@@ -507,7 +520,15 @@ impl CameraController {
                 KeyCode::KeyC => self.keys_pressed.c = pressed,
                 KeyCode::KeyQ => self.keys_pressed.q = pressed,
                 KeyCode::KeyE => self.keys_pressed.e = pressed,
-                KeyCode::ShiftLeft | KeyCode::ShiftRight => self.keys_pressed.shift = pressed,
+                KeyCode::ShiftLeft | KeyCode::ShiftRight => {
+                    if keycode == KeyCode::ShiftLeft {
+                        self.keys_pressed.shift_left = pressed;
+                    } else {
+                        self.keys_pressed.shift_right = pressed;
+                    }
+                    self.alternate_speed_active =
+                        self.keys_pressed.shift_left || self.keys_pressed.shift_right;
+                }
                 KeyCode::Tab => {
                     if pressed && !self.keys_pressed.tab {
                         self.toggle_mode();
@@ -703,8 +724,8 @@ impl CameraController {
 
         // 4. MOVEMENT (WASD + Space + C) - Only in FreeFly mode
         if self.mode == CameraMode::FreeFly {
-            let speed = if self.keys_pressed.shift {
-                self.move_speed * dt
+            let speed = if self.alternate_speed_active {
+                self.move_speed * self.alternate_speed_multiplier * dt
             } else {
                 self.move_speed * self.sprint_multiplier * dt
             };
@@ -797,6 +818,34 @@ impl CameraController {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scroll_adjusts_only_the_active_freefly_speed() {
+        let mut camera = super::CameraController::default();
+        camera.mode = super::CameraMode::FreeFly;
+        camera.handle_scroll(winit::event::MouseScrollDelta::LineDelta(0.0, 1.0));
+        let speed_one = camera.sprint_multiplier;
+        assert!(speed_one > 6.0);
+        assert_eq!(camera.alternate_speed_multiplier, 1.0);
+        camera.alternate_speed_active = true;
+        camera.handle_scroll(winit::event::MouseScrollDelta::LineDelta(0.0, -1.0));
+        assert!(camera.alternate_speed_multiplier < 1.0);
+        assert_eq!(camera.sprint_multiplier, speed_one);
+        camera.alternate_speed_active = false;
+        camera.handle_scroll(winit::event::MouseScrollDelta::LineDelta(0.0, -1.0));
+        assert!((camera.sprint_multiplier - 6.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn orbit_scroll_preserves_both_freefly_speeds() {
+        let mut camera = super::CameraController::default();
+        camera.mode = super::CameraMode::Orbit;
+        camera.alternate_speed_active = true;
+        camera.handle_scroll(winit::event::MouseScrollDelta::LineDelta(0.0, 2.0));
+        assert_eq!(camera.sprint_multiplier, 6.0);
+        assert_eq!(camera.alternate_speed_multiplier, 1.0);
+        assert_eq!(camera.accumulated_scroll, 2.0);
+    }
+
     use super::*;
 
     fn quat_matches(a: Quat, b: Quat) -> bool {

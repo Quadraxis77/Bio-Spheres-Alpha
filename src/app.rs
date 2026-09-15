@@ -220,6 +220,11 @@ impl App {
         dock_manager: DockManager,
         mut ui: UiSystem,
     ) -> Self {
+        // Apply the saved window preference after UI settings have loaded.
+        if ui.state.fullscreen {
+            window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
+        }
+
         // Build the main menu scene before moving `ui` into the struct so we
         // can access `ui.renderer` mutably without fighting the borrow checker.
         let main_menu_scene = MainMenuScene::new(&device, &queue, &config, &mut ui.renderer);
@@ -1732,12 +1737,9 @@ impl App {
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_scroll_input() {
                     let camera = self.scene_manager.active_scene_mut().camera_mut();
-                    let previous_sprint_multiplier = camera.sprint_multiplier;
                     camera.handle_scroll(*delta);
-                    if (camera.sprint_multiplier - previous_sprint_multiplier).abs() > f32::EPSILON
-                    {
-                        self.ui.state.camera_sprint_multiplier = camera.sprint_multiplier;
-                    }
+                    self.ui.state.camera_sprint_multiplier = camera.sprint_multiplier;
+                    self.ui.state.camera_alternate_speed_multiplier = camera.alternate_speed_multiplier;
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1975,7 +1977,7 @@ impl App {
                 return;
             };
 
-        let was_fullscreen = self.window.fullscreen().is_some();
+        let was_fullscreen = self.ui.state.fullscreen;
         let mut fullscreen = was_fullscreen;
         let menu_response = Self::render_main_menu_ui(
             &self.ui.ctx.clone(),
@@ -1997,6 +1999,9 @@ impl App {
             } else {
                 None
             });
+            self.ui.state.fullscreen = fullscreen;
+            self.ui.mark_ui_state_dirty();
+            self.ui.save_ui_state();
         }
         if menu_response.audio_settings_changed {
             self.audio
@@ -3015,7 +3020,8 @@ impl App {
                 crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES,
                 crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
             );
-            camera.sprint_multiplier = self.ui.state.camera_sprint_multiplier.clamp(1.0, 20.0);
+            camera.sprint_multiplier = self.ui.state.camera_sprint_multiplier.clamp(0.05, 20.0);
+            camera.alternate_speed_multiplier = self.ui.state.camera_alternate_speed_multiplier.clamp(0.05, 20.0);
             camera.zoom_speed = self.ui.state.camera_scroll_sensitivity.clamp(0.01, 2.0);
         }
 

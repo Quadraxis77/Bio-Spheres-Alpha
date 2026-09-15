@@ -781,6 +781,10 @@ fn default_camera_sprint_multiplier() -> f32 {
     6.0
 }
 
+fn default_camera_alternate_speed_multiplier() -> f32 {
+    1.0
+}
+
 fn default_camera_scroll_sensitivity() -> f32 {
     0.2
 }
@@ -1006,6 +1010,9 @@ pub struct GlobalUiState {
     #[serde(default = "default_camera_sprint_multiplier")]
     pub camera_sprint_multiplier: f32,
 
+    #[serde(default = "default_camera_alternate_speed_multiplier")]
+    pub camera_alternate_speed_multiplier: f32,
+
     /// Mouse-wheel scroll sensitivity shared by preview and GPU scenes.
     #[serde(default = "default_camera_scroll_sensitivity")]
     pub camera_scroll_sensitivity: f32,
@@ -1013,6 +1020,10 @@ pub struct GlobalUiState {
     /// Interval between scheduled ecosystem field-report scans.
     #[serde(default = "default_field_report_interval_seconds")]
     pub field_report_interval_seconds: f32,
+
+    /// Restore borderless fullscreen on the next launch.
+    #[serde(default)]
+    pub fullscreen: bool,
 
     /// Master music volume, 0.0 to 1.0.
     #[serde(default = "default_music_volume")]
@@ -1177,8 +1188,10 @@ impl Default for GlobalUiState {
             field_reports_enabled: true,
             horizontal_fov_degrees: default_horizontal_fov_degrees(),
             camera_sprint_multiplier: default_camera_sprint_multiplier(),
+            camera_alternate_speed_multiplier: default_camera_alternate_speed_multiplier(),
             camera_scroll_sensitivity: default_camera_scroll_sensitivity(),
             field_report_interval_seconds: default_field_report_interval_seconds(),
+            fullscreen: false,
             music_volume: default_music_volume(),
             sfx_volume: default_sfx_volume(),
             gpu_headless_mode: false,

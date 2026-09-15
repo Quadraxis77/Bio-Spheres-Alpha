@@ -99,6 +99,16 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
 }
 
+// Use the visible sphere surface in both LODs. A radius-aware sunward bias
+// clears the cell and its voxel footprint without the old 3-6 voxel displacement.
+fn cell_light_sample_position(center: vec3<f32>, normal: vec3<f32>, radius: f32, light_dir: vec3<f32>) -> vec3<f32> {
+    let surface = center + normal * radius;
+    let bias = radius + shadow_params.cell_size;
+    let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
+    let grid_max = grid_min + vec3<f32>(shadow_params.cell_size * f32(shadow_params.grid_resolution));
+    return clamp(surface - light_dir * bias, grid_min, grid_max);
+}
+
 fn apply_shadow_contrast(raw_light: f32) -> f32 {
     return max(raw_light, 1.0 - shadow_params.shadow_strength);
 }
@@ -1140,16 +1150,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     if (lod == 0u) {
         // Keep distant cells integrated with scene lighting. Only procedural
         // internals, specialized surfaces, and geometry effects are skipped.
-        let offset_distance = mix(3.0, 6.0, shadow_params.shadow_quality) * shadow_params.cell_size;
-        let shadow_sample_pos = in.center - light_dir * offset_distance;
-        let grid_size = shadow_params.cell_size * f32(shadow_params.grid_resolution);
-        let grid_min = vec3<f32>(
-            shadow_params.grid_origin_x,
-            shadow_params.grid_origin_y,
-            shadow_params.grid_origin_z,
-        );
-        let grid_max = grid_min + vec3<f32>(grid_size);
-        let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
+        let clamped_pos = cell_light_sample_position(in.center, world_normal_front, in.radius, light_dir);
         let shadow = apply_shadow_contrast(sample_light_field(clamped_pos));
         let local_light_color = sample_light_color_field(clamped_pos);
 
@@ -1594,15 +1595,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // ====================================================================
     // Membrane surface lighting (specular + fresnel on front shell only)
     // ====================================================================
-    // Sample shadow from light field, offset toward light to avoid self-occlusion
-    // lighting.light_dir points FROM light, so negate to go TOWARD light
-    let offset_distance = mix(3.0, 6.0, shadow_params.shadow_quality) * shadow_params.cell_size;
-    let shadow_sample_pos = in.center - normalize(lighting.light_dir) * offset_distance;
-    // Clamp sample position to stay within valid light field grid bounds
-    let grid_size = shadow_params.cell_size * f32(shadow_params.grid_resolution);
-    let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
-    let grid_max = grid_min + vec3<f32>(grid_size, grid_size, grid_size);
-    let clamped_pos = clamp(shadow_sample_pos, grid_min, grid_max);
+    let clamped_pos = cell_light_sample_position(in.center, world_normal_front, in.radius, light_dir);
     let shadow = apply_shadow_contrast(sample_light_field(clamped_pos));
     let local_light_color = sample_light_color_field(clamped_pos);
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);

@@ -1,14 +1,6 @@
-// Cave Collision SDF Shader
-// 
-// Implements GPU-based SDF collision detection using Voronoi-based cave generation.
-// Uses 3D Voronoi cells with random wall thresholds for clear wall/air regions.
-//
-// Voronoi cave approach:
-// - Each Voronoi cell has a random "wall threshold" (0-1)
-// - If wall_density > wall_threshold, the cell is a CAVE OBSTACLE (solid)
-// - Caves are SOLID OBSTACLES that cells must avoid
-// - Cells stay in OPEN SPACE (non-cave cells)
-// - When in a cave cell, cells are pushed OUT into open space
+// Cell collision against the density grid used to generate the cave mesh.
+// Includes geothermal vent walls and carved openings. Density gradients
+// provide contact normals without per-cell triangle searches.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -78,7 +70,7 @@ struct CaveParams {
 @group(0) @binding(7) var<storage, read> angular_velocities: array<vec4<f32>>;
 
 @group(1) @binding(0) var<uniform> cave_params: CaveParams;
-@group(1) @binding(1) var<storage, read> solid_mask: array<u32>;
+@group(1) @binding(1) var<storage, read> collision_density: array<f32>;
 
 // Constants
 const EPSILON: f32 = 0.0001;
@@ -251,8 +243,31 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     }
 }
 
+fn collision_grid_value(p: vec3<u32>, size: u32) -> f32 {
+    return collision_density[p.x + p.y * size + p.z * size * size];
+}
+
+// Trilinear density matches the mesh's grid and includes opaque vent walls
+// and carved openings. Re-evaluating terrain noise here omits both.
 fn sample_collision_density(pos: vec3<f32>) -> f32 {
-    return sample_cave_density(pos);
+    let extent = cave_params.world_radius + 3.0;
+    let resolution = cave_params.grid_resolution;
+    let size = resolution + 1u;
+    let grid = (pos - cave_params.world_center + vec3<f32>(extent))
+        * (f32(resolution) / (2.0 * extent));
+    if (any(grid < vec3<f32>(0.0)) || any(grid > vec3<f32>(f32(resolution)))) {
+        return 1.0;
+    }
+    let lo = min(vec3<u32>(floor(grid)), vec3<u32>(resolution - 1u));
+    let hi = lo + vec3<u32>(1u);
+    let f = grid - vec3<f32>(lo);
+    let z0 = mix(
+        mix(collision_grid_value(lo, size), collision_grid_value(vec3<u32>(hi.x, lo.y, lo.z), size), f.x),
+        mix(collision_grid_value(vec3<u32>(lo.x, hi.y, lo.z), size), collision_grid_value(vec3<u32>(hi.x, hi.y, lo.z), size), f.x), f.y);
+    let z1 = mix(
+        mix(collision_grid_value(vec3<u32>(lo.x, lo.y, hi.z), size), collision_grid_value(vec3<u32>(hi.x, lo.y, hi.z), size), f.x),
+        mix(collision_grid_value(vec3<u32>(lo.x, hi.y, hi.z), size), collision_grid_value(hi, size), f.x), f.y);
+    return mix(z0, z1, f.z);
 }
 
 fn raw_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {

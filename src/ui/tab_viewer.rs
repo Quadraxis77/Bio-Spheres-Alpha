@@ -8283,14 +8283,14 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     ui.label(format!("Mode: {:?}", camera.mode));
     ui.label(format!("Distance: {:.1}", camera.distance));
 
-    ui.label("Walk Speed:")
-        .on_hover_text("Camera movement speed while holding Shift in FreeFly mode");
+    ui.label("Base Movement Speed:")
+        .on_hover_text("Base movement speed shared by both FreeFly speed settings");
     ui.add(egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
-    ui.label("Run Speed:").on_hover_text(
-        "Normal FreeFly speed multiplier. Adjust with the scroll wheel while flying",
+    ui.label("Speed 1:").on_hover_text(
+        "Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed while flying",
     );
     let sprint_response = ui.add(
-        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 1.0..=20.0)
+        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 0.05..=20.0)
             .custom_formatter(|value, _| format!("{value:.1}x")),
     );
     let mut sprint_multiplier_changed = sprint_response.changed();
@@ -8300,6 +8300,19 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     }
     if sprint_multiplier_changed {
         camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
+    }
+    ui.label("Speed 2:")
+        .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
+    let alternate_response = ui.add(
+        egui::Slider::new(&mut ui_state.camera_alternate_speed_multiplier, 0.05..=20.0)
+            .logarithmic(true)
+            .custom_formatter(|value, _| format!("{value:.2}x")),
+    );
+    if alternate_response.double_clicked() {
+        ui_state.camera_alternate_speed_multiplier = 1.0;
+    }
+    if alternate_response.changed() || alternate_response.double_clicked() {
+        camera.alternate_speed_multiplier = ui_state.camera_alternate_speed_multiplier;
     }
     ui.label("Zoom Speed:")
         .on_hover_text("How fast scrolling zooms the camera in Orbit mode");

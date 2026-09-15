@@ -2989,10 +2989,10 @@ fn show_windows_menu(
     }
 
     ui.add_space(6.0);
-    ui.label("Run Speed:")
-        .on_hover_text("Normal FreeFly speed multiplier. Use the scroll wheel in FreeFly mode to adjust it; hold Shift to walk.");
+    ui.label("Speed 1:")
+        .on_hover_text("Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed in FreeFly mode.");
     let sprint_response = ui.add(
-        egui::Slider::new(&mut state.camera_sprint_multiplier, 1.0..=20.0)
+        egui::Slider::new(&mut state.camera_sprint_multiplier, 0.05..=20.0)
             .custom_formatter(|value, _| format!("{value:.1}x")),
     );
     let mut sprint_multiplier_changed = sprint_response.changed();
@@ -3007,6 +3007,19 @@ fn show_windows_menu(
             .sprint_multiplier = state.camera_sprint_multiplier;
     }
 
+    ui.label("Speed 2:")
+        .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
+    let alternate_response = ui.add(
+        egui::Slider::new(&mut state.camera_alternate_speed_multiplier, 0.05..=20.0)
+            .logarithmic(true)
+            .custom_formatter(|value, _| format!("{value:.2}x")),
+    );
+    if alternate_response.double_clicked() {
+        state.camera_alternate_speed_multiplier = 1.0;
+    }
+    if alternate_response.changed() || alternate_response.double_clicked() {
+        scene_manager.active_scene_mut().camera_mut().alternate_speed_multiplier = state.camera_alternate_speed_multiplier;
+    }
     ui.add_space(6.0);
     ui.label("Scroll Sensitivity:")
         .on_hover_text("How strongly mouse-wheel scrolling zooms the active scene camera. Double-click the slider to reset.");
