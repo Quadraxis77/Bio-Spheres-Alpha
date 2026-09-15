@@ -13,6 +13,7 @@ pub mod preview_physics;
 /// Cached Signal Backbone prototype. This is not wired into live simulation.
 pub mod signal_backbone_bench;
 pub mod signal_system;
+pub mod signal_diffusion;
 pub mod spatial_grid;
 
 pub use adhesion_inheritance::inherit_adhesions_on_division;

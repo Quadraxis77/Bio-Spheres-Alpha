@@ -53,7 +53,7 @@ use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    window::{CursorIcon, Window, WindowId},
+    window::{CursorIcon, Fullscreen, Window, WindowId},
 };
 
 /// High-level application phase.
@@ -444,7 +444,7 @@ impl App {
 
         let aspect = w / h;
         let cam_pos = preview_scene.camera.position();
-        let cam_rot = preview_scene.camera.rotation;
+        let cam_rot = preview_scene.camera.view_rotation();
 
         let ndc_x = (mx / w) * 2.0 - 1.0;
         let ndc_y = 1.0 - (my / h) * 2.0;
@@ -685,8 +685,8 @@ impl App {
 
         let view_matrix = glam::Mat4::look_at_rh(
             scene.camera.position(),
-            scene.camera.position() + scene.camera.rotation * glam::Vec3::NEG_Z,
-            scene.camera.rotation * glam::Vec3::Y,
+            scene.camera.position() + scene.camera.view_rotation() * glam::Vec3::NEG_Z,
+            scene.camera.view_rotation() * glam::Vec3::Y,
         );
         let proj_matrix = scene.camera.projection_matrix(width / height, 0.1, 5000.0);
         let clip = proj_matrix * view_matrix * world_pos.extend(1.0);
@@ -740,8 +740,8 @@ impl App {
             return;
         };
 
-        let camera_right = preview_scene.camera.rotation * glam::Vec3::X;
-        let camera_up = preview_scene.camera.rotation * glam::Vec3::Y;
+        let camera_right = preview_scene.camera.view_rotation() * glam::Vec3::X;
+        let camera_up = preview_scene.camera.view_rotation() * glam::Vec3::Y;
         let radius_world = selection.formation_range;
         let right_edge = Self::preview_world_to_screen(
             preview_scene,
@@ -1377,7 +1377,7 @@ impl App {
                             let aspect = w / h;
 
                             let cam_pos = preview_scene.camera.position();
-                            let cam_rot = preview_scene.camera.rotation;
+                            let cam_rot = preview_scene.camera.view_rotation();
 
                             let ndc_x = (mx / w) * 2.0 - 1.0;
                             let ndc_y = 1.0 - (my / h) * 2.0;
@@ -1647,7 +1647,7 @@ impl App {
                         let aspect = w / h;
 
                         let cam_pos = preview_scene.camera.position();
-                        let cam_rot = preview_scene.camera.rotation;
+                        let cam_rot = preview_scene.camera.view_rotation();
 
                         let ndc_x = (mx / w) * 2.0 - 1.0;
                         let ndc_y = 1.0 - (my / h) * 2.0;
@@ -1975,6 +1975,8 @@ impl App {
                 return;
             };
 
+        let was_fullscreen = self.window.fullscreen().is_some();
+        let mut fullscreen = was_fullscreen;
         let menu_response = Self::render_main_menu_ui(
             &self.ui.ctx.clone(),
             left_id,
@@ -1985,9 +1987,17 @@ impl App {
             panel_h,
             self.ui.state.tutorial.ever_shown,
             &mut self.main_menu_settings_open,
+            &mut fullscreen,
             &mut self.ui.state.music_volume,
             &mut self.ui.state.sfx_volume,
         );
+        if fullscreen != was_fullscreen {
+            self.window.set_fullscreen(if fullscreen {
+                Some(Fullscreen::Borderless(self.window.current_monitor()))
+            } else {
+                None
+            });
+        }
         if menu_response.audio_settings_changed {
             self.audio
                 .set_volumes(self.ui.state.music_volume, self.ui.state.sfx_volume);
@@ -2129,6 +2139,7 @@ impl App {
         _panel_h: f32,
         ever_shown: bool,
         settings_open: &mut bool,
+        fullscreen: &mut bool,
         music_volume: &mut f32,
         sfx_volume: &mut f32,
     ) -> MenuUiResponse {
@@ -2534,6 +2545,9 @@ impl App {
                 .open(&mut open)
                 .show(ctx, |ui| {
                     ui.set_width(280.0);
+                    ui.checkbox(fullscreen, "Fullscreen")
+                        .on_hover_text("Fill the current screen without window borders.");
+                    ui.separator();
                     audio_settings_changed |= ui
                         .add(
                             egui::Slider::new(music_volume, 0.0..=1.0)
@@ -2552,6 +2566,7 @@ impl App {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("Defaults").clicked() {
+                            *fullscreen = false;
                             *music_volume = 0.18;
                             *sfx_volume = 0.45;
                             audio_settings_changed = true;

@@ -247,19 +247,19 @@ pub struct ModeSettings {
     pub photocyte_emit_channel: i32,  // 0-15 = channel to emit on
     pub photocyte_emit_threshold: f32, // Light level threshold (0.0-1.0)
     pub photocyte_emit_mode: i32,     // 0 = above threshold, 1 = below threshold
-    pub photocyte_emit_value: f32,    // Signed signal value to emit (-1000.0 to 1000.0)
+    pub photocyte_emit_value: f32,    // Nonnegative signal production per second (0..1000)
 
     // Lipocyte signal emission
     pub lipocyte_emit_enabled: bool, // Whether signal emission is active
     pub lipocyte_emit_channel: i32,  // 0-15 = channel to emit on
     pub lipocyte_emit_threshold: f32, // Storage fraction threshold (0.0-1.0)
     pub lipocyte_emit_mode: i32,     // 0 = above threshold, 1 = below threshold
-    pub lipocyte_emit_value: f32,    // Signed signal value to emit (-1000.0 to 1000.0)
+    pub lipocyte_emit_value: f32,    // Nonnegative signal production per second (0..1000)
 
     // Oculocyte settings
     pub oculocyte_sense_type: u32, // Bitmask: bit0=Cell, bit1=Food, bit2=Light, bit3=Barrier, bit4=Self, bit5=Mossrock
     pub oculocyte_signal_channel: i32, // Which channel to send on (0-7, sensory channel range)
-    pub oculocyte_signal_value: f32, // Signed signal value to send (-1000.0 to 1000.0)
+    pub oculocyte_signal_value: f32, // Nonnegative signal production per second (0..1000)
     pub oculocyte_ray_length: f32, // How far ahead the oculocyte ray reaches (1.0 to 100.0)
     pub oculocyte_light_target_color: Vec3, // RGB color that light-sensing oculocytes can see
     pub oculocyte_light_color_tolerance: f32, // Max RGB distance from target color for light detection
@@ -301,7 +301,7 @@ pub struct ModeSettings {
 
     // Developmental/regulation signal emission: any cell mode can emit on channels 8-15
     pub regulation_emit_channel: i32, // Channel to emit on (-1 = disabled, 8-15 = regulation/developmental channel)
-    pub regulation_emit_value: f32,   // Signed signal value to emit (-1000.0 to 1000.0)
+    pub regulation_emit_value: f32,   // Nonnegative signal production per second (0..1000)
 
     // Signal-conditional behavior settings
     // Division gating: cell only divides if signal condition is met

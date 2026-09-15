@@ -26,6 +26,7 @@ pub mod phagocyte_consumption;
 pub mod scaffold;
 pub mod signal_backbone_topology;
 pub mod signal_backbone_v2;
+pub mod signal_diffusion;
 pub mod triple_buffer;
 
 pub use adhesion_buffers::AdhesionBuffers;

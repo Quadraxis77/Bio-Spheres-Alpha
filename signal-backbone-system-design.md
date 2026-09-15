@@ -1,6 +1,6 @@
 # Cached Signal Backbone System
 
-Status: Approved semantic design; implementation benchmark required  
+Status: Historical design; gameplay transport is superseded by [additive diffusion](signal-diffusion-design.md)
 Scope: CPU preview and GPU simulation signal semantics, propagation, processing, topology, performance, migration, and verification  
 Supersedes: The incomplete bounded per-emitter route-cache design in the current working tree  
 

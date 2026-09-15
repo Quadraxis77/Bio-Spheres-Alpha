@@ -9814,13 +9814,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         });
 
                         ui.label("Signal Value:")
-                            .on_hover_text("Value emitted on the channel when the condition is met");
+                            .on_hover_text("Nonnegative signal quantity produced per second while the condition is met");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, -1000.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(1.0).range(-1000.0..=1000.0));
+                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(1.0).range(0.0..=1000.0));
                         });
 
                         ui.separator();
@@ -10093,13 +10093,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         });
 
                         ui.label("Signal Value:")
-                            .on_hover_text("Value emitted on the channel when the condition is met");
+                            .on_hover_text("Nonnegative signal quantity produced per second while the condition is met");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, -1000.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(1.0).range(-1000.0..=1000.0));
+                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(1.0).range(0.0..=1000.0));
                         });
 
                         ui.separator();
@@ -10317,13 +10317,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Signal Value
                     ui.label("Signal Value:")
-                        .on_hover_text("Signed strength emitted when the ray detects its target. Ordinary signal routes retain 95%; Vasculocyte-to-Vasculocyte roads retain 98.75%");
+                        .on_hover_text("Nonnegative signal quantity produced per second while the ray detects its target. Signal diffuses through all eligible connections and degrades over time");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, -1000.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(-1000.0..=1000.0));
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, 0.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(0.0..=1000.0));
                     });
 
                     // Ray Length
@@ -11105,22 +11105,22 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 if mode.regulation_emit_channel >= 8 {
                     ui.label("Emit Value:")
-                        .on_hover_text("Signed signal strength broadcast from this cell. Ordinary signal routes retain 95%; Vasculocyte-to-Vasculocyte roads retain 98.75%");
+                        .on_hover_text("Nonnegative signal quantity produced per second. Production adds to the local concentration; diffusion transfers it to connected cells");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, -1000.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(-1000.0..=1000.0));
+                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, 0.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(0.0..=1000.0));
                     });
 
                     ui.label("Network Reach:")
-                        .on_hover_text("Signals follow the selected active routes across ordinary cell-to-cell adhesions. Reach is determined by attenuation and receiver threshold, not a hop budget");
+                        .on_hover_text("Signals diffuse through all ordinary cell-to-cell adhesions. Production, conductance, degradation, and receiver thresholds determine effective range");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.label("Reach follows every connected active signal route; there is no hop limit.");
+                        ui.label("Signal spreads over time through every eligible connection, with no hop cutoff.");
                     });
                 }
             });

@@ -241,8 +241,8 @@ impl Scene for PreviewScene {
         // Calculate view-projection matrix (same as used by cell renderer)
         let view_matrix = glam::Mat4::look_at_rh(
             self.camera.position(),
-            self.camera.position() + self.camera.rotation * glam::Vec3::NEG_Z,
-            self.camera.rotation * glam::Vec3::Y,
+            self.camera.position() + self.camera.view_rotation() * glam::Vec3::NEG_Z,
+            self.camera.view_rotation() * glam::Vec3::Y,
         );
         let aspect = self.renderer.width as f32 / self.renderer.height as f32;
         let proj_matrix = self.camera.projection_matrix(aspect, 0.1, 5000.0);
@@ -319,7 +319,7 @@ impl Scene for PreviewScene {
             Some(&self.genome),
             cell_type_visuals,
             self.camera.position(),
-            self.camera.rotation,
+            self.camera.view_rotation(),
             self.state.display_time,
             lod_scale_factor,
             lod_threshold_low,
@@ -351,7 +351,7 @@ impl Scene for PreviewScene {
                     &self.renderer.depth_view,
                     &tail_instances,
                     self.camera.position(),
-                    self.camera.rotation,
+                    self.camera.view_rotation(),
                     self.state.display_time,
                     self.camera.horizontal_fov_degrees,
                     self.renderer.width,
@@ -367,7 +367,7 @@ impl Scene for PreviewScene {
                     &self.renderer.depth_view,
                     &plumage_instances,
                     self.camera.position(),
-                    self.camera.rotation,
+                    self.camera.view_rotation(),
                     self.state.display_time,
                     self.camera.horizontal_fov_degrees,
                     self.renderer.width,
@@ -383,7 +383,7 @@ impl Scene for PreviewScene {
                     &self.renderer.depth_view,
                     &siphon_instances,
                     self.camera.position(),
-                    self.camera.rotation,
+                    self.camera.view_rotation(),
                     self.state.display_time,
                     self.camera.horizontal_fov_degrees,
                     self.renderer.width,
@@ -431,7 +431,7 @@ impl Scene for PreviewScene {
                         queue,
                         &self.state.display_state,
                         self.camera.position(),
-                        self.camera.rotation,
+                        self.camera.view_rotation(),
                         self.camera.horizontal_fov_degrees,
                     );
                 }

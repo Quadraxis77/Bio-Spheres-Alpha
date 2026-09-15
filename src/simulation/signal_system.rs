@@ -1,12 +1,12 @@
 //! Signal system for oculocyte sensing and inter-cell communication.
 //!
 //! Oculocytes sense targets (cells, food, light, barriers) along their forward direction
-//! and inject signed sources into the cached signal backbone.
+//! and add nonnegative production to a conservative diffusion field.
 //!
 //! Signal semantics:
 //! - `None` = null (no signal on this channel)
-//! - `Some(value)` = a finalized signed channel value
-//! - Contributions accumulate completely before saturating to `-1000..1000`
+//! - `Some(value)` = a nonnegative receiver value
+//! - Unsaturated concentrations persist; only receiver inputs saturate to `0..1000`
 //! - Signals update on the fixed 15 Hz signal clock
 
 use crate::genome::{Genome, SignalResponseMode};
@@ -15,7 +15,7 @@ use glam::Vec3;
 
 /// Number of signal channels (0-15)
 pub const SIGNAL_CHANNELS: usize = 16;
-pub const SIGNAL_MIN: f32 = -1000.0;
+pub const SIGNAL_MIN: f32 = 0.0;
 pub const SIGNAL_MAX: f32 = 1000.0;
 pub const SIGNAL_TICK_HZ: f32 = 15.0;
 pub const SIGNAL_TICK_SECONDS: f32 = 1.0 / SIGNAL_TICK_HZ;
@@ -90,7 +90,6 @@ const COGNOCYTE_TYPE: i32 = 14;
 /// Memorocyte cell type index
 const MEMOROCYTE_TYPE: i32 = 15;
 /// Vasculocyte cell type index
-const VASCULOCYTE_TYPE: i32 = 12;
 
 /// Clear all finalized signal channels.
 pub fn clear_all_signals(state: &mut CanonicalState) {
@@ -134,8 +133,6 @@ pub fn sense_oculocytes(
 
         let sense_mask = mode.oculocyte_sense_type;
         let channel = mode.oculocyte_signal_channel.clamp(0, 7) as usize; // Sensory channels 0-7
-                                                                          // GPU signals use an unsigned 11-bit payload, so authored sensor signals
-                                                                          // share the same positive 1..2047 range in both scenes.
         let signal_value = mode.oculocyte_signal_value.clamp(SIGNAL_MIN, SIGNAL_MAX);
         let ray_length = mode.oculocyte_ray_length.clamp(1.0, 100.0);
 
@@ -218,13 +215,6 @@ fn sense_barrier_ray(pos: Vec3, forward: Vec3, ray_length: f32, boundary_radius:
     // We want t > 0 (ahead of us) and t <= ray_length
     let t = if t1 > 0.0 { t1 } else { t2 };
     t > 0.0 && t <= ray_length
-}
-
-fn is_vasculocyte(genome: &Genome, mode_idx: usize) -> bool {
-    genome
-        .modes
-        .get(mode_idx)
-        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE)
 }
 
 /// Read a single signal channel value for a specific cell.
@@ -329,13 +319,7 @@ pub fn process_lipocytes(state: &CanonicalState, genome: &Genome) -> Vec<SignalE
     emissions
 }
 
-/// Run the complete signal system for one frame:
-/// 1. Clear all signals
-/// 2. Run oculocyte sensing (channels 0-7) + regulation signals (channels 8-15)
-///    + photocyte/lipocyte conditional emissions
-/// 3. Propagate sensor/regulation signals
-/// 4. Cognocytes compute on propagated signals and re-emit
-/// 5. Memorocytes update leaky-integrator state and emit
+/// Advance fixed-rate production, diffusion, decay, and explicit processor memory.
 pub fn run_signal_system(
     state: &mut CanonicalState,
     genome: &Genome,
@@ -392,6 +376,13 @@ pub fn reset_processor_state(state: &mut CanonicalState, cell: usize) {
     }
 }
 
+/// New compartments begin empty; separate from mode-change processor reset.
+pub fn reset_cell_signal_state(state: &mut CanonicalState, cell: usize) {
+    state.signal_concentrations[cell] = [0.0; SIGNAL_CHANNELS];
+    state.signal_channels[cell * SIGNAL_CHANNELS..(cell + 1) * SIGNAL_CHANNELS].fill(None);
+    reset_processor_state(state, cell);
+}
+
 pub(crate) fn deterministic_heat_value(cell_id: u32, channel: usize, tick: u64) -> f32 {
     // Keep this integer sequence byte-for-byte equivalent to the WGSL heat
     // hash. The signal tick intentionally wraps to u32 on both paths.
@@ -404,7 +395,7 @@ pub(crate) fn deterministic_heat_value(cell_id: u32, channel: usize, tick: u64) 
     hash = hash.wrapping_mul(0x846c_a68b);
     hash ^= hash >> 16;
     if hash & 1 == 0 {
-        SIGNAL_MIN
+        -SIGNAL_MAX
     } else {
         SIGNAL_MAX
     }
@@ -423,111 +414,6 @@ fn oscillator_polarity(value_01: f32, peak: f32, polarity: i32) -> f32 {
 fn emission_cost(value: f32) -> f32 {
     REFERENCE_BASELINE_MAINTENANCE_PER_SECOND * 0.25 * value.abs().min(SIGNAL_MAX) / SIGNAL_MAX
         * SIGNAL_TICK_SECONDS
-}
-
-fn build_cpu_forest(
-    state: &mut CanonicalState,
-    genome: &Genome,
-    sources: Vec<[f32; SIGNAL_CHANNELS]>,
-) -> crate::simulation::signal_backbone_bench::SyntheticForest {
-    use crate::cell::adhesion::{BOND_FLAG_BARRIER_BALL, BOND_FLAG_SIGNAL_ACTIVE};
-    use crate::simulation::signal_backbone_bench::{
-        BondClass, Edge, EdgeClass, NodeRole, SyntheticForest,
-    };
-
-    let mut forest = SyntheticForest::new(state.cell_count);
-    forest.sources = sources;
-    for cell in 0..state.cell_count {
-        forest.roles[cell] =
-            genome
-                .modes
-                .get(state.mode_indices[cell])
-                .map_or(NodeRole::Disabled, |mode| {
-                    if mode.cell_type == OCULOCYTE_TYPE {
-                        NodeRole::SourceOnly
-                    } else {
-                        NodeRole::Relay
-                    }
-                });
-    }
-    let connections = &state.adhesion_connections;
-    let mut stable_bond_ids = Vec::new();
-    let mut physical_edge_indices = Vec::new();
-    for edge in 0..connections.active_count {
-        if connections.is_active[edge] == 0
-            || connections.bond_flags[edge] & BOND_FLAG_BARRIER_BALL != 0
-        {
-            continue;
-        }
-        let a = connections.cell_a_index[edge];
-        let b = connections.cell_b_index[edge];
-        if a >= state.cell_count || b >= state.cell_count {
-            continue;
-        }
-        let bond_class = match (forest.roles[a], forest.roles[b]) {
-            (NodeRole::Relay, NodeRole::Relay) => BondClass::Backbone,
-            (NodeRole::SourceOnly, NodeRole::Relay) | (NodeRole::Relay, NodeRole::SourceOnly) => {
-                BondClass::SourceAttachment
-            }
-            _ => BondClass::MechanicalOnly,
-        };
-        let road = is_vasculocyte(genome, state.mode_indices[a])
-            && is_vasculocyte(genome, state.mode_indices[b]);
-        forest.edges.push(Edge {
-            a: a as u32,
-            b: b as u32,
-            edge_class: if road {
-                EdgeClass::VascularRoad
-            } else {
-                EdgeClass::Normal
-            },
-            bond_class,
-            active: true,
-        });
-        stable_bond_ids.push(((connections.slot_generation[edge] as u64) << 32) | edge as u64);
-        physical_edge_indices.push(edge);
-    }
-    match forest.select_active_routes_with_ids(&stable_bond_ids) {
-        Ok(routed) => {
-            for edge in 0..state.adhesion_connections.active_count {
-                if state.adhesion_connections.bond_flags[edge] & BOND_FLAG_BARRIER_BALL == 0 {
-                    state.adhesion_connections.bond_flags[edge] &= !BOND_FLAG_SIGNAL_ACTIVE;
-                }
-            }
-            for (routed_edge, &physical_edge) in
-                routed.edges.iter().zip(physical_edge_indices.iter())
-            {
-                if routed_edge.active {
-                    state.adhesion_connections.bond_flags[physical_edge] |= BOND_FLAG_SIGNAL_ACTIVE;
-                }
-            }
-            routed
-        }
-        Err(error) => {
-            log::error!("failed to select CPU signal routes: {error:?}");
-            SyntheticForest::new(state.cell_count)
-        }
-    }
-}
-
-fn topology_signature(forest: &crate::simulation::signal_backbone_bench::SyntheticForest) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    let mut mix = |value: u64| {
-        hash ^= value;
-        hash = hash.wrapping_mul(0x100000001b3);
-    };
-    mix(forest.roles.len() as u64);
-    for role in &forest.roles {
-        mix(*role as u64);
-    }
-    for edge in &forest.edges {
-        mix(edge.a as u64);
-        mix(edge.b as u64);
-        mix(edge.edge_class as u64);
-        mix(edge.bond_class as u64);
-        mix(edge.active as u64);
-    }
-    hash.max(1)
 }
 
 fn run_authoritative_signal_tick(
@@ -562,7 +448,7 @@ fn run_authoritative_signal_tick(
             let channel = state.signal_processor_channel[cell] as usize;
             let value = state.signal_processor_output[cell].clamp(SIGNAL_MIN, SIGNAL_MAX);
             requested[cell][channel] += value;
-            ordinary_cost[cell] += emission_cost(value);
+            ordinary_cost[cell] += emission_cost(value) * state.signal_diffusion.production_scale;
         }
         if state.cell_thermal_state[cell] == 9 {
             for channel in 0..SIGNAL_CHANNELS {
@@ -570,7 +456,8 @@ fn run_authoritative_signal_tick(
                     state.cell_ids[cell],
                     channel,
                     state.signal_tick_index,
-                );
+                )
+                .abs();
             }
         }
     }
@@ -578,12 +465,16 @@ fn run_authoritative_signal_tick(
         if emission.source_cell < count && emission.channel < SIGNAL_CHANNELS {
             let value = emission.value.clamp(SIGNAL_MIN, SIGNAL_MAX);
             requested[emission.source_cell][emission.channel] += value;
-            ordinary_cost[emission.source_cell] += emission_cost(value);
+            ordinary_cost[emission.source_cell] +=
+                emission_cost(value) * state.signal_diffusion.production_scale;
         }
     }
 
     for cell in 0..count {
-        let heat_cost: f32 = heat[cell].iter().map(|&value| emission_cost(value)).sum();
+        let heat_cost: f32 = heat[cell]
+            .iter()
+            .map(|&value| emission_cost(value) * state.signal_diffusion.production_scale)
+            .sum();
         let available = state.nutrients[cell].max(0.0);
         let paid_heat = available.min(heat_cost);
         state.nutrients[cell] -= paid_heat;
@@ -603,50 +494,48 @@ fn run_authoritative_signal_tick(
         }
     }
 
-    let forest = build_cpu_forest(state, genome, requested);
-    let signature = topology_signature(&forest);
-    if state.signal_cached_forest.is_none() || state.signal_topology_signature != signature {
-        match forest.cache() {
-            Ok(cache) => {
-                state.signal_cached_forest = Some(cache);
-                state.signal_topology_signature = signature;
-            }
-            Err(error) => {
-                log::error!("invalid explicit CPU signal backbone: {error:?}");
-                state.signal_cached_forest = None;
-                state.signal_topology_signature = 0;
-                clear_all_signals(state);
-                return;
-            }
+    use crate::cell::adhesion::{BOND_FLAG_BARRIER_BALL, BOND_FLAG_SIGNAL_ACTIVE};
+    let mut edges = Vec::new();
+    let connections = &mut state.adhesion_connections;
+    for edge in 0..connections.active_count {
+        let a = connections.cell_a_index[edge];
+        let b = connections.cell_b_index[edge];
+        let eligible = connections.is_active[edge] != 0
+            && connections.bond_flags[edge] & BOND_FLAG_BARRIER_BALL == 0
+            && a < count
+            && b < count
+            && a != b;
+        connections.bond_flags[edge] &= !BOND_FLAG_SIGNAL_ACTIVE;
+        if eligible {
+            connections.bond_flags[edge] |= BOND_FLAG_SIGNAL_ACTIVE;
+            edges.push((a, b));
         }
     }
-    let field = match state
-        .signal_cached_forest
-        .as_ref()
-        .expect("cache assigned above")
-        .propagate(&forest.sources)
-    {
-        Ok(field) => field,
-        Err(error) => {
-            log::error!("invalid explicit CPU signal backbone: {error:?}");
-            clear_all_signals(state);
-            return;
-        }
-    };
+    let next = crate::simulation::signal_diffusion::step(
+        &state.signal_concentrations[..count],
+        &requested,
+        &edges,
+        state.signal_diffusion,
+        SIGNAL_TICK_SECONDS,
+    )
+    .expect("validated diffusion settings and cell adjacency");
+    state.signal_concentrations[..count].copy_from_slice(&next);
     clear_all_signals(state);
     for cell in 0..count {
         for channel in 0..SIGNAL_CHANNELS {
-            let value = (field[cell][channel] + heat[cell][channel]).clamp(SIGNAL_MIN, SIGNAL_MAX);
-            if value != 0.0 {
+            let value = next[cell][channel].min(SIGNAL_MAX).round_ties_even();
+            if value > 0.0 {
                 state.signal_channels[cell * SIGNAL_CHANNELS + channel] = Some(value);
                 state.has_any_signal = true;
             }
         }
     }
 
-    let immutable_field: Vec<f32> = state.signal_channels[..count * SIGNAL_CHANNELS]
+    // Match GPU processors: cap full-precision input independently of packed receivers.
+    let immutable_field: Vec<f32> = next
         .iter()
-        .map(|value| value.unwrap_or(0.0))
+        .flatten()
+        .map(|value| value.min(SIGNAL_MAX))
         .collect();
     let mut next_output = vec![0.0f32; count];
     let mut next_channel = vec![0u8; count];
@@ -748,7 +637,6 @@ pub fn emit_regulation_signals(state: &CanonicalState, genome: &Genome) -> Vec<S
 #[cfg(test)]
 mod signal_gate_tests {
     use super::*;
-    use crate::cell::adhesion::BOND_FLAG_BARRIER_BALL;
     use crate::genome::Genome;
     use glam::{Quat, Vec3};
 
@@ -859,322 +747,62 @@ mod signal_gate_tests {
     }
 
     #[test]
-    fn phase2_fixed_clock_tree_and_economics_contract() {
+    fn diffusion_preview_is_delayed_additive_and_survives_topology_changes() {
         let genome = Genome::default();
         let mut state = state_with_cells(3);
-        signal_bond(&mut state, 0, 1);
+        let first = signal_bond(&mut state, 0, 1);
         signal_bond(&mut state, 1, 2);
-        let source = [manual(0, 0, -1000.0)];
-
+        state.signal_diffusion.decay_rate = 0.0;
+        let source = [manual(0, 0, 300.0)];
         run_signal_system(
             &mut state,
             &genome,
             200.0,
-            SIGNAL_TICK_SECONDS * 0.5,
+            SIGNAL_TICK_SECONDS,
             0.0,
             Some(&source),
         );
-        assert_eq!(
-            read_channel(&state, 1, 0),
-            None,
-            "no render-frame-defined early tick"
-        );
+        assert!((read_channel(&state, 0, 0).unwrap() - 20.0).abs() < 0.00001);
+        assert_eq!(read_channel(&state, 1, 0), None);
         run_signal_system(
             &mut state,
             &genome,
             200.0,
-            SIGNAL_TICK_SECONDS * 0.5,
-            1.0,
+            SIGNAL_TICK_SECONDS,
+            0.0,
             Some(&source),
         );
-        assert!((read_channel(&state, 1, 0).unwrap() + 950.0).abs() < 1e-3);
-        assert!((read_channel(&state, 2, 0).unwrap() + 902.5).abs() < 1e-3);
-        assert_eq!(
-            read_channel(&state, 0, 0),
-            None,
-            "normal source cannot receive itself"
-        );
-
-        let retained = state.signal_channels.clone();
-        run_signal_system(&mut state, &genome, 200.0, 0.0, 2.0, None);
-        assert_eq!(
-            state.signal_channels, retained,
-            "published field persists between ticks"
-        );
-
-        let mut brownout = state_with_cells(2);
-        signal_bond(&mut brownout, 0, 1);
-        let full_cost = emission_cost(1000.0);
-        brownout.nutrients[0] = full_cost * 0.5;
-        run_signal_system(
-            &mut brownout,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            0.0,
-            Some(&[manual(0, 0, 1000.0)]),
-        );
-        assert!((read_channel(&brownout, 1, 0).unwrap() - 475.0).abs() < 1e-3);
-        assert_eq!(brownout.nutrients[0], 0.0);
+        assert!(read_channel(&state, 0, 0).unwrap() > 20.0);
+        assert!(read_channel(&state, 1, 0).unwrap() > 0.0);
+        assert_eq!(read_channel(&state, 2, 0), None);
+        state.adhesion_connections.is_active[first] = 0;
+        let retained = state.signal_concentrations[0][0];
+        run_signal_system(&mut state, &genome, 200.0, SIGNAL_TICK_SECONDS, 0.0, None);
+        assert_eq!(state.signal_concentrations[0][0], retained);
+        assert!(state.signal_concentrations[2][0] > 0.0);
     }
 
     #[test]
-    fn ordinary_bonds_signal_mechanical_joints_do_not_and_vasculocytes_are_preferred() {
-        let mut genome = Genome::default();
-        let mut state = state_with_cells(3);
-        state
-            .adhesion_manager
-            .add_ball_joint(
-                &mut state.adhesion_connections,
-                0,
-                1,
-                0,
-                0.0,
-                BOND_FLAG_BARRIER_BALL,
-            )
-            .unwrap();
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            0.0,
-            Some(&[manual(0, 0, 1000.0)]),
-        );
-        assert_eq!(
-            read_channel(&state, 1, 0),
-            None,
-            "mechanical-only bond is ignored"
-        );
-
-        // Repair requires a newly created ordinary bond; the mechanical-only
-        // joint above is never promoted.
-        let repaired = signal_bond(&mut state, 0, 1);
-        signal_bond(&mut state, 2, 1);
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            1.0,
-            Some(&[manual(0, 0, 1000.0), manual(2, 0, -1000.0)]),
-        );
-        assert_eq!(
-            read_channel(&state, 1, 0),
-            None,
-            "opposite signs cancel before clamp"
-        );
-
-        state.adhesion_connections.is_active[repaired] = 0;
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            1.5,
-            Some(&[manual(0, 0, 1000.0)]),
-        );
-        assert_eq!(
-            read_channel(&state, 1, 0),
-            None,
-            "break masks transport at the next tick"
-        );
+    fn diffusion_receiver_saturation_does_not_destroy_quantity_or_emit_on_receipt() {
+        let genome = Genome::default();
+        let mut state = state_with_cells(2);
         signal_bond(&mut state, 0, 1);
-
-        genome.modes[0].cell_type = VASCULOCYTE_TYPE;
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            2.0,
-            Some(&[manual(0, 1, 1000.0)]),
+        state.signal_diffusion.decay_rate = 0.0;
+        state.signal_concentrations[0][0] = 5000.0;
+        run_signal_system(&mut state, &genome, 200.0, SIGNAL_TICK_SECONDS, 0.0, None);
+        assert_eq!(read_channel(&state, 0, 0), Some(1000.0));
+        assert!(
+            (state
+                .signal_concentrations
+                .iter()
+                .map(|v| v[0])
+                .sum::<f32>()
+                - 5000.0)
+                .abs()
+                < 0.001
         );
-        assert!((read_channel(&state, 1, 1).unwrap() - 987.5).abs() < 1e-3);
-    }
-
-    #[test]
-    fn phase2_processors_heat_listeners_and_lifecycle_contract() {
-        let mut genome = Genome::default();
-        genome.modes[1] = genome.modes[0].clone();
-        genome.modes[1].cell_type = COGNOCYTE_TYPE;
-        genome.modes[1].cognocyte_operation = crate::cell::behaviors::cognocyte::OP_ADD;
-        genome.modes[1].cognocyte_input_channel_a = 0;
-        genome.modes[1].cognocyte_input_channel_b = 1;
-        genome.modes[1].cognocyte_output_channel = 2;
-
-        let mut state = state_with_cells(3);
-        state.mode_indices[1] = 1;
-        signal_bond(&mut state, 0, 1);
-        signal_bond(&mut state, 1, 2);
-        let inputs = [manual(0, 0, 100.0), manual(0, 1, 100.0)];
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            0.0,
-            Some(&inputs),
-        );
-        assert_eq!(
-            read_channel(&state, 2, 2),
-            None,
-            "processor result is not visible in tick t"
-        );
-        assert!((state.signal_processor_output[1] - 190.0).abs() < 1e-3);
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            1.0,
-            Some(&inputs),
-        );
-        assert!((read_channel(&state, 2, 2).unwrap() - 180.5).abs() < 1e-3);
-
-        reset_processor_state(&mut state, 1);
-        assert_eq!(state.signal_processor_output[1], 0.0);
-        assert_eq!(state.memo_state[1], 0.0);
-
-        state.cell_thermal_state[2] = 9;
-        state.nutrients[2] = 10.0;
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            2.0,
-            Some(&[manual(2, 15, 500.0)]),
-        );
-        let expected_heat_cost = SIGNAL_CHANNELS as f32 * emission_cost(1000.0);
-        assert!((state.nutrients[2] - (10.0 - expected_heat_cost)).abs() < 1e-5);
-        for channel in 0..SIGNAL_CHANNELS {
-            assert_eq!(read_channel(&state, 2, channel).unwrap().abs(), 1000.0);
-        }
-
-        assert!(listener_active(
-            -500.0,
-            400.0,
-            SignalResponseMode::Negative,
-            false
-        ));
-        assert!(!listener_active(
-            -500.0,
-            400.0,
-            SignalResponseMode::Positive,
-            false
-        ));
-        assert!(listener_active(
-            -500.0,
-            400.0,
-            SignalResponseMode::Magnitude,
-            false
-        ));
-
-        state.signal_processor_output[2] = 777.0;
-        state.signal_processor_config[2] = 99;
-        state.remove_cell(1);
-        assert_eq!(
-            state.signal_processor_output[1], 777.0,
-            "swap-remove carries the live cell state"
-        );
-        let reused = state
-            .add_cell(
-                Vec3::ZERO,
-                Vec3::ZERO,
-                Quat::IDENTITY,
-                Quat::IDENTITY,
-                Vec3::ZERO,
-                100.0,
-                0,
-                0,
-                0.0,
-                1.0,
-                200.0,
-                1.0,
-            )
-            .unwrap();
-        assert_eq!(
-            state.signal_processor_output[reused], 0.0,
-            "new slot is zero initialized"
-        );
-    }
-
-    #[test]
-    fn phase2_memorocyte_source_attachment_and_catch_up_contract() {
-        let mut genome = Genome::default();
-        genome.modes[1] = genome.modes[0].clone();
-        genome.modes[1].cell_type = MEMOROCYTE_TYPE;
-        genome.modes[1].memorocyte_input_channel = 0;
-        genome.modes[1].memorocyte_output_channel = 3;
-        genome.modes[1].memorocyte_rate = 0.5;
-        genome.modes[2] = genome.modes[0].clone();
-        genome.modes[2].cell_type = OCULOCYTE_TYPE;
-        genome.modes[2].oculocyte_sense_type = SENSE_SELF;
-        genome.modes[2].oculocyte_signal_channel = 4;
-        genome.modes[2].oculocyte_signal_value = 100.0;
-
-        let mut state = state_with_cells(4);
-        state.mode_indices[1] = 1;
-        state.mode_indices[2] = 2;
-        state.organism_ids[3] = 99;
-        signal_bond(&mut state, 0, 1);
-        signal_bond(&mut state, 2, 0);
-        signal_bond(&mut state, 2, 3);
-
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS,
-            0.0,
-            Some(&[manual(0, 0, 1000.0), manual(0, 5, 250.0)]),
-        );
-        let expected_rate = 1.0 - 0.5f32.powf(SIGNAL_TICK_SECONDS);
-        assert!((state.memo_state[1] - 950.0 * expected_rate).abs() < 1e-3);
-        assert_eq!(
-            read_channel(&state, 1, 3),
-            None,
-            "new memory waits one tick"
-        );
-        assert!((read_channel(&state, 0, 4).unwrap() - 95.0).abs() < 1e-3);
-        assert!((read_channel(&state, 3, 4).unwrap() - 95.0).abs() < 1e-3);
-        assert_eq!(
-            read_channel(&state, 3, 5),
-            None,
-            "source-only attachment cannot relay"
-        );
-
-        let topology_signature = state.signal_topology_signature;
-        genome.modes[2].oculocyte_signal_value = 200.0;
-        run_signal_system(&mut state, &genome, 200.0, SIGNAL_TICK_SECONDS, 1.0, None);
-        assert_eq!(state.signal_topology_signature, topology_signature);
-        assert!((read_channel(&state, 3, 4).unwrap() - 190.0).abs() < 1e-3);
-
-        let before = state.signal_tick_index;
-        run_signal_system(
-            &mut state,
-            &genome,
-            200.0,
-            SIGNAL_TICK_SECONDS * 20.0,
-            2.0,
-            None,
-        );
-        assert_eq!(
-            state.signal_tick_index - before,
-            MAX_SIGNAL_CATCH_UP_TICKS as u64
-        );
-        assert!(state.signal_tick_accumulator < SIGNAL_TICK_SECONDS);
-
-        state.signal_light_samples[0] = 0.75;
-        genome.modes[0].cell_type = PHOTOCYTE_TYPE;
-        genome.modes[0].photocyte_emit_enabled = true;
-        genome.modes[0].photocyte_emit_threshold = 0.5;
-        genome.modes[0].photocyte_emit_mode = 0;
-        assert_eq!(process_photocytes(&state, &genome).len(), 1);
-
-        assert_eq!(oscillator_polarity(0.25, 1000.0, 0), 250.0);
-        assert_eq!(oscillator_polarity(0.25, 1000.0, 1), -250.0);
-        assert_eq!(oscillator_polarity(0.25, 1000.0, 2), -500.0);
+        state.remove_cell(0);
+        let carried = state.signal_concentrations[0][0];
+        assert!(carried > 0.0 && carried < 1000.0);
     }
 }

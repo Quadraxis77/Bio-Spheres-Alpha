@@ -339,29 +339,27 @@ impl AdhesionLineRenderer {
                 (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) != 0;
             let is_signal_capable =
                 (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) == 0;
-            let route_active =
-                (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_SIGNAL_ACTIVE) != 0;
-            let route_color = if route_active {
+            let signal_active = is_signal_capable && (0..16).any(|channel| {
+                state.signal_channels[cell_a_idx * 16 + channel].unwrap_or(0.0) > 0.0
+                    && state.signal_channels[cell_b_idx * 16 + channel].unwrap_or(0.0) > 0.0
+            });
+            let route_color = if signal_active {
                 [1.0, 1.0, 0.0, 1.0]
             } else {
                 [0.0, 0.0, 0.0, 1.0]
             };
-            let zone_color_a = if is_signal_capable {
-                route_color
-            } else if is_barrier_ball {
+            let zone_color_a = if is_barrier_ball {
                 [0.0, 0.0, 0.0, 1.0]
             } else {
                 get_zone_color(zone_a)
             };
-            let zone_color_b = if is_signal_capable {
-                route_color
-            } else if is_barrier_ball {
+            let zone_color_b = if is_barrier_ball {
                 [0.0, 0.0, 0.0, 1.0]
             } else {
                 get_zone_color(zone_b)
             };
 
-            // Backbone routing is visible even while silent.
+            // Signal activity colors only the outline; the core keeps its zone colors.
             let signal_color = if is_signal_capable {
                 route_color
             } else if is_barrier_ball {

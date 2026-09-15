@@ -22,9 +22,9 @@ use crate::simulation::gpu_physics::{
     DivisionAudioParams, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
     GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
     GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
-    PhysicsFeatureFlags, SignalBackboneValuePipeline, SignalTickClock,
+    PhysicsFeatureFlags, SignalTickClock,
 };
-use crate::simulation::signal_backbone_bench::CachedForest;
+use crate::simulation::gpu_physics::signal_diffusion::{DiffusionParams, SignalDiffusionPipeline};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
@@ -132,9 +132,8 @@ pub struct GpuScene {
     pub gpu_triple_buffers: GpuTripleBufferSystem,
     /// Adhesion buffer system for GPU adhesion physics
     pub adhesion_buffers: AdhesionBuffers,
-    /// Single cached-backbone signal value pipeline. The previous hop-based
-    /// gameplay implementation has been removed.
-    pub signal_backbone: SignalBackboneValuePipeline,
+    /// Persistent nonnegative concentrations transported across all eligible bonds.
+    pub signal_diffusion: SignalDiffusionPipeline,
     signal_clock: SignalTickClock,
     signal_elapsed_pending: f32,
     /// GPU resolver for preview-authored scaffold links stored in genomes
@@ -777,12 +776,7 @@ impl GpuScene {
         // Initialize adhesion buffers with default values
         adhesion_buffers.initialize(queue);
 
-        let signal_backbone = SignalBackboneValuePipeline::new(
-            device,
-            capacity,
-            &gpu_triple_buffers.nutrients_buffer,
-            &adhesion_buffers.signal_flags,
-        );
+        let signal_diffusion = SignalDiffusionPipeline::new(device, capacity);
 
         let scaffold_system = GpuScaffoldSystem::new(device);
 
@@ -901,7 +895,7 @@ impl GpuScene {
             gpu_physics_pipelines,
             gpu_triple_buffers,
             adhesion_buffers,
-            signal_backbone,
+            signal_diffusion,
             signal_clock: SignalTickClock::default(),
             signal_elapsed_pending: 0.0,
             scaffold_system,
@@ -1170,12 +1164,6 @@ impl GpuScene {
         self.gpu_triple_buffers.capacity
     }
 
-    /// Install the externally generated immutable Phase 3 backbone snapshot.
-    /// Phase 4 replaces this upload boundary with incremental topology repair.
-    pub fn set_static_signal_forest(&mut self, device: &wgpu::Device, cache: &CachedForest) {
-        self.signal_backbone.set_static_forest(device, cache);
-    }
-
     /// Reset the simulation to initial state.
     pub fn reset(&mut self, queue: &wgpu::Queue) {
         self.current_cell_count = 0;
@@ -1221,7 +1209,7 @@ impl GpuScene {
         self.has_devorocytes = false;
         self.has_gametocytes = false;
         self.physics_features = PhysicsFeatureFlags::default();
-        self.signal_backbone.clear_static_forest();
+        self.signal_diffusion.reset(queue);
         self.signal_clock = SignalTickClock::default();
         self.signal_elapsed_pending = 0.0;
         self.instance_builder.mark_all_dirty();
@@ -3239,11 +3227,12 @@ impl GpuScene {
         let signal_v4: Vec<[f32; 4]> = genome_ref
             .modes
             .iter()
-            .map(|mode| {
+            .enumerate()
+            .map(|(local, mode)| {
                 [
                     remap(mode.mode_switch_target),
                     if mode.mode_switch_invert { 1.0 } else { 0.0 },
-                    0.0,
+                    (global_start_index + local + 1) as f32,
                     0.0,
                 ]
             })
@@ -8526,29 +8515,43 @@ impl Scene for GpuScene {
             }
         }
 
-        // Fixed 15 Hz cached-backbone value ticks. All catch-up ticks stay in
-        // this command encoder and therefore add no queue submission.
+        // The live graph needs no externally installed forest. Residual fields
+        // keep diffusing and decaying even when every producer is silent.
         let elapsed = std::mem::take(&mut self.signal_elapsed_pending);
-        let signal_ticks = if self.signal_backbone.has_static_forest() {
-            self.signal_clock.advance(elapsed)
-        } else {
-            0
-        };
-        let signal_cell_slots = self.total_cell_slots.max(if cell_inserted { 1 } else { 0 });
-        for tick_slot in 0..signal_ticks {
-            let tick = self.signal_clock.begin_tick();
-            self.signal_backbone
-                .write_params(queue, tick_slot, signal_cell_slots, tick, 0xf);
-            self.signal_backbone
-                .encode_sources(&mut encoder, tick_slot, signal_cell_slots);
-            self.signal_backbone
-                .encode_propagation(&mut encoder, 0xf, tick_slot);
-            self.signal_backbone.encode_finalize_and_processors(
-                &mut encoder,
-                tick_slot,
-                signal_cell_slots,
-                true,
-            );
+        let signal_ticks = self.signal_clock.advance(elapsed);
+        let signal_cell_slots = self.gpu_triple_buffers.capacity;
+        if signal_ticks > 0 && signal_cell_slots > 0 {
+            self.signal_diffusion.sync_modes(device, queue, &self.genomes);
+            for tick_slot in 0..signal_ticks {
+                let tick = self.signal_clock.begin_tick();
+                let dt = crate::simulation::signal_system::SIGNAL_TICK_SECONDS;
+                let settings = self.signal_diffusion.settings;
+                let radius = self.config.sphere_radius;
+                let origin = self.light_field_system.as_ref()
+                    .map_or([-radius; 3], |light| light.grid_origin());
+                let params = DiffusionParams {
+                    count: signal_cell_slots,
+                    tick: tick as u32,
+                    degree: crate::simulation::gpu_physics::adhesion::MAX_ADHESIONS_PER_CELL as u32,
+                    resolution: 128,
+                    dt,
+                    conductance: settings.conductance,
+                    retention: (-dt * settings.decay_rate).exp(),
+                    production_scale: settings.production_scale,
+                    time: (tick + 1) as f32 * dt,
+                    radius,
+                    grid_cell: self.light_field_system.as_ref()
+                        .map_or(radius * 2.0 / 128.0, |light| light.cell_size()),
+                    padding: 0.0,
+                    grid_origin: [origin[0], origin[1], origin[2], 0.0],
+                };
+                self.signal_diffusion.encode_tick(
+                    device, queue, &mut encoder, tick_slot as usize, params,
+                    &self.gpu_triple_buffers, &self.adhesion_buffers,
+                    self.light_field_system.as_ref(), self.fluid_simulator.as_ref(),
+                    self.moss_system.as_ref(), [radius, radius * 2.0 / 64.0, 64.0, 16.0],
+                );
+            }
         }
 
         // End of "Signal Processing" segment, start of "Physics & Lifecycle".

@@ -523,7 +523,7 @@ pub struct GpuTripleBufferSystem {
     /// v1: [apoptosis_signal_threshold(f32), apoptosis_signal_invert(f32 0/1), signal_child_a_channel(f32), signal_child_a_threshold(f32)]
     /// v2: [signal_child_a_mode_above(f32), signal_child_a_mode_below(f32), signal_child_b_channel(f32), signal_child_b_threshold(f32)]
     /// v3: [signal_child_b_mode_above(f32), signal_child_b_mode_below(f32), mode_switch_signal_channel(f32), mode_switch_signal_threshold(f32)]
-    /// v4: [mode_switch_target(f32), mode_switch_invert(f32 0/1), padding, padding]
+    /// v4: [mode_switch_target, mode_switch_control, inherited diffusion mode reference, padding]
     pub signal_settings_v0: wgpu::Buffer,
     pub signal_settings_v1: wgpu::Buffer,
     pub signal_settings_v2: wgpu::Buffer,
@@ -2897,7 +2897,7 @@ impl GpuTripleBufferSystem {
                     (if mode.mode_switch_invert { 1 } else { 0 }
                         + 2 * mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_MODE_SWITCH)
                             as i32) as f32,
-                    0.0,
+                    (v4.len() + 1) as f32,
                     0.0,
                 ]);
             }

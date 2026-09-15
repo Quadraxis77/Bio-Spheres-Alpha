@@ -2029,7 +2029,7 @@ pub fn physics_step_with_genome(
     // Form contact adhesion bonds for Glueocyte cells
     form_glueocyte_contact_bonds(state, genome, current_time);
 
-    // Run the fixed-rate cached-backbone signal system.
+    // Run fixed-rate conservative signal diffusion.
     let boundary_radius = config.sphere_radius;
     crate::simulation::signal_system::run_signal_system(
         state,

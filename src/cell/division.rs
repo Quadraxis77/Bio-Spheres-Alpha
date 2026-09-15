@@ -595,6 +595,7 @@ pub fn division_step(
             if data.child_a_slot < state.capacity {
                 // Write child A
                 let child_a_id = state.next_cell_id;
+                crate::simulation::signal_system::reset_cell_signal_state(state, data.child_a_slot);
                 state.cell_ids[data.child_a_slot] = child_a_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_a_slot, data.child_a_development_address);
@@ -637,6 +638,7 @@ pub fn division_step(
             if data.child_b_slot < state.capacity {
                 // Write child B
                 let child_b_id = state.next_cell_id;
+                crate::simulation::signal_system::reset_cell_signal_state(state, data.child_b_slot);
                 state.cell_ids[data.child_b_slot] = child_b_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_b_slot, data.child_b_development_address);
@@ -1337,6 +1339,7 @@ pub fn division_step_multi(
 
             if data.child_a_slot < state.capacity {
                 let child_a_id = state.next_cell_id;
+                crate::simulation::signal_system::reset_cell_signal_state(state, data.child_a_slot);
                 state.cell_ids[data.child_a_slot] = child_a_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_a_slot, data.child_a_development_address);
@@ -1375,6 +1378,7 @@ pub fn division_step_multi(
 
             if data.child_b_slot < state.capacity {
                 let child_b_id = state.next_cell_id;
+                crate::simulation::signal_system::reset_cell_signal_state(state, data.child_b_slot);
                 state.cell_ids[data.child_b_slot] = child_b_id;
                 state.next_cell_id += 1;
                 state.set_development_address(data.child_b_slot, data.child_b_development_address);
