@@ -97,9 +97,16 @@ impl LuminocyteEmission {
         glow: &wgpu::Buffer,
         count: &wgpu::Buffer,
         solid: &wgpu::Buffer,
+        cell_occupancy: &wgpu::Buffer,
         slots: u32,
     ) {
         encoder.clear_buffer(&self.buffer, 0, None);
+        // Clear stale illumination, but do not build cave acceleration structures
+        // or dispatch emission for an empty scene. Keep pending cave edits until
+        // there are cells to light.
+        if slots == 0 {
+            return;
+        }
         if let Some((pipeline, rt)) = self
             .ray_tracing
             .as_ref()
@@ -108,7 +115,15 @@ impl LuminocyteEmission {
             let mut rt = rt.borrow_mut();
             rt.prepare(device, encoder);
             if let Some(tlas) = &rt.tlas {
-                let buffers = [&self.params, positions, glow, count, solid, &self.buffer];
+                let buffers = [
+                    &self.params,
+                    positions,
+                    glow,
+                    count,
+                    solid,
+                    &self.buffer,
+                    cell_occupancy,
+                ];
                 let mut entries: Vec<_> = buffers
                     .iter()
                     .enumerate()
@@ -118,7 +133,7 @@ impl LuminocyteEmission {
                     })
                     .collect();
                 entries.push(wgpu::BindGroupEntry {
-                    binding: 6,
+                    binding: 7,
                     resource: tlas.as_binding(),
                 });
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -140,7 +155,15 @@ impl LuminocyteEmission {
             device,
             encoder,
             &self.scatter,
-            &[&self.params, positions, glow, count, solid, &self.buffer],
+            &[
+                &self.params,
+                positions,
+                glow,
+                count,
+                solid,
+                &self.buffer,
+                cell_occupancy,
+            ],
             slots.div_ceil(64),
         );
     }
@@ -149,12 +172,13 @@ impl LuminocyteEmission {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         colors: &wgpu::Buffer,
+        intensity: &wgpu::Buffer,
     ) {
         self.dispatch(
             device,
             encoder,
             &self.resolve,
-            &[&self.buffer, colors],
+            &[&self.buffer, colors, intensity],
             (128u32 * 128 * 128).div_ceil(64),
         );
     }

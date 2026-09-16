@@ -2,8 +2,47 @@ use bio_spheres::simulation::fluid_simulation::gpu_simulator::{GpuFluidParams, G
 use bio_spheres::simulation::gpu_physics::luminocyte_emission::{
     emission_shader_source, LuminocyteEmission,
 };
+use bio_spheres::simulation::gpu_physics::light_field::LightFieldSystem;
+use bio_spheres::rendering::VolumetricFogRenderer;
 use bytemuck::Zeroable;
 use wgpu::util::DeviceExt;
+
+fn shader_f32_const(source: &str, name: &str) -> f32 {
+    let prefix = format!("const {name}: f32 = ");
+    source
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(&prefix))
+        .and_then(|value| value.trim_end_matches(';').parse().ok())
+        .unwrap_or_else(|| panic!("missing f32 constant {name}"))
+}
+
+#[test]
+fn luminocyte_food_conversion_is_subcritical_per_receiver() {
+    let shader = include_str!("../shaders/photocyte_light.wgsl");
+    let cost = shader_f32_const(shader, "LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND");
+    let recovery = shader_f32_const(
+        shader,
+        "LUMINOCYTE_PHOTOCYTE_NUTRIENTS_PER_LIGHT_SECOND",
+    );
+
+    assert!(recovery < cost);
+    assert_eq!(recovery / cost, 5.0 / 6.0);
+    for distance_voxels in [0.0f32, 1.0, 3.0, 5.0] {
+        let falloff = (1.0 - distance_voxels / 6.0).max(0.0).powi(2);
+        assert!(recovery * falloff < cost);
+    }
+
+    // The production shaders round nutrient payment up and emitted strength
+    // down. Check the low-brightness boundary where opposite rounding could
+    // otherwise produce a small amount of free light.
+    let dt = 1.0 / 60.0;
+    for brightness in [0.0011f32, 0.00147, 0.01, 0.15, 1.0, 3.0, 4.0] {
+        let paid_units = (brightness * cost * dt * 1000.0).ceil() as u32;
+        let emitted = (brightness.min(4.0) * 1024.0).floor() / 1024.0;
+        let recovered_units = (emitted * recovery * dt * 1000.0).floor() as u32;
+        assert!(recovered_units < paid_units);
+    }
+}
 
 fn buffer(device: &wgpu::Device, data: &[u8]) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -62,6 +101,53 @@ fn validate_both_emission_shader_variants() {
         .validate(&module)
         .unwrap();
     }
+
+    for (name, source) in [
+        ("luminocyte resolve", include_str!("../shaders/luminocyte_resolve.wgsl")),
+        ("photocyte consumption", include_str!("../shaders/photocyte_light.wgsl")),
+        ("volumetric haze", include_str!("../shaders/volumetric_fog.wgsl")),
+    ] {
+        let module = naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+}
+
+#[test]
+fn shared_radiative_field_pipelines_create() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::new(&Default::default());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .unwrap();
+        let limits = adapter.limits();
+        let (device, _) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_limits: wgpu::Limits {
+                    max_storage_buffers_per_shader_stage: 64
+                        .min(limits.max_storage_buffers_per_shader_stage),
+                    max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
+                    max_buffer_size: limits.max_buffer_size,
+                    ..wgpu::Limits::default()
+                },
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let _light = LightFieldSystem::new(&device, 200.0, 16);
+        let _fog = VolumetricFogRenderer::new(
+            &device,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            64,
+            64,
+        );
+    });
 }
 
 fn run_emission_test(hardware: bool) {
@@ -118,7 +204,10 @@ fn run_emission_test(hardware: bool) {
             &device,
             bytemuck::cast_slice(&[[64.5f32, 64.5, 64.5, 1.]; 2]),
         );
-        let glow = buffer(&device, bytemuck::cast_slice(&[[1f32, 0., 0., 1.]; 2]));
+        let glow = buffer(
+            &device,
+            bytemuck::cast_slice(&[[1f32, 0., 0., 1.], [0., 0., 1., 1.]]),
+        );
         let count = buffer(&device, bytemuck::cast_slice(&[1u32]));
         let n = 128usize.pow(3);
         let mut walls = vec![0u32; n];
@@ -130,11 +219,25 @@ fn run_emission_test(hardware: bool) {
         }
         emission.set_solid_mask(&walls);
         let solid = buffer(&device, bytemuck::cast_slice(&walls));
+        let mut occupancy_values = vec![0u32; n];
+        let occupancy = buffer(&device, bytemuck::cast_slice(&occupancy_values));
         let colors = buffer(&device, bytemuck::cast_slice(&vec![[0f32; 4]; n]));
+        let intensity = buffer(&device, bytemuck::cast_slice(&vec![0f32; n]));
         let dispatch = || {
             let mut encoder = device.create_command_encoder(&Default::default());
-            emission.scatter(&device, &mut encoder, &positions, &glow, &count, &solid, 2);
-            emission.resolve(&device, &mut encoder, &colors);
+            encoder.clear_buffer(&colors, 0, None);
+            encoder.clear_buffer(&intensity, 0, None);
+            emission.scatter(
+                &device,
+                &mut encoder,
+                &positions,
+                &glow,
+                &count,
+                &solid,
+                &occupancy,
+                2,
+            );
+            emission.resolve(&device, &mut encoder, &colors, &intensity);
             queue.submit([encoder.finish()]);
         };
         dispatch();
@@ -157,11 +260,58 @@ fn run_emission_test(hardware: bool) {
             "opaque wall must occlude light and radiant heat"
         );
         assert_eq!(sample(71)[3], 0, "finite light radius");
+        assert!(sample(62)[3] > 0, "unblocked cell must receive light");
+        occupancy_values[index(63, 64, 64)] = 1;
+        queue.write_buffer(&occupancy, 0, bytemuck::cast_slice(&occupancy_values));
+        dispatch();
+        assert_eq!(sample(62)[3], 0, "intervening cells must cast shadows");
+        occupancy_values[index(63, 64, 64)] = 0;
+        queue.write_buffer(&occupancy, 0, bytemuck::cast_slice(&occupancy_values));
+        dispatch();
         let resolved = read(&device, &queue, &colors, index(64, 64, 64) as u64 * 16, 16);
         assert!(f32::from_bits(resolved[0]) > 0. && f32::from_bits(resolved[3]) > 0.);
+        let resolved_intensity = read(
+            &device,
+            &queue,
+            &intensity,
+            index(64, 64, 64) as u64 * 4,
+            4,
+        );
+        assert_eq!(f32::from_bits(resolved_intensity[0]), 1.0);
+        let shadowed_intensity = read(
+            &device,
+            &queue,
+            &intensity,
+            index(67, 64, 64) as u64 * 4,
+            4,
+        );
+        assert_eq!(f32::from_bits(shadowed_intensity[0]), 0.0);
         queue.write_buffer(&count, 0, bytemuck::cast_slice(&[2u32]));
         dispatch();
         assert_eq!(sample(64)[3], one * 2, "emitters must add");
+        let blended_intensity = read(
+            &device,
+            &queue,
+            &intensity,
+            index(64, 64, 64) as u64 * 4,
+            4,
+        );
+        assert_eq!(f32::from_bits(blended_intensity[0]), 2.0);
+        let blended_color = read(
+            &device,
+            &queue,
+            &colors,
+            index(64, 64, 64) as u64 * 16,
+            16,
+        );
+        assert_eq!(
+            [
+                f32::from_bits(blended_color[0]),
+                f32::from_bits(blended_color[1]),
+                f32::from_bits(blended_color[2]),
+            ],
+            [0.5, 0.0, 0.5]
+        );
         queue.write_buffer(&glow, 0, bytemuck::cast_slice(&[[0f32; 4]; 2]));
         dispatch();
         assert_eq!(

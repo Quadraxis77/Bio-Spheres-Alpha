@@ -104,6 +104,13 @@ fn sample_light_field(world_pos: vec3<f32>) -> f32 {
 fn cell_light_sample_position(center: vec3<f32>, normal: vec3<f32>, radius: f32, light_dir: vec3<f32>) -> vec3<f32> {
     let surface = center + normal * radius;
     let bias = radius + shadow_params.cell_size;
+    return surface_light_sample_position(surface, bias, light_dir);
+}
+
+// Sample just sunward of arbitrary rendered geometry. This keeps procedural
+// surfaces such as Devorocyte spikes from shadowing themselves in the coarse
+// voxel field while still giving them the same scene-light response as cells.
+fn surface_light_sample_position(surface: vec3<f32>, bias: f32, light_dir: vec3<f32>) -> vec3<f32> {
     let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
     let grid_max = grid_min + vec3<f32>(shadow_params.cell_size * f32(shadow_params.grid_resolution));
     return clamp(surface - light_dir * bias, grid_min, grid_max);
@@ -1681,14 +1688,23 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let ray_d = normalize(quat_rotate_inverse(in.rotation, ray_dir_world));
 
         // t at which the ray hits the sphere front surface in cell-local space.
-        // Solve |ray_o + t*ray_d|^2 = 1. Take the larger positive root (front face).
+        // The ray points from the camera toward the cell, so the smaller positive
+        // root is the visible surface. Using the far root makes the buried part of
+        // every cone render through the membrane instead of appearing embedded.
         let sph_b    = dot(ray_o, ray_d);
         let sph_c    = dot(ray_o, ray_o) - 1.0;
         let sph_disc = sph_b * sph_b - sph_c;
         var t_sphere_front = 1e9;
         if (sph_disc >= 0.0) {
-            let t_sf = -sph_b + sqrt(sph_disc);
-            if (t_sf > 0.001) { t_sphere_front = t_sf; }
+            let sph_sqrt = sqrt(sph_disc);
+            let t_near = -sph_b - sph_sqrt;
+            let t_far  = -sph_b + sph_sqrt;
+            if (t_near > 0.001) {
+                t_sphere_front = t_near;
+            } else if (t_far > 0.001) {
+                // Defensive fallback for a camera placed inside the sphere.
+                t_sphere_front = t_far;
+            }
         }
 
         let spike_dirs = array<vec3<f32>, 20>(
@@ -1769,14 +1785,38 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
             let hit_local = ray_o + ray_d * best_t;
             let hit_world = in.center + quat_rotate(in.rotation, hit_local) * in.radius;
 
+            // Use the normal cell-lighting inputs instead of a fixed 20% fill and
+            // uncoloured white highlight. The spikes are opaque, non-emissive cell
+            // material: they receive ambient/direct/local light, shadows, coloured
+            // illumination, and the configured specular/fresnel response.
+            let spike_light_pos = surface_light_sample_position(
+                hit_world,
+                in.radius + shadow_params.cell_size,
+                light_dir,
+            );
+            let spike_shadow = apply_shadow_contrast(sample_light_field(spike_light_pos));
+            let spike_light_color = sample_light_color_field(spike_light_pos);
+            let spike_local_light = sample_local_irradiance(hit_world);
             let spike_ndotl = max(dot(spike_world_normal, -light_dir), 0.0);
-            let spike_half  = normalize(-light_dir + view_dir);
-            let spike_spec  = pow(max(dot(spike_world_normal, spike_half), 0.0), 40.0) * 0.8;
+            let spike_diffuse = spike_ndotl * spike_light_color * spike_shadow
+                              + spike_local_light;
+            let spike_view = normalize(camera.camera_pos - hit_world);
+            let spike_half = normalize(-light_dir + spike_view);
+            let spike_spec = pow(
+                max(dot(spike_world_normal, spike_half), 0.0),
+                in.visual_params.y,
+            ) * in.visual_params.x * spike_light_color * spike_shadow;
+            let spike_fresnel = pow(
+                1.0 - max(dot(spike_world_normal, spike_view), 0.0),
+                3.0,
+            ) * in.visual_params.z * spike_light_color * spike_shadow;
 
             let tip_fade    = clamp((length(hit_local) - 1.0) / spike_height, 0.0, 1.0);
-            let spike_color = base_color * (0.8 - tip_fade * tip_fade_str * 0.5)
-                            * (0.2 + 0.8 * spike_ndotl)
-                            + vec3<f32>(spike_spec);
+            let spike_albedo = base_color * (0.78 - tip_fade * tip_fade_str * 0.40);
+            let spike_color = base_color * lighting.ambient
+                            + spike_albedo * ((1.0 - lighting.ambient) * spike_diffuse)
+                            + spike_spec
+                            + spike_fresnel;
 
             let spike_clip = camera.view_proj * vec4<f32>(hit_world, 1.0);
             out.depth = spike_clip.z / spike_clip.w;

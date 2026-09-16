@@ -315,19 +315,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             light_sample_pos.z += dz * fog_params.water_wave_strength;
         }
 
-        // Get fog density before lighting so density-free samples avoid light-field reads.
+        // Murky water is itself a participating medium. It must be evaluated
+        // before the empty-air early-out so local emitters remain visible even
+        // when the global atmospheric fog density is zero.
         let density = fog_density_at(sample_pos);
-        if (density <= 0.0) {
+        let water_amount = sample_water_density_fog(sample_pos);
+        let effective_density = density + water_amount * 0.6;
+        if (effective_density <= 0.0) {
             continue;
         }
-        
-        let light_intensity = sample_light_field(light_sample_pos);
 
-        // Water at this sample point: contributes its own scattering density and blue tint.
-        let water_amount = sample_water_density_fog(sample_pos);
-        // Effective density: base fog plus water-volume scattering contribution.
-        // Water acts as a participating medium even when base fog_density is low.
-        let effective_density = density + water_amount * 0.6;
+        let light_intensity = sample_light_field(light_sample_pos);
 
         // In-scattered light: light that scatters toward camera at this point.
         // Local emitter-lit voxels (w > 0) use isotropic phase - their light radiates in
@@ -367,7 +365,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         // Beer-Lambert absorption (fast exp approximation)
-        let sample_extinction = effective_density * (fog_params.absorption + fog_params.fog_density) * step_size * 0.01;
+        let medium_absorption = fog_params.absorption + fog_params.fog_density + water_amount * 0.18;
+        let sample_extinction = effective_density * medium_absorption * step_size * 0.01;
         let sample_transmittance = 1.0 / (1.0 + sample_extinction + sample_extinction * sample_extinction * 0.5);
 
         // Accumulate (energy-conserving integration)

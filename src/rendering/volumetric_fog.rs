@@ -609,10 +609,6 @@ impl VolumetricFogRenderer {
         grid_origin: [f32; 3],
         world_radius: f32,
     ) {
-        if self.fog_density <= 0.0 && self.height_fog_density <= 0.0 {
-            return;
-        }
-
         // Update camera uniforms
         let inv_view_proj = view_proj.inverse();
         let aspect = (self.fog_width as f32 / self.fog_height.max(1) as f32).max(0.001);

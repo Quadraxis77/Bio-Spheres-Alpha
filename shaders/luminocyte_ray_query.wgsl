@@ -1,4 +1,4 @@
-@group(0) @binding(6) var cave_acceleration: acceleration_structure;
+@group(0) @binding(7) var cave_acceleration: acceleration_structure;
 
 // Distance to the exit of the containing voxel in the supplied direction.
 fn voxel_exit(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
@@ -13,6 +13,17 @@ fn visible_between(center: vec3<f32>, receiver: vec3<f32>) -> bool {
     let distance = length(delta);
     if distance < 0.0001 { return true; }
     let direction = delta / distance;
+    let base = vec3<i32>(floor(center));
+    let receiver_voxel = vec3<i32>(floor(receiver));
+    // The cave is queried through the acceleration structure. Dynamic cells use
+    // the occupancy volume built earlier in this frame, so both backends cast
+    // the same cell shadows without rebuilding the TLAS as cells move.
+    let occupancy_steps = max(i32(ceil(distance * 2.0)), 1);
+    for (var s = 1; s < occupancy_steps; s++) {
+        let q = vec3<i32>(floor(center + delta * (f32(s) / f32(occupancy_steps))));
+        if all(q == base) || all(q == receiver_voxel) { continue; }
+        if inside(q) && cell_occupancy[index(q)] != 0u { return false; }
+    }
     // Exclude source and receiver voxels, so a wall can receive light itself.
     let start = voxel_exit(center, direction) + 0.0001;
     let end = distance - voxel_exit(receiver, -direction) - 0.0001;

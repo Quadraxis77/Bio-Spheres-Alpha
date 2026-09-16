@@ -2515,11 +2515,6 @@ impl GpuScene {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
-        let (light_field, fluid_sim) = match (&self.light_field_system, &self.fluid_simulator) {
-            (Some(l), Some(f)) => (l, f),
-            _ => return,
-        };
-
         // Compute light field only when something will consume it. Put this before
         // buffer clears and bind-group setup so skipped frames are genuinely cheap.
         if !self.has_photocytes
@@ -2529,6 +2524,12 @@ impl GpuScene {
         {
             return;
         }
+
+        if self.light_field_system.is_none() || self.fluid_simulator.is_none() {
+            return;
+        }
+        let light_field = self.light_field_system.as_ref().unwrap();
+        let fluid_sim = self.fluid_simulator.as_ref().unwrap();
 
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
 
@@ -2611,7 +2612,15 @@ impl GpuScene {
             &light_field.glow_flags_buffer,
             &self.gpu_triple_buffers.cell_count_buffer,
             fluid_sim.solid_mask_buffer(),
-            self.conservative_cell_dispatch_slots(),
+            light_field.cell_occupancy_buffer_ref(),
+            // The newborn guard is nonzero even before the first insertion.
+            // Wait for the first cell-count readback before enabling emission;
+            // otherwise an empty world still triggers the optional cave build.
+            if self.total_cell_slots.max(self.current_cell_count) == 0 {
+                0
+            } else {
+                self.conservative_cell_dispatch_slots()
+            },
         );
 
         // Compute light field
@@ -2725,26 +2734,10 @@ impl GpuScene {
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
-        // Sense pass: photocytes detect nearby luminocyte glow via spatial grid
-        let sense_bg = light_field.create_sense_bind_group(
-            device,
-            &self.gpu_triple_buffers.cell_types,
-            &self.gpu_triple_buffers.nutrients_buffer,
-            &self.gpu_triple_buffers.death_flags,
-            &self.gpu_triple_buffers.split_nutrient_thresholds,
-            &self.gpu_triple_buffers.spatial_grid_counts,
-            &self.gpu_triple_buffers.spatial_grid_cells,
-        );
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Sense Luminocyte (physics step)"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(light_field.sense_luminocyte_pipeline_ref());
-            pass.set_bind_group(0, photocyte_physics_bg, &[]);
-            pass.set_bind_group(1, &sense_bg, &[]);
-            pass.dispatch_workgroups(cell_workgroups, 1, 1);
-        }
+        // Photocytes consume luminocyte energy through the resolved radiative
+        // volume on the following physics step. The former proximity scan was
+        // intentionally removed because it bypassed cave occlusion and could
+        // feed a photocyte through a wall.
     }
 
     /// Copy data from triple buffers to instance builder

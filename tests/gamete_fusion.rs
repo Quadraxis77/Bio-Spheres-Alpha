@@ -164,9 +164,9 @@ fn photocyte_surface_exposure_preserves_sun_shadow_and_vent_light() {
         let source = include_str!("../shaders/photocyte_light.wgsl");
         let params_start = source.find("struct PhotocyteParams {").unwrap();
         let params_end = params_start + source[params_start..].find('}').unwrap() + 1;
-        let helpers_start = source.find("fn sample_light(").unwrap();
+        let helpers_start = source.find("fn light_index(").unwrap();
         let helpers_end = source.find("fn signal_value(").unwrap();
-        let shader = format!("{}\n@group(0) @binding(0) var<uniform> photocyte_params: PhotocyteParams;\n@group(0) @binding(1) var<storage, read> light_field: array<f32>;\n@group(0) @binding(2) var<storage, read_write> results: array<f32>;\n{}\n@compute @workgroup_size(1) fn main() {{ results[0] = sample_photocyte_light(vec3<f32>(2.0, 2.0, 2.0), 0.5); results[1] = sample_photocyte_light(vec3<f32>(2.0, 4.0, 2.0), 0.5); results[2] = sample_photocyte_light(vec3<f32>(2.0, 6.0, 2.0), 0.5); }}", &source[params_start..params_end], &source[helpers_start..helpers_end]);
+        let shader = format!("{}\nstruct Emission {{ r: atomic<u32>, g: atomic<u32>, b: atomic<u32>, strength: atomic<u32>, }}\nconst LUMINOCYTE_FIELD_FIXED_POINT_SCALE: f32 = 1024.0;\n@group(0) @binding(0) var<uniform> photocyte_params: PhotocyteParams;\n@group(0) @binding(1) var<storage, read> light_field: array<f32>;\n@group(0) @binding(2) var<storage, read> light_color_field: array<vec4<f32>>;\n@group(0) @binding(3) var<storage, read_write> luminocyte_emission: array<Emission>;\n@group(0) @binding(4) var<storage, read_write> results: array<f32>;\n{}\n@compute @workgroup_size(1) fn main() {{ results[0] = sample_photocyte_light(vec3<f32>(2.0, 2.0, 2.0), 0.5).x; results[1] = sample_photocyte_light(vec3<f32>(2.0, 4.0, 2.0), 0.5).x; let local = sample_photocyte_light(vec3<f32>(2.0, 6.0, 2.0), 0.5); results[2] = local.x; results[3] = local.y; }}", &source[params_start..params_end], &source[helpers_start..helpers_end]);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(shader.into()),
@@ -208,15 +208,22 @@ fn photocyte_surface_exposure_preserves_sun_shadow_and_vent_light() {
             contents: bytemuck::cast_slice(&field),
             usage: wgpu::BufferUsages::STORAGE,
         });
+        let mut colors = vec![[0f32; 4]; 512];
+        colors[2 + 6 * 8 + 2 * 64][3] = 3.75;
+        let light_colors = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&colors),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         let result = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 12,
+            size: 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 12,
+            size: 16,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -234,6 +241,10 @@ fn photocyte_surface_exposure_preserves_sun_shadow_and_vent_light() {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: light_colors.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
                     resource: result.as_entire_binding(),
                 },
             ],
@@ -245,7 +256,7 @@ fn photocyte_surface_exposure_preserves_sun_shadow_and_vent_light() {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
-        encoder.copy_buffer_to_buffer(&result, 0, &readback, 0, 12);
+        encoder.copy_buffer_to_buffer(&result, 0, &readback, 0, 16);
         queue.submit([encoder.finish()]);
         let (tx, rx) = std::sync::mpsc::channel();
         readback
@@ -259,6 +270,9 @@ fn photocyte_surface_exposure_preserves_sun_shadow_and_vent_light() {
             .unwrap();
         rx.recv().unwrap().unwrap();
         let data = readback.slice(..).get_mapped_range();
-        assert_eq!(bytemuck::cast_slice::<u8, f32>(&data), &[1.0, 0.0, 3.75]);
+        assert_eq!(
+            bytemuck::cast_slice::<u8, f32>(&data),
+            &[1.0, 0.0, 0.0, 3.75]
+        );
     });
 }

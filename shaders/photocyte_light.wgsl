@@ -2,8 +2,8 @@
 // Photocytes gain mass based on light intensity at their position.
 // Reads from the pre-computed light field buffer.
 //
-// Luminocytes write their glow state to glow_flags (plain store, no voxel scatter).
-// Photocyte detection of luminocyte light is handled by sense_luminocyte.wgsl.
+// Luminocytes write their glow state to glow_flags. The render-frame emission
+// pass scatters it into this same field before the next physics step.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -91,10 +91,23 @@ var<storage, read_write> signal_flags: array<atomic<u32>>;
 var<storage, read> mode_colors: array<vec4<f32>>;
 
 // Luminocyte glow flags: vec4(color.rgb, brightness). Written by luminocytes each frame.
-// Read by sense_luminocyte.wgsl to give nearby photocytes nutrient gain.
 // Buffer is DMA-cleared before this dispatch so dead/off luminocytes read as zero.
 @group(1) @binding(11)
 var<storage, read_write> glow_flags: array<vec4<f32>>;
+
+// xyz = blended radiative color, w = total local-source intensity. Luminocyte
+// radiance is resolved here before the next physics step, after cave occlusion.
+@group(1) @binding(12)
+var<storage, read> light_color_field: array<vec4<f32>>;
+
+struct Emission {
+    r: atomic<u32>,
+    g: atomic<u32>,
+    b: atomic<u32>,
+    strength: atomic<u32>,
+}
+@group(1) @binding(13)
+var<storage, read_write> luminocyte_emission: array<Emission>;
 
 // Photocyte cell type constant
 const PHOTOCYTE_TYPE: u32 = 3u;
@@ -114,6 +127,10 @@ fn listener_active(value: f32, threshold: f32, response_mode: u32, invert: bool)
 }
 // Luminocyte energy cost per second at full brightness.
 const LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND: f32 = 6.0;
+// A photocyte converts at most 5 nutrients/sec from one unit of luminocyte
+// radiance. A luminocyte pays 6 nutrients/sec for that unit before falloff and
+// occlusion, so a single receiving photocyte cannot recover the emitter's cost.
+const LUMINOCYTE_PHOTOCYTE_NUTRIENTS_PER_LIGHT_SECOND: f32 = 5.0;
 // Photocytes below the direct-light threshold should starve at a stable rate.
 // Do not scale this by sampled sunlight; true darkness would otherwise drain
 // nothing and blocked cells could survive indefinitely.
@@ -124,6 +141,7 @@ const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
 
 // Fixed-point conversion
 const FIXED_POINT_SCALE: f32 = 1000.0;
+const LUMINOCYTE_FIELD_FIXED_POINT_SCALE: f32 = 1024.0;
 
 fn fixed_to_float(value: i32) -> f32 {
     return f32(value) / FIXED_POINT_SCALE;
@@ -133,36 +151,50 @@ fn float_to_fixed(value: f32) -> i32 {
     return i32(value * FIXED_POINT_SCALE);
 }
 
-// Sample light intensity from the voxel occupied by the cell.
-fn sample_light(world_pos: vec3<f32>) -> f32 {
+fn light_index(world_pos: vec3<f32>) -> u32 {
     let res = photocyte_params.grid_resolution;
-
-    let gx = (world_pos.x - photocyte_params.grid_origin_x) / photocyte_params.cell_size;
-    let gy = (world_pos.y - photocyte_params.grid_origin_y) / photocyte_params.cell_size;
-    let gz = (world_pos.z - photocyte_params.grid_origin_z) / photocyte_params.cell_size;
-
-    let ix = i32(floor(gx));
-    let iy = i32(floor(gy));
-    let iz = i32(floor(gz));
-
+    let p = vec3<i32>(floor((world_pos - vec3<f32>(
+        photocyte_params.grid_origin_x,
+        photocyte_params.grid_origin_y,
+        photocyte_params.grid_origin_z,
+    )) / photocyte_params.cell_size));
     let ires = i32(res);
-
-    if (ix < 0 || ix >= ires || iy < 0 || iy >= ires || iz < 0 || iz >= ires) {
-        return 0.0;
+    if (any(p < vec3<i32>(0)) || any(p >= vec3<i32>(ires))) {
+        return 0xffffffffu;
     }
+    return u32(p.x) + u32(p.y) * res + u32(p.z) * res * res;
+}
 
-    let idx = u32(ix) + u32(iy) * res + u32(iz) * res * res;
-    return light_field[idx];
+// Returns (total radiance, local-source radiance) from the shared field.
+fn sample_light(world_pos: vec3<f32>) -> vec2<f32> {
+    let idx = light_index(world_pos);
+    if (idx == 0xffffffffu) {
+        return vec2<f32>(0.0);
+    }
+    return vec2<f32>(light_field[idx], max(light_color_field[idx].w, 0.0));
+}
+
+fn sample_luminocyte_intensity(world_pos: vec3<f32>) -> f32 {
+    let idx = light_index(world_pos);
+    if (idx == 0xffffffffu) { return 0.0; }
+    return f32(atomicLoad(&luminocyte_emission[idx].strength))
+        / LUMINOCYTE_FIELD_FIXED_POINT_SCALE;
 }
 
 // The occupancy field includes this cell. Sampling only its center can
 // mistake its own opaque voxel footprint for shade. Probe the sun-facing
 // surface beyond that footprint, while retaining local geothermal exposure.
-fn sample_photocyte_light(pos: vec3<f32>, mass: f32) -> f32 {
+fn sample_photocyte_light(pos: vec3<f32>, mass: f32) -> vec2<f32> {
     let toward_sun = vec3<f32>(photocyte_params.light_dir_x, photocyte_params.light_dir_y, photocyte_params.light_dir_z);
     let radius = clamp(mass, 0.5, 2.0);
     let surface = pos + toward_sun * (radius + photocyte_params.cell_size);
-    return max(sample_light(pos), sample_light(surface));
+    let center = sample_light(pos);
+    let sun_surface = sample_light(surface);
+    // Local radiance is sampled at the cell itself. Sunlight probes the exposed
+    // surface so the cell's own occupancy voxel cannot shadow it.
+    let center_sun = max(center.x - center.y, 0.0);
+    let surface_sun = max(sun_surface.x - sun_surface.y, 0.0);
+    return vec2<f32>(max(center_sun, surface_sun), center.y);
 }
 
 fn signal_value(cell_idx: u32, channel: u32) -> f32 {
@@ -221,7 +253,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             return;
         }
 
-        let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
+        let current_nutrients_fixed = atomicLoad(&nutrients_buffer[cell_idx]);
+        let current_nutrients = fixed_to_float(current_nutrients_fixed);
         let nutrient_factor = smoothstep(1.0, 10.0, current_nutrients);
         let effective_brightness = brightness * nutrient_factor;
         if (effective_brightness <= 0.001) {
@@ -233,19 +266,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             emit_color = clamp(mode_colors[mode_idx].xyz, vec3<f32>(0.0), vec3<f32>(4.0));
         }
 
-        // Plain store — no voxel scatter, no atomics. Buffer was DMA-cleared this frame.
-        glow_flags[cell_idx] = vec4<f32>(emit_color, effective_brightness);
-
-        // Deduct nutrients
+        // Pay before emitting. Near starvation, the actual brightness is reduced
+        // to exactly what the cell could afford, so unpaid light cannot enter
+        // the radiative field.
         let requested_cost = effective_brightness * LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND * params.delta_time;
-        let paid_cost = min(requested_cost, max(current_nutrients - 1.0, 0.0));
-        if (paid_cost > 0.0) {
-            atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(paid_cost));
+        // Nutrients use thousandths. Round the payment up, then derive emitted
+        // brightness from what was actually paid. This prevents sub-unit light
+        // from escaping for free at very small time steps or brightness values.
+        let requested_cost_fixed = i32(ceil(requested_cost * FIXED_POINT_SCALE));
+        let available_cost_fixed = max(current_nutrients_fixed - i32(FIXED_POINT_SCALE), 0);
+        let paid_cost_fixed = min(requested_cost_fixed, available_cost_fixed);
+        if (paid_cost_fixed > 0) {
+            atomicAdd(&nutrients_buffer[cell_idx], -paid_cost_fixed);
+            let paid_cost = fixed_to_float(paid_cost_fixed);
+            let paid_brightness = min(
+                effective_brightness,
+                paid_cost / max(LUMINOCYTE_NUTRIENT_COST_PER_LIGHT_SECOND * params.delta_time, 0.000001),
+            );
+            // Plain store — voxel scatter happens once after the physics steps.
+            glow_flags[cell_idx] = vec4<f32>(emit_color, paid_brightness);
         }
         return;
     }
 
-    // Photocyte: gain/lose nutrients based on ambient sunlight
+    // Photocyte: consume the same occluded radiative field used by rendering.
     let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
 
     if (current_nutrients < 1.0) {
@@ -253,30 +297,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let max_nutrients = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
-    let light_intensity = sample_photocyte_light(pos, positions[cell_idx].w);
+    let radiance = sample_photocyte_light(pos, positions[cell_idx].w);
 
     let ambient_floor = clamp(photocyte_params.ambient_floor, 0.0, 0.95);
     let direct_sun = clamp(
-        (light_intensity - ambient_floor) / max(1.0 - ambient_floor, 0.001),
+        (radiance.x - ambient_floor) / max(1.0 - ambient_floor, 0.001),
         0.0,
         1.0
     );
-    let geothermal_light = select(0.0, light_intensity, light_intensity > 1.0);
-    let usable_light = max(direct_sun, geothermal_light);
-    let in_light = usable_light >= photocyte_params.min_light_threshold;
+    let luminocyte_light = sample_luminocyte_intensity(pos);
+    let geothermal_light = clamp(
+        max(radiance.y - luminocyte_light, 0.0),
+        0.0,
+        GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE,
+    );
+    let usable_light = direct_sun + geothermal_light + luminocyte_light;
 
-    var nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0 * direct_sun;
-    if (light_intensity > 1.0) {
-        nutrient_rate = photocyte_params.geothermal_mass_per_second_full_light * 100.0
-            * clamp(light_intensity, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
-    }
+    // Sun, geothermal glow, and luminocyte radiance add. Luminocyte food uses
+    // its own conversion coefficient so it stays below the emitter's cost.
+    let nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0 * direct_sun
+        + photocyte_params.geothermal_mass_per_second_full_light * 100.0 * geothermal_light
+        + LUMINOCYTE_PHOTOCYTE_NUTRIENTS_PER_LIGHT_SECOND * luminocyte_light;
+    let capacity = max(max_nutrients - current_nutrients, 0.0);
+    let nutrient_gain = min(nutrient_rate * params.delta_time, capacity);
 
-    if (in_light) {
-        let nutrient_gain = min(nutrient_rate * params.delta_time, max(max_nutrients - current_nutrients, 0.0));
-        if (nutrient_gain > 0.0) {
-            atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(nutrient_gain));
-        }
-    } else {
+    if (nutrient_gain > 0.0) {
+        atomicAdd(&nutrients_buffer[cell_idx], float_to_fixed(nutrient_gain));
+    } else if (usable_light < photocyte_params.min_light_threshold) {
         let nutrient_loss = min(PHOTOCYTE_SHADE_LOSS_RATE * params.delta_time, max(current_nutrients - 1.0, 0.0));
         if (nutrient_loss > 0.0) {
             atomicAdd(&nutrients_buffer[cell_idx], -float_to_fixed(nutrient_loss));

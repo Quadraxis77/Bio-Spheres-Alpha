@@ -1,5 +1,6 @@
 [package]
 name = "bio-spheres"
+default-run = "bio-spheres"
 version = "0.1.0"
 edition = "2021"
 exclude = ["references/"]

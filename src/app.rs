@@ -5147,7 +5147,7 @@ impl ApplicationHandler for AppState {
                 max_buffer_size: buffer_size_limit,
                 ..wgpu::Limits::default()
             },
-            memory_hints: Default::default(),
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             trace: Default::default(),
             experimental_features: if hardware_ray_queries {
                 // SAFETY: opt into wgpu's experimental ray-query implementation;

@@ -6894,7 +6894,7 @@ fn render_light_settings_organized(
             let mut enabled = supported && context.editor_state.luminocyte_ray_tracing;
             let response = ui.add_enabled(supported,
                 egui::Checkbox::new(&mut enabled, "Hardware Ray Tracing"))
-                .on_hover_text("On: hardware ray tracing for luminocyte light and radiant-heat occlusion. Off: voxel ray marching. Both modes illuminate nearby surfaces and warm water.")
+                .on_hover_text("On: hardware rays test cave voxel boxes. Off: voxel ray marching tests the same cave mask. Both use the same lighting grid and falloff, so appearance is usually similar. Neither traces the detailed cave surface or cell shadows.")
                 .on_disabled_hover_text("Hardware ray tracing is unavailable on the active graphics device. Your GPU, driver, and graphics backend must support ray queries. Luminocyte lighting uses voxel ray marching instead.");
             if response.changed() {
                 context.editor_state.luminocyte_ray_tracing = enabled;
@@ -6903,8 +6903,15 @@ fn render_light_settings_organized(
                 }
                 changed = true;
             }
-            ui.weak(if enabled { "Lighting type: Hardware ray tracing" }
-                else { "Lighting type: Voxel ray marching" });
+            let active = emission.is_some_and(|e| e.hardware_ray_tracing_active());
+            ui.weak(if active {
+                "Lighting type: Hardware ray tracing (cave voxels)"
+            } else if enabled {
+                "Lighting type: Voxel ray marching (hardware geometry pending or unavailable)"
+            } else {
+                "Lighting type: Voxel ray marching"
+            });
+            ui.weak("Visible underwater haze uses the Volumetric Fog setting below.");
         });
 
     // Everything below is rendering/engine tuning the player doesn't touch

@@ -7,6 +7,7 @@ struct Emission { r: atomic<u32>, g: atomic<u32>, b: atomic<u32>, strength: atom
 @group(0) @binding(3) var<storage, read> count: array<u32>;
 @group(0) @binding(4) var<storage, read> solid: array<u32>;
 @group(0) @binding(5) var<storage, read_write> emission: array<Emission>;
+@group(0) @binding(6) var<storage, read> cell_occupancy: array<u32>;
 const RES: i32 = 128;
 // RGB <= 16 per cell: safe even if all 200k supported cells overlap.
 const FP: f32 = 1024.0;
@@ -38,7 +39,9 @@ fn scatter(@builtin(global_invocation_id) id: vec3<u32>) {
                 atomicAdd(&emission[i].r, u32(round(rgb.r * FP)));
                 atomicAdd(&emission[i].g, u32(round(rgb.g * FP)));
                 atomicAdd(&emission[i].b, u32(round(rgb.b * FP)));
-                atomicAdd(&emission[i].strength, u32(round(power * FP)));
+                // Strength drives heat and photocyte food. Round down so fixed-
+                // point quantization can discard energy but can never create it.
+                atomicAdd(&emission[i].strength, u32(power * FP));
             }
         }
     }
