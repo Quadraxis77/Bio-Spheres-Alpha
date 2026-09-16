@@ -6882,6 +6882,31 @@ fn render_light_settings_organized(
             }
         });
 
+    egui::CollapsingHeader::new("Luminocyte Lighting")
+        .default_open(true)
+        .show(ui, |ui| {
+            let emission = context.scene_manager.gpu_scene()
+                .and_then(|scene| scene.light_field_system.as_ref())
+                .map(|light| &light.luminocyte_emission);
+            let supported = emission.is_some_and(|e| e.hardware_ray_tracing_supported());
+            // Show the effective choice without overwriting a saved preference
+            // when settings are opened on a machine without ray-query support.
+            let mut enabled = supported && context.editor_state.luminocyte_ray_tracing;
+            let response = ui.add_enabled(supported,
+                egui::Checkbox::new(&mut enabled, "Hardware Ray Tracing"))
+                .on_hover_text("On: hardware ray tracing for luminocyte light and radiant-heat occlusion. Off: voxel ray marching. Both modes illuminate nearby surfaces and warm water.")
+                .on_disabled_hover_text("Hardware ray tracing is unavailable on the active graphics device. Your GPU, driver, and graphics backend must support ray queries. Luminocyte lighting uses voxel ray marching instead.");
+            if response.changed() {
+                context.editor_state.luminocyte_ray_tracing = enabled;
+                if let Some(emission) = emission {
+                    emission.set_hardware_ray_tracing_enabled(enabled);
+                }
+                changed = true;
+            }
+            ui.weak(if enabled { "Lighting type: Hardware ray tracing" }
+                else { "Lighting type: Voxel ray marching" });
+        });
+
     // Everything below is rendering/engine tuning the player doesn't touch
     // during normal play - gated behind Advanced to keep the panel focused on
     // sun brightness, day/night cycles, timing, and color.

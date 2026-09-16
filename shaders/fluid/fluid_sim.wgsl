@@ -102,6 +102,8 @@ struct ExtractParams {
 // Prebaked directional heat from geothermal crevices. Generated with the cave
 // voxel field and only read here, so runtime cost is one coalesced load.
 @group(0) @binding(9) var<storage, read> geothermal_heat: array<f32>;
+// Fixed-point additive luminocyte emission, independent of the sun and vent field.
+@group(0) @binding(10) var<storage, read> luminocyte_emission: array<vec4<u32>>;
 
 // Encode a displacement vector (dx, dy, dz each in {-1, 0, +1}) into a packed u32.
 // Encoding: 2 bits per axis. 0b00=0, 0b01=+1, 0b10=-1.
@@ -1273,6 +1275,12 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
             self_delta_c += (geothermal_target_c - t_self) * geothermal_coupling;
         }
     }
+
+    // Continuous energy input, divided by the receiving medium's thermal mass.
+    // Water therefore warms gradually and advects/conducts this heat; existing
+    // phase debt supplies the latent delay before ice melts. No temperature reset.
+    let luminocyte_power = f32(luminocyte_emission[idx].w) / 1024.0;
+    self_delta_c += min(luminocyte_power * 1.5 * rate_scale / m_self, 8.0);
 
     // Conduction should carry warmth into shadow. Apply same-tick solar
     // warming before the neighbor solve, but do not let local radiative

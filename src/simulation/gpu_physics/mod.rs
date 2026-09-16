@@ -21,6 +21,8 @@ pub mod gpu_cell_inspector;
 pub mod gpu_scene_integration;
 pub mod gpu_tool_operations;
 pub mod light_field;
+pub mod luminocyte_emission;
+mod luminocyte_ray_tracing;
 pub mod moss;
 pub mod mutation;
 pub mod organism_labels;

@@ -611,6 +611,8 @@ pub struct GenomeEditorState {
     pub luminocyte_bloom_enabled: bool,
     /// Bloom halo radius in NDC y-units (screen height = 2.0)
     pub luminocyte_bloom_radius: f32,
+    /// Prefer hardware luminocyte occlusion when the active GPU supports it.
+    pub luminocyte_ray_tracing: bool,
 
     // Depth of field settings
     /// Whether depth of field is enabled
@@ -1104,6 +1106,7 @@ impl GenomeEditorState {
             photocyte_min_light_threshold,
             luminocyte_bloom_enabled,
             luminocyte_bloom_radius,
+            luminocyte_ray_tracing,
             fog_water_wave_strength,
             fog_water_wave_scale,
             fog_smooth_light_field,
@@ -1346,6 +1349,7 @@ impl GenomeEditorState {
             light_params_dirty: true,
             luminocyte_bloom_enabled,
             luminocyte_bloom_radius,
+            luminocyte_ray_tracing,
             show_dof,
             dof_focal_distance,
             dof_focal_range,
@@ -2876,6 +2880,7 @@ impl GenomeEditorState {
             // Luminocyte bloom
             self.luminocyte_bloom_enabled,
             self.luminocyte_bloom_radius,
+            self.luminocyte_ray_tracing,
             self.fog_water_wave_strength,
             self.fog_water_wave_scale,
             self.fog_smooth_light_field,
@@ -2941,6 +2946,7 @@ impl GenomeEditorState {
         // Luminocyte bloom
         luminocyte_bloom_enabled: bool,
         luminocyte_bloom_radius: f32,
+        luminocyte_ray_tracing: bool,
         fog_water_wave_strength: f32,
         fog_water_wave_scale: f32,
         fog_smooth_light_field: bool,
@@ -3002,6 +3008,7 @@ impl GenomeEditorState {
             // Luminocyte bloom
             luminocyte_bloom_enabled: bool,
             luminocyte_bloom_radius: f32,
+            luminocyte_ray_tracing: bool,
             fog_water_wave_strength: f32,
             fog_water_wave_scale: f32,
             fog_smooth_light_field: bool,
@@ -3064,6 +3071,7 @@ impl GenomeEditorState {
             // Luminocyte bloom
             luminocyte_bloom_enabled,
             luminocyte_bloom_radius,
+            luminocyte_ray_tracing,
             fog_water_wave_strength,
             fog_water_wave_scale,
             fog_smooth_light_field,
@@ -3129,6 +3137,7 @@ impl GenomeEditorState {
         f32, // photocyte_mass, photocyte_threshold
         bool,
         f32, // luminocyte_bloom_enabled, luminocyte_bloom_radius
+        bool, // luminocyte_ray_tracing
         f32,
         f32,
         bool,
@@ -3212,6 +3221,8 @@ impl GenomeEditorState {
             luminocyte_bloom_enabled: bool,
             #[serde(default = "default_bloom_radius")]
             luminocyte_bloom_radius: f32,
+            #[serde(default = "default_luminocyte_ray_tracing")]
+            luminocyte_ray_tracing: bool,
             #[serde(default = "default_fog_water_wave_strength")]
             fog_water_wave_strength: f32,
             #[serde(default = "default_fog_water_wave_scale")]
@@ -3279,6 +3290,9 @@ impl GenomeEditorState {
         }
         fn default_sun_rotation_axis() -> [f32; 3] {
             [0.0, 1.0, 0.0]
+        }
+        fn default_luminocyte_ray_tracing() -> bool {
+            true
         }
         fn default_bloom_enabled() -> bool {
             true
@@ -3376,6 +3390,7 @@ impl GenomeEditorState {
                                 // Luminocyte bloom
                                 s.luminocyte_bloom_enabled,
                                 s.luminocyte_bloom_radius,
+                                s.luminocyte_ray_tracing,
                                 s.fog_water_wave_strength,
                                 s.fog_water_wave_scale,
                                 s.fog_smooth_light_field,
@@ -3445,6 +3460,7 @@ impl GenomeEditorState {
             0.05,
             true,
             0.02,
+            true, // prefer hardware ray tracing when supported
             0.4,
             0.15,
             true,

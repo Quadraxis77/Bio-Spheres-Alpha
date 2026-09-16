@@ -286,6 +286,7 @@ pub struct GpuFluidSimulator {
     // Light field (read-only, 128^3 f32 per voxel, owned by LightFieldSystem;
     // cloned here so per-call bind groups can include it alongside the cached one).
     light_field_buffer: wgpu::Buffer,
+    luminocyte_emission_buffer: wgpu::Buffer,
 
     // Atmospheric humidity field (128^3 atomic u32 per voxel, fixed-point *256, ~8MB).
     // Diffused/condensed via dedicated compute passes; read by the light field
@@ -414,6 +415,7 @@ impl GpuFluidSimulator {
         world_center: Vec3,
         solid_mask_buffer: wgpu::Buffer,
         light_field_buffer: &wgpu::Buffer,
+        luminocyte_emission_buffer: &wgpu::Buffer,
     ) -> Self {
         let world_diameter = world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
@@ -777,6 +779,16 @@ impl GpuFluidSimulator {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -1284,6 +1296,10 @@ impl GpuFluidSimulator {
                     binding: 9,
                     resource: geothermal_heat_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: luminocyte_emission_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -1333,6 +1349,7 @@ impl GpuFluidSimulator {
             state_buffer,
             solid_mask_buffer,
             light_field_buffer: light_field_buffer.clone(),
+            luminocyte_emission_buffer: luminocyte_emission_buffer.clone(),
             humidity_buffer,
             phase_debt_buffer,
             temp_field_buffer,
@@ -1475,6 +1492,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 9,
                     resource: self.geothermal_heat_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: self.luminocyte_emission_buffer.as_entire_binding(),
                 },
             ],
         })

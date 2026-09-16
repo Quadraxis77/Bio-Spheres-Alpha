@@ -123,6 +123,7 @@ pub struct ShadowFieldParams {
 ///   3. Compute light field (ray march with occlusion)
 ///   4. Photocyte light consumption (photocytes gain mass)
 pub struct LightFieldSystem {
+    pub luminocyte_emission: super::luminocyte_emission::LuminocyteEmission,
     // Buffers
     light_field_buffer: wgpu::Buffer,
     light_color_field_buffer: wgpu::Buffer,
@@ -1120,6 +1121,9 @@ impl LightFieldSystem {
             });
 
         Self {
+            luminocyte_emission: super::luminocyte_emission::LuminocyteEmission::new(
+                device, grid_origin, cell_size,
+            ),
             light_field_buffer,
             light_color_field_buffer,
             _light_field_texture: light_field_texture,
@@ -1193,6 +1197,12 @@ impl LightFieldSystem {
             return [0.0, 1.0, 0.0];
         }
         [d[0] / len, d[1] / len, d[2] / len]
+    }
+
+    /// Merge current local emission before packing the renderer textures.
+    pub fn resolve_luminocyte_light(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        self.luminocyte_emission
+            .resolve(device, encoder, &self.light_color_field_buffer);
     }
 
     /// Get the light field buffer (for volumetric fog renderer to read)

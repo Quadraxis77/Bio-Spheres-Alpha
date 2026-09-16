@@ -5069,6 +5069,23 @@ impl ApplicationHandler for AppState {
         }))
         .unwrap();
 
+        // wgpu 27 exposes ray queries through Vulkan. A platform's default
+        // backend (notably DX12) may omit them even on ray-tracing hardware.
+        // Prefer a surface-compatible RT adapter when the default lacks queries.
+        let adapter = if !adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY) {
+            let mut ray_adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::VULKAN)
+                .into_iter().filter(|candidate| {
+                    candidate.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+                        && candidate.is_surface_supported(&surface)
+                }).collect();
+            ray_adapters.sort_by_key(|candidate| match candidate.get_info().device_type {
+                wgpu::DeviceType::DiscreteGpu => 0,
+                wgpu::DeviceType::IntegratedGpu => 1,
+                _ => 2,
+            });
+            ray_adapters.into_iter().next().unwrap_or(adapter)
+        } else { adapter };
+
         // Log adapter info to help diagnose GPU-specific issues
         let adapter_info = adapter.get_info();
         log::warn!(
@@ -5103,7 +5120,15 @@ impl ApplicationHandler for AppState {
             required_features |= timestamp_features;
         }
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let hardware_ray_queries = adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+        if hardware_ray_queries {
+            required_features |= wgpu::Features::EXPERIMENTAL_RAY_QUERY;
+        }
+        log::info!("Luminocyte occlusion: {}", if hardware_ray_queries {
+            "hardware ray tracing"
+        } else { "voxel fallback (ray queries unsupported by adapter/backend)" });
+
+        let mut device_descriptor = wgpu::DeviceDescriptor {
             label: Some("Bio-Spheres Device"),
             required_features,
             required_limits: wgpu::Limits {
@@ -5124,9 +5149,30 @@ impl ApplicationHandler for AppState {
             },
             memory_hints: Default::default(),
             trace: Default::default(),
-            experimental_features: Default::default(),
-        }))
-        .expect("Failed to create wgpu device — check log for adapter limits");
+            experimental_features: if hardware_ray_queries {
+                // SAFETY: opt into wgpu's experimental ray-query implementation;
+                // all geometry/build/binding operations use its validated safe API.
+                unsafe { wgpu::ExperimentalFeatures::enabled() }
+            } else { Default::default() },
+        };
+        if hardware_ray_queries {
+            device_descriptor.required_limits = device_descriptor.required_limits
+                .using_acceleration_structure_values(adapter.limits());
+        }
+        let requested_device = pollster::block_on(adapter.request_device(&device_descriptor));
+        let (device, queue) = match requested_device {
+            Ok(pair) => pair,
+            Err(error) if hardware_ray_queries => {
+                log::warn!("Ray-query device creation failed ({error}); retrying with voxel lighting");
+                device_descriptor.required_features.remove(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+                device_descriptor.experimental_features = Default::default();
+                device_descriptor.required_limits = device_descriptor.required_limits
+                    .using_acceleration_structure_values(wgpu::Limits::default());
+                pollster::block_on(adapter.request_device(&device_descriptor))
+                    .expect("Failed to create fallback wgpu device")
+            }
+            Err(error) => panic!("Failed to create wgpu device: {error}"),
+        };
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);

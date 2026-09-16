@@ -541,6 +541,14 @@ fn internals_memorocyte(p: vec3<f32>, r: f32, current_time: f32) -> vec3<f32> {
     return vec3<f32>(pattern, color_shift, 0.0);
 }
 
+// Local emitters illuminate all sides with a soft wrap, independent of sunlight.
+fn sample_local_irradiance(world_pos: vec3<f32>) -> vec3<f32> {
+    let uvw = world_to_light_uvw(world_pos);
+    if !light_uvw_in_bounds(uvw) { return vec3<f32>(0.0); }
+    let local = textureSampleLevel(light_color_field_tex, light_field_sampler, uvw, 0.0);
+    return max(local.rgb, vec3<f32>(0.0)) * (1.0 - exp(-max(local.w, 0.0)));
+}
+
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     let fallback = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     if (shadow_params.shadow_enabled == 0u) {
@@ -1155,7 +1163,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let local_light_color = sample_light_color_field(clamped_pos);
 
         let ndotl = max(dot(world_normal_front, -light_dir), 0.0);
-        let diffuse = ndotl * local_light_color * shadow;
+        let diffuse = ndotl * local_light_color * shadow + sample_local_irradiance(in.center);
         var simple_color =
             base_color * (lighting.ambient + (1.0 - lighting.ambient) * diffuse);
 
@@ -1599,7 +1607,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let shadow = apply_shadow_contrast(sample_light_field(clamped_pos));
     let local_light_color = sample_light_color_field(clamped_pos);
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);
-    let front_diffuse = front_ndotl * local_light_color * shadow;
+    let front_diffuse = front_ndotl * local_light_color * shadow + sample_local_irradiance(in.center);
 
     // Apply scene lighting to the detailed composite. Non-emissive cell material
     // receives no artificial fill light in shadow.

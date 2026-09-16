@@ -2602,6 +2602,18 @@ impl GpuScene {
             pass.dispatch_workgroups(cell_workgroups, 1, 1);
         }
 
+        // Rebuild once per rendered frame from the most recent physics glow.
+        // The fluid step consumes the preceding field, just like sunlight.
+        light_field.luminocyte_emission.scatter(
+            device,
+            encoder,
+            &self.gpu_triple_buffers.position_and_mass[output_idx],
+            &light_field.glow_flags_buffer,
+            &self.gpu_triple_buffers.cell_count_buffer,
+            fluid_sim.solid_mask_buffer(),
+            self.conservative_cell_dispatch_slots(),
+        );
+
         // Compute light field
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2612,6 +2624,8 @@ impl GpuScene {
             pass.set_bind_group(0, light_field_bg, &[]);
             pass.dispatch_workgroups(light_workgroups, 1, 1);
         }
+
+        light_field.resolve_luminocyte_light(device, encoder);
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2697,7 +2711,7 @@ impl GpuScene {
         encoder.clear_buffer(
             &light_field.glow_flags_buffer,
             0,
-            Some(dispatch_slots as u64 * 4),
+            Some(dispatch_slots as u64 * 16),
         );
 
         {
@@ -5760,12 +5774,18 @@ impl GpuScene {
             glam::Vec3::ZERO,
             solid_mask_buffer,
             &light_field_buffer,
+            &self.light_field_system.as_ref().unwrap().luminocyte_emission.buffer,
         );
         if let (Some(ref solid_mask_generator), Some(ref cave_renderer)) =
             (&self.solid_mask_generator, &self.cave_renderer)
         {
-            let (_, geothermal_fields) = solid_mask_generator
-                .generate_solid_mask_and_geothermal_fields(cave_renderer.params());
+            let (solid_mask, geothermal_fields) = solid_mask_generator
+                .generate_solid_mask_and_geothermal_fields_with_culled_fragments(
+                    cave_renderer.params(), cave_renderer.culled_fragment_regions(),
+                );
+            if let Some(light) = &self.light_field_system {
+                light.luminocyte_emission.set_solid_mask(&solid_mask);
+            }
             self.geothermal_vent_sources = geothermal_fields.vent_sources.clone();
             simulator.update_geothermal_fields(queue, &geothermal_fields);
         }
@@ -7208,6 +7228,9 @@ impl GpuScene {
             );
             light_field.set_geothermal_mass_per_second(base_photocyte_mass_rate);
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
+            light_field.luminocyte_emission.set_hardware_ray_tracing_enabled(
+                editor_state.luminocyte_ray_tracing,
+            );
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
             light_field.set_shadow_strength(editor_state.shadow_strength);
             light_field.set_shadow_quality(editor_state.shadow_quality);
@@ -7430,6 +7453,9 @@ impl GpuScene {
 
             // Update the solid mask buffer
             fluid_buffers.update_solid_mask(queue, &solid_mask);
+            if let Some(light) = &self.light_field_system {
+                light.luminocyte_emission.set_solid_mask(&solid_mask);
+            }
             if let Some(ref simulator) = self.fluid_simulator {
                 simulator.update_geothermal_fields(queue, &geothermal_fields);
             }

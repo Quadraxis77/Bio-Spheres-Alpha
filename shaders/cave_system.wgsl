@@ -916,6 +916,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var shadow = 1.0;
     var raw_light_visibility = 1.0;
     var local_light_weight = 0.0;
+    var local_surface_color = max(cave_params.geothermal_glow_color, vec3<f32>(0.0));
     var local_light_direction = N;
     var sun_color = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     var vent_light_intensity = 0.0;
@@ -925,6 +926,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let light_color_sample = smooth_local_light_sample(in.world_position, N, grid_min, grid_max);
         shadow = apply_shadow_contrast(raw_light);
         local_light_weight = light_color_sample.w;
+        local_surface_color = max(light_color_sample.rgb, vec3<f32>(0.0));
         vent_light_intensity = 1.0 - exp(-local_light_weight * 0.9);
         let vent_gradient = local_light_gradient(in.world_position, grid_min, grid_max);
         local_light_direction = normalize(select(N, vent_gradient, dot(vent_gradient, vent_gradient) > 0.00001));
@@ -936,7 +938,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = sun_color * cave_params.rock_ambient_strength * ao * ambient_visibility;
     var final_color = final_base_color * (ambient + sun_color * diffuse * cave_params.rock_diffuse_strength * shadow)
         + sun_color * vec3<f32>(specular * cave_params.rock_specular_strength * shadow);
-    let vent_color = max(cave_params.geothermal_glow_color, vec3<f32>(0.0));
+    let vent_color = local_surface_color;
     let vent_wrap = clamp(dot(N, local_light_direction) * 0.45 + 0.55, 0.0, 1.0);
     let vent_surface_breakup = mix(0.72, 1.18, noise(in.world_position.xz * 0.18 + vec2<f32>(shadow_params.time * 0.04, 17.0)))
         * mix(0.84, 1.10, texture_value);
