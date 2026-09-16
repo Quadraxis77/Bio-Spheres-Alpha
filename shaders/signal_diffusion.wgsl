@@ -8,11 +8,13 @@
 @group(0) @binding(5) var<storage, read> adjacency: array<i32>;
 @group(0) @binding(6) var<storage, read> cells: array<CellState>;
 
+@group(0) @binding(7) var<storage, read> activity: u32;
+
 @compute @workgroup_size(128)
 fn transport(@builtin(global_invocation_id) id: vec3<u32>) {
     let cell = id.x;
     if (cell >= params.count) { return; }
-    if (cells[cell].live == 0u) {
+    if (activity == 0u || cells[cell].live == 0u) {
         for(var group=0u;group<4u;group++){next[cell*4u+group]=vec4<f32>(0.0);} return;
     }
     var neighbors: array<vec4<f32>,4>;

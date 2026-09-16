@@ -3,7 +3,7 @@
 // Detects contact between Gametocyte cells from different organisms.
 // When two Gametocytes (cell type 13) from different organisms come within
 // merge_range of each other, a merge event is written to the events buffer
-// and both cells are marked for death.
+// and both cells are marked as fused.
 //
 // Each merge event (8 u32s = 32 bytes):
 //   [0] cell_a_idx
@@ -13,10 +13,11 @@
 //   [4] position_x as bits (f32 encoded as u32)
 //   [5] position_y as bits
 //   [6] position_z as bits
-//   [7] 0 (reserved)
+//   [7] combined reserve (fixed-point x1000)
 //
 // The events buffer has a leading u32 atomic counter (events_count) followed
-// by MAX_GAMETE_MERGE_EVENTS events. CPU reads this each frame via staging buffer.
+// by MAX_GAMETE_MERGE_EVENTS events. GPU allocation/crossover/birth consume these
+// in the same command stream. Parent locks are rolled back if allocation fails.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -61,7 +62,7 @@ var<storage, read> cell_count_buffer: array<u32>;
 var<storage, read> cell_types: array<u32>;
 
 @group(1) @binding(1)
-var<storage, read_write> death_flags: array<u32>;
+var<storage, read_write> death_flags: array<atomic<u32>>;
 
 // Persistent developmental identity: [organism_id, lineage_hash_lo,
 // lineage_hash_hi, depth_branch]. Unlike a connected-component label,
@@ -89,6 +90,27 @@ var<storage, read_write> merge_events: array<atomic<u32>>;
 // Embryocyte/Gametocyte reserve buffer (x1000 fixed-point, read-only here)
 @group(1) @binding(7)
 var<storage, read> embryocyte_reserves: array<u32>;
+
+@group(1) @binding(8)
+var<storage, read> genome_meta: array<vec4<u32>>;
+@group(1) @binding(9)
+var<storage, read> mode_cell_types: array<u32>;
+
+fn genomes_compatible(a: u32, b: u32) -> bool {
+    if (a >= arrayLength(&genome_meta) || b >= arrayLength(&genome_meta)) { return false; }
+    let ma = genome_meta[a];
+    let mb = genome_meta[b];
+    let overlap = min(ma.x, mb.x);
+    if (overlap == 0u) { return false; }
+    if (a == b) { return true; }
+    let alignment = f32(overlap) / f32(max(ma.x, mb.x));
+    if (alignment < 0.5) { return false; }
+    var matches = 0u;
+    for (var i = 0u; i < overlap; i++) {
+        if (mode_cell_types[ma.y + i] == mode_cell_types[mb.y + i]) { matches += 1u; }
+    }
+    return alignment * f32(matches) / f32(overlap) >= 0.5;
+}
 
 // Group 2: Spatial grid
 @group(2) @binding(0)
@@ -123,7 +145,7 @@ fn world_to_grid(pos: vec3<f32>, world_size: f32, res: i32) -> vec3<i32> {
     return vec3<i32>(gx, gy, gz);
 }
 
-@compute @workgroup_size(256)
+@compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cell_idx = gid.x;
     let live_count = cell_count_buffer[0];
@@ -137,7 +159,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Skip dead cells
-    if death_flags[cell_idx] != 0u {
+    if atomicLoad(&death_flags[cell_idx]) != 0u {
         return;
     }
 
@@ -146,23 +168,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let merge_range = mode_properties_v13[mode_idx].x;
     let reproductive_parent_a = development_addresses[cell_idx].x;
     let genome_a = genome_ids[cell_idx];
+    if (reproductive_parent_a == 0u) { return; }
+    let radius_a = clamp(positions_in[cell_idx].w, 0.5, 2.0);
 
     // Query spatial grid neighbours
     let res = params.grid_resolution;
     let gc = world_to_grid(pos_a, params.world_size, res);
 
-    for (var dz: i32 = -1; dz <= 1; dz++) {
-        for (var dy: i32 = -1; dy <= 1; dy++) {
-            for (var dx: i32 = -1; dx <= 1; dx++) {
-                let grid_idx = grid_coords_to_index(gc.x + dx, gc.y + dy, gc.z + dz, res);
+    // Clip the neighborhood once. Clamping each lookup repeats edge buckets
+    // up to 27 times, multiplying candidate reads and compatibility work.
+    let grid_lo = max(gc - vec3<i32>(1), vec3<i32>(0));
+    let grid_hi = min(gc + vec3<i32>(1), vec3<i32>(res - 1));
+    for (var z = grid_lo.z; z <= grid_hi.z; z++) {
+        for (var y = grid_lo.y; y <= grid_hi.y; y++) {
+            for (var x = grid_lo.x; x <= grid_hi.x; x++) {
+                let grid_idx = u32(x + y * res + z * res * res);
                 let count = min(spatial_grid_counts[grid_idx], MAX_CELLS_PER_GRID);
                 let base = grid_idx * MAX_CELLS_PER_GRID;
 
                 for (var k: u32 = 0u; k < count; k++) {
                     let other_idx = spatial_grid_cells[base + k];
 
-                    // Skip self
-                    if other_idx == cell_idx {
+                    // Reject duplicate pairs and stale entries before storage reads.
+                    if other_idx <= cell_idx || other_idx >= live_count {
                         continue;
                     }
 
@@ -172,7 +200,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
 
                     // Skip dead
-                    if death_flags[other_idx] != 0u {
+                    if atomicLoad(&death_flags[other_idx]) != 0u {
                         continue;
                     }
 
@@ -186,27 +214,33 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         continue;
                     }
 
-                    // Use canonical ordering (lower index = cell_a) to avoid duplicate events
-                    if cell_idx >= other_idx {
-                        continue;
-                    }
-
                     // Check contact distance (mass stored in .w, radius = clamp(mass, 0.5, 2.0))
                     let pos_b = positions_in[other_idx].xyz;
-                    let dist = length(pos_a - pos_b);
-                    let mass_a = positions_in[cell_idx].w;
+                    let delta = pos_a - pos_b;
                     let mass_b = positions_in[other_idx].w;
-                    let radius_a = clamp(mass_a, 0.5, 2.0);
                     let radius_b = clamp(mass_b, 0.5, 2.0);
                     let contact_dist = radius_a + radius_b + merge_range;
-                    if dist > contact_dist {
+                    if dot(delta, delta) > contact_dist * contact_dist {
                         continue;
                     }
 
-                    // Claim an event slot atomically
+                    if (!genomes_compatible(genome_a, genome_ids[other_idx])) {
+                        continue;
+                    }
+
+                    // Atomically claim both parents; competing invocations must
+                    // never consume a gamete in more than one fusion.
+                    if (!atomicCompareExchangeWeak(&death_flags[cell_idx], 0u, 2u).exchanged) {
+                        return;
+                    }
+                    if (!atomicCompareExchangeWeak(&death_flags[other_idx], 0u, 2u).exchanged) {
+                        atomicStore(&death_flags[cell_idx], 0u);
+                        continue;
+                    }
                     let slot = atomicAdd(&merge_events[0], 1u);
                     if slot >= MAX_GAMETE_MERGE_EVENTS {
-                        // No space - skip (will be retried next frame if cells survive)
+                        atomicStore(&death_flags[cell_idx], 0u);
+                        atomicStore(&death_flags[other_idx], 0u);
                         return;
                     }
 
@@ -227,9 +261,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let combined = min(reserve_a + reserve_b, 65535000u);
                     atomicStore(&merge_events[event_base + 7u], combined);
 
-                    // Mark both cells for death
-                    death_flags[cell_idx] = 1u;
-                    death_flags[other_idx] = 1u;
+                    // Both parents are fused (2), not dead (1). Stop after one pair.
+                    return;
                 }
             }
         }

@@ -153,6 +153,9 @@ pub struct App {
     ui: UiSystem,
     last_render_time: std::time::Instant,
     frame_count: u32,
+    cpu_phase_totals_ms: [f64; 8],
+    cpu_phase_max_ms: [f64; 8],
+    frame_lateness_max_ms: f64,
     fps_timer: std::time::Instant,
     /// Persistent genome editor state
     editor_state: crate::ui::panel_context::GenomeEditorState,
@@ -240,6 +243,9 @@ impl App {
             ui,
             last_render_time: std::time::Instant::now(),
             frame_count: 0,
+            cpu_phase_totals_ms: [0.0; 8],
+            cpu_phase_max_ms: [0.0; 8],
+            frame_lateness_max_ms: 0.0,
             fps_timer: std::time::Instant::now(),
             editor_state: crate::ui::panel_context::GenomeEditorState::new(),
             mouse_position: (0.0, 0.0),
@@ -2642,6 +2648,9 @@ impl App {
             return;
         }
 
+        self.frame_lateness_max_ms = self.frame_lateness_max_ms.max(
+            now.saturating_duration_since(self.next_frame_time).as_secs_f64() * 1000.0,
+        );
         let dt = now
             .duration_since(self.last_render_time)
             .as_secs_f32()
@@ -2795,6 +2804,7 @@ impl App {
         self.scene_manager.update(dt);
 
         let camera = self.scene_manager.active_scene().camera();
+        let audio_started = std::time::Instant::now();
         self.audio
             .set_listener_from_camera(camera.position(), camera.rotation);
         if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
@@ -2829,6 +2839,7 @@ impl App {
             self.audio.play_event(event);
         }
         self.audio.update();
+        let audio_ms = audio_started.elapsed().as_secs_f64() * 1000.0;
 
         // Poll for async tool operation results (GPU mode only)
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
@@ -3025,6 +3036,7 @@ impl App {
             camera.zoom_speed = self.ui.state.camera_scroll_sensitivity.clamp(0.01, 2.0);
         }
 
+        let acquire_started = std::time::Instant::now();
         let output = loop {
             match self.surface.get_current_texture() {
                 Ok(output) => break output,
@@ -3039,6 +3051,7 @@ impl App {
                 }
             }
         };
+        let acquire_done = std::time::Instant::now();
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -3056,6 +3069,7 @@ impl App {
             gpu_scene.set_occlusion_min_screen_size(self.ui.state.occlusion_min_screen_size);
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
+            gpu_scene.audio_readbacks_enabled = self.ui.state.sfx_volume > 0.0;
             gpu_scene.set_gpu_timing_enabled(self.ui.state.gpu_timing_enabled);
             gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
 
@@ -3182,6 +3196,7 @@ impl App {
             self.editor_state.cell_outline_width,
         );
 
+        let scene_done = std::time::Instant::now();
         // Pull the latest GPU frame timing breakdown (lags a few frames behind
         // due to async readback) for the performance monitor.
         if self.ui.state.gpu_timing_enabled {
@@ -3229,8 +3244,8 @@ impl App {
         }
 
         // Update culling stats from GPU scene using non-blocking async read
-        // Only if GPU readbacks are enabled (can be disabled to avoid CPU-GPU sync overhead)
-        if self.ui.state.gpu_readbacks_enabled && !gpu_headless {
+        // Copy scheduling is gated by telemetry; drain existing maps even when disabled.
+        {
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                 // Poll for any pending async stats read
                 if gpu_scene.instance_builder.poll_culling_stats(&self.device) {
@@ -3243,10 +3258,9 @@ impl App {
                     );
                 }
 
-                // Start a new async read periodically (once per second)
-                if self.performance.should_refresh_culling_stats() {
-                    gpu_scene.instance_builder.start_culling_stats_read();
-                }
+                // The builder schedules a copy only when enabled and due.
+                // Always drain a previously submitted sample after toggling off.
+                gpu_scene.instance_builder.start_culling_stats_read();
             }
         }
 
@@ -4543,6 +4557,7 @@ impl App {
             pixels_per_point: self.window.scale_factor() as f32,
         };
 
+        let ui_build_done = std::time::Instant::now();
         // Render egui
         self.ui.render(
             &self.device,
@@ -4598,7 +4613,9 @@ impl App {
         // Submit egui commands (includes the screenshot copy if requested)
         self.queue.submit(std::iter::once(encoder.finish()));
 
+        let present_started = std::time::Instant::now();
         output.present();
+        let present_done = std::time::Instant::now();
 
         // -- Process screenshot readback ----------------------------------------
         // Runs after present() - the staging buffer is already populated.
@@ -4868,10 +4885,30 @@ impl App {
         // under the default file-logger filter without needing RUST_LOG set;
         // once/sec is cheap enough not to reintroduce the logging-on-the-
         // hot-path stutter the [audio-diag] lines caused earlier.
+        let phase_ms = [
+            acquire_started.duration_since(now).as_secs_f64() * 1000.0,
+            acquire_done.duration_since(acquire_started).as_secs_f64() * 1000.0,
+            scene_done.duration_since(acquire_done).as_secs_f64() * 1000.0,
+            ui_build_done.duration_since(scene_done).as_secs_f64() * 1000.0,
+            present_started.duration_since(ui_build_done).as_secs_f64() * 1000.0,
+            present_done.duration_since(present_started).as_secs_f64() * 1000.0,
+            present_done.elapsed().as_secs_f64() * 1000.0,
+            audio_ms, // A subset of Update, useful for separating environment audio.
+        ];
+        for (i, ms) in phase_ms.iter().enumerate() {
+            self.cpu_phase_totals_ms[i] += ms;
+            self.cpu_phase_max_ms[i] = self.cpu_phase_max_ms[i].max(*ms);
+        }
         self.frame_count += 1;
         if self.fps_timer.elapsed().as_secs_f32() >= 1.0 {
-            let fps = self.frame_count;
-            let frame_ms = if fps > 0 { 1000.0 / fps as f32 } else { 0.0 };
+            let elapsed_seconds = self.fps_timer.elapsed().as_secs_f64();
+            let frames = self.frame_count.max(1) as f64;
+            let fps = (frames / elapsed_seconds).round() as u32;
+            let frame_ms = elapsed_seconds * 1000.0 / frames;
+            let cpu_phases = ["Update", "Acquire", "Scene", "UI Build", "UI Submit", "Present", "Deferred", "Audio subset"]
+                .iter().enumerate().map(|(i, label)| format!(
+                    "{label}={:.2}/{:.2}ms", self.cpu_phase_totals_ms[i] / frames, self.cpu_phase_max_ms[i],
+                )).collect::<Vec<_>>().join(", ");
 
             let segments = self.performance.gpu_segment_times_ms();
             let gpu_total_ms: f32 = segments.iter().sum();
@@ -4884,14 +4921,21 @@ impl App {
 
             let gpu_scene = self.scene_manager.gpu_scene();
             let rain_intensity = gpu_scene.map_or(0.0, |s| s.rain_audio_intensity);
-            let splash_particles = gpu_scene
-                .and_then(|s| s.rain_splash_particle_renderer.as_ref())
-                .map_or(0, |r| r.particle_count());
             let cell_count = gpu_scene.map_or(0, |s| s.current_cell_count);
             let physics_steps = gpu_scene.map_or(0, |s| s.last_physics_steps);
 
+            let gpu_sample_age_ms = gpu_scene.and_then(|scene| scene.gpu_timer.as_ref())
+                .and_then(|timer| timer.sample_age_ms());
             log::warn!(
-                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms physics_steps={physics_steps} | {segments_str} | rain_intensity={rain_intensity:.2} splash_particles={splash_particles} cells={cell_count}"
+                "[perf-cpu] avg/max: {cpu_phases} | deadline_late_max={:.2}ms gpu_sample_age_ms={gpu_sample_age_ms:?}",
+                self.frame_lateness_max_ms,
+            );
+            self.cpu_phase_totals_ms = [0.0; 8];
+            self.cpu_phase_max_ms = [0.0; 8];
+            self.frame_lateness_max_ms = 0.0;
+
+            log::warn!(
+                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms physics_steps={physics_steps} | {segments_str} | rain_intensity={rain_intensity:.2} cells={cell_count}"
             );
 
             self.frame_count = 0;

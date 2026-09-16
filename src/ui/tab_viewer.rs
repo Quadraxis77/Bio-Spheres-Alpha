@@ -1438,10 +1438,10 @@ fn render_headless_section(ui: &mut Ui, context: &mut PanelContext, state: &mut 
         });
 
         ui.horizontal(|ui| {
-            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU readbacks");
+            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU telemetry");
             ui.label(
                 egui::RichText::new(if state.gpu_readbacks_enabled {
-                    "live counts enabled"
+                    "culling and climate statistics enabled"
                 } else {
                     "reduced CPU/GPU synchronization"
                 })
@@ -3464,8 +3464,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
 
     // GPU Readbacks toggle at the top
     ui.horizontal(|ui| {
-        ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks")
-            .on_hover_text("Allow the CPU to read back cell data from the GPU for the Cell Inspector. Disable to reduce GPU-CPU synchronization overhead if the inspector is not needed");
+        ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU Telemetry")
+            .on_hover_text("Read culling and climate statistics at a reduced rate. Cell counts, active camera follow, audio and explicit inspection remain available; GPU timing has its own switch.");
         ui.checkbox(&mut state.gpu_timing_enabled, "GPU Frame Timing")
             .on_hover_text("Measure per-segment GPU frame time with timestamp queries. Disable to remove timestamp query and readback overhead");
     });
@@ -11433,7 +11433,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             // Nutrient Settings Group (Green)
             group_container(ui, "Nutrient Settings", egui::Color32::from_rgb(100, 180, 120), |ui| {
                 ui.label("Nutrient Priority:")
-                    .on_hover_text("How aggressively this cell competes for nutrients from its vascular connections. Higher priority cells are fed first. Embryocytes use 4.0, gonads 3.5, structural cells 1.0–1.5, vascular pipes 0.4");
+                    .on_hover_text("Controls nutrient sharing through attached cells. For gametocytes and embryocytes, priority directly multiplies reserve intake: 0.5 halves it, 1.0 is normal, and 2.0 doubles it. Baseline intake per feeding connection is 10 nutrients/sec for gametocytes and 100 for embryocytes, subject to available food. Donors retain their safety buffer.");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };

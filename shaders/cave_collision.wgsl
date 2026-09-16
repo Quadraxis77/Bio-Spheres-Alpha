@@ -79,7 +79,7 @@ const ROLLING_CONTACT_FRICTION: f32 = 0.18;
 const CAVE_RESTITUTION: f32 = 0.08;
 const CAVE_RESTING_SPEED: f32 = 2.0;
 const CAVE_MAX_CORRECTION_PER_STEP: f32 = 0.18;
-const CAVE_CONTACT_SLOP: f32 = 0.12;
+const CAVE_CONTACT_SLOP: f32 = 0.02;
 const CAVE_POSITION_CORRECTION_FRACTION: f32 = 0.22;
 const CAVE_REST_SPEED: f32 = 0.08;
 
@@ -337,40 +337,65 @@ fn estimate_penetration_depth(pos: vec3<f32>, radius: f32, density_overlap: f32,
     return select(0.0, radius * 0.25, center_is_solid);
 }
 
-// Apply position-based collision - directly moves cells out of solid rock into cave tunnels.
-// Center-based contact avoids preemptively pushing cells away while their center
-// is still in open space, which otherwise makes them stand off from the surface.
+// Conservative broad phase: trilinear density cannot exceed the maximum
+// corner value. Usually eight grid reads reject a cell far from any wall.
+fn sphere_may_touch_rock(pos: vec3<f32>, radius: f32) -> bool {
+    let extent = cave_params.world_radius + 3.0;
+    let resolution = cave_params.grid_resolution;
+    let scale = f32(resolution) / (2.0 * extent);
+    let grid = (pos - cave_params.world_center + vec3<f32>(extent)) * scale;
+    let lo = vec3<i32>(floor(grid - vec3<f32>(radius * scale)));
+    let hi = vec3<i32>(ceil(grid + vec3<f32>(radius * scale)));
+    if (any(lo < vec3<i32>(0)) || any(hi > vec3<i32>(i32(resolution)))) { return true; }
+    for (var z = lo.z; z <= hi.z; z++) {
+        for (var y = lo.y; y <= hi.y; y++) {
+            for (var x = lo.x; x <= hi.x; x++) {
+                if (collision_grid_value(vec3<u32>(u32(x), u32(y), u32(z)), resolution + 1u) > cave_params.threshold) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Normal points into open space; w is sphere penetration in world units.
+fn cave_sphere_contact(pos: vec3<f32>, radius: f32) -> vec4<f32> {
+    if (!sphere_may_touch_rock(pos, radius)) { return vec4<f32>(0.0); }
+    let center_density = sample_collision_density(pos);
+    let normal = -compute_sdf_gradient(pos, radius);
+    if (center_density > cave_params.threshold) {
+        let depth = estimate_penetration_depth(pos, radius, center_density - cave_params.threshold, true);
+        return vec4<f32>(normal, radius + depth);
+    }
+    // Probe the actual sphere surface toward the wall, including diagonal
+    // contacts. The density threshold itself does not change with cell size.
+    let surface = pos - normal * radius;
+    let surface_density = sample_collision_density(surface);
+    let overlap = surface_density - cave_params.threshold;
+    if (overlap <= 0.0) { return vec4<f32>(0.0); }
+    // Interpolate the crossing along the center-to-surface segment. Probing
+    // beyond this contact can cross the far side of a thin vent wall and
+    // underestimate its gradient. This also saves six extra density samples.
+    let depth = radius * overlap / max(surface_density - center_density, EPSILON);
+    return vec4<f32>(normal, depth);
+}
+
+// Apply bounded position correction and velocity response at the sphere surface.
 fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) {
     if (cave_params.collision_enabled == 0u) {
         return;
     }
-
-    let center_density = sample_collision_density(pos);
-    let radius_threshold = cave_params.threshold;
-
-    if (center_density > radius_threshold) {
-        // Compute gradient pointing toward lower density (into open cave space)
-        let normal = -compute_sdf_gradient(pos, radius);  // Points into cave (away from wall)
-
-        // Penetration estimate. Cave density is a smooth scalar field, not a
-        // true SDF, so estimate world-space depth from local density gradient
-        // instead of scaling by cave scale or a voxel size.
-        let density_overlap = center_density - radius_threshold;
-        let penetration = estimate_penetration_depth(
-            pos,
-            radius,
-            density_overlap,
-            true
-        );
-
+    let contact = cave_sphere_contact(pos, radius);
+    let normal = contact.xyz;
+    let penetration = contact.w;
+    if (penetration > 0.0) {
         var vel = velocities[cell_idx].xyz;
         let vel_into_wall = dot(vel, -normal);
 
         if (penetration > CAVE_CONTACT_SLOP) {
-            // Soft depenetration. Cave density is not a true signed-distance
-            // field, so `penetration + radius` behaves like a teleport near
-            // high-gradient/voxelized walls. Leave a small contact slop and
-            // correct a bounded fraction so cells can settle and roll.
+            // Leave a small contact slop and correct a bounded fraction so
+            // cells can settle and roll without abrupt position jumps.
             let correction_distance = min(
                 max(penetration - CAVE_CONTACT_SLOP, 0.0) * CAVE_POSITION_CORRECTION_FRACTION,
                 CAVE_MAX_CORRECTION_PER_STEP
@@ -446,6 +471,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let collision_radius = calculate_radius_from_mass(mass);
 
-    // Apply force-based cave collision (modifies velocity only)
+    // Resolve sphere contact (position, velocity, and rolling torque)
     apply_cave_collision_force(idx, pos, collision_radius, mass, params.delta_time);
 }

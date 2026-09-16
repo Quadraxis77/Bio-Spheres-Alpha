@@ -105,6 +105,10 @@ pub struct AdhesionBuffers {
 impl AdhesionBuffers {
     /// Create new adhesion buffer system
     pub fn new(device: &wgpu::Device, cell_capacity: u32) -> Self {
+        Self::with_mode_capacity(device, cell_capacity, super::mutation::initial_mode_pool_capacity())
+    }
+
+    pub(super) fn with_mode_capacity(device: &wgpu::Device, cell_capacity: u32, initial_mode_pool_size: u64) -> Self {
         // Each connection is shared by 2 cells, so theoretical max = cells * max_per_cell / 2
         let max_connections = cell_capacity * (MAX_ADHESIONS_PER_CELL as u32) / 2;
 
@@ -125,8 +129,6 @@ impl AdhesionBuffers {
         // Per-mode adhesion settings split into 3 x vec4 sub-buffers (16 bytes each).
         // Match the triple-buffer mode pool without preallocating the full logical
         // mutation range at startup.
-        let initial_mode_pool_size =
-            crate::simulation::gpu_physics::mutation::initial_mode_pool_capacity();
         let adhesion_settings_v0 = Self::create_storage_buffer(
             device,
             initial_mode_pool_size * 16,

@@ -598,8 +598,13 @@ impl CameraController {
     pub fn update(&mut self, dt: f32) {
         // 1. ZOOM (scroll) - Only in Orbit mode
         if self.mode == CameraMode::Orbit && self.accumulated_scroll.abs() > 0.001 {
-            // Additive zoom - constant speed regardless of distance.
-            self.target_distance -= self.accumulated_scroll * self.zoom_speed * 30.0;
+            if self.scene_type == SceneType::PreviewScene {
+                // Scale distance so close-up zoom stays precise. Exponential
+                // scaling also makes opposite scroll deltas undo one another.
+                self.target_distance *= (-self.accumulated_scroll * self.zoom_speed).exp();
+            } else {
+                self.target_distance -= self.accumulated_scroll * self.zoom_speed * 30.0;
+            }
             self.target_distance = self.target_distance.max(0.1);
         }
         self.accumulated_scroll = 0.0;

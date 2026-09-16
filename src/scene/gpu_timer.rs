@@ -50,6 +50,8 @@ pub struct GpuTimer {
     period_ns: f32,
     frame_index: usize,
     last_segments_ms: [f32; SEGMENT_COUNT],
+    resolved_this_frame: bool,
+    last_completed_at: Option<std::time::Instant>,
 }
 
 impl GpuTimer {
@@ -92,6 +94,8 @@ impl GpuTimer {
             period_ns: queue.get_timestamp_period(),
             frame_index: 0,
             last_segments_ms: [0.0; SEGMENT_COUNT],
+            resolved_this_frame: false,
+            last_completed_at: None,
         })
     }
 
@@ -107,6 +111,7 @@ impl GpuTimer {
     /// Resolve this frame's timestamps into the readback buffer. Must be called
     /// once, after all `write_timestamp` calls for the frame, before `queue.submit`.
     pub fn resolve(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.resolved_this_frame = false;
         let slot = &self.slots[self.frame_index];
         // If the previous readback for this slot hasn't completed yet, skip -
         // we'll catch up next time this slot comes around.
@@ -131,12 +136,18 @@ impl GpuTimer {
             0,
             (TIMESTAMP_COUNT * std::mem::size_of::<u64>()) as u64,
         );
+        self.resolved_this_frame = true;
+    }
+
+    /// Age of the most recently received sample; absent until a readback completes.
+    pub fn sample_age_ms(&self) -> Option<f64> {
+        self.last_completed_at.map(|at| at.elapsed().as_secs_f64() * 1000.0)
     }
 
     /// Call after `queue.submit`. Kicks off async mapping for the slot just
     /// resolved and polls all slots for completed readbacks.
     pub fn after_submit(&mut self, device: &wgpu::Device) {
-        if self.slots[self.frame_index].map_receiver.is_none() {
+        if self.resolved_this_frame && self.slots[self.frame_index].map_receiver.is_none() {
             let slot = &mut self.slots[self.frame_index];
             let (sender, receiver) = std::sync::mpsc::channel();
             slot.buffer
@@ -150,10 +161,21 @@ impl GpuTimer {
         let _ = device.poll(wgpu::PollType::Poll);
 
         for slot in &mut self.slots {
-            let completed = matches!(
-                slot.map_receiver.as_ref().map(|rx| rx.try_recv()),
-                Some(Ok(Ok(())))
-            );
+            let completed = match slot.map_receiver.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(Ok(()))) => true,
+                Some(Ok(Err(error))) => {
+                    log::warn!("GPU timing readback failed, recycling slot: {error}");
+                    // A failed map leaves the buffer unmapped.
+                    slot.map_receiver = None;
+                    false
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                    // A failed map leaves the buffer unmapped.
+                    slot.map_receiver = None;
+                    false
+                }
+                _ => false,
+            };
 
             if completed {
                 slot.map_receiver = None;
@@ -168,9 +190,11 @@ impl GpuTimer {
                     }
                 }
                 slot.buffer.unmap();
+                self.last_completed_at = Some(std::time::Instant::now());
             }
         }
 
+        self.resolved_this_frame = false;
         self.frame_index = (self.frame_index + 1) % FRAMES_IN_FLIGHT;
     }
 
@@ -182,5 +206,48 @@ impl GpuTimer {
     /// Total GPU time across all segments (ms).
     pub fn total_ms(&self) -> f32 {
         self.last_segments_ms.iter().sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readback_recovers_and_only_maps_resolved_frames() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                ..Default::default()
+            }).await.unwrap();
+            let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+            if !adapter.features().contains(features) { return; }
+            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+                required_features: features, ..Default::default()
+            }).await.unwrap();
+            let mut timer = GpuTimer::new(&device, &queue).unwrap();
+            timer.after_submit(&device);
+            assert!(timer.slots.iter().all(|slot| slot.map_receiver.is_none()));
+            assert!(timer.sample_age_ms().is_none());
+
+            let (sender, receiver) = std::sync::mpsc::channel();
+            sender.send(Err(wgpu::BufferAsyncError)).unwrap();
+            timer.slots[0].map_receiver = Some(receiver);
+            timer.after_submit(&device);
+            assert!(timer.slots[0].map_receiver.is_none());
+
+            for _ in 0..8 {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                for boundary in 0..=SEGMENT_COUNT { timer.write_timestamp(&mut encoder, boundary); }
+                timer.resolve(&mut encoder);
+                queue.submit([encoder.finish()]);
+                device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+                timer.after_submit(&device);
+            }
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            timer.after_submit(&device);
+            assert!(timer.sample_age_ms().is_some());
+        });
     }
 }

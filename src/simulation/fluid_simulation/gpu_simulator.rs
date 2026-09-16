@@ -387,6 +387,12 @@ pub struct GpuFluidSimulator {
     temp_stats_buffer: wgpu::Buffer,
     temp_stats_staging_buffer: wgpu::Buffer,
     temp_stats_copy_pending: std::cell::Cell<bool>,
+    telemetry_enabled: std::cell::Cell<bool>,
+    audio_readbacks_enabled: std::cell::Cell<bool>,
+    listener_readbacks_enabled: std::cell::Cell<bool>,
+    last_climate_readback: std::cell::Cell<Option<std::time::Instant>>,
+    last_climate_update: std::cell::Cell<Option<std::time::Instant>>,
+    last_listener_readback: std::cell::Cell<Option<std::time::Instant>>,
     temp_stats_map_receiver:
         std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
     /// Set when the static-water fill or phase pass actually changes water/ice
@@ -1410,6 +1416,12 @@ impl GpuFluidSimulator {
             temp_stats_buffer,
             temp_stats_staging_buffer,
             temp_stats_copy_pending: std::cell::Cell::new(false),
+            telemetry_enabled: std::cell::Cell::new(true),
+            audio_readbacks_enabled: std::cell::Cell::new(true),
+            listener_readbacks_enabled: std::cell::Cell::new(true),
+            last_climate_readback: std::cell::Cell::new(None),
+            last_climate_update: std::cell::Cell::new(None),
+            last_listener_readback: std::cell::Cell::new(None),
             temp_stats_map_receiver: std::cell::RefCell::new(None),
             static_surface_mesh_changed: std::cell::Cell::new(false),
             avg_water_temp_c: std::cell::Cell::new(0.0),
@@ -1713,6 +1725,18 @@ impl GpuFluidSimulator {
     /// outside the simulated grid (e.g. camera outside the world sphere)
     /// can't be underwater by definition, so this resolves that case
     /// immediately without waiting on a readback.
+    pub fn configure_readbacks(&self, telemetry: bool, audio: bool, listener: bool) {
+        self.telemetry_enabled.set(telemetry);
+        self.audio_readbacks_enabled.set(audio);
+        self.listener_readbacks_enabled.set(listener);
+    }
+
+    fn climate_readback_due(&self) -> bool {
+        // Static-water phase changes also invalidate the cached surface mesh.
+        (self.telemetry_enabled.get() || self.static_water_world_enabled.get())
+            && self.last_climate_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 250)
+    }
+
     pub fn set_listener_position(&self, position: Vec3) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
@@ -1831,7 +1855,9 @@ impl GpuFluidSimulator {
         let Some(index) = self.listener_grid_index.get() else {
             return;
         };
-        if !self.listener_water_copy_pending.get()
+        if self.listener_readbacks_enabled.get()
+            && self.last_listener_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 33)
+            && !self.listener_water_copy_pending.get()
             && self.listener_water_readback_receiver.borrow().is_none()
         {
             let offset = (index as u64) * std::mem::size_of::<u32>() as u64;
@@ -1843,6 +1869,7 @@ impl GpuFluidSimulator {
                 std::mem::size_of::<u32>() as u64,
             );
             self.listener_water_copy_pending.set(true);
+            self.last_listener_readback.set(Some(std::time::Instant::now()));
         }
     }
 
@@ -2033,7 +2060,7 @@ impl GpuFluidSimulator {
                 // Copy after the phase pass so slot 6 includes this tick's
                 // successful water<->ice transitions. Reset only after a copy
                 // is queued; otherwise the counter survives readback pressure.
-                if !self.temp_stats_copy_pending.get()
+                if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
                     && self.temp_stats_map_receiver.borrow().is_none()
                 {
                     encoder.copy_buffer_to_buffer(
@@ -2049,6 +2076,7 @@ impl GpuFluidSimulator {
                         Some(std::mem::size_of::<u32>() as u64),
                     );
                     self.temp_stats_copy_pending.set(true);
+                self.last_climate_readback.set(Some(std::time::Instant::now()));
                 }
             }
             return;
@@ -2079,7 +2107,7 @@ impl GpuFluidSimulator {
                 pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
-            if !self.temp_stats_copy_pending.get()
+            if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
                 && self.temp_stats_map_receiver.borrow().is_none()
             {
                 encoder.copy_buffer_to_buffer(
@@ -2090,6 +2118,7 @@ impl GpuFluidSimulator {
                     self.temp_stats_buffer.size(),
                 );
                 self.temp_stats_copy_pending.set(true);
+                self.last_climate_readback.set(Some(std::time::Instant::now()));
             }
         }
 
@@ -2179,6 +2208,7 @@ impl GpuFluidSimulator {
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        if !self.audio_readbacks_enabled.get() { return; }
         // Skip while the previous sample is still being consumed. Dynamic
         // callers already schedule this at 15 Hz; static mode may call more
         // often briefly while old flow/rain sources decay toward silence.
@@ -2612,27 +2642,28 @@ impl GpuFluidSimulator {
                         // alongside liquid water - a frozen pool must read frozen
                         // within seconds, not minutes (the old 0.01 rate made the
                         // water readout lag so far behind it was misleading).
-                        const WATER_EMA_RATE: f32 = 0.2;
-                        const AIR_EMA_RATE: f32 = 0.2;
-                        const HUMIDITY_EMA_RATE: f32 = 0.2;
+                        // Preserve responsiveness independently of sample rate.
+                        let now = std::time::Instant::now();
+                        let rate = self.last_climate_update.replace(Some(now))
+                            .map_or(1.0, |previous| 1.0 - (-now.duration_since(previous).as_secs_f32() / 0.3).exp());
 
                         if stats[1] > 0 {
                             let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;
                             let prev = self.avg_water_temp_c.get();
                             self.avg_water_temp_c
-                                .set(prev + (avg_c - prev) * WATER_EMA_RATE);
+                                .set(prev + (avg_c - prev) * rate);
                         }
                         if stats[3] > 0 {
                             let avg_c = (stats[2] as f32 / stats[3] as f32) - 50.0;
                             let prev = self.avg_air_temp_c.get();
                             self.avg_air_temp_c
-                                .set(prev + (avg_c - prev) * AIR_EMA_RATE);
+                                .set(prev + (avg_c - prev) * rate);
                         }
                         if stats.len() >= 6 && stats[5] > 0 {
                             let avg = (stats[4] as f32 / stats[5] as f32) / 255.0;
                             let prev = self.avg_humidity.get();
                             self.avg_humidity
-                                .set(prev + (avg - prev) * HUMIDITY_EMA_RATE);
+                                .set(prev + (avg - prev) * rate);
                         }
                         if stats.len() >= 7 && stats[6] > 0 {
                             self.static_surface_mesh_changed.set(true);

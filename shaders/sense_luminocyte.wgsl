@@ -70,7 +70,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     let cell_count = cell_count_buffer[0];
     if (cell_idx >= cell_count) { return; }
-    if (death_flags[cell_idx] == 1u) { return; }
+    if (death_flags[cell_idx] != 0u) { return; }
     if (cell_types[cell_idx] != PHOTOCYTE_TYPE) { return; }
 
     let current_nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));

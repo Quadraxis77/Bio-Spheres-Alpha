@@ -14,7 +14,6 @@
 //! 3. `render` - draws all `min(counter, MAX_PARTICLES)` instances as flat,
 //!    surface-oriented (not camera-facing) quads.
 
-use std::sync::mpsc::Receiver;
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -75,8 +74,7 @@ pub struct RainSplashParticleRenderer {
 
     particle_buffer: wgpu::Buffer,
     counter_buffer: wgpu::Buffer,
-    counter_staging_buffer: wgpu::Buffer,
-    counter_readback_receiver: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    draw: super::particle_draw::ParticleDraw,
     params_buffer: wgpu::Buffer,
 
     camera_bind_group_layout: wgpu::BindGroupLayout,
@@ -84,7 +82,6 @@ pub struct RainSplashParticleRenderer {
 
     max_particles: u32,
     time: f32,
-    particle_count: u32,
 }
 
 impl RainSplashParticleRenderer {
@@ -143,12 +140,7 @@ impl RainSplashParticleRenderer {
             mapped_at_creation: false,
         });
 
-        let counter_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Rain Splash Counter Staging"),
-            size: std::mem::size_of::<ParticleCounter>() as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let draw = super::particle_draw::ParticleDraw::new(device, &counter_buffer, 6, max_particles);
 
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Rain Splash Extract Params"),
@@ -366,14 +358,12 @@ impl RainSplashParticleRenderer {
             compute_bind_group_layout,
             particle_buffer,
             counter_buffer,
-            counter_staging_buffer,
-            counter_readback_receiver: None,
+            draw,
             params_buffer,
             camera_bind_group_layout,
             render_bind_group_layout,
             max_particles,
             time: 0.0,
-            particle_count: 0,
         }
     }
 
@@ -480,49 +470,10 @@ impl RainSplashParticleRenderer {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        if self.counter_readback_receiver.is_none() {
-            encoder.copy_buffer_to_buffer(
-                &self.counter_buffer,
-                0,
-                &self.counter_staging_buffer,
-                0,
-                std::mem::size_of::<ParticleCounter>() as u64,
-            );
-        }
+        self.draw.encode(encoder);
     }
 
-    /// Poll for particle count (call after command buffer submission).
-    pub fn poll_particle_count(&mut self, device: &wgpu::Device) {
-        if self.counter_readback_receiver.is_none() {
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.counter_staging_buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    tx.send(result).ok();
-                });
-            self.counter_readback_receiver = Some(rx);
-        }
 
-        let _ = device.poll(wgpu::PollType::Poll);
-        let Some(rx) = self.counter_readback_receiver.as_ref() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(())) => {
-                {
-                    let data = self.counter_staging_buffer.slice(..).get_mapped_range();
-                    let count: &[u32] = bytemuck::cast_slice(&data);
-                    self.particle_count = count[0].min(self.max_particles);
-                }
-                self.counter_staging_buffer.unmap();
-                self.counter_readback_receiver = None;
-            }
-            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.counter_readback_receiver = None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        }
-    }
 
     /// Render splash rings.
     pub fn render(
@@ -533,9 +484,6 @@ impl RainSplashParticleRenderer {
         camera_bind_group: &wgpu::BindGroup,
         render_bind_group: &wgpu::BindGroup,
     ) {
-        if self.particle_count == 0 {
-            return;
-        }
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Rain Splash Particle Pass"),
@@ -564,14 +512,12 @@ impl RainSplashParticleRenderer {
         render_pass.set_bind_group(0, camera_bind_group, &[]);
         render_pass.set_bind_group(1, render_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
-        render_pass.draw(0..6, 0..self.particle_count);
+        render_pass.draw_indirect(&self.draw.args, 0);
     }
 
     pub fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.camera_bind_group_layout
     }
 
-    pub fn particle_count(&self) -> u32 {
-        self.particle_count
-    }
+
 }

@@ -19,7 +19,7 @@ use crate::simulation::gpu_physics::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
     AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
     DevorocyteConsumptionSystem, DivisionAudioCandidate, DivisionAudioCollectDispatch,
-    DivisionAudioParams, GameteMergeEvent, GametocyteMergeSystem, GenomeBufferManager,
+    DivisionAudioParams, GametocyteMergeSystem, GenomeBufferManager,
     GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
     GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
     PhysicsFeatureFlags, SignalTickClock,
@@ -191,6 +191,8 @@ pub struct GpuScene {
     first_frame: bool,
     /// Whether GPU readbacks are enabled (cell count, etc.)
     readbacks_enabled: bool,
+    cell_count_readback_dirty: bool,
+    pub audio_readbacks_enabled: bool,
     /// Time scale multiplier (1.0 = normal, 2.0 = 2x speed)
     pub time_scale: f32,
     /// Number of physics steps that ran during the most recent render frame
@@ -420,13 +422,8 @@ pub struct GpuScene {
     gametocyte_spatial_bind_group: Option<wgpu::BindGroup>,
     /// Cached gametocyte physics bind groups (one per triple buffer index)
     gametocyte_physics_bind_groups: Option<[wgpu::BindGroup; 3]>,
-    /// Pending gamete merge events waiting to be processed (decoded from staging buffer)
-    pending_gamete_merges: Vec<GameteMergeEvent>,
-    /// Tracks whether a staging readback is in flight for gamete events
-    gamete_readback_in_flight: bool,
-    /// Receiver for the gamete staging buffer map_async callback.
-    /// Some means map_async has already been called; None means it hasn't been called yet.
-    gamete_map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    /// GPU crossover and birth; no CPU offspring queue or event readback.
+    gpu_fusion: Option<crate::simulation::gpu_physics::gpu_fusion::GpuFusion>,
     /// Uniform params for the division-audio spatial-grid collector.
     division_audio_params_buffer: wgpu::Buffer,
     /// GPU output buffer for the closest split candidates.
@@ -617,23 +614,8 @@ pub struct GpuScene {
     follow_target: glam::Vec3,
     /// Smoothed orbit pivot - lerps toward follow_target every frame.
     follow_center: glam::Vec3,
-    /// Persistent staging buffer for position readback (reused every frame).
-    follow_pos_staging: Option<wgpu::Buffer>,
-    /// Persistent staging buffer for label readback (reused every frame).
-    follow_lbl_staging: Option<wgpu::Buffer>,
-    /// True when a GPU->staging copy has been submitted and not yet consumed.
-    follow_copy_submitted: bool,
-    /// True when copy_buffer_to_buffer was encoded this frame and map_async
-    /// needs to be called after queue.submit (via tick_follow_camera_post_submit).
-    follow_needs_map: bool,
-    /// Counts map_async completions (0 = none, 1 = one buffer ready, 2 = both ready).
-    /// Written by map_async callbacks; polled each frame.
-    follow_map_ready_flag: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    /// True when the label buffer copy in flight was taken on a reset frame.
-    /// On reset frames labels are temporarily set to each cell's own index, so
-    /// the CoM scan would find only 1 cell and produce a jump. We skip the
-    /// target update for that readback and keep the previous follow_target.
-    follow_label_was_reset: bool,
+    follow_reduction: Option<crate::simulation::gpu_physics::organism_follow::OrganismFollow>,
+
 }
 
 impl GpuScene {
@@ -930,6 +912,8 @@ impl GpuScene {
             light_field_needs_update: true,
             first_frame: true,
             readbacks_enabled: true,
+            cell_count_readback_dirty: true,
+            audio_readbacks_enabled: true,
             time_scale: 1.0,
             last_physics_steps: 0,
             headless_no_render: false,
@@ -1047,12 +1031,10 @@ impl GpuScene {
             devorocyte_spatial_bind_group: None,
             devorocyte_physics_bind_groups: None,
             gametocyte_merge_system: None,
+            gpu_fusion: None,
             gametocyte_cell_data_bind_group: None,
             gametocyte_spatial_bind_group: None,
             gametocyte_physics_bind_groups: None,
-            pending_gamete_merges: Vec::new(),
-            gamete_readback_in_flight: false,
-            gamete_map_receiver: None,
             division_audio_params_buffer,
             division_audio_candidates_buffer,
             division_audio_candidate_count_buffer,
@@ -1141,12 +1123,7 @@ impl GpuScene {
             follow_organism_id: None,
             follow_target: glam::Vec3::ZERO,
             follow_center: glam::Vec3::ZERO,
-            follow_pos_staging: None,
-            follow_lbl_staging: None,
-            follow_copy_submitted: false,
-            follow_needs_map: false,
-            follow_map_ready_flag: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            follow_label_was_reset: false,
+            follow_reduction: None,
         }
     }
 
@@ -1166,6 +1143,10 @@ impl GpuScene {
 
     /// Reset the simulation to initial state.
     pub fn reset(&mut self, queue: &wgpu::Queue) {
+        if self.follow_organism_id.is_some() {
+            self.clear_organism_follow();
+        }
+        self.cell_count_readback_dirty = true;
         self.current_cell_count = 0;
         self.total_cell_slots = 0;
         self.next_cell_id = 0;
@@ -2074,10 +2055,11 @@ impl GpuScene {
         self.lod_debug_colors = debug_colors;
     }
 
-    /// Set whether GPU readbacks are enabled (cell count, etc.)
+    /// Enable optional telemetry; operational camera/audio/count reads have separate lifetimes.
     /// Disabling this can improve performance by avoiding CPU-GPU sync overhead.
     pub fn set_readbacks_enabled(&mut self, enabled: bool) {
         self.readbacks_enabled = enabled;
+        self.instance_builder.set_stats_readback_enabled(enabled && !self.headless_no_render);
     }
 
     /// Set whether GPU timestamp timing is enabled.
@@ -2388,6 +2370,10 @@ impl GpuScene {
                     self.gpu_triple_buffers.mode_pool_capacity as u32,
                 );
             }
+        }
+
+        if let Some(mutation_system) = &mut self.mutation_system {
+            mutation_system.maintain_genomes(device, encoder);
         }
 
         // NOTE: Spatial grid rebuild after lifecycle is unnecessary because the grid
@@ -2870,6 +2856,14 @@ impl GpuScene {
             return Some(genome_id); // No change needed
         }
 
+        let authored_modes: usize = self.genomes.iter().map(|g| g.modes.len()).sum();
+        if authored_modes - existing_genome.modes.len() + genome.modes.len()
+            > crate::simulation::gpu_physics::mutation::AUTHORED_MODE_RESERVE as usize
+        {
+            log::warn!("Genome update exceeds the authored GPU mode reserve");
+            return None;
+        }
+
         // Update the genome in place
         self.genomes[genome_id] = genome.clone();
         self.genomes_dirty = true;
@@ -2913,6 +2907,16 @@ impl GpuScene {
             }
         }
 
+        // GPU-born genomes occupy a separate ID/mode partition. Never overwrite
+        // them when the user inserts another authored genome during a running world.
+        if self.genomes.len() >= crate::simulation::gpu_physics::mutation::AUTHORED_GENOME_RESERVE as usize
+            || self.genomes.iter().map(|g| g.modes.len()).sum::<usize>() + genome.modes.len()
+                > crate::simulation::gpu_physics::mutation::AUTHORED_MODE_RESERVE as usize
+        {
+            log::warn!("Authored genome partition is full");
+            return None;
+        }
+
         // Either no match or content differs - add as new genome
         // This preserves existing cells' behavior when genome is modified
         let id = self.genomes.len();
@@ -2942,7 +2946,7 @@ impl GpuScene {
     /// Update has_oculocytes flag based on current genomes.
     /// Also activates the signal system for regulation emitters (channels 8-15),
     /// which use the same signal_flags buffers and propagation pipeline.
-    fn update_has_oculocytes(&mut self) {
+    pub(super) fn update_has_oculocytes(&mut self) {
         use crate::cell::types::CellType;
         let oculocyte_type = CellType::Oculocyte as u32 as i32;
         let glueocyte_type = CellType::Glueocyte as u32 as i32;
@@ -3533,8 +3537,37 @@ impl GpuScene {
         }
     }
 
-    /// Sync adhesion settings from genomes to GPU
-    /// Call this after adding genomes to ensure settings are uploaded to GPU
+    /// Flush a genome change once, including visual and mutation metadata.
+    /// Fusion insertion needs it immediately; render must not upload it again.
+    pub(super) fn sync_dirty_genomes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Sync adhesion settings to GPU only when genomes are added or modified
+        if self.genomes_dirty {
+            self.signal_diffusion.sync_modes(device, queue, &self.genomes);
+            self.sync_adhesion_settings(device, queue);
+            // Sync mutation system genome metadata when genomes change
+            if let Some(mutation_system) = &mut self.mutation_system {
+                mutation_system.sync_genome_metadata(queue, &self.genomes);
+            }
+            // Update mode visuals (colors) from CPU genomes.
+            // This must ONLY happen when CPU genomes change, not every frame,
+            // because the mutation shader writes directly to mode_visuals_buffer
+            // for GPU-mutated genomes and a per-frame overwrite would clobber those.
+            if !self.genomes.is_empty() {
+                self.instance_builder.update_mode_visuals_from_genomes(
+                    device,
+                    queue,
+                    &self.genomes,
+                );
+            }
+            // Mode/visual buffers may have been replaced by the sync above.
+            self.rebuild_mutation_bindings(device, queue);
+            self.gpu_fusion = None;
+            self.gametocyte_cell_data_bind_group = None;
+            self.genomes_dirty = false;
+        }
+    }
+
+    /// Sync adhesion settings from genomes to GPU.
     pub fn sync_adhesion_settings(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         // Grow mode pool if needed before syncing
         let total_modes: u64 = self.genomes.iter().map(|g| g.modes.len() as u64).sum();
@@ -3704,17 +3737,12 @@ impl GpuScene {
         queue: &wgpu::Queue,
     ) -> bool {
         if let Some(pending) = self.pending_cell_insertion.take() {
-            self.insert_cell_from_genome(
-                device,
-                encoder,
-                queue,
-                pending.world_position,
-                &pending.genome,
-                pending.initial_reserve,
-                pending.initial_nutrients,
-                pending.lineage_origin,
-            )
-            .is_some()
+            let inserted = self.insert_cell_from_genome(
+                device, encoder, queue, pending.world_position, &pending.genome,
+                pending.initial_reserve, pending.initial_nutrients, pending.lineage_origin.clone(),
+            ).is_some();
+            if !inserted { self.pending_cell_insertion = Some(pending); }
+            inserted
         } else {
             false
         }
@@ -3756,6 +3784,7 @@ impl GpuScene {
         };
         let mode_idx = genome.initial_mode.max(0) as usize;
 
+        let is_fusion = matches!(&lineage_origin, Some(LineageOrigin::Hybrid { .. }));
         match lineage_origin {
             Some(LineageOrigin::Hybrid {
                 parent_a,
@@ -3790,7 +3819,7 @@ impl GpuScene {
 
         // Sync settings to GPU if genome was added or updated
         if needs_sync {
-            self.sync_adhesion_settings(device, queue);
+            self.sync_dirty_genomes(device, queue);
         }
 
         // Calculate initial radius from mass (mass = 4/3 * pi * r^3 for unit density)
@@ -3824,9 +3853,9 @@ impl GpuScene {
                 genome_id as u32,           // genome_id
                 mode_idx as u32,            // mode_index (local to this genome)
                 self.current_time,          // birth_time
-                self.next_cell_id,          // cell_id
+                0,                         // Allocate a unique ID on GPU, including after fusion
                 &self.genomes,
-                if initial_reserve != 0 {
+                if is_fusion || initial_reserve != 0 {
                     Some(initial_reserve)
                 } else {
                     None
@@ -4086,12 +4115,7 @@ impl GpuScene {
     /// Stop following any organism and return to free camera.
     pub fn clear_organism_follow(&mut self) {
         self.follow_organism_id = None;
-        self.follow_pos_staging = None;
-        self.follow_lbl_staging = None;
-        self.follow_copy_submitted = false;
-        self.follow_needs_map = false;
-        self.follow_map_ready_flag
-            .store(0, std::sync::atomic::Ordering::Release);
+        self.follow_reduction = None;
         self.follow_target = glam::Vec3::ZERO;
         self.switch_to_freefly();
     }
@@ -4114,225 +4138,35 @@ impl GpuScene {
         self.follow_organism_id.is_some()
     }
 
-    /// Called every frame from inside `render()`, while the encoder is still open.
-    /// Encodes the GPU->staging copy and polls the previous frame's result.
-    /// Does NOT call map_async - that must happen after queue.submit via
-    /// tick_follow_camera_post_submit().
-    ///
-    /// Copies both the position buffer and the label buffer each frame. On readback,
-    /// finds the root label of the followed cell and computes the average position of
-    /// all cells in the same organism. This means the camera follows the organism's
-    /// centre-of-mass rather than a single cell, and survives individual cell death
-    /// as long as any cell in the organism is still alive.
-    pub fn tick_follow_camera(
-        &mut self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        dt: f32,
-    ) {
-        let cell_idx = match self.follow_organism_id {
-            Some(id) => id as usize,
-            None => return,
-        };
-
-        let cell_count = self.total_cell_slots as usize;
-        if cell_count == 0 || cell_idx >= cell_count {
-            self.camera.center = self.follow_center;
-            return;
+    /// Reduce the followed organism on GPU and consume only its final centroid.
+    pub fn tick_follow_camera(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, dt: f32) {
+        let Some(mut cell) = self.follow_organism_id else { return; };
+        if self.follow_reduction.is_none() {
+            let Some(labels) = self.organism_label_system.as_ref() else { return; };
+            self.follow_reduction = Some(crate::simulation::gpu_physics::organism_follow::OrganismFollow::new(
+                device, &self.gpu_triple_buffers, &labels.label_buffer));
         }
-
-        // -- Step 1: poll for the previous frame's copy result -----------------
-        // Both pos and label buffers are mapped; we wait for both (flag >= 2).
-        if self.follow_copy_submitted {
-            let _ = device.poll(wgpu::PollType::Poll);
-
-            let ready_count = self
-                .follow_map_ready_flag
-                .load(std::sync::atomic::Ordering::Acquire);
-            if ready_count >= 2 {
-                self.follow_map_ready_flag
-                    .store(0, std::sync::atomic::Ordering::Release);
-                self.follow_copy_submitted = false;
-
-                // If the label buffer was copied on a reset frame, labels are
-                // temporarily set to each cell's own index - the CoM scan would
-                // find only 1 matching cell and produce a jump. Skip this readback.
-                let skip_update = self.follow_label_was_reset;
-                self.follow_label_was_reset = false;
-
-                let mut new_target: Option<glam::Vec3> = None;
-                let mut organism_alive = false;
-
-                if !skip_update {
-                    if let (Some(ref pos_buf), Some(ref lbl_buf)) =
-                        (&self.follow_pos_staging, &self.follow_lbl_staging)
-                    {
-                        let pos_view = pos_buf.slice(..).get_mapped_range();
-                        let lbl_view = lbl_buf.slice(..).get_mapped_range();
-                        let positions: &[[f32; 4]] = bytemuck::cast_slice(&pos_view);
-                        let labels: &[u32] = bytemuck::cast_slice(&lbl_view);
-
-                        // Resolve the organism root label from the clicked cell.
-                        let root_label = if let Some(lbl) = labels.get(cell_idx).copied() {
-                            if lbl != 0xFFFF_FFFFu32 {
-                                lbl
-                            } else {
-                                cell_idx as u32
-                            }
-                        } else {
-                            cell_idx as u32
-                        };
-
-                        // Compute the centre-of-mass of all live cells with this root label.
-                        let mut sum = glam::Vec3::ZERO;
-                        let mut count = 0u32;
-                        let n = positions.len().min(labels.len());
-                        for i in 0..n {
-                            if labels[i] == root_label {
-                                let mass = positions[i][3];
-                                if mass > 0.0 {
-                                    sum += glam::Vec3::new(
-                                        positions[i][0],
-                                        positions[i][1],
-                                        positions[i][2],
-                                    );
-                                    count += 1;
-                                    organism_alive = true;
-                                }
-                            }
-                        }
-
-                        if count > 0 {
-                            new_target = Some(sum / count as f32);
-                            self.follow_organism_id = Some(root_label);
-                        }
-
-                        drop(lbl_view);
-                        drop(pos_view);
-                        lbl_buf.unmap();
-                        pos_buf.unmap();
-                    }
-                } else {
-                    // Reset frame - just unmap without reading.
-                    organism_alive = true; // assume still alive, check next frame
-                    if let Some(ref pos_buf) = self.follow_pos_staging {
-                        pos_buf.unmap();
-                    }
-                    if let Some(ref lbl_buf) = self.follow_lbl_staging {
-                        lbl_buf.unmap();
-                    }
-                }
-
-                if let Some(target) = new_target {
-                    self.follow_target = target;
-                } else if !organism_alive {
-                    self.follow_pos_staging = None;
-                    self.follow_lbl_staging = None;
-                    self.follow_organism_id = None;
-                    self.follow_needs_map = false;
-                    self.switch_to_freefly();
-                    return;
-                }
+        if let Some(result) = self.follow_reduction.as_mut().unwrap().poll(device) {
+            if result.count == 0 {
+                self.clear_organism_follow();
+                return;
             }
+            self.follow_target = glam::Vec3::from_array([result.center[0], result.center[1], result.center[2]]);
+            cell = result.root;
+            self.follow_organism_id = Some(cell);
         }
-
-        // -- Step 1.5: lerp follow_center toward follow_target every frame -----
-        // Spring constant 12 -> ~95% convergence in 0.25s at 60fps.
         let alpha = 1.0 - (-12.0_f32 * dt).exp();
         self.follow_center = self.follow_center.lerp(self.follow_target, alpha);
-
-        // -- Step 2: encode fresh copies of position + label buffers ----------
-        if !self.follow_copy_submitted && cell_count > 0 {
-            let output_idx = self.gpu_triple_buffers.output_buffer_index();
-            let pos_src = &self.gpu_triple_buffers.position_and_mass[output_idx];
-            let pos_size = cell_count as u64 * 16;
-            let lbl_size = cell_count as u64 * 4;
-
-            // Reallocate staging buffers if the cell count grew.
-            let pos_needs_alloc = self
-                .follow_pos_staging
-                .as_ref()
-                .map(|b| b.size() < pos_size)
-                .unwrap_or(true);
-            if pos_needs_alloc {
-                self.follow_pos_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Follow Pos Staging"),
-                    size: pos_size,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-
-            let lbl_needs_alloc = self
-                .follow_lbl_staging
-                .as_ref()
-                .map(|b| b.size() < lbl_size)
-                .unwrap_or(true);
-            if lbl_needs_alloc {
-                self.follow_lbl_staging = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Follow Label Staging"),
-                    size: lbl_size,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-
-            if let Some(ref pos_dst) = self.follow_pos_staging {
-                encoder.copy_buffer_to_buffer(pos_src, 0, pos_dst, 0, pos_size);
-            }
-
-            if let (Some(ref lbl_src), Some(ref lbl_dst)) = (
-                self.organism_label_system.as_ref().map(|s| &s.label_buffer),
-                self.follow_lbl_staging.as_ref(),
-            ) {
-                encoder.copy_buffer_to_buffer(lbl_src, 0, lbl_dst, 0, lbl_size);
-            }
-
-            // Record whether this copy was taken on a label reset frame.
-            // On reset frames the label buffer is temporarily set to each cell's own
-            // index, so the CoM scan would find only 1 matching cell and jump.
-            self.follow_label_was_reset = self
-                .organism_label_system
-                .as_ref()
-                .map(|s| s.is_reset_frame())
-                .unwrap_or(false);
-
-            self.follow_needs_map = true;
-        }
-
-        // -- Step 3: set orbit pivot to the smoothed follow center ------------
         self.camera.center = self.follow_center;
+        // Reset-frame labels are transient; do not sample them.
+        if !self.organism_label_system.as_ref().is_some_and(|s| s.is_reset_frame()) {
+            self.follow_reduction.as_mut().unwrap().encode(device, encoder,
+                self.gpu_triple_buffers.output_buffer_index(), cell);
+        }
     }
 
-    /// Called after queue.submit() to call map_async on the staging buffers.
-    /// map_async must not be called while the buffer is referenced by a pending
-    /// command encoder - doing so causes a wgpu validation error.
     pub fn tick_follow_camera_post_submit(&mut self) {
-        if !self.follow_needs_map {
-            return;
-        }
-        self.follow_needs_map = false;
-
-        // Both pos and label buffers need to map; the flag counts completions.
-        // Processing happens once both reach 2.
-        if let Some(ref pos_dst) = self.follow_pos_staging {
-            let flag = self.follow_map_ready_flag.clone();
-            pos_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                if r.is_ok() {
-                    flag.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                }
-            });
-            self.follow_copy_submitted = true;
-        }
-
-        if let Some(ref lbl_dst) = self.follow_lbl_staging {
-            let flag = self.follow_map_ready_flag.clone();
-            lbl_dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                if r.is_ok() {
-                    flag.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                }
-            });
-        }
+        if let Some(reduction) = self.follow_reduction.as_mut() { reduction.after_submit(); }
     }
 
     /// Execute pending tool queries using GPU spatial query system
@@ -4442,6 +4276,7 @@ impl GpuScene {
                             // the label buffer readback in update_follow_camera().
                             // We store the cell index as the organism ID for now; it will
                             // be replaced by the true root label on the first readback.
+                            self.follow_reduction = None;
                             self.follow_organism_id = Some(cell_idx as u32);
                             self.follow_center = self.camera.center;
                             self.follow_target = self.camera.center;
@@ -6212,20 +6047,27 @@ impl GpuScene {
         log::info!("Gametocyte merge system initialized");
     }
 
-    /// Run gametocyte merge detection: clear events, dispatch shader, schedule readback.
+    /// Detect contacts and complete fusion entirely in GPU command order.
     fn run_gametocyte_merge(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
-        let system = match &self.gametocyte_merge_system {
-            Some(s) => s,
-            None => return,
-        };
-
-        // Clear event counter at the start of each frame
-        system.clear_events(queue);
+        if self.current_frame % 4 != 0 || self.gametocyte_merge_system.is_none() {
+            return;
+        }
+        self.initialize_gpu_systems(device, queue);
+        let system = self.gametocyte_merge_system.as_ref().unwrap();
+        let Some(mutation) = self.mutation_system.as_ref() else { return; };
+        if self.gpu_fusion.is_none() {
+            self.gpu_fusion = Some(crate::simulation::gpu_physics::gpu_fusion::GpuFusion::new(
+                device, &self.gpu_triple_buffers, &self.adhesion_buffers, mutation,
+                &self.gpu_physics_pipelines, &system.merge_events_buffer,
+                self.instance_builder.mode_colors_buffer(), self.instance_builder.mode_emissive_buffer(),
+            ));
+        }
+        system.clear_events(encoder);
 
         // Cache physics bind groups (one per triple buffer index)
         if self.gametocyte_physics_bind_groups.is_none() {
@@ -6273,6 +6115,8 @@ impl GpuScene {
                 &bufs.mode_indices,
                 &bufs.mode_properties_v13,
                 &bufs.embryocyte_reserve_buffer,
+                mutation.genome_meta_buffer(),
+                &bufs.mode_cell_types,
             ));
         }
 
@@ -6293,197 +6137,17 @@ impl GpuScene {
             &self.gametocyte_cell_data_bind_group,
             &self.gametocyte_spatial_bind_group,
         ) {
-            // Gametocyte merges are rare - run every 4 physics steps rather than every step.
-            // Dispatching over total_cell_slots (live count) rather than full capacity
-            // avoids dispatching twice as many workgroups as necessary.
-            if self.current_frame % 4 == 0 {
-                system.run(
-                    encoder,
-                    &physics_bgs[output_idx],
-                    cell_bg,
-                    spatial_bg,
-                    self.total_cell_slots.max(1) as usize,
-                );
-                // Schedule async readback of events after dispatch
-                if !self.gamete_readback_in_flight {
-                    system.schedule_readback(encoder);
-                    self.gamete_readback_in_flight = true;
-                }
-            }
-        }
-    }
-
-    /// Poll the gamete events staging buffer and process any completed merges.
-    /// Uses a non-blocking poll - if the staging buffer isn't mapped yet, waits until next frame.
-    fn poll_gamete_merge_events(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue) {
-        if !self.gamete_readback_in_flight {
-            return;
-        }
-        if self.gametocyte_merge_system.is_none() {
-            return;
-        }
-
-        // Try to non-blockingly map the staging buffer and read events into a local Vec.
-        // We scope the borrow on `gametocyte_merge_system` tightly so that `self` can be
-        // mutated afterward without a live borrow conflict.
-        // Call map_async only once per readback cycle; store the receiver for subsequent polls.
-        if self.gamete_map_receiver.is_none() {
-            let system = self.gametocyte_merge_system.as_ref().unwrap();
-            let (sender, receiver) = std::sync::mpsc::channel();
-            system
-                .staging_buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |r| {
-                    let _ = sender.send(r);
-                });
-            self.gamete_map_receiver = Some(receiver);
-        }
-
-        let _ = device.poll(wgpu::PollType::Poll);
-
-        let maybe_events: Option<Vec<GameteMergeEvent>> = {
-            let system = self.gametocyte_merge_system.as_ref().unwrap();
-            let ready = self
-                .gamete_map_receiver
-                .as_ref()
-                .and_then(|rx| rx.try_recv().ok())
-                .map(|r| r.is_ok())
-                .unwrap_or(false);
-            if ready {
-                let buffer_slice = system.staging_buffer.slice(..);
-                let data = buffer_slice.get_mapped_range();
-                let evs = GametocyteMergeSystem::parse_events(&data);
-                drop(data);
-                system.staging_buffer.unmap();
-                Some(evs)
-            } else {
-                None
-            }
-        };
-
-        if let Some(new_events) = maybe_events {
-            self.gamete_readback_in_flight = false;
-            self.gamete_map_receiver = None;
-            self.pending_gamete_merges.extend(new_events);
-        }
-
-        self.process_gamete_merge_events();
-    }
-
-    /// Perform genome crossover for pending gamete merge events and spawn offspring.
-    fn process_gamete_merge_events(&mut self) {
-        if self.pending_gamete_merges.is_empty() {
-            return;
-        }
-        let events: Vec<GameteMergeEvent> = std::mem::take(&mut self.pending_gamete_merges);
-        let current_frame = self.current_frame as u64;
-
-        for (i, event) in events.iter().enumerate() {
-            let genome_a_id = event.genome_a_id as usize;
-            let genome_b_id = event.genome_b_id as usize;
-
-            if genome_a_id >= self.genomes.len() || genome_b_id >= self.genomes.len() {
-                log::warn!(
-                    "Gamete merge: out-of-range genome ids {} / {}",
-                    genome_a_id,
-                    genome_b_id
-                );
-                continue;
-            }
-
-            // --- Similarity gate ---
-            // Compute genome similarity: mode-count alignment x cell-type match fraction.
-            let similarity = crate::genome::Genome::similarity(
-                &self.genomes[genome_a_id],
-                &self.genomes[genome_b_id],
+            system.run(
+                encoder, &physics_bgs[output_idx], cell_bg, spatial_bg,
+                self.conservative_cell_dispatch_slots() as usize,
             );
-
-            if similarity < crate::genome::GAMETOCYTE_MIN_SIMILARITY {
-                log::debug!(
-                    "Gamete merge rejected: '{}' x '{}' similarity {:.2} < {:.2}",
-                    self.genomes[genome_a_id].name,
-                    self.genomes[genome_b_id].name,
-                    similarity,
-                    crate::genome::GAMETOCYTE_MIN_SIMILARITY,
-                );
-                continue; // Incompatible - both cells already died, no offspring spawned
-            }
-
-            // --- Crossover ---
-            let rng_seed = current_frame
-                .wrapping_add((event.cell_a_idx as u64).wrapping_mul(0x9e3779b97f4a7c15))
-                .wrapping_add(event.cell_b_idx as u64)
-                .wrapping_add(i as u64);
-
-            let offspring_genome = crate::genome::Genome::crossover(
-                &self.genomes[genome_a_id],
-                &self.genomes[genome_b_id],
-                rng_seed,
+            let fusion = self.gpu_fusion.as_ref().unwrap();
+            fusion.encode(
+                encoder, self.cell_insertion.as_ref().unwrap(), &self.gpu_physics_pipelines,
+                &self.cached_bind_groups, output_idx,
+                self.conservative_cell_dispatch_slots().saturating_mul(10)
+                    .min(self.adhesion_buffers.max_connections),
             );
-
-            // Determine the initial cell type from the crossover genome.
-            // The gametes become whatever the offspring genome's initial mode specifies -
-            // no forced override. The combined reserve is only meaningful for Embryocyte
-            // initial cells (cell_type == 10); for all other types the reserve is discarded
-            // and the cell starts with normal full nutrients instead.
-            let initial_idx = offspring_genome.initial_mode as usize;
-            let initial_cell_type = offspring_genome
-                .modes
-                .get(initial_idx)
-                .map(|m| m.cell_type)
-                .unwrap_or(0);
-
-            let is_embryocyte = initial_cell_type == crate::cell::CellType::Embryocyte as i32;
-
-            // Pass combined reserve only when the initial cell is an Embryocyte.
-            // For any other cell type: convert the reserve 1:1 into nutrients (same x1000
-            // fixed-point scale), capped at 100000 (= 100.0, a full nutrient pool).
-            // The reserve itself is discarded for non-storage cells.
-            let initial_reserve = if is_embryocyte {
-                event.combined_reserve
-            } else {
-                0
-            };
-            let initial_nutrients = if is_embryocyte {
-                0
-            } else {
-                event.combined_reserve.min(100_000)
-            };
-
-            log::info!(
-                "Gamete merge: '{}' x '{}' -> '{}' cell_type={} (similarity {:.2}, reserve {})",
-                self.genomes[genome_a_id].name,
-                self.genomes[genome_b_id].name,
-                offspring_genome.name,
-                initial_cell_type,
-                similarity,
-                event.combined_reserve / 1000,
-            );
-
-            let spawn_pos = glam::Vec3::new(event.spawn_x, event.spawn_y, event.spawn_z);
-            if self.pending_cell_insertion.is_none() {
-                let parent_a = self.lineage_archive.ensure_user_lineage(
-                    genome_a_id as u32,
-                    &self.genomes[genome_a_id],
-                    self.current_frame,
-                );
-                let parent_b = self.lineage_archive.ensure_user_lineage(
-                    genome_b_id as u32,
-                    &self.genomes[genome_b_id],
-                    self.current_frame,
-                );
-                self.pending_cell_insertion = Some(PendingCellInsertion {
-                    world_position: spawn_pos,
-                    genome: offspring_genome,
-                    initial_reserve,
-                    initial_nutrients,
-                    lineage_origin: Some(LineageOrigin::Hybrid {
-                        parent_a,
-                        parent_b,
-                        similarity,
-                    }),
-                });
-            }
         }
     }
 
@@ -6823,6 +6487,8 @@ impl GpuScene {
             // sun_intensity is now also 0-5 to match directly.
             simulator.set_sun_brightness(self.sun_intensity);
             simulator.set_water_drag_strength(queue, self.water_viscosity);
+            simulator.configure_readbacks(self.readbacks_enabled,
+                self.audio_readbacks_enabled && !self.headless_no_render, !self.headless_no_render);
             simulator.set_listener_position(self.camera.position());
             simulator.step(
                 device,
@@ -7112,12 +6778,7 @@ impl GpuScene {
         }
     }
 
-    /// Poll for rain splash particle count after command buffer submission
-    pub fn poll_rain_splash_particle_count(&mut self, device: &wgpu::Device) {
-        if let Some(ref mut particle_renderer) = self.rain_splash_particle_renderer {
-            particle_renderer.poll_particle_count(device);
-        }
-    }
+
 
     /// Create or update nutrient particle renderer when fluid simulator is available
     fn ensure_nutrient_particle_renderer(
@@ -7277,12 +6938,7 @@ impl GpuScene {
         }
     }
 
-    /// Poll the death particle counter staging buffer after queue submission.
-    pub fn poll_death_particle_count(&mut self, device: &wgpu::Device) {
-        if let Some(ref mut renderer) = self.death_particle_renderer {
-            renderer.poll_particle_count(device);
-        }
-    }
+
     fn ensure_steam_extract_bind_group(&mut self, device: &wgpu::Device) {
         if self.steam_extract_bind_group.is_some() {
             return;
@@ -7349,12 +7005,7 @@ impl GpuScene {
         }
     }
 
-    /// Poll for steam particle count after command buffer submission
-    pub fn poll_steam_particle_count(&mut self, device: &wgpu::Device) {
-        if let Some(ref mut particle_renderer) = self.steam_particle_renderer {
-            particle_renderer.poll_particle_count(device);
-        }
-    }
+
 
     /// Create or update nutrient extract bind group when fluid simulator is available
     fn ensure_nutrient_extract_bind_group(&mut self, device: &wgpu::Device) {
@@ -7419,12 +7070,7 @@ impl GpuScene {
         }
     }
 
-    /// Poll for nutrient particle count after command buffer submission
-    pub fn poll_nutrient_particle_count(&mut self, device: &wgpu::Device) {
-        if let Some(ref mut particle_renderer) = self.nutrient_particle_renderer {
-            particle_renderer.poll_particle_count(device);
-        }
-    }
+
 
     /// Create or update water extract bind group when fluid simulator is available
     fn ensure_water_extract_bind_group(&mut self, device: &wgpu::Device) {
@@ -7493,12 +7139,7 @@ impl GpuScene {
         }
     }
 
-    /// Poll for water particle count after command buffer submission
-    pub fn poll_water_particle_count(&mut self, device: &wgpu::Device) {
-        if let Some(ref mut particle_renderer) = self.water_particle_renderer {
-            particle_renderer.poll_particle_count(device);
-        }
-    }
+
 
     /// Set water particle prominence factor (0.0 = barely visible, 1.0 = very prominent)
     pub fn set_water_particle_prominence(&mut self, prominence: f32) {
@@ -7637,6 +7278,11 @@ impl GpuScene {
 
         // Update tail renderer light color
         self.tail_renderer.set_light_color(scaled_sun_color);
+        self.tail_renderer.set_light_dir([
+            -editor_state.light_dir[0],
+            -editor_state.light_dir[1],
+            -editor_state.light_dir[2],
+        ]);
 
         // Update sun renderer parameters
         self.show_sun = editor_state.show_sun;
@@ -7894,6 +7540,18 @@ impl GpuScene {
             self.tool_operations = Some(tool_operations);
         }
 
+        // Insertion and tools call this repeatedly. Existing bindings and genome
+        // metadata remain valid until a genome sync replaces their buffers.
+        if self
+            .mutation_system
+            .as_ref()
+            .is_some_and(|system| !system.bindings_initialized())
+        {
+            self.rebuild_mutation_bindings(device, queue);
+        }
+    }
+
+    fn rebuild_mutation_bindings(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         // Initialize mutation system bind groups
         if let Some(mutation_system) = &mut self.mutation_system {
             // Rebuild collect bind groups (reads lifecycle buffers)
@@ -7953,6 +7611,8 @@ impl GpuScene {
                 &self.gpu_triple_buffers.mode_properties_v7,
                 &self.gpu_triple_buffers.mode_properties_v14,
                 &self.gpu_triple_buffers.glueocyte_cell_adhesion_flags,
+                &self.gpu_triple_buffers.embryocyte_defaults_v9,
+                &self.gpu_triple_buffers.embryocyte_defaults_v10,
             );
 
             // Rebuild GC bind group (for genome recycling)
@@ -7965,11 +7625,6 @@ impl GpuScene {
                 &self.gpu_triple_buffers.genome_ids,
                 &self.gpu_triple_buffers.death_flags,
             );
-
-            // Sync genome metadata if genomes are already loaded
-            if !self.genomes.is_empty() {
-                mutation_system.sync_genome_metadata(queue, &self.genomes);
-            }
         }
     }
 
@@ -8313,26 +7968,7 @@ impl Scene for GpuScene {
         _lod_debug_colors: bool,
         outline_width: f32,
     ) {
-        // Sync adhesion settings to GPU only when genomes are added or modified
-        if self.genomes_dirty {
-            self.sync_adhesion_settings(device, queue);
-            // Sync mutation system genome metadata when genomes change
-            if let Some(mutation_system) = &mut self.mutation_system {
-                mutation_system.sync_genome_metadata(queue, &self.genomes);
-            }
-            // Update mode visuals (colors) from CPU genomes.
-            // This must ONLY happen when CPU genomes change, not every frame,
-            // because the mutation shader writes directly to mode_visuals_buffer
-            // for GPU-mutated genomes and a per-frame overwrite would clobber those.
-            if !self.genomes.is_empty() {
-                self.instance_builder.update_mode_visuals_from_genomes(
-                    device,
-                    queue,
-                    &self.genomes,
-                );
-            }
-            self.genomes_dirty = false;
-        }
+        self.sync_dirty_genomes(device, queue);
 
         // Check and update cave world radius if world diameter changed
         self.check_world_diameter_change(device, queue, world_diameter);
@@ -8429,9 +8065,6 @@ impl Scene for GpuScene {
             }
         }
 
-        // Poll gamete merge events from the staging buffer and process crossovers
-        self.poll_gamete_merge_events(device, queue);
-
         // Process any pending cell insertion from input handling
         let cell_inserted = self.process_pending_insertion(device, &mut encoder, queue);
 
@@ -8511,7 +8144,6 @@ impl Scene for GpuScene {
         let signal_ticks = self.signal_clock.advance(elapsed);
         let signal_cell_slots = self.gpu_triple_buffers.capacity;
         if signal_ticks > 0 && signal_cell_slots > 0 {
-            self.signal_diffusion.sync_modes(device, queue, &self.genomes);
             for tick_slot in 0..signal_ticks {
                 let tick = self.signal_clock.begin_tick();
                 let dt = crate::simulation::signal_system::SIGNAL_TICK_SECONDS;
@@ -8572,8 +8204,9 @@ impl Scene for GpuScene {
             let buffer_count = self.division_audio_readback_buffers.len();
             self.division_audio_frame_readback_index = (0..buffer_count)
                 .map(|offset| (self.division_audio_readback_write_index + offset) % buffer_count)
-                .find(|&idx| !self.division_audio_readback_busy[idx]);
-            if self.division_audio_frame_readback_index.is_none() {
+                .find(|&idx| self.audio_readbacks_enabled && !self.headless_no_render
+                    && !self.division_audio_readback_busy[idx]);
+            if self.audio_readbacks_enabled && !self.headless_no_render && self.division_audio_frame_readback_index.is_none() {
                 log::warn!(
                     "Division audio: all {buffer_count} readback buffers busy this frame - collection skipped"
                 );
@@ -8707,11 +8340,14 @@ impl Scene for GpuScene {
             }
         }
 
+        self.cell_count_readback_dirty |= physics_steps > 0 || cell_inserted || cell_removed;
+
         if self.headless_no_render {
             let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
-            let should_start_readback = !cell_count_read_pending;
+            let should_start_readback = self.cell_count_readback_dirty && !cell_count_read_pending;
             if should_start_readback {
                 self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
+                self.cell_count_readback_dirty = false;
             }
 
             // No rendering work in headless mode - write the remaining boundaries
@@ -8738,9 +8374,6 @@ impl Scene for GpuScene {
                 self.tick_follow_camera_post_submit();
             }
 
-            if let Some(label_system) = &mut self.organism_label_system {
-                label_system.poll_debug_readback(device);
-            }
 
             if let Some(ref simulator) = self.fluid_simulator {
                 simulator.poll_temperature_stats(device);
@@ -9044,6 +8677,7 @@ impl Scene for GpuScene {
                 self.renderer.width,
                 self.renderer.height,
                 self.instance_builder.capacity(),
+                self.renderer.shadow_bind_group(),
             );
             if self.physics_features.has_plumocytes {
                 self.tail_renderer.render_plumage_from_gpu_buffer(
@@ -9660,9 +9294,10 @@ impl Scene for GpuScene {
         // 8-byte read stays enabled so UI status counts remain authoritative
         // even when heavier optional readbacks are disabled.
         let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
-        let should_start_readback = !cell_count_read_pending;
+        let should_start_readback = self.cell_count_readback_dirty && !cell_count_read_pending;
         if should_start_readback {
             self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
+            self.cell_count_readback_dirty = false;
         }
 
         // End of "Post-Process" segment, and final resolve for this frame's queries.
@@ -9687,11 +9322,6 @@ impl Scene for GpuScene {
         // encoder (wgpu validation error: "buffer is still mapped").
         if self.follow_organism_id.is_some() {
             self.tick_follow_camera_post_submit();
-        }
-
-        // Debug: poll label buffer readback.
-        if let Some(label_system) = &mut self.organism_label_system {
-            label_system.poll_debug_readback(device);
         }
 
         if let Some(ref simulator) = self.fluid_simulator {
@@ -9732,23 +9362,8 @@ impl Scene for GpuScene {
             }
         }
 
-        // Poll for steam particle count (GPU readback)
-        if self.show_steam_particles {
-            self.poll_steam_particle_count(device);
-        }
 
-        // Poll for organism skin skinned cell count (GPU readback)
-        if self.show_organism_skins {
-            if let Some(ref mut renderer) = self.organism_skin_renderer {
-                renderer.try_read_skinned_count(device);
-            }
-        }
 
-        // Poll for water particle count (GPU readback)
-        if self.show_water_particles {
-            self.poll_water_particle_count(device);
-        }
-        self.poll_rain_splash_particle_count(device);
         if let Some(ref fluid_sim) = self.fluid_simulator {
             fluid_sim.poll_water_audio_summary(device);
             self.flowing_water_audio_sources = fluid_sim.flow_audio_sources();
@@ -9797,15 +9412,7 @@ impl Scene for GpuScene {
         }
         self.update_boundary_visual_state();
 
-        // Poll for nutrient particle count (GPU readback)
-        if self.show_nutrient_particles {
-            self.poll_nutrient_particle_count(device);
-        }
 
-        // Poll for death particle count (GPU readback)
-        if self.show_death_particles {
-            self.poll_death_particle_count(device);
-        }
 
         // Mark that we now have Hi-Z data for next frame
         self.first_frame = false;

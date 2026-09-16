@@ -24,7 +24,7 @@ var<storage, read_write> genome_ref_counts: array<atomic<u32>>;
 struct SyncParams {
     cell_capacity: u32,
     genome_capacity: u32,
-    _pad0: u32,
+    user_genome_count: u32,
     _pad1: u32,
 }
 
@@ -40,7 +40,7 @@ fn clear_ref_counts(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Reset ref_count to 0
     // User genomes (set to u32::MAX during init) will be reset here,
     // but we'll recount them in the next stage
-    atomicStore(&genome_ref_counts[genome_id], 0u);
+    atomicStore(&genome_ref_counts[genome_id], select(0u, 0xffffffffu, genome_id < params.user_genome_count));
 }
 
 // Stage 2: Count active cells per genome
@@ -53,13 +53,13 @@ fn count_genome_usage(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Skip dead cells
-    if (death_flags[cell_idx] == 1u) {
+    if (death_flags[cell_idx] != 0u) {
         return;
     }
     
     // Increment ref_count for this cell's genome
     let genome_id = genome_ids[cell_idx];
     if (genome_id < params.genome_capacity) {
-        atomicAdd(&genome_ref_counts[genome_id], 1u);
+        if (genome_id >= params.user_genome_count) { atomicAdd(&genome_ref_counts[genome_id], 1u); }
     }
 }

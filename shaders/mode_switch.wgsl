@@ -116,7 +116,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (cell_idx >= cell_count) { return; }
 
     // Skip dead cells
-    if (death_flags[cell_idx] == 1u) { return; }
+    if (death_flags[cell_idx] != 0u) { return; }
 
     let mode_idx = mode_indices[cell_idx];
 

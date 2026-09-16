@@ -134,6 +134,9 @@ var<storage, read_write> genome_meta: array<vec4<u32>>;
 @group(0) @binding(5)
 var<storage, read_write> genome_ref_counts: array<atomic<u32>>;
 
+@group(0) @binding(6)
+var<storage, read_write> genome_initial_orientations: array<vec4<f32>>;
+
 // Group 1: Mutation candidates (written by division execute, read here)
 // mutation_candidates[i] = vec2<u32>(child_cell_idx, parent_genome_id)
 // Length = 2 * max_divisions_per_frame (child A and child B per division)
@@ -283,6 +286,9 @@ var<storage, read_write> mode_properties_v7: array<vec4<f32>>;
 var<storage, read_write> mode_properties_v14: array<vec4<f32>>;
 @group(2) @binding(38)
 var<storage, read_write> glueocyte_cell_adhesion_flags: array<u32>;
+
+@group(2) @binding(39) var<storage, read_write> embryocyte_defaults_v9: array<vec4<f32>>;
+@group(2) @binding(40) var<storage, read_write> embryocyte_defaults_v10: array<vec4<f32>>;
 
 const MUTATION_NOOP: u32 = 0xFFFFFFFFu;
 
@@ -650,6 +656,8 @@ fn clone_genome_modes(
         regulation_params_buf[dst] = regulation_params_buf[src];
 
         // Embryocyte/Stemocyte development params.
+        embryocyte_defaults_v9[dst] = embryocyte_defaults_v9[src];
+        embryocyte_defaults_v10[dst] = embryocyte_defaults_v10[src];
         mode_properties_v9[dst] = mode_properties_v9[src];
         mode_properties_v10[dst] = mode_properties_v10[src];
         mode_properties_v11[dst] = mode_properties_v11[src];
@@ -2133,6 +2141,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // only during interval snapshots, so we do not create one record per mutation.
     genome_meta[new_genome_id] =
         vec4<u32>(parent_mode_count, new_base_offset, parent_meta.z, parent_genome_id);
+
+    genome_initial_orientations[new_genome_id] = genome_initial_orientations[parent_genome_id];
 
     // Update reference counts atomically
     atomicAdd(&genome_ref_counts[new_genome_id], 1u);

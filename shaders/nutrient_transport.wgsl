@@ -257,7 +257,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Skip dead cells - they're waiting to be recycled via ring buffer
-    if (death_flags[cell_idx] == 1u) {
+    if (death_flags[cell_idx] != 0u) {
         return;
     }
     
@@ -469,7 +469,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else {
             continue;
         }
-        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
+        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] != 0u) {
             continue;
         }
         if ((adh.bond_flags & BOND_FLAG_BARRIER_BALL) == 0u) {
@@ -522,7 +522,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else {
             continue;
         }
-        if (cell_b_idx >= cell_count || death_flags[cell_b_idx] == 1u) {
+        if (cell_b_idx >= cell_count || death_flags[cell_b_idx] != 0u) {
             continue;
         }
         // Only block the sending cell (cell_a = cell_idx) if it is split-deferred.
@@ -587,7 +587,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let cell_b_is_embryocyte_check = cell_b_type == 10u || cell_b_type == 13u;
         if (cell_b_is_embryocyte_check && mode_b_idx < arrayLength(&mode_properties_v1)) {
             let embryo_priority = mode_properties_v1[mode_b_idx].y;
-            effective_rate *= max(embryo_priority, 1.0);
+            effective_rate *= max(embryo_priority, 0.0);
         }
 
         // --- Compression-driven pump boost ---
@@ -596,6 +596,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // outgoing connections benefit - so a lipocyte squeezed by a myocyte pushes
         // nutrients faster into every adjacent vasculocyte, not just back into the myocyte.
         effective_rate *= cell_pump_mult;
+
+        // Gamete priority scales a 10/sec baseline in both directions.
+        // Compression cannot exceed that authored intake rate.
+        if (cell_b_type == 13u) {
+            let intake_priority = max(mode_properties_v1[mode_b_idx].y, 0.0);
+            effective_rate = min(effective_rate, 10.0 * intake_priority);
+        }
 
         let nutrients_b = fixed_to_float(atomicLoad(&nutrients_buffer[cell_b_idx]));
         let mode_a_v1 = mode_properties_v1[mode_a_idx];
@@ -651,6 +658,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         total_out += desired;
     }
 
+    // Share one donor budget across all outgoing bonds. Reusing the original
+    // snapshot for every receiver can spend the same nutrients multiple times.
+    var remaining_out = nutrients_a_snap;
     // Pass 2: apply proportionally scaled transfers (matches preview)
     let lerp_t = min(LERP_SPEED * params.delta_time, 1.0);
 
@@ -688,7 +698,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // flow at nutrients / priority equilibrium. Applying the production cap
         // here prevents a high-priority cell that starts "full" from receiving
         // anything, so priority can never establish its intended equilibrium.
-        let min_nutrients_a = select(0.0, 10.0, prioritize_a);
+        // Reserve loading must not starve the attached parent, regardless of
+        // its optional low-nutrient priority setting.
+        let min_nutrients_a = select(0.0, DANGER_NUTRIENTS, prioritize_a || cell_b_is_embryocyte);
         var can_recv: f32;
         if (cell_b_is_embryocyte) {
             let cur_reserve_b = atomicLoad(&embryocyte_reserves[cell_b_idx]);
@@ -697,9 +709,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             can_recv = nutrient_transfer;
         }
 
-        let can_give = max(nutrients_a_snap - min_nutrients_a, 0.0);
+        let can_give = max(remaining_out - min_nutrients_a, 0.0);
         let actual_transfer = min(nutrient_transfer, min(can_give, can_recv));
 
+        remaining_out -= actual_transfer;
         // Apply transfer using atomic operations (thread-safe).
         // If cell_b is an Embryocyte, incoming nutrients go to its reserve buffer.
         if (actual_transfer > 0.0 && cell_b_is_embryocyte) {

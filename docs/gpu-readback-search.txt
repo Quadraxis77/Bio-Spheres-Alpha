@@ -1,0 +1,972 @@
+src/gif_capture.rs:58:    /// Staging buffer for pixel readback.
+src/gif_capture.rs:268:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/gif_capture.rs:394:        // Readback (blocking for this one frame - ~1ms).
+src/gif_capture.rs:397:        slice.map_async(wgpu::MapMode::Read, move |r| {
+src/gif_capture.rs:401:            .poll(wgpu::PollType::Wait {
+src/gif_capture.rs:420:        let mapped = self.staging.slice(..).get_mapped_range();
+tests/cave_radius_contact.rs:62:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+tests/cave_radius_contact.rs:63:                label: None, size: output.size(), usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+tests/cave_radius_contact.rs:82:            encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, output.size());
+tests/cave_radius_contact.rs:85:            readback.slice(..).map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+tests/cave_radius_contact.rs:86:            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+tests/cave_radius_contact.rs:88:            let mapped = readback.slice(..).get_mapped_range();
+tests/gamete_fusion.rs:107:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+tests/gamete_fusion.rs:110:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+tests/gamete_fusion.rs:116:            encoder.copy_buffer_to_buffer(&system.merge_events_buffer, 0, &readback, 0, 36);
+tests/gamete_fusion.rs:117:            encoder.copy_buffer_to_buffer(&flags, 0, &readback, 36, 12);
+tests/gamete_fusion.rs:120:            readback
+tests/gamete_fusion.rs:122:                .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+tests/gamete_fusion.rs:124:                .poll(wgpu::PollType::Wait {
+tests/gamete_fusion.rs:130:            let bytes = readback.slice(..).get_mapped_range();
+tests/gamete_fusion.rs:217:        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+tests/gamete_fusion.rs:220:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+tests/gamete_fusion.rs:248:        encoder.copy_buffer_to_buffer(&result, 0, &readback, 0, 12);
+tests/gamete_fusion.rs:251:        readback
+tests/gamete_fusion.rs:253:            .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+tests/gamete_fusion.rs:255:            .poll(wgpu::PollType::Wait {
+tests/gamete_fusion.rs:261:        let data = readback.slice(..).get_mapped_range();
+src/simulation/fluid_simulation/gpu_simulator.rs:29:// Snappy enough to settle within ~1-2 frames of readback latency for a real
+src/simulation/fluid_simulation/gpu_simulator.rs:312:    water_audio_readback_receiver:
+src/simulation/fluid_simulation/gpu_simulator.rs:319:    /// as the raw GPU readback), and when it was last updated - see
+src/simulation/fluid_simulation/gpu_simulator.rs:330:    /// scene. Cheap: one 4-byte copy + async readback per frame, same
+src/simulation/fluid_simulation/gpu_simulator.rs:331:    /// map_async/poll pattern as the water audio summary above, just reading
+src/simulation/fluid_simulation/gpu_simulator.rs:337:    listener_water_readback_receiver:
+src/simulation/fluid_simulation/gpu_simulator.rs:342:    /// voxel readback noise near a water surface (wave motion, camera
+src/simulation/fluid_simulation/gpu_simulator.rs:353:    /// all - reacts as fast as the async GPU readback allows (~1 frame).
+src/simulation/fluid_simulation/gpu_simulator.rs:386:    // -- Rolling-average climate readback --
+src/simulation/fluid_simulation/gpu_simulator.rs:391:    audio_readbacks_enabled: std::cell::Cell<bool>,
+src/simulation/fluid_simulation/gpu_simulator.rs:392:    listener_readbacks_enabled: std::cell::Cell<bool>,
+src/simulation/fluid_simulation/gpu_simulator.rs:393:    last_climate_readback: std::cell::Cell<Option<std::time::Instant>>,
+src/simulation/fluid_simulation/gpu_simulator.rs:395:    last_listener_readback: std::cell::Cell<Option<std::time::Instant>>,
+src/simulation/fluid_simulation/gpu_simulator.rs:520:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/fluid_simulation/gpu_simulator.rs:526:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/fluid_simulation/gpu_simulator.rs:622:        // staging buffer for async CPU readback to drive the rolling averages.
+src/simulation/fluid_simulation/gpu_simulator.rs:624:        // shader; keeping it in this existing readback avoids another map.
+src/simulation/fluid_simulation/gpu_simulator.rs:637:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/fluid_simulation/gpu_simulator.rs:1368:            water_audio_readback_receiver: std::cell::RefCell::new(None),
+src/simulation/fluid_simulation/gpu_simulator.rs:1378:            listener_water_readback_receiver: std::cell::RefCell::new(None),
+src/simulation/fluid_simulation/gpu_simulator.rs:1420:            audio_readbacks_enabled: std::cell::Cell::new(true),
+src/simulation/fluid_simulation/gpu_simulator.rs:1421:            listener_readbacks_enabled: std::cell::Cell::new(true),
+src/simulation/fluid_simulation/gpu_simulator.rs:1422:            last_climate_readback: std::cell::Cell::new(None),
+src/simulation/fluid_simulation/gpu_simulator.rs:1424:            last_listener_readback: std::cell::Cell::new(None),
+src/simulation/fluid_simulation/gpu_simulator.rs:1724:    /// GPU readback happens in `step`/`poll_listener_water`. Positions
+src/simulation/fluid_simulation/gpu_simulator.rs:1727:    /// immediately without waiting on a readback.
+src/simulation/fluid_simulation/gpu_simulator.rs:1728:    pub fn configure_readbacks(&self, telemetry: bool, audio: bool, listener: bool) {
+src/simulation/fluid_simulation/gpu_simulator.rs:1730:        self.audio_readbacks_enabled.set(audio);
+src/simulation/fluid_simulation/gpu_simulator.rs:1731:        self.listener_readbacks_enabled.set(listener);
+src/simulation/fluid_simulation/gpu_simulator.rs:1734:    fn climate_readback_due(&self) -> bool {
+src/simulation/fluid_simulation/gpu_simulator.rs:1737:            && self.last_climate_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 250)
+src/simulation/fluid_simulation/gpu_simulator.rs:1773:    /// Un-debounced occupancy sample from the most recent completed readback -
+src/simulation/fluid_simulation/gpu_simulator.rs:1789:    /// Queues (if needed) and polls the async readback of the listener's
+src/simulation/fluid_simulation/gpu_simulator.rs:1790:    /// voxel state, same map_async/poll pattern as `poll_water_audio_summary`.
+src/simulation/fluid_simulation/gpu_simulator.rs:1795:            self.listener_water_staging_buffer.slice(..).map_async(
+src/simulation/fluid_simulation/gpu_simulator.rs:1796:                wgpu::MapMode::Read,
+src/simulation/fluid_simulation/gpu_simulator.rs:1801:            *self.listener_water_readback_receiver.borrow_mut() = Some(rx);
+src/simulation/fluid_simulation/gpu_simulator.rs:1805:        let receiver_ref = self.listener_water_readback_receiver.borrow();
+src/simulation/fluid_simulation/gpu_simulator.rs:1817:                        .get_mapped_range();
+src/simulation/fluid_simulation/gpu_simulator.rs:1842:                *self.listener_water_readback_receiver.borrow_mut() = None;
+src/simulation/fluid_simulation/gpu_simulator.rs:1845:                *self.listener_water_readback_receiver.borrow_mut() = None;
+src/simulation/fluid_simulation/gpu_simulator.rs:1858:        if self.listener_readbacks_enabled.get()
+src/simulation/fluid_simulation/gpu_simulator.rs:1859:            && self.last_listener_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 33)
+src/simulation/fluid_simulation/gpu_simulator.rs:1861:            && self.listener_water_readback_receiver.borrow().is_none()
+src/simulation/fluid_simulation/gpu_simulator.rs:1872:            self.last_listener_readback.set(Some(std::time::Instant::now()));
+src/simulation/fluid_simulation/gpu_simulator.rs:2062:                // is queued; otherwise the counter survives readback pressure.
+src/simulation/fluid_simulation/gpu_simulator.rs:2063:                if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
+src/simulation/fluid_simulation/gpu_simulator.rs:2079:                self.last_climate_readback.set(Some(std::time::Instant::now()));
+src/simulation/fluid_simulation/gpu_simulator.rs:2098:            // snapshot, then copied out for async readback (the rolling
+src/simulation/fluid_simulation/gpu_simulator.rs:2110:            if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
+src/simulation/fluid_simulation/gpu_simulator.rs:2121:                self.last_climate_readback.set(Some(std::time::Instant::now()));
+src/simulation/fluid_simulation/gpu_simulator.rs:2211:        if !self.audio_readbacks_enabled.get() { return; }
+src/simulation/fluid_simulation/gpu_simulator.rs:2216:            || self.water_audio_readback_receiver.borrow().is_some()
+src/simulation/fluid_simulation/gpu_simulator.rs:2255:            && self.water_audio_readback_receiver.borrow().is_none()
+src/simulation/fluid_simulation/gpu_simulator.rs:2432:            self.water_audio_bucket_staging_buffer.slice(..).map_async(
+src/simulation/fluid_simulation/gpu_simulator.rs:2433:                wgpu::MapMode::Read,
+src/simulation/fluid_simulation/gpu_simulator.rs:2438:            *self.water_audio_readback_receiver.borrow_mut() = Some(rx);
+src/simulation/fluid_simulation/gpu_simulator.rs:2442:        let receiver_ref = self.water_audio_readback_receiver.borrow();
+src/simulation/fluid_simulation/gpu_simulator.rs:2454:                        .get_mapped_range();
+src/simulation/fluid_simulation/gpu_simulator.rs:2479:                *self.water_audio_readback_receiver.borrow_mut() = None;
+src/simulation/fluid_simulation/gpu_simulator.rs:2482:                *self.water_audio_readback_receiver.borrow_mut() = None;
+src/simulation/fluid_simulation/gpu_simulator.rs:2616:    /// Polls the async readback of the rolling climate accumulator and,
+src/simulation/fluid_simulation/gpu_simulator.rs:2623:                .map_async(wgpu::MapMode::Read, move |r| {
+src/simulation/fluid_simulation/gpu_simulator.rs:2636:                        let view = self.temp_stats_staging_buffer.slice(..).get_mapped_range();
+src/simulation/fluid_simulation/gpu_simulator.rs:2640:                        // averages only need light smoothing to suppress readback
+src/simulation/fluid_simulation/gpu_simulator.rs:2821:    /// Read back the fluid voxel state and nutrient voxels from the GPU.
+src/simulation/fluid_simulation/gpu_simulator.rs:2835:        // Create staging buffers for readback.
+src/simulation/fluid_simulation/gpu_simulator.rs:2839:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/fluid_simulation/gpu_simulator.rs:2845:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/fluid_simulation/gpu_simulator.rs:2867:            slice.map_async(wgpu::MapMode::Read, move |r| {
+src/simulation/fluid_simulation/gpu_simulator.rs:2870:            let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/fluid_simulation/gpu_simulator.rs:2875:            let data = slice.get_mapped_range();
+src/simulation/fluid_simulation/gpu_simulator.rs:2886:            slice.map_async(wgpu::MapMode::Read, move |r| {
+src/simulation/fluid_simulation/gpu_simulator.rs:2889:            let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/fluid_simulation/gpu_simulator.rs:2894:            let data = slice.get_mapped_range();
+src/simulation/gpu_physics/gpu_cell_inspector.rs:3://! Provides GPU-based cell inspection with async readback management for real-time cell data display.
+src/simulation/gpu_physics/gpu_cell_inspector.rs:9:/// Unique identifier for async readback requests
+src/simulation/gpu_physics/gpu_cell_inspector.rs:11:pub struct ReadbackId(u64);
+src/simulation/gpu_physics/gpu_cell_inspector.rs:13:impl ReadbackId {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:21:/// Completed readback result
+src/simulation/gpu_physics/gpu_cell_inspector.rs:23:pub struct ReadbackResult {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:28:impl ReadbackResult {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:32:            "[DEBUG] Cell Inspector Readback - Cell {}: Organism ID = {} (raw: 0x{:08X})",
+src/simulation/gpu_physics/gpu_cell_inspector.rs:48:/// Manages GPU-based cell data extraction with async readback management.
+src/simulation/gpu_physics/gpu_cell_inspector.rs:51:/// This system integrates with AsyncReadbackManager to handle GPU-to-CPU transfers
+src/simulation/gpu_physics/gpu_cell_inspector.rs:57:    /// Async readback manager for handling GPU-to-CPU transfers
+src/simulation/gpu_physics/gpu_cell_inspector.rs:58:    readback_manager: Option<AsyncReadbackManager>,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:61:    current_readback_id: Option<ReadbackId>,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:67:    last_result: Option<ReadbackResult>,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:149:            readback_manager: None, // Will be set later when device is available
+src/simulation/gpu_physics/gpu_cell_inspector.rs:150:            current_readback_id: None,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:159:    /// Initialize the async readback manager
+src/simulation/gpu_physics/gpu_cell_inspector.rs:162:    pub fn initialize_readback_manager(&mut self, device: wgpu::Device) {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:163:        self.readback_manager = Some(AsyncReadbackManager::new(device, 4));
+src/simulation/gpu_physics/gpu_cell_inspector.rs:166:    /// Extract cell data using GPU compute shader with async readback management
+src/simulation/gpu_physics/gpu_cell_inspector.rs:169:    /// and initiates async readback using the AsyncReadbackManager.
+src/simulation/gpu_physics/gpu_cell_inspector.rs:183:        let use_async_manager = self.readback_manager.is_some();
+src/simulation/gpu_physics/gpu_cell_inspector.rs:189:        // If we have a readback manager, use it for async readback
+src/simulation/gpu_physics/gpu_cell_inspector.rs:190:        if let Some(ref mut readback_manager) = self.readback_manager {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:192:            if let Some(prev_id) = self.current_readback_id.take() {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:193:                readback_manager.cancel_request(prev_id);
+src/simulation/gpu_physics/gpu_cell_inspector.rs:196:            // Request async readback through the manager
+src/simulation/gpu_physics/gpu_cell_inspector.rs:200:            if let Some(readback_id) = readback_manager.request_readback(output_buffer, data_size) {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:201:                // Initiate the actual readback transfer
+src/simulation/gpu_physics/gpu_cell_inspector.rs:202:                if let Err(e) = readback_manager.initiate_readback(
+src/simulation/gpu_physics/gpu_cell_inspector.rs:204:                    readback_id,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:208:                    eprintln!("Failed to initiate readback: {}", e);
+src/simulation/gpu_physics/gpu_cell_inspector.rs:213:                self.current_readback_id = Some(readback_id);
+src/simulation/gpu_physics/gpu_cell_inspector.rs:217:                eprintln!("Failed to request readback - too many concurrent operations");
+src/simulation/gpu_physics/gpu_cell_inspector.rs:228:    /// This method should be called each frame to check for completed async readbacks.
+src/simulation/gpu_physics/gpu_cell_inspector.rs:235:        // If we have a readback manager, use it
+src/simulation/gpu_physics/gpu_cell_inspector.rs:236:        if let Some(ref mut readback_manager) = self.readback_manager {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:237:            // Poll the readback manager for completions
+src/simulation/gpu_physics/gpu_cell_inspector.rs:238:            readback_manager.poll_completions();
+src/simulation/gpu_physics/gpu_cell_inspector.rs:240:            // Check if our current readback is complete
+src/simulation/gpu_physics/gpu_cell_inspector.rs:241:            if let Some(readback_id) = self.current_readback_id {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:242:                if let Some(data_bytes) = readback_manager.get_result_bytes(readback_id) {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:258:                            let result = ReadbackResult { cell_index, data };
+src/simulation/gpu_physics/gpu_cell_inspector.rs:263:                        self.current_readback_id = None;
+src/simulation/gpu_physics/gpu_cell_inspector.rs:269:                            "Readback data size mismatch: expected {}, got {}",
+src/simulation/gpu_physics/gpu_cell_inspector.rs:274:                } else if readback_manager.is_failed(readback_id) {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:275:                    // Readback failed
+src/simulation/gpu_physics/gpu_cell_inspector.rs:277:                        "Cell data extraction failed for readback ID {:?}",
+src/simulation/gpu_physics/gpu_cell_inspector.rs:278:                        readback_id
+src/simulation/gpu_physics/gpu_cell_inspector.rs:280:                    self.current_readback_id = None;
+src/simulation/gpu_physics/gpu_cell_inspector.rs:299:                    let result = ReadbackResult { cell_index, data };
+src/simulation/gpu_physics/gpu_cell_inspector.rs:311:    pub fn get_latest_result(&self) -> Option<&ReadbackResult> {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:328:        if let Some(ref mut readback_manager) = self.readback_manager {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:329:            readback_manager.clear_completed();
+src/simulation/gpu_physics/gpu_cell_inspector.rs:333:        self.current_readback_id = None;
+src/simulation/gpu_physics/gpu_cell_inspector.rs:339:    /// Get readback manager statistics
+src/simulation/gpu_physics/gpu_cell_inspector.rs:340:    pub fn get_readback_stats(&self) -> Option<ReadbackStats> {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:341:        self.readback_manager.as_ref().map(|rm| rm.get_stats())
+src/simulation/gpu_physics/gpu_cell_inspector.rs:345:/// Statistics about async readback operations
+src/simulation/gpu_physics/gpu_cell_inspector.rs:347:pub struct ReadbackStats {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:356:/// Async Readback Manager
+src/simulation/gpu_physics/gpu_cell_inspector.rs:359:/// Implements requirements 11.1-11.6 for proper async readback management.
+src/simulation/gpu_physics/gpu_cell_inspector.rs:362:/// for async readback operations.
+src/simulation/gpu_physics/gpu_cell_inspector.rs:363:pub struct AsyncReadbackManager {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:364:    /// Active readback requests with their channels
+src/simulation/gpu_physics/gpu_cell_inspector.rs:366:        ReadbackId,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:373:    /// Completed readback results (cached)
+src/simulation/gpu_physics/gpu_cell_inspector.rs:374:    completed_results: HashMap<ReadbackId, Vec<u8>>,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:376:    /// Maximum concurrent readback operations (requirement 11.6)
+src/simulation/gpu_physics/gpu_cell_inspector.rs:377:    max_concurrent_readbacks: usize,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:383:impl AsyncReadbackManager {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:384:    /// Create a new async readback manager
+src/simulation/gpu_physics/gpu_cell_inspector.rs:385:    pub fn new(device: wgpu::Device, max_concurrent_readbacks: usize) -> Self {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:389:            max_concurrent_readbacks,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:394:    /// Request a new readback operation with staging buffer management
+src/simulation/gpu_physics/gpu_cell_inspector.rs:397:    pub fn request_readback(
+src/simulation/gpu_physics/gpu_cell_inspector.rs:401:    ) -> Option<ReadbackId> {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:402:        // Check concurrent readback limit (requirement 11.6)
+src/simulation/gpu_physics/gpu_cell_inspector.rs:403:        if self.requests.len() >= self.max_concurrent_readbacks {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:407:        let id = ReadbackId::new();
+src/simulation/gpu_physics/gpu_cell_inspector.rs:412:    /// Initiate the readback by copying data and starting async mapping
+src/simulation/gpu_physics/gpu_cell_inspector.rs:413:    pub fn initiate_readback(
+src/simulation/gpu_physics/gpu_cell_inspector.rs:416:        id: ReadbackId,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:422:            label: Some(&format!("Async Readback Staging Buffer {}", id.0)),
+src/simulation/gpu_physics/gpu_cell_inspector.rs:424:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/gpu_cell_inspector.rs:435:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:445:    /// Poll for completed readback operations without blocking
+src/simulation/gpu_physics/gpu_cell_inspector.rs:460:                let view = buffer_slice.get_mapped_range();
+src/simulation/gpu_physics/gpu_cell_inspector.rs:480:    pub fn get_result_bytes(&mut self, id: ReadbackId) -> Option<Vec<u8>> {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:484:    /// Check if a readback request is completed
+src/simulation/gpu_physics/gpu_cell_inspector.rs:485:    pub fn is_completed(&self, id: ReadbackId) -> bool {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:489:    /// Check if a readback request failed (simplified - just check if not pending and not completed)
+src/simulation/gpu_physics/gpu_cell_inspector.rs:490:    pub fn is_failed(&self, id: ReadbackId) -> bool {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:494:    /// Cancel a pending readback request
+src/simulation/gpu_physics/gpu_cell_inspector.rs:495:    pub fn cancel_request(&mut self, id: ReadbackId) -> bool {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:520:    /// Get statistics about readback operations
+src/simulation/gpu_physics/gpu_cell_inspector.rs:521:    pub fn get_stats(&self) -> ReadbackStats {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:522:        ReadbackStats {
+src/simulation/gpu_physics/gpu_cell_inspector.rs:528:            max_concurrent: self.max_concurrent_readbacks,
+src/simulation/gpu_physics/mutation.rs:8://! perturbation all happen in compute shaders with no CPU readback.
+src/simulation/gpu_physics/mutation.rs:3290:    /// Debug: Read back genome_ring_state and print values
+src/simulation/gpu_physics/mutation.rs:3292:        // Create staging buffer for readback
+src/simulation/gpu_physics/mutation.rs:3296:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/mutation.rs:3302:            label: Some("Genome Ring State Readback"),
+src/simulation/gpu_physics/mutation.rs:3310:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/mutation.rs:3313:        let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/mutation.rs:3319:        let data = buffer_slice.get_mapped_range();
+src/simulation/gpu_physics/mutation.rs:3342:    /// Get the mutation log buffer (for readback/UI display)
+src/simulation/gpu_physics/mutation.rs:3378:            // Readback access is needed only by this regression test.
+src/simulation/gpu_physics/mutation.rs:3396:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/mutation.rs:3398:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/mutation.rs:3402:            encoder.copy_buffer_to_buffer(&system.genome_meta_buffer, 949 * 16, &readback, 0, 32);
+src/simulation/gpu_physics/mutation.rs:3403:            encoder.copy_buffer_to_buffer(&system.genome_ref_counts_buffer, 949 * 4, &readback, 32, 8);
+src/simulation/gpu_physics/mutation.rs:3404:            encoder.copy_buffer_to_buffer(&system.genome_ring_state_buffer, 0, &readback, 40, 20);
+src/simulation/gpu_physics/mutation.rs:3407:            readback.slice(..).map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+src/simulation/gpu_physics/mutation.rs:3408:            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+src/simulation/gpu_physics/mutation.rs:3410:            let data = readback.slice(..).get_mapped_range();
+shaders/gpu_adhesion_line.wgsl:2:// Renders adhesion connections directly from GPU buffers (no CPU readback)
+src/simulation/gpu_physics/signal_backbone_topology.rs:368:    fn map_read<T: Pod>(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<T> {
+src/simulation/gpu_physics/signal_backbone_topology.rs:371:        slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/signal_backbone_topology.rs:375:            .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_topology.rs:381:        let view = slice.get_mapped_range();
+src/simulation/gpu_physics/signal_backbone_topology.rs:475:            let bond_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/signal_backbone_topology.rs:476:                label: Some("Phase 4 Bond Readback"),
+src/simulation/gpu_physics/signal_backbone_topology.rs:478:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_topology.rs:481:            let control_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/signal_backbone_topology.rs:482:                label: Some("Phase 4 Control Readback"),
+src/simulation/gpu_physics/signal_backbone_topology.rs:484:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_topology.rs:490:                &bond_readback,
+src/simulation/gpu_physics/signal_backbone_topology.rs:492:                bond_readback.size(),
+src/simulation/gpu_physics/signal_backbone_topology.rs:497:                &control_readback,
+src/simulation/gpu_physics/signal_backbone_topology.rs:503:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_topology.rs:511:            let gpu_bonds = map_read::<GpuBackboneTopologyBond>(&device, &bond_readback);
+src/simulation/gpu_physics/signal_backbone_topology.rs:516:            let control = map_read::<GpuBackboneTopologyControl>(&device, &control_readback)[0];
+src/simulation/gpu_physics/signal_backbone_topology.rs:548:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/signal_backbone_topology.rs:549:                label: Some("Phase 4 Repair Readback"),
+src/simulation/gpu_physics/signal_backbone_topology.rs:552:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_topology.rs:555:            encoder.copy_buffer_to_buffer(&repair_pipeline.bonds, 0, &readback, 0, readback.size());
+src/simulation/gpu_physics/signal_backbone_topology.rs:558:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_topology.rs:564:            for (index, gpu) in map_read::<GpuBackboneTopologyBond>(&device, &readback)
+tests/tail_lighting.rs:116:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+tests/tail_lighting.rs:181:            staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+tests/tail_lighting.rs:185:                .poll(wgpu::PollType::Wait {
+tests/tail_lighting.rs:191:            let mapped = staging.slice(..).get_mapped_range();
+src/simulation/gpu_physics/signal_backbone_v2.rs:2107:    /// no signal readback.
+src/simulation/gpu_physics/signal_backbone_v2.rs:2275:    fn map_read<T: Pod>(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<T> {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2278:        slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2282:            .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2288:        let view = slice.get_mapped_range();
+src/simulation/gpu_physics/signal_backbone_v2.rs:2485:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2486:                label: Some("Signed Listener Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:2488:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:2503:            encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
+src/simulation/gpu_physics/signal_backbone_v2.rs:2505:            assert_eq!(map_read::<u32>(&device, &readback), expected);
+src/simulation/gpu_physics/signal_backbone_v2.rs:2591:                label: Some("Signal Parity Finalized Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:2593:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:2605:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2610:            let actual = map_read::<[f32; 4]>(&device, &staging);
+src/simulation/gpu_physics/signal_backbone_v2.rs:2709:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2710:                label: Some("Shallow Parity Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:2712:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:2719:            encoder.copy_buffer_to_buffer(&pipeline.finalized_field, 0, &readback, 0, 7 * 4 * 16);
+src/simulation/gpu_physics/signal_backbone_v2.rs:2722:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2727:            let actual = map_read::<[f32; 4]>(&device, &readback);
+src/simulation/gpu_physics/signal_backbone_v2.rs:2788:                let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2789:                    label: Some("Specialized Parity Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:2791:                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:2801:                    &readback,
+src/simulation/gpu_physics/signal_backbone_v2.rs:2807:                    .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2812:                let actual = map_read::<[f32; 4]>(&device, &readback);
+src/simulation/gpu_physics/signal_backbone_v2.rs:2876:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2877:                label: Some("Phase 3 Gate Query Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:2879:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:2905:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2916:                encoder.copy_buffer_to_buffer(&resolve, 0, &readback, 0, 32);
+src/simulation/gpu_physics/signal_backbone_v2.rs:2919:                    .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:2924:                let t = map_read::<u64>(&device, &readback);
+src/simulation/gpu_physics/signal_backbone_v2.rs:3001:                label: Some("Cognocyte Matrix State Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:3003:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:3007:                label: Some("Cognocyte Latency Source Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:3009:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:3025:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:3030:            let states = map_read::<GpuSignalProcessorState>(&device, &state_staging);
+src/simulation/gpu_physics/signal_backbone_v2.rs:3063:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:3068:            let sources = map_read::<[f32; 4]>(&device, &source_staging);
+src/simulation/gpu_physics/signal_backbone_v2.rs:3208:                label: Some("Signal Funding Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:3210:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:3214:                label: Some("Signal Nutrient Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:3216:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:3220:                label: Some("Signal Lifecycle State Readback"),
+src/simulation/gpu_physics/signal_backbone_v2.rs:3222:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/signal_backbone_v2.rs:3253:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/signal_backbone_v2.rs:3259:            let sources = map_read::<[f32; 4]>(&device, &source_staging);
+src/simulation/gpu_physics/signal_backbone_v2.rs:3271:                map_read::<i32>(&device, &nutrient_staging),
+src/simulation/gpu_physics/signal_backbone_v2.rs:3275:            let states = map_read::<GpuSignalProcessorState>(&device, &state_staging);
+src/simulation/gpu_physics/boulder_system.rs:143:        self.buffers.poll_dead_readback(device);
+src/simulation/gpu_physics/genome_compaction.rs:251:        // Read back the compacted count
+src/simulation/gpu_physics/genome_compaction.rs:252:        // Note: In a real implementation, you'd want to use async readback
+src/simulation/gpu_physics/genome_compaction.rs:290:        // In a real implementation, this would read back from GPU
+src/simulation/gpu_physics/adhesion_buffers.rs:542:    /// always kept in sync, so no GPU readback is required.
+src/simulation/gpu_physics/adhesion_buffers.rs:624:    /// DEBUG: Synchronous readback of adhesion counts from GPU
+src/simulation/gpu_physics/adhesion_buffers.rs:626:    pub fn debug_sync_readback_adhesion_counts(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+src/simulation/gpu_physics/adhesion_buffers.rs:627:        // Create a staging buffer for readback
+src/simulation/gpu_physics/adhesion_buffers.rs:631:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/adhesion_buffers.rs:637:            label: Some("Debug Adhesion Readback"),
+src/simulation/gpu_physics/adhesion_buffers.rs:645:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/adhesion_buffers.rs:649:        let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/adhesion_buffers.rs:655:            let data = buffer_slice.get_mapped_range();
+src/simulation/gpu_physics/adhesion_buffers.rs:669:    /// DEBUG: Synchronous readback of first N adhesion connections from GPU
+src/simulation/gpu_physics/adhesion_buffers.rs:670:    pub fn debug_sync_readback_connections(
+src/simulation/gpu_physics/adhesion_buffers.rs:679:        // Create a staging buffer for readback
+src/simulation/gpu_physics/adhesion_buffers.rs:683:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/adhesion_buffers.rs:689:            label: Some("Debug Connections Readback"),
+src/simulation/gpu_physics/adhesion_buffers.rs:697:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/adhesion_buffers.rs:701:        let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/adhesion_buffers.rs:707:            let data = buffer_slice.get_mapped_range();
+src/simulation/gpu_physics/gpu_fusion.rs:2://! No readback, CPU genome registration, or per-offspring queue writes.
+src/simulation/gpu_physics/gpu_fusion.rs:517:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/gpu_fusion.rs:524:        staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+src/simulation/gpu_physics/gpu_fusion.rs:528:            .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/gpu_fusion.rs:534:        bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec()
+src/simulation/gpu_physics/genome_snapshot.rs:2://! simulation and reproduction never wait for these readbacks.
+src/simulation/gpu_physics/genome_snapshot.rs:25:    staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+src/simulation/gpu_physics/genome_snapshot.rs:29:        .poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/genome_snapshot.rs:37:    let words = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec();
+src/simulation/gpu_physics/genome_snapshot.rs:45:        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/signal_diffusion.rs:516:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/signal_diffusion.rs:525:            .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+src/simulation/gpu_physics/signal_diffusion.rs:526:        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+src/simulation/gpu_physics/signal_diffusion.rs:528:        let result = bytemuck::cast_slice(&staging.slice(..).get_mapped_range()).to_vec();
+src/simulation/gpu_physics/signal_diffusion.rs:926:                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+src/simulation/gpu_physics/signal_diffusion.rs:974:                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+src/simulation/gpu_physics/gpu_tool_operations.rs:12://! - Async readback for tool operation feedback (4.6)
+src/simulation/gpu_physics/gpu_tool_operations.rs:24:/// All operations are performed directly on GPU buffers with minimal async readbacks.
+src/simulation/gpu_physics/gpu_tool_operations.rs:33:    spatial_query_readback_buffer: wgpu::Buffer,
+src/simulation/gpu_physics/gpu_tool_operations.rs:61:    // Async readback state
+src/simulation/gpu_physics/gpu_tool_operations.rs:62:    readback_in_progress: bool,
+src/simulation/gpu_physics/gpu_tool_operations.rs:96:        // Create readback buffer for spatial query results (requirement 11.1)
+src/simulation/gpu_physics/gpu_tool_operations.rs:97:        let spatial_query_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/gpu_tool_operations.rs:98:            label: Some("Spatial Query Readback Buffer"),
+src/simulation/gpu_physics/gpu_tool_operations.rs:100:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/gpu_tool_operations.rs:317:            spatial_query_readback_buffer,
+src/simulation/gpu_physics/gpu_tool_operations.rs:335:            readback_in_progress: false,
+src/simulation/gpu_physics/gpu_tool_operations.rs:353:        // Skip if readback already in progress
+src/simulation/gpu_physics/gpu_tool_operations.rs:354:        if self.readback_in_progress {
+src/simulation/gpu_physics/gpu_tool_operations.rs:403:        // Copy result to readback buffer for CPU access
+src/simulation/gpu_physics/gpu_tool_operations.rs:407:            &self.spatial_query_readback_buffer,
+src/simulation/gpu_physics/gpu_tool_operations.rs:412:        // Mark readback as in progress and clear any previous map receiver
+src/simulation/gpu_physics/gpu_tool_operations.rs:413:        self.readback_in_progress = true;
+src/simulation/gpu_physics/gpu_tool_operations.rs:423:    /// Implements requirement 11.3 for non-blocking readback completion polling.
+src/simulation/gpu_physics/gpu_tool_operations.rs:424:    /// This method should be called each frame to check for completed async readbacks.
+src/simulation/gpu_physics/gpu_tool_operations.rs:432:        // If no readback in progress, return None
+src/simulation/gpu_physics/gpu_tool_operations.rs:433:        if !self.readback_in_progress {
+src/simulation/gpu_physics/gpu_tool_operations.rs:438:        // after queue.submit() completes. Using PollType::Wait with a timeout
+src/simulation/gpu_physics/gpu_tool_operations.rs:446:            let slice = self.spatial_query_readback_buffer.slice(..);
+src/simulation/gpu_physics/gpu_tool_operations.rs:449:            slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/gpu_tool_operations.rs:464:                let slice = self.spatial_query_readback_buffer.slice(..);
+src/simulation/gpu_physics/gpu_tool_operations.rs:465:                let view = slice.get_mapped_range();
+src/simulation/gpu_physics/gpu_tool_operations.rs:474:                    self.spatial_query_readback_buffer.unmap();
+src/simulation/gpu_physics/gpu_tool_operations.rs:475:                    self.readback_in_progress = false;
+src/simulation/gpu_physics/gpu_tool_operations.rs:482:                    self.spatial_query_readback_buffer.unmap();
+src/simulation/gpu_physics/gpu_tool_operations.rs:483:                    self.readback_in_progress = false;
+src/simulation/gpu_physics/gpu_tool_operations.rs:490:                self.readback_in_progress = false;
+src/simulation/gpu_physics/gpu_tool_operations.rs:496:                // Keep map_receiver so we don't call map_async again
+src/simulation/gpu_physics/gpu_tool_operations.rs:556:        self.readback_in_progress = false;
+src/simulation/gpu_physics/gpu_tool_operations.rs:564:        self.readback_in_progress
+src/simulation/gpu_physics/boulder_buffers.rs:127:    /// Staging buffer for async readback of dead flags (to recycle slots on CPU).
+src/simulation/gpu_physics/boulder_buffers.rs:128:    pub dead_flags_readback: wgpu::Buffer,
+src/simulation/gpu_physics/boulder_buffers.rs:130:    /// Whether a dead-flag readback is pending.
+src/simulation/gpu_physics/boulder_buffers.rs:131:    pub readback_pending: bool,
+src/simulation/gpu_physics/boulder_buffers.rs:133:    /// Channel receiver for readback completion.
+src/simulation/gpu_physics/boulder_buffers.rs:134:    pub readback_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+src/simulation/gpu_physics/boulder_buffers.rs:139:    /// CPU-side moss values (for initial upload and death detection via readback).
+src/simulation/gpu_physics/boulder_buffers.rs:224:        // Dead flags readback: MAX_BOULDERS x 4 bytes
+src/simulation/gpu_physics/boulder_buffers.rs:225:        let dead_flags_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/boulder_buffers.rs:226:            label: Some("Boulder Dead Flags Readback"),
+src/simulation/gpu_physics/boulder_buffers.rs:228:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/boulder_buffers.rs:240:            dead_flags_readback,
+src/simulation/gpu_physics/boulder_buffers.rs:241:            readback_pending: false,
+src/simulation/gpu_physics/boulder_buffers.rs:242:            readback_receiver: None,
+src/simulation/gpu_physics/boulder_buffers.rs:337:    /// Initiate async readback of dead flags to detect boulders that have died on GPU.
+src/simulation/gpu_physics/boulder_buffers.rs:338:    /// Call once per frame; poll with `poll_dead_readback`.
+src/simulation/gpu_physics/boulder_buffers.rs:339:    pub fn request_dead_readback(&mut self, encoder: &mut wgpu::CommandEncoder) {
+src/simulation/gpu_physics/boulder_buffers.rs:340:        if self.readback_pending {
+src/simulation/gpu_physics/boulder_buffers.rs:345:        // The dead_flags_readback buffer is sized for MAX_BOULDERS x 4 (just the dead u32s),
+src/simulation/gpu_physics/boulder_buffers.rs:349:        self.readback_pending = true;
+src/simulation/gpu_physics/boulder_buffers.rs:352:    /// Poll for completed dead-flag readback. Returns list of newly-dead slot indices.
+src/simulation/gpu_physics/boulder_buffers.rs:353:    pub fn poll_dead_readback(&mut self, device: &wgpu::Device) -> Vec<u32> {
+src/simulation/gpu_physics/boulder_buffers.rs:354:        if !self.readback_pending {
+src/simulation/gpu_physics/boulder_buffers.rs:358:        let slice = self.dead_flags_readback.slice(..);
+src/simulation/gpu_physics/boulder_buffers.rs:360:        slice.map_async(wgpu::MapMode::Read, move |r| {
+src/simulation/gpu_physics/boulder_buffers.rs:370:            let view = slice.get_mapped_range();
+src/simulation/gpu_physics/boulder_buffers.rs:379:            self.dead_flags_readback.unmap();
+src/simulation/gpu_physics/boulder_buffers.rs:380:            self.readback_pending = false;
+src/simulation/gpu_physics/gpu_scene_integration.rs:30://! - NO CPU readback during simulation
+src/simulation/gpu_physics/gpu_scene_integration.rs:41:    pub readback_buffer: &'a wgpu::Buffer,
+src/simulation/gpu_physics/gpu_scene_integration.rs:1035:                audio.readback_buffer,
+src/simulation/gpu_physics/organism_follow.rs:50:            "Follow camera readback",
+src/simulation/gpu_physics/organism_follow.rs:52:            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/organism_follow.rs:165:            .map_async(wgpu::MapMode::Read, move |r| {
+src/simulation/gpu_physics/organism_follow.rs:176:                    bytemuck::pod_read_unaligned(&self.staging.slice(..).get_mapped_range());
+src/simulation/gpu_physics/organism_follow.rs:246:                    .poll(wgpu::PollType::Wait {
+src/app.rs:124:/// Save/load operations involve blocking GPU readbacks or large data uploads.
+src/app.rs:1277:                let _ = self.device.poll(wgpu::PollType::Wait {
+src/app.rs:2855:            // Poll organism follow readback and update camera center
+src/app.rs:3071:            gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
+src/app.rs:3072:            gpu_scene.audio_readbacks_enabled = self.ui.state.sfx_volume > 0.0;
+src/app.rs:3201:        // due to async readback) for the performance monitor.
+src/app.rs:4194:                            gpu_scene.read_back_genome(&self.device, &self.queue, genome_id)
+src/app.rs:4204:                            // push the readback genome into the preview scene right away.
+src/app.rs:4207:                            // our readback genome before update_genome could push it.
+src/app.rs:4238:                            // Now push the readback genome into the preview scene immediately
+src/app.rs:4242:                                log::info!("Pushed readback genome into preview scene");
+src/app.rs:4245:                            log::error!("Failed to read back genome_id={} from GPU", genome_id);
+src/app.rs:4385:                        if let Some(genome) = gpu_scene.read_back_genome_for_inspected_cell(
+src/app.rs:4399:                            // push the readback genome into the preview scene right away.
+src/app.rs:4402:                            // our readback genome before update_genome could push it.
+src/app.rs:4433:                            // Now push the readback genome into the preview scene immediately
+src/app.rs:4441:                                "Failed to read back inspected cell genome: reported_genome_id={} mode_index={}",
+src/app.rs:4587:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/app.rs:4620:        // -- Process screenshot readback ----------------------------------------
+src/app.rs:4715:                    // Map the staging buffer and read back the pixel data.
+src/app.rs:4718:                    slice.map_async(wgpu::MapMode::Read, move |r| {
+src/app.rs:4721:                    match self.device.poll(wgpu::PollType::Wait {
+src/app.rs:4741:                    let mapped = slice.get_mapped_range();
+src/input/cell_dragging.rs:12:// - 4.6: Async readback for tool operation feedback
+src/simulation/gpu_physics/triple_buffer.rs:456:    /// Cell count readback buffer for async GPU-to-CPU transfer
+src/simulation/gpu_physics/triple_buffer.rs:457:    cell_count_readback_buffer: wgpu::Buffer,
+src/simulation/gpu_physics/triple_buffer.rs:459:    /// Whether a cell count readback is pending
+src/simulation/gpu_physics/triple_buffer.rs:465:    /// Last known cell count from GPU readback
+src/simulation/gpu_physics/triple_buffer.rs:722:                let mut view = buf.slice(..).get_mapped_range_mut();
+src/simulation/gpu_physics/triple_buffer.rs:757:        // Cell count readback buffer for async GPU-to-CPU transfer
+src/simulation/gpu_physics/triple_buffer.rs:758:        let cell_count_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/triple_buffer.rs:759:            label: Some("Cell Count Readback Buffer"),
+src/simulation/gpu_physics/triple_buffer.rs:761:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/triple_buffer.rs:1131:            cell_count_readback_buffer,
+src/simulation/gpu_physics/triple_buffer.rs:1174:            let mut view = buffer.slice(..).get_mapped_range_mut();
+src/simulation/gpu_physics/triple_buffer.rs:1203:            let mut view = buffer.slice(..).get_mapped_range_mut();
+src/simulation/gpu_physics/triple_buffer.rs:1659:    /// * `genome_ids` - Genome ID for each cell (from GPU buffer readback or canonical state)
+src/simulation/gpu_physics/triple_buffer.rs:1660:    /// * `mode_indices` - Mode index for each cell (from GPU buffer readback or canonical state)
+src/simulation/gpu_physics/triple_buffer.rs:3385:        // Copy cell count buffer to readback buffer
+src/simulation/gpu_physics/triple_buffer.rs:3389:            &self.cell_count_readback_buffer,
+src/simulation/gpu_physics/triple_buffer.rs:3396:    /// Call this after queue.submit() to start the async readback.
+src/simulation/gpu_physics/triple_buffer.rs:3403:        let buffer_slice = self.cell_count_readback_buffer.slice(..);
+src/simulation/gpu_physics/triple_buffer.rs:3406:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/triple_buffer.rs:3430:                    let buffer_slice = self.cell_count_readback_buffer.slice(..);
+src/simulation/gpu_physics/triple_buffer.rs:3431:                    let data = buffer_slice.get_mapped_range();
+src/simulation/gpu_physics/triple_buffer.rs:3442:                    self.cell_count_readback_buffer.unmap();
+src/simulation/gpu_physics/triple_buffer.rs:3470:    /// Get the last known cell count from GPU readback.
+src/simulation/gpu_physics/triple_buffer.rs:3475:    /// Clear cached cell-count readback state.
+src/simulation/gpu_physics/triple_buffer.rs:3478:    /// readback from before the reset completes later, it must not overwrite the
+src/simulation/gpu_physics/triple_buffer.rs:3480:    pub fn reset_cell_count_readback(&mut self) {
+src/simulation/gpu_physics/triple_buffer.rs:3482:            self.cell_count_readback_buffer.unmap();
+src/simulation/gpu_physics/triple_buffer.rs:3489:    /// Check if a cell count readback is pending.
+src/simulation/gpu_physics/triple_buffer.rs:3826:    /// DEBUG: Blocking readback of position/mass data from a specific buffer.
+src/simulation/gpu_physics/triple_buffer.rs:3841:        // Create staging buffer for readback
+src/simulation/gpu_physics/triple_buffer.rs:3845:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/triple_buffer.rs:3851:            label: Some("Debug Readback Encoder"),
+src/simulation/gpu_physics/triple_buffer.rs:3865:        slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/triple_buffer.rs:3868:        let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/triple_buffer.rs:3874:            let view = slice.get_mapped_range();
+src/simulation/gpu_physics/triple_buffer.rs:3884:    /// DEBUG: Blocking readback of cell_count_buffer [total, live].
+src/simulation/gpu_physics/triple_buffer.rs:3895:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/triple_buffer.rs:3900:            label: Some("Debug Cell Count Readback"),
+src/simulation/gpu_physics/triple_buffer.rs:3907:        slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/triple_buffer.rs:3910:        let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/triple_buffer.rs:3916:            let view = slice.get_mapped_range();
+src/simulation/gpu_physics/triple_buffer.rs:3927:    /// DEBUG: Blocking readback of mode_indices buffer.
+src/simulation/gpu_physics/triple_buffer.rs:3943:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/simulation/gpu_physics/triple_buffer.rs:3948:            label: Some("Debug Mode Indices Readback"),
+src/simulation/gpu_physics/triple_buffer.rs:3955:        slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/triple_buffer.rs:3958:        let _ = device.poll(wgpu::PollType::Wait {
+src/simulation/gpu_physics/triple_buffer.rs:3964:            let view = slice.get_mapped_range();
+src/simulation/gpu_physics/mod.rs:49:    AsyncReadbackManager, GpuCellInspector, ReadbackId, ReadbackResult, ReadbackStats,
+src/simulation/gpu_physics/cell_data_extraction.rs:166:    /// Staging buffer for CPU readback
+src/simulation/gpu_physics/cell_data_extraction.rs:167:    readback_buffer: wgpu::Buffer,
+src/simulation/gpu_physics/cell_data_extraction.rs:175:    /// Cached extracted data (from last successful readback)
+src/simulation/gpu_physics/cell_data_extraction.rs:178:    /// Pending map_async receiver - Some means a mapping is in flight
+src/simulation/gpu_physics/cell_data_extraction.rs:214:        // Create staging buffer for CPU readback
+src/simulation/gpu_physics/cell_data_extraction.rs:215:        let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_physics/cell_data_extraction.rs:216:            label: Some("Cell Extraction Readback Buffer"),
+src/simulation/gpu_physics/cell_data_extraction.rs:218:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_physics/cell_data_extraction.rs:378:            readback_buffer,
+src/simulation/gpu_physics/cell_data_extraction.rs:397:        copy_to_internal_readback: bool,
+src/simulation/gpu_physics/cell_data_extraction.rs:427:        if copy_to_internal_readback {
+src/simulation/gpu_physics/cell_data_extraction.rs:433:                &self.readback_buffer,
+src/simulation/gpu_physics/cell_data_extraction.rs:442:    /// This method should be called each frame to check for completed async readbacks.
+src/simulation/gpu_physics/cell_data_extraction.rs:447:            let slice = self.readback_buffer.slice(..);
+src/simulation/gpu_physics/cell_data_extraction.rs:449:            slice.map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_physics/cell_data_extraction.rs:465:                self.readback_buffer.unmap();
+src/simulation/gpu_physics/cell_data_extraction.rs:469:            let slice = self.readback_buffer.slice(..);
+src/simulation/gpu_physics/cell_data_extraction.rs:470:            let view = slice.get_mapped_range();
+src/simulation/gpu_physics/cell_data_extraction.rs:477:                self.readback_buffer.unmap();
+src/simulation/gpu_physics/cell_data_extraction.rs:482:                self.readback_buffer.unmap();
+src/simulation/gpu_physics/cell_data_extraction.rs:494:    /// Get reference to the output buffer for async readback operations
+src/simulation/gpu_physics/cell_data_extraction.rs:503:        self.readback_buffer.unmap();
+src/scene/snapshot_io.rs:14://!    `map_async` to read the bytes back to CPU.
+src/scene/snapshot_io.rs:15://! 3. Collect the CPU-side adhesion caches (no readback needed).
+src/scene/snapshot_io.rs:188:fn readback_buffer_bytes(
+src/scene/snapshot_io.rs:202:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/scene/snapshot_io.rs:207:        label: Some("Snapshot Readback Encoder"),
+src/scene/snapshot_io.rs:214:    slice.map_async(wgpu::MapMode::Read, move |r| {
+src/scene/snapshot_io.rs:219:        .poll(wgpu::PollType::Wait {
+src/scene/snapshot_io.rs:223:        .map_err(|e| SnapshotError::GpuReadback(format!("device.poll failed: {e:?}")))?;
+src/scene/snapshot_io.rs:226:        .map_err(|_| SnapshotError::GpuReadback("channel closed before map completed".into()))?
+src/scene/snapshot_io.rs:227:        .map_err(|e| SnapshotError::GpuReadback(format!("map_async error: {e:?}")))?;
+src/scene/snapshot_io.rs:229:    let mapped = slice.get_mapped_range();
+src/scene/snapshot_io.rs:239:fn readback_typed<T: bytemuck::Pod>(
+src/scene/snapshot_io.rs:246:    let bytes = readback_buffer_bytes(device, queue, src_buffer, 0, byte_count)?;
+src/scene/snapshot_io.rs:636:    readback_typed(
+src/scene/snapshot_io.rs:798:    /// This intentionally avoids per-cell GPU readbacks and uses the most recent
+src/scene/snapshot_io.rs:836:            readback_typed(device, queue, &self.gpu_triple_buffers.cell_count_buffer, 2)?;
+src/scene/snapshot_io.rs:879:            readback_typed(device, queue, &self.gpu_triple_buffers.genome_ids, slots)?;
+src/scene/snapshot_io.rs:881:            readback_typed(device, queue, &self.gpu_triple_buffers.death_flags, slots)?;
+src/scene/snapshot_io.rs:883:        let positions_and_mass: Vec<[f32; 4]> = readback_typed(
+src/scene/snapshot_io.rs:890:            readback_typed(device, queue, &self.gpu_triple_buffers.mode_indices, slots)?;
+src/scene/snapshot_io.rs:891:        let nutrients: Vec<i32> = readback_typed(
+src/scene/snapshot_io.rs:898:            readback_typed(device, queue, &self.gpu_triple_buffers.birth_times, slots)?;
+src/scene/snapshot_io.rs:899:        let split_intervals: Vec<f32> = readback_typed(
+src/scene/snapshot_io.rs:905:        let split_nutrient_thresholds: Vec<f32> = readback_typed(
+src/scene/snapshot_io.rs:912:            readback_typed(device, queue, &self.gpu_triple_buffers.cell_types, slots)?;
+src/scene/snapshot_io.rs:917:            .map(|labels| readback_typed(device, queue, &labels.label_buffer, slots))
+src/scene/snapshot_io.rs:1058:                if let Some(genome) = self.read_back_genome(device, queue, genome_id) {
+src/scene/snapshot_io.rs:1205:    /// This performs a **blocking** GPU readback of all per-cell buffers.  The
+src/scene/snapshot_io.rs:1227:        // -- Per-cell GPU readbacks --------------------------------------------
+src/scene/snapshot_io.rs:1228:        // Each readback creates a staging buffer, copies, polls, and maps.
+src/scene/snapshot_io.rs:1233:            readback_typed(
+src/scene/snapshot_io.rs:1244:            readback_typed(
+src/scene/snapshot_io.rs:1255:            readback_typed(
+src/scene/snapshot_io.rs:1266:            readback_typed(
+src/scene/snapshot_io.rs:1277:            readback_typed(
+src/scene/snapshot_io.rs:1288:            readback_typed(device, queue, &self.gpu_triple_buffers.birth_times, slots)?
+src/scene/snapshot_io.rs:1294:            readback_typed(
+src/scene/snapshot_io.rs:1305:            readback_typed(
+src/scene/snapshot_io.rs:1316:            readback_typed(device, queue, &self.gpu_triple_buffers.split_counts, slots)?
+src/scene/snapshot_io.rs:1322:            readback_typed(device, queue, &self.gpu_triple_buffers.genome_ids, slots)?
+src/scene/snapshot_io.rs:1328:            readback_typed(device, queue, &self.gpu_triple_buffers.mode_indices, slots)?
+src/scene/snapshot_io.rs:1334:            readback_typed(device, queue, &self.gpu_triple_buffers.cell_ids, slots)?
+src/scene/snapshot_io.rs:1340:            readback_typed(device, queue, &self.gpu_triple_buffers.death_flags, slots)?
+src/scene/snapshot_io.rs:1346:            readback_typed(
+src/scene/snapshot_io.rs:1356:        // -- Adhesion state (CPU caches - no readback needed) ------------------
+src/scene/snapshot_io.rs:1367:                .map_err(|e| SnapshotError::GpuReadback(format!("genome serialization: {e}")))?;
+src/scene/snapshot_io.rs:1377:            ).map_err(SnapshotError::GpuReadback)?
+src/scene/snapshot_io.rs:1379:        let development_addresses = readback_typed(device, queue, &self.gpu_triple_buffers.development_addresses, slots)?;
+src/scene/snapshot_io.rs:1380:        let parent_lineage_hashes = readback_typed(device, queue, &self.gpu_triple_buffers.parent_lineage_hashes, slots)?;
+src/scene/snapshot_io.rs:1381:        let organism_cell_ids = readback_typed(device, queue, &self.gpu_triple_buffers.organism_cell_ids, slots)?;
+src/scene/snapshot_io.rs:1382:        let gpu_next_id: Vec<u32> = readback_typed(device, queue, &self.gpu_triple_buffers.next_cell_id, 1)?;
+src/scene/snapshot_io.rs:1436:            "[Snapshot] Readback complete: {} cells, {} adhesions, {} genomes, fluid={}",
+src/scene/snapshot_io.rs:1581:                .map_err(|e| SnapshotError::GpuReadback(format!("genome deserialization: {e}")))?;
+src/scene/snapshot_io.rs:1722:            ).map_err(SnapshotError::GpuReadback)?;
+src/scene/snapshot.rs:8://! ### 1. Per-cell GPU data (requires blocking readback)
+src/scene/snapshot.rs:14://! ### 2. CPU-side caches (no readback needed)
+src/scene/snapshot.rs:105:    // -- Adhesion state (CPU caches - no readback needed) ---------------------
+src/scene/snapshot.rs:212:    /// GPU readback failed (buffer mapping error).
+src/scene/snapshot.rs:213:    GpuReadback(String),
+src/scene/snapshot.rs:229:            Self::GpuReadback(msg) => write!(f, "GPU readback failed: {msg}"),
+src/scene/manager.rs:631:    /// Poll the organism follow readback and update the camera center (GPU scene only).
+src/scene/gpu_timer.rs:5://! monitor. Uses a small ring of readback buffers so mapping never stalls
+src/scene/gpu_timer.rs:16:/// Frames of readback latency, so mapping a buffer never stalls the GPU.
+src/scene/gpu_timer.rs:40:struct ReadbackSlot {
+src/scene/gpu_timer.rs:49:    slots: [ReadbackSlot; FRAMES_IN_FLIGHT],
+src/scene/gpu_timer.rs:80:        let slots = std::array::from_fn(|_| ReadbackSlot {
+src/scene/gpu_timer.rs:82:                label: Some("GPU Frame Timer Readback Buffer"),
+src/scene/gpu_timer.rs:84:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/scene/gpu_timer.rs:111:    /// Resolve this frame's timestamps into the readback buffer. Must be called
+src/scene/gpu_timer.rs:116:        // If the previous readback for this slot hasn't completed yet, skip -
+src/scene/gpu_timer.rs:142:    /// Age of the most recently received sample; absent until a readback completes.
+src/scene/gpu_timer.rs:148:    /// resolved and polls all slots for completed readbacks.
+src/scene/gpu_timer.rs:155:                .map_async(wgpu::MapMode::Read, move |result| {
+src/scene/gpu_timer.rs:167:                    log::warn!("GPU timing readback failed, recycling slot: {error}");
+src/scene/gpu_timer.rs:184:                    let view = slot.buffer.slice(..).get_mapped_range();
+src/scene/gpu_timer.rs:201:    /// GPU time per segment (ms) from the most recently completed readback.
+src/scene/gpu_timer.rs:217:    fn readback_recovers_and_only_maps_resolved_frames() {
+src/scene/gpu_timer.rs:245:                device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+src/scene/gpu_timer.rs:248:            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+src/simulation/gpu_upload.rs:42:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/simulation/gpu_upload.rs:45:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/simulation/gpu_upload.rs:58:                encoder.copy_buffer_to_buffer(&params, 0, &readback, step as u64 * 8, 8);
+src/simulation/gpu_upload.rs:62:            readback
+src/simulation/gpu_upload.rs:64:                .map_async(wgpu::MapMode::Read, move |result| {
+src/simulation/gpu_upload.rs:68:                .poll(wgpu::PollType::Wait {
+src/simulation/gpu_upload.rs:74:            let mapped = readback.slice(..).get_mapped_range();
+src/simulation/gpu_upload.rs:81:            readback.unmap();
+src/cell/behaviors/gametocyte.rs:14:/// which writes merge events to a readback buffer. The CPU then reads those
+src/scene/gpu_scene.rs:20:    AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
+src/scene/gpu_scene.rs:40:/// Number of staging buffers in the division-audio readback pool. Measured GPU
+src/scene/gpu_scene.rs:46:/// map_async started and sat busy forever).
+src/scene/gpu_scene.rs:47:const DIVISION_AUDIO_READBACK_BUFFER_COUNT: usize = 8;
+src/scene/gpu_scene.rs:149:    /// Async readback manager for coordinating all GPU-to-CPU transfers
+src/scene/gpu_scene.rs:150:    pub readback_manager: Option<AsyncReadbackManager>,
+src/scene/gpu_scene.rs:192:    /// Whether GPU readbacks are enabled (cell count, etc.)
+src/scene/gpu_scene.rs:193:    readbacks_enabled: bool,
+src/scene/gpu_scene.rs:194:    cell_count_readback_dirty: bool,
+src/scene/gpu_scene.rs:195:    pub audio_readbacks_enabled: bool,
+src/scene/gpu_scene.rs:310:    /// Total cell slots used (high water mark from GPU readback).
+src/scene/gpu_scene.rs:425:    /// GPU crossover and birth; no CPU offspring queue or event readback.
+src/scene/gpu_scene.rs:434:    /// collection. Sized to `DIVISION_AUDIO_READBACK_BUFFER_COUNT` - see that
+src/scene/gpu_scene.rs:436:    division_audio_readback_buffers: Vec<wgpu::Buffer>,
+src/scene/gpu_scene.rs:437:    /// Round-robin cursor into `division_audio_readback_buffers`.
+src/scene/gpu_scene.rs:438:    division_audio_readback_write_index: usize,
+src/scene/gpu_scene.rs:440:    division_audio_readback_busy: Vec<bool>,
+src/scene/gpu_scene.rs:447:    /// Per-buffer receiver for its map_async callback, so every busy buffer
+src/scene/gpu_scene.rs:456:    division_audio_readback_claimed_at: Vec<Option<std::time::Instant>>,
+src/scene/gpu_scene.rs:457:    /// Readback staging buffer index selected for this render frame's single
+src/scene/gpu_scene.rs:459:    division_audio_frame_readback_index: Option<usize>,
+src/scene/gpu_scene.rs:461:    /// audio collector using `division_audio_frame_readback_index`.
+src/scene/gpu_scene.rs:462:    division_audio_frame_readback_used: bool,
+src/scene/gpu_scene.rs:463:    /// Audio events decoded from the latest completed division readback.
+src/scene/gpu_scene.rs:613:    /// Raw GPU center-of-mass - snapped to the latest readback value each time one arrives.
+src/scene/gpu_scene.rs:797:        let create_division_audio_readback_buffer = |label: &str| {
+src/scene/gpu_scene.rs:802:                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/scene/gpu_scene.rs:806:        let division_audio_readback_buffers: Vec<wgpu::Buffer> = (0
+src/scene/gpu_scene.rs:807:            ..DIVISION_AUDIO_READBACK_BUFFER_COUNT)
+src/scene/gpu_scene.rs:809:                create_division_audio_readback_buffer(&format!(
+src/scene/gpu_scene.rs:810:                    "Division Audio Candidate Readback {i}"
+src/scene/gpu_scene.rs:859:        // Create async readback manager for coordinating all readback operations
+src/scene/gpu_scene.rs:860:        let readback_manager = None; // Will be initialized when needed
+src/scene/gpu_scene.rs:888:            readback_manager,
+src/scene/gpu_scene.rs:914:            readbacks_enabled: true,
+src/scene/gpu_scene.rs:915:            cell_count_readback_dirty: true,
+src/scene/gpu_scene.rs:916:            audio_readbacks_enabled: true,
+src/scene/gpu_scene.rs:1041:            division_audio_readback_write_index: 0,
+src/scene/gpu_scene.rs:1042:            division_audio_readback_busy: vec![false; division_audio_readback_buffers.len()],
+src/scene/gpu_scene.rs:1043:            division_audio_map_receivers: (0..division_audio_readback_buffers.len())
+src/scene/gpu_scene.rs:1046:            division_audio_readback_claimed_at: (0..division_audio_readback_buffers.len())
+src/scene/gpu_scene.rs:1049:            division_audio_readback_buffers,
+src/scene/gpu_scene.rs:1053:            division_audio_frame_readback_index: None,
+src/scene/gpu_scene.rs:1054:            division_audio_frame_readback_used: false,
+src/scene/gpu_scene.rs:1149:        self.cell_count_readback_dirty = true;
+src/scene/gpu_scene.rs:1158:        for index in 0..self.division_audio_readback_buffers.len() {
+src/scene/gpu_scene.rs:1160:                self.division_audio_readback_buffers[index].unmap();
+src/scene/gpu_scene.rs:1163:        self.division_audio_readback_busy = vec![false; self.division_audio_readback_buffers.len()];
+src/scene/gpu_scene.rs:1164:        self.division_audio_readback_claimed_at =
+src/scene/gpu_scene.rs:1165:            vec![None; self.division_audio_readback_buffers.len()];
+src/scene/gpu_scene.rs:1166:        self.division_audio_readback_write_index = 0;
+src/scene/gpu_scene.rs:1167:        self.division_audio_frame_readback_index = None;
+src/scene/gpu_scene.rs:1168:        self.division_audio_frame_readback_used = false;
+src/scene/gpu_scene.rs:1204:        self.gpu_triple_buffers.reset_cell_count_readback();
+src/scene/gpu_scene.rs:1281:    /// Read back a genome from GPU buffers and reconstruct it as a CPU-side Genome.
+src/scene/gpu_scene.rs:1284:    /// For GPU-mutated genomes, performs synchronous GPU readback of all mode buffers
+src/scene/gpu_scene.rs:1288:    pub fn read_back_genome(
+src/scene/gpu_scene.rs:1301:        let meta = self.read_back_buffer_range::<crate::simulation::gpu_physics::GenomeMeta>(
+src/scene/gpu_scene.rs:1312:                    "read_back_genome: failed to read genome_meta for genome_id={}",
+src/scene/gpu_scene.rs:1325:            log::warn!("read_back_genome: invalid metadata for genome_id={}: mode_count={}, base_offset={}", genome_id, mode_count, base_offset);
+src/scene/gpu_scene.rs:1330:            "read_back_genome: genome_id={} mode_count={} base_offset={}",
+src/scene/gpu_scene.rs:1336:        // Read back all mode buffers for this genome's mode range (split into 5 sub-buffers each)
+src/scene/gpu_scene.rs:1337:        let mp_v0 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1344:        let mp_v1 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1351:        let mp_v2 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1358:        let mp_v3 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1365:        let mp_v4 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1384:        let gmd_v0 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1391:        let gmd_v1 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1398:        let gmd_v2 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1405:        let gmd_v3 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1412:        let gmd_v4 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1431:        let child_indices = self.read_back_buffer_range::<[i32; 2]>(
+src/scene/gpu_scene.rs:1439:        let cell_types = self.read_back_buffer_range::<u32>(
+src/scene/gpu_scene.rs:1447:        let parent_make_flags = self.read_back_buffer_range::<u32>(
+src/scene/gpu_scene.rs:1455:        let child_a_keep_flags = self.read_back_buffer_range::<u32>(
+src/scene/gpu_scene.rs:1463:        let child_b_keep_flags = self.read_back_buffer_range::<u32>(
+src/scene/gpu_scene.rs:1471:        let glueocyte_flags = self.read_back_buffer_range::<u32>(
+src/scene/gpu_scene.rs:1479:        let oculocyte_params = self.read_back_buffer_range::<[u32; 4]>(
+src/scene/gpu_scene.rs:1489:        let regulation_params = self.read_back_buffer_range::<[u32; 4]>(
+src/scene/gpu_scene.rs:1498:        let colors_raw = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1505:        let emissive_raw = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1518:            let v0 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1525:            let v1 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1532:            let v2 = self.read_back_buffer_range::<[f32; 4]>(
+src/scene/gpu_scene.rs:1812:    /// Read back the genome associated with an inspected cell.
+src/scene/gpu_scene.rs:1818:    pub fn read_back_genome_for_inspected_cell(
+src/scene/gpu_scene.rs:1841:        self.read_back_genome(device, queue, resolved_genome_id)
+src/scene/gpu_scene.rs:1859:        let Some(meta) = self.read_back_buffer_range::<crate::simulation::gpu_physics::GenomeMeta>(
+src/scene/gpu_scene.rs:1936:    /// Synchronous GPU buffer readback helper.
+src/scene/gpu_scene.rs:1939:    fn read_back_buffer_range<T: bytemuck::Pod>(
+src/scene/gpu_scene.rs:1957:                "read_back_buffer_range: out of bounds — offset={} size={} buffer_size={} (T={} start_index={} count={})",
+src/scene/gpu_scene.rs:1964:        // Create staging buffer for readback
+src/scene/gpu_scene.rs:1966:            label: Some("Genome Readback Staging"),
+src/scene/gpu_scene.rs:1968:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/scene/gpu_scene.rs:1974:            label: Some("Genome Readback Encoder"),
+src/scene/gpu_scene.rs:1982:        slice.map_async(wgpu::MapMode::Read, move |result| {
+src/scene/gpu_scene.rs:1985:        let _ = device.poll(wgpu::PollType::Wait {
+src/scene/gpu_scene.rs:1992:                let mapped = slice.get_mapped_range();
+src/scene/gpu_scene.rs:1999:                log::error!("GPU readback failed");
+src/scene/gpu_scene.rs:2060:    pub fn set_readbacks_enabled(&mut self, enabled: bool) {
+src/scene/gpu_scene.rs:2061:        self.readbacks_enabled = enabled;
+src/scene/gpu_scene.rs:2062:        self.instance_builder.set_stats_readback_enabled(enabled && !self.headless_no_render);
+src/scene/gpu_scene.rs:2147:    /// CPU cell-count readback trails GPU division by a few frames. Specialized
+src/scene/gpu_scene.rs:2197:        // Using the async-readback live count would cause premature physics freeze
+src/scene/gpu_scene.rs:2198:        // when the readback lags behind the actual GPU state.
+src/scene/gpu_scene.rs:2236:        // Update boulder system: spawn new boulders, poll dead readback, update instance buffer.
+src/scene/gpu_scene.rs:2308:        let audio_readback_index = self.division_audio_frame_readback_index;
+src/scene/gpu_scene.rs:2310:            if collect_division_audio && known_cell_slots > 0 && audio_readback_index.is_some() {
+src/scene/gpu_scene.rs:2331:                    readback_buffer: &self.division_audio_readback_buffers
+src/scene/gpu_scene.rs:2332:                        [audio_readback_index.unwrap_or(0)],
+src/scene/gpu_scene.rs:2352:            // readback has reported total_cell_slots > 0 (lags 1-3 frames).
+src/scene/gpu_scene.rs:2358:            self.division_audio_frame_readback_used = true;
+src/scene/gpu_scene.rs:2436:        // Using the async-readback live count would cause premature consumption freeze
+src/scene/gpu_scene.rs:2437:        // when the readback lags behind the actual GPU state.
+src/scene/gpu_scene.rs:2637:        // Using the async-readback live count would cause premature consumption freeze
+src/scene/gpu_scene.rs:2638:        // when the readback lags behind the actual GPU state.
+src/scene/gpu_scene.rs:4175:    /// It dispatches the GPU spatial query compute shader and initiates async readback.
+src/scene/gpu_scene.rs:4276:                            // the label buffer readback in update_follow_camera().
+src/scene/gpu_scene.rs:4278:                            // be replaced by the true root label on the first readback.
+src/scene/gpu_scene.rs:4498:    /// Extract cell data using GPU compute shader with async readback management
+src/scene/gpu_scene.rs:4501:    /// and initiates async readback. Call poll_cell_extraction() to check for completion.
+src/scene/gpu_scene.rs:4541:    ) -> Option<&crate::simulation::gpu_physics::ReadbackResult> {
+src/scene/gpu_scene.rs:5712:            gpu_surface_nets.extract_mesh_with_counter_readback(encoder);
+src/scene/gpu_scene.rs:5716:    /// Read back mesh counts from GPU (call after command buffer submission)
+src/scene/gpu_scene.rs:6490:            simulator.configure_readbacks(self.readbacks_enabled,
+src/scene/gpu_scene.rs:6491:                self.audio_readbacks_enabled && !self.headless_no_render, !self.headless_no_render);
+src/scene/gpu_scene.rs:7481:    /// - AsyncReadbackManager for coordinating GPU-to-CPU transfers
+src/scene/gpu_scene.rs:7486:        // Initialize async readback manager first (requirement 11.1)
+src/scene/gpu_scene.rs:7487:        if self.readback_manager.is_none() {
+src/scene/gpu_scene.rs:7488:            let max_concurrent_readbacks = 4; // Limit concurrent operations (requirement 11.6)
+src/scene/gpu_scene.rs:7489:            self.readback_manager = Some(AsyncReadbackManager::new(
+src/scene/gpu_scene.rs:7491:                max_concurrent_readbacks,
+src/scene/gpu_scene.rs:7693:    /// Clear all cached readback results
+src/scene/gpu_scene.rs:7697:    pub fn clear_readback_caches(&mut self) {
+src/scene/gpu_scene.rs:7706:        if let Some(ref mut readback_manager) = self.readback_manager {
+src/scene/gpu_scene.rs:7707:            readback_manager.clear_completed();
+src/scene/gpu_scene.rs:7711:    /// Poll all async readback operations for completion
+src/scene/gpu_scene.rs:7713:    /// This method should be called each frame to check for completed async readbacks
+src/scene/gpu_scene.rs:7714:    /// from all GPU systems. It coordinates readback operations across:
+src/scene/gpu_scene.rs:7719:    /// Implements requirement 11.3 for non-blocking async readback polling.
+src/scene/gpu_scene.rs:7720:    pub fn poll_async_readbacks(&mut self, device: &wgpu::Device) {
+src/scene/gpu_scene.rs:7721:        // Poll async readback manager if available
+src/scene/gpu_scene.rs:7722:        if let Some(ref mut readback_manager) = self.readback_manager {
+src/scene/gpu_scene.rs:7723:            readback_manager.poll_completions();
+src/scene/gpu_scene.rs:7848:    /// Pumps every busy division-audio readback buffer's map_async independently.
+src/scene/gpu_scene.rs:7852:    /// `DIVISION_AUDIO_READBACK_BUFFER_COUNT`'s doc comment).
+src/scene/gpu_scene.rs:7854:        if !self.division_audio_readback_busy.iter().any(|busy| *busy) {
+src/scene/gpu_scene.rs:7860:        let buffer_count = self.division_audio_readback_buffers.len();
+src/scene/gpu_scene.rs:7863:            if !self.division_audio_readback_busy[index]
+src/scene/gpu_scene.rs:7868:            let slice = self.division_audio_readback_buffers[index].slice(0..bytes);
+src/scene/gpu_scene.rs:7870:            slice.map_async(wgpu::MapMode::Read, move |result| {
+src/scene/gpu_scene.rs:7886:                    let slice = self.division_audio_readback_buffers[index].slice(0..bytes);
+src/scene/gpu_scene.rs:7887:                    let mapped = slice.get_mapped_range();
+src/scene/gpu_scene.rs:7897:                    self.division_audio_readback_claimed_at[index] = None;
+src/scene/gpu_scene.rs:7917:                    self.division_audio_readback_buffers[index].unmap();
+src/scene/gpu_scene.rs:7918:                    self.division_audio_readback_busy[index] = false;
+src/scene/gpu_scene.rs:7922:                    log::warn!("Division audio candidate readback failed: {err}");
+src/scene/gpu_scene.rs:7923:                    self.division_audio_readback_busy[index] = false;
+src/scene/gpu_scene.rs:7925:                    self.division_audio_readback_claimed_at[index] = None;
+src/scene/gpu_scene.rs:7929:                    log::warn!("Division audio candidate readback channel disconnected");
+src/scene/gpu_scene.rs:7930:                    self.division_audio_readback_busy[index] = false;
+src/scene/gpu_scene.rs:7932:                    self.division_audio_readback_claimed_at[index] = None;
+src/scene/gpu_scene.rs:8074:        // Poll for cell extraction completion (inspect tool async readback)
+src/scene/gpu_scene.rs:8075:        // This needs to be called each frame to check for completed async readbacks
+src/scene/gpu_scene.rs:8201:            // Pick one division-audio readback buffer for the final encoded fixed
+src/scene/gpu_scene.rs:8204:            let buffer_count = self.division_audio_readback_buffers.len();
+src/scene/gpu_scene.rs:8205:            self.division_audio_frame_readback_index = (0..buffer_count)
+src/scene/gpu_scene.rs:8206:                .map(|offset| (self.division_audio_readback_write_index + offset) % buffer_count)
+src/scene/gpu_scene.rs:8207:                .find(|&idx| self.audio_readbacks_enabled && !self.headless_no_render
+src/scene/gpu_scene.rs:8208:                    && !self.division_audio_readback_busy[idx]);
+src/scene/gpu_scene.rs:8209:            if self.audio_readbacks_enabled && !self.headless_no_render && self.division_audio_frame_readback_index.is_none() {
+src/scene/gpu_scene.rs:8211:                    "Division audio: all {buffer_count} readback buffers busy this frame - collection skipped"
+src/scene/gpu_scene.rs:8214:            self.division_audio_frame_readback_used = false;
+src/scene/gpu_scene.rs:8240:            if self.division_audio_frame_readback_used {
+src/scene/gpu_scene.rs:8241:                if let Some(index) = self.division_audio_frame_readback_index {
+src/scene/gpu_scene.rs:8242:                    self.division_audio_readback_busy[index] = true;
+src/scene/gpu_scene.rs:8243:                    self.division_audio_readback_claimed_at[index] =
+src/scene/gpu_scene.rs:8245:                    self.division_audio_readback_write_index =
+src/scene/gpu_scene.rs:8246:                        (index + 1) % self.division_audio_readback_buffers.len();
+src/scene/gpu_scene.rs:8321:        // behind the async readback, so the first cell would be invisible without this override.
+src/scene/gpu_scene.rs:8343:        self.cell_count_readback_dirty |= physics_steps > 0 || cell_inserted || cell_removed;
+src/scene/gpu_scene.rs:8347:            let should_start_readback = self.cell_count_readback_dirty && !cell_count_read_pending;
+src/scene/gpu_scene.rs:8348:            if should_start_readback {
+src/scene/gpu_scene.rs:8350:                self.cell_count_readback_dirty = false;
+src/scene/gpu_scene.rs:8382:            if should_start_readback {
+src/scene/gpu_scene.rs:8387:            if should_start_readback || cell_count_read_pending {
+src/scene/gpu_scene.rs:8404:                        self.gpu_triple_buffers.reset_cell_count_readback();
+src/scene/gpu_scene.rs:8460:            // doesn't early-out before the async readback has caught up.
+src/scene/gpu_scene.rs:9293:        // Start async cell count readback (copy to readback buffer). This tiny
+src/scene/gpu_scene.rs:9295:        // even when heavier optional readbacks are disabled.
+src/scene/gpu_scene.rs:9297:        let should_start_readback = self.cell_count_readback_dirty && !cell_count_read_pending;
+src/scene/gpu_scene.rs:9298:        if should_start_readback {
+src/scene/gpu_scene.rs:9300:            self.cell_count_readback_dirty = false;
+src/scene/gpu_scene.rs:9320:        // Call map_async on follow camera staging buffers NOW - after submit.
+src/scene/gpu_scene.rs:9321:        // map_async must not be called while the buffer is referenced by a pending
+src/scene/gpu_scene.rs:9331:        // Initiate the async map operation after submit (if we started a readback)
+src/scene/gpu_scene.rs:9332:        if should_start_readback {
+src/scene/gpu_scene.rs:9337:        // Poll for cell count readback completion and update current_cell_count.
+src/scene/gpu_scene.rs:9338:        if should_start_readback || cell_count_read_pending {
+src/scene/gpu_scene.rs:9360:                    self.gpu_triple_buffers.reset_cell_count_readback();
+src/scene/gpu_scene.rs:9373:            // readback poll here) - map_async on a buffer that still has a
+src/scene/gpu_scene.rs:9378:            // one-frame lag every other readback-driven system in this file
+src/rendering/death_particles.rs:21://!   `MAX_PARTICLES`, giving a ring-buffer effect with no CPU readback needed.
+src/rendering/death_particles.rs:22://! - Draw arguments are generated from the current GPU counter without readback.
+src/rendering/tail_renderer.rs:272:            .get_mapped_range_mut()
+src/rendering/tail_renderer.rs:285:            .get_mapped_range_mut()
+src/rendering/tail_renderer.rs:297:            .get_mapped_range_mut()
+src/rendering/tail_renderer.rs:309:            .get_mapped_range_mut()
+src/rendering/tail_renderer.rs:321:            .get_mapped_range_mut()
+src/rendering/tail_renderer.rs:333:            .get_mapped_range_mut()
+src/ui/tab_viewer.rs:554:                            "Requested genome readback for inspected cell: genome_id={} mode_index={}",
+src/ui/tab_viewer.rs:1441:            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU telemetry");
+src/ui/tab_viewer.rs:1443:                egui::RichText::new(if state.gpu_readbacks_enabled {
+src/ui/tab_viewer.rs:1910:                        "Loads from the biosphere genome table without another GPU readback"
+src/ui/tab_viewer.rs:3465:    // GPU Readbacks toggle at the top
+src/ui/tab_viewer.rs:3467:        ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU Telemetry")
+src/ui/tab_viewer.rs:3470:            .on_hover_text("Measure per-segment GPU frame time with timestamp queries. Disable to remove timestamp query and readback overhead");
+src/rendering/instance_builder.rs:95:    counters_readback_buffer: wgpu::Buffer,
+src/rendering/instance_builder.rs:144:    // Async stats readback state
+src/rendering/instance_builder.rs:146:    stats_readback_enabled: bool,
+src/rendering/instance_builder.rs:812:        let counters_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+src/rendering/instance_builder.rs:813:            label: Some("Counters Readback"),
+src/rendering/instance_builder.rs:815:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/rendering/instance_builder.rs:866:            counters_readback_buffer,
+src/rendering/instance_builder.rs:892:            stats_readback_enabled: false,
+src/rendering/instance_builder.rs:1922:        self.encode_stats_readback(encoder);
+src/rendering/instance_builder.rs:1999:    /// Read back culling statistics (call after GPU work is done).
+src/rendering/instance_builder.rs:2003:        let buffer_slice = self.counters_readback_buffer.slice(..);
+src/rendering/instance_builder.rs:2006:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+src/rendering/instance_builder.rs:2011:        let _ = device.poll(wgpu::PollType::Wait {
+src/rendering/instance_builder.rs:2017:            let data = buffer_slice.get_mapped_range();
+src/rendering/instance_builder.rs:2029:            self.counters_readback_buffer.unmap();
+src/rendering/instance_builder.rs:2036:    fn encode_stats_readback(&mut self, encoder: &mut wgpu::CommandEncoder) {
+src/rendering/instance_builder.rs:2038:        if self.stats_readback_enabled && !self.stats_map_pending && !self.stats_copy_ready
+src/rendering/instance_builder.rs:2045:                &self.counters_readback_buffer,
+src/rendering/instance_builder.rs:2055:    pub fn set_stats_readback_enabled(&mut self, enabled: bool) {
+src/rendering/instance_builder.rs:2056:        self.stats_readback_enabled = enabled;
+src/rendering/instance_builder.rs:2067:        let buffer_slice = self.counters_readback_buffer.slice(..);
+src/rendering/instance_builder.rs:2070:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+src/rendering/instance_builder.rs:2094:                    let buffer_slice = self.counters_readback_buffer.slice(..);
+src/rendering/instance_builder.rs:2095:                    let data = buffer_slice.get_mapped_range();
+src/rendering/instance_builder.rs:2108:                    self.counters_readback_buffer.unmap();
+src/rendering/instance_builder.rs:2268:    /// Get the counters buffer for debug readback.
+src/rendering/instance_builder.rs:2275:mod readback_tests {
+src/rendering/instance_builder.rs:2288:            builder.encode_stats_readback(&mut encoder);
+src/rendering/instance_builder.rs:2291:            builder.set_stats_readback_enabled(true);
+src/rendering/instance_builder.rs:2292:            builder.encode_stats_readback(&mut encoder);
+src/rendering/instance_builder.rs:2296:            builder.set_stats_readback_enabled(false);
+src/rendering/instance_builder.rs:2298:            builder.encode_stats_readback(&mut encoder);
+src/rendering/instance_builder.rs:2301:            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+src/rendering/instance_builder.rs:2306:            builder.set_stats_readback_enabled(true);
+src/rendering/instance_builder.rs:2310:            builder.encode_stats_readback(&mut encoder);
+src/rendering/instance_builder.rs:2313:            builder.encode_stats_readback(&mut encoder);
+src/rendering/instance_builder.rs:2317:            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+src/rendering/post_process.rs:134:                .get_mapped_range_mut()
+src/rendering/particle_draw.rs:97:            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/rendering/particle_draw.rs:100:                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/rendering/particle_draw.rs:114:                    encoder.copy_buffer_to_buffer(&draw.args, 0, &readback, i as u64 * 16, 16);
+src/rendering/particle_draw.rs:118:                readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+src/rendering/particle_draw.rs:122:                    .poll(wgpu::PollType::Wait {
+src/rendering/particle_draw.rs:128:                let mapped = readback.slice(..).get_mapped_range();
+src/rendering/particle_draw.rs:137:                readback.unmap();
+src/ui/panel_context.rs:42:    /// Request to read back a mutated genome from GPU and load it into the editor
+src/ui/panel_context.rs:44:    /// Request to load a scene-table genome into the editor without GPU readback.
+src/ui/panel_context.rs:48:    /// Request to read back the GPU genome for an inspected cell.
+src/ui/panel_context.rs:3972:    /// Get the GPU cell count buffer (GPU-only, no CPU readback).
+src/ui/panel_context.rs:3975:    /// now uses GPU cell count buffer exclusively without async readback.
+src/ui/panel_context.rs:4008:    ) -> Option<&crate::simulation::gpu_physics::ReadbackResult> {
+src/ui/types.rs:157:/// - Gpu: Fully GPU-based simulation without CPU readbacks (high performance)
+src/ui/types.rs:164:    /// Full GPU simulation - entirely on GPU without CPU readbacks.
+src/ui/types.rs:991:    /// Whether GPU readbacks are enabled (cell count, culling stats)
+src/ui/types.rs:994:    pub gpu_readbacks_enabled: bool,
+src/ui/types.rs:997:    /// Disabling this removes per-frame timestamp writes and timing readbacks.
+src/ui/types.rs:1186:            gpu_readbacks_enabled: true,
+src/ui/performance.rs:446:            log::warn!("🔬 Bio-Spheres Specific - May be caused by: GPU scene mode switch, large cell buffer updates, or occlusion query readback");
+src/rendering/gpu_surface_nets.rs:206:    // Cached counts (updated after GPU readback)
+src/rendering/gpu_surface_nets.rs:385:            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+src/rendering/gpu_surface_nets.rs:1865:    /// Run surface nets extraction and copy counters for CPU readback.
+src/rendering/gpu_surface_nets.rs:1866:    pub fn extract_mesh_with_counter_readback(&self, encoder: &mut wgpu::CommandEncoder) {
+src/rendering/gpu_surface_nets.rs:1971:        // No counter readback: the indirect draw needs no CPU involvement.
+src/rendering/gpu_surface_nets.rs:1974:    /// Read back mesh counts from GPU (call after extract_mesh completes)
+src/rendering/gpu_surface_nets.rs:1977:        slice.map_async(wgpu::MapMode::Read, |_| {});
+src/rendering/gpu_surface_nets.rs:1978:        let _ = device.poll(wgpu::PollType::Wait {
+src/rendering/gpu_surface_nets.rs:1984:            let data = slice.get_mapped_range();
+src/rendering/gpu_adhesion_lines.rs:3://! Renders adhesion connections directly from GPU buffers without CPU readback.
+src/rendering/gpu_adhesion_lines.rs:11:/// Reads directly from GPU adhesion buffers - no CPU readback needed.
+src/ui/ui_system.rs:3401:/// frame, then `app.rs` fires the GPU readback + file dialog on the next frame.
+src/bin/signal_backbone_bench.rs:829:    let query_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:830:        label: Some("Chain Bench Query Readback"),
+src/bin/signal_backbone_bench.rs:832:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:949:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:964:        encoder.copy_buffer_to_buffer(&query_resolve, 0, &query_readback, 0, 16);
+src/bin/signal_backbone_bench.rs:967:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:972:        let timestamps: Vec<u64> = map_read(&device, &query_readback)?;
+src/bin/signal_backbone_bench.rs:977:    let output_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:978:        label: Some("Chain Bench Value Readback"),
+src/bin/signal_backbone_bench.rs:980:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:984:        label: Some("Chain Bench Value Readback Encoder"),
+src/bin/signal_backbone_bench.rs:986:    encoder.copy_buffer_to_buffer(&output_buffer, 0, &output_readback, 0, output_bytes);
+src/bin/signal_backbone_bench.rs:989:        .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:993:        .map_err(|error| format!("value readback wait failed: {error:?}"))?;
+src/bin/signal_backbone_bench.rs:994:    let gpu_vec4: Vec<[f32; 4]> = map_read(&device, &output_readback)?;
+src/bin/signal_backbone_bench.rs:1002:        let processor_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:1003:            label: Some("Path Processor Readback"),
+src/bin/signal_backbone_bench.rs:1005:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:1009:            label: Some("Path Processor Readback Encoder"),
+src/bin/signal_backbone_bench.rs:1016:        encoder.copy_buffer_to_buffer(processor_source, 0, &processor_readback, 0, tree_down_bytes);
+src/bin/signal_backbone_bench.rs:1019:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:1023:            .map_err(|error| format!("path processor readback wait failed: {error:?}"))?;
+src/bin/signal_backbone_bench.rs:1024:        let processor_actual = map_read::<[f32; 4]>(&device, &processor_readback)?;
+src/bin/signal_backbone_bench.rs:1064:        "block_size={} microtrees={} macro_rounds={} active_group_mask=0x{:x} workspace_bytes={} workspace_mib={:.3} benchmark_readback_bytes={} dispatches={}",
+src/bin/signal_backbone_bench.rs:1234:    let query_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:1235:        label: Some("Integrated Signal Query Readback"),
+src/bin/signal_backbone_bench.rs:1237:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:1240:    let output_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:1241:        label: Some("Integrated Signal Output Readback"),
+src/bin/signal_backbone_bench.rs:1243:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:1246:    let processor_state_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:1247:        label: Some("Integrated Signal Prior Processor State Readback"),
+src/bin/signal_backbone_bench.rs:1249:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:1291:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:1313:            pipeline.copy_processor_state_to(&mut encoder, &processor_state_readback, cell_count);
+src/bin/signal_backbone_bench.rs:1317:        encoder.copy_buffer_to_buffer(&query_resolve, 0, &query_readback, 0, 32);
+src/bin/signal_backbone_bench.rs:1322:                &output_readback,
+src/bin/signal_backbone_bench.rs:1329:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:1334:        let timestamp = map_read::<u64>(device, &query_readback)?;
+src/bin/signal_backbone_bench.rs:1369:    let actual = map_read::<[f32; 4]>(device, &output_readback)?;
+src/bin/signal_backbone_bench.rs:1379:        let prior = map_read::<GpuSignalProcessorState>(device, &processor_state_readback)?;
+src/bin/signal_backbone_bench.rs:1418:        "integrated_workspace_bytes={} workspace_mib={:.3} dispatches={} queue_submissions_per_tick=1 cpu_readbacks_per_tick=0",
+src/bin/signal_backbone_bench.rs:1915:    let query_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:1916:        label: Some("General Propagation Query Readback"),
+src/bin/signal_backbone_bench.rs:1918:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:1989:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:2004:        encoder.copy_buffer_to_buffer(&query_resolve, 0, &query_readback, 0, 16);
+src/bin/signal_backbone_bench.rs:2007:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:2012:        let timestamps = map_read::<u64>(device, &query_readback)?;
+src/bin/signal_backbone_bench.rs:2016:    let output_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:2017:        label: Some("General Output Readback"),
+src/bin/signal_backbone_bench.rs:2019:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:2023:        label: Some("General Output Readback Encoder"),
+src/bin/signal_backbone_bench.rs:2025:    encoder.copy_buffer_to_buffer(&finalized_buffer, 0, &output_readback, 0, field_bytes);
+src/bin/signal_backbone_bench.rs:2028:        .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:2033:    let actual = map_read::<[f32; 4]>(device, &output_readback)?;
+src/bin/signal_backbone_bench.rs:2038:        let processor_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:2039:            label: Some("General Processor Readback"),
+src/bin/signal_backbone_bench.rs:2041:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:2045:            label: Some("General Processor Readback Encoder"),
+src/bin/signal_backbone_bench.rs:2050:            &processor_readback,
+src/bin/signal_backbone_bench.rs:2056:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:2061:        let processor_actual = map_read::<[f32; 4]>(device, &processor_readback)?;
+src/bin/signal_backbone_bench.rs:2216:    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_bench.rs:2217:        label: Some("General Topology Diagnostics Readback"),
+src/bin/signal_backbone_bench.rs:2219:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_bench.rs:2343:    encoder.copy_buffer_to_buffer(&diagnostics_buffer, 0, &readback, 0, 16);
+src/bin/signal_backbone_bench.rs:2346:        .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:2351:    let diagnostics = map_read::<u32>(device, &readback)?;
+src/bin/signal_backbone_bench.rs:2376:fn map_read<T: Pod>(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<T>, String> {
+src/bin/signal_backbone_bench.rs:2379:    slice.map_async(wgpu::MapMode::Read, move |result| {
+src/bin/signal_backbone_bench.rs:2383:        .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_bench.rs:2392:    let view = slice.get_mapped_range();
+src/bin/signal_backbone_topology_bench.rs:46:fn map_read<T: Pod>(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<T> {
+src/bin/signal_backbone_topology_bench.rs:49:    slice.map_async(wgpu::MapMode::Read, move |result| {
+src/bin/signal_backbone_topology_bench.rs:53:        .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_topology_bench.rs:59:    let view = slice.get_mapped_range();
+src/bin/signal_backbone_topology_bench.rs:145:    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_topology_bench.rs:146:        label: Some("Phase 4 Topology Benchmark Readback"),
+src/bin/signal_backbone_topology_bench.rs:148:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_topology_bench.rs:172:        encoder.copy_buffer_to_buffer(&resolve, 0, &readback, 0, 16);
+src/bin/signal_backbone_topology_bench.rs:175:            .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_topology_bench.rs:180:        let ticks = map_read::<u64>(device, &readback);
+src/bin/signal_backbone_topology_bench.rs:208:    let control_readback = device.create_buffer(&wgpu::BufferDescriptor {
+src/bin/signal_backbone_topology_bench.rs:209:        label: Some("Phase 4 Completion Control Readback"),
+src/bin/signal_backbone_topology_bench.rs:211:        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+src/bin/signal_backbone_topology_bench.rs:217:        &control_readback,
+src/bin/signal_backbone_topology_bench.rs:219:        control_readback.size(),
+src/bin/signal_backbone_topology_bench.rs:223:        .poll(wgpu::PollType::Wait {
+src/bin/signal_backbone_topology_bench.rs:228:    let completed = map_read::<GpuBackboneTopologyControl>(device, &control_readback)[0];
+egui_local/crates/egui-wgpu/src/capture.rs:133:            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+egui_local/crates/egui-wgpu/src/capture.rs:206:        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+egui_local/crates/egui-wgpu/src/capture.rs:215:                .get_mapped_range()
+egui_local/crates/egui_kittest/src/wgpu.rs:214:            .poll(wgpu::PollType::Wait {
+egui_local/crates/egui_kittest/src/texture_to_image.rs:17:        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+egui_local/crates/egui_kittest/src/texture_to_image.rs:49:    buffer_slice.map_async(wgpu::MapMode::Read, move |v| drop(sender.send(v)));
+egui_local/crates/egui_kittest/src/texture_to_image.rs:53:        .poll(wgpu::PollType::Wait {
+egui_local/crates/egui_kittest/src/texture_to_image.rs:61:    let data = buffer_slice.get_mapped_range();

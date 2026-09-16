@@ -27,6 +27,9 @@ const MUTATION_TELEMETRY_COUNTERS: u32 = 16;
 /// This matches the UI's 200k maximum cell-capacity range so, in the worst case,
 /// every live cell can own a distinct GPU-mutated genome slot.
 pub const GENOME_RING_CAPACITY: u32 = 200_000;
+/// Keep authored insertions separate from GPU-allocated mutation/fusion genomes.
+pub const AUTHORED_GENOME_RESERVE: u32 = 4096;
+pub const AUTHORED_MODE_RESERVE: u32 = 65536;
 
 /// Maximum logical modes across all GPU-mutated genomes.
 ///
@@ -251,14 +254,15 @@ pub struct MutationSystem {
     vulnerability_table: Vec<MutationParamEntry>,
 
     // Genome free slot ring buffer
-    genome_ring_state_buffer: wgpu::Buffer, // [head, tail, next_id, next_mode_offset]
-    genome_free_ring_buffer: wgpu::Buffer,
+    pub(super) genome_ring_state_buffer: wgpu::Buffer,
+    pub(super) genome_initial_orientations: wgpu::Buffer, // [head, tail, next_id, next_mode_offset]
+    pub(super) genome_free_ring_buffer: wgpu::Buffer,
 
     // Per-genome metadata
     genome_meta_buffer: wgpu::Buffer,
 
     // Per-genome reference counts (separate atomic buffer)
-    genome_ref_counts_buffer: wgpu::Buffer,
+    pub(super) genome_ref_counts_buffer: wgpu::Buffer,
 
     // Mutation candidates (written by collect_candidates, read by mutation shader)
     mutation_candidates_buffer: wgpu::Buffer,
@@ -397,6 +401,7 @@ impl MutationSystem {
                     },
                     count: None,
                 },
+                Self::storage_rw_entry(6), // inherited initial genome orientation
             ],
         });
 
@@ -527,6 +532,8 @@ impl MutationSystem {
                 Self::storage_rw_entry(36),
                 Self::storage_rw_entry(37),
                 Self::storage_rw_entry(38),
+                Self::storage_rw_entry(39),
+                Self::storage_rw_entry(40),
             ],
         });
 
@@ -770,6 +777,7 @@ impl MutationSystem {
                 entries: &[
                     // binding 0: genome_ring_state (read_write storage)
                     Self::storage_rw_entry(0),
+                    Self::storage_rw_entry(1),
                 ],
             });
 
@@ -855,6 +863,11 @@ impl MutationSystem {
             mapped_at_creation: false,
         });
 
+        let genome_initial_orientations = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Genome Initial Orientations"), size: GENOME_RING_CAPACITY as u64 * 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
         let genome_meta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Genome Metadata"),
             size: (GENOME_RING_CAPACITY as u64) * std::mem::size_of::<GenomeMeta>() as u64,
@@ -925,6 +938,7 @@ impl MutationSystem {
             vulnerability_table_buffer,
             vulnerability_table,
             genome_ring_state_buffer,
+            genome_initial_orientations,
             genome_free_ring_buffer,
             genome_meta_buffer,
             genome_ref_counts_buffer,
@@ -2576,35 +2590,41 @@ impl MutationSystem {
     /// IDs already allocated by the GPU shader are not recycled.
     pub fn sync_genome_metadata(&mut self, queue: &wgpu::Queue, genomes: &[crate::genome::Genome]) {
         let mut offset = 0u32;
-        for (i, genome) in genomes.iter().enumerate() {
-            if i >= GENOME_RING_CAPACITY as usize {
-                break;
-            }
-            let entry = GenomeMeta {
-                mode_count: genome.modes.len() as u32,
-                base_mode_offset: offset,
-                initial_mode_local: genome.initial_mode.max(0) as u32,
-                parent_genome_id: u32::MAX,
-            };
-            // Partial write: only touch this genome's entry, leave all others intact
-            let byte_offset = (i * std::mem::size_of::<GenomeMeta>()) as u64;
-            queue.write_buffer(
-                &self.genome_meta_buffer,
-                byte_offset,
-                bytemuck::bytes_of(&entry),
-            );
-
-            // Keep user genomes immortal (ref_count = u32::MAX so GC never recycles them)
-            let ref_byte_offset = (i * std::mem::size_of::<u32>()) as u64;
-            let immortal: u32 = u32::MAX;
+        let entries: Vec<GenomeMeta> = genomes
+            .iter()
+            .take(GENOME_RING_CAPACITY as usize)
+            .map(|genome| {
+                let entry = GenomeMeta {
+                    mode_count: genome.modes.len() as u32,
+                    base_mode_offset: offset,
+                    initial_mode_local: genome.initial_mode.max(0) as u32,
+                    parent_genome_id: u32::MAX,
+                };
+                offset += entry.mode_count;
+                entry
+            })
+            .collect();
+        if !entries.is_empty() {
+            // Upload only the CPU-owned prefix, preserving GPU-mutated entries.
+            // Two writes replace two writes per genome (thousands per fusion).
+            queue.write_buffer(&self.genome_meta_buffer, 0, bytemuck::cast_slice(&entries));
+            let immortal = vec![u32::MAX; entries.len()];
             queue.write_buffer(
                 &self.genome_ref_counts_buffer,
-                ref_byte_offset,
-                bytemuck::bytes_of(&immortal),
+                0,
+                bytemuck::cast_slice(&immortal),
             );
-
-            offset += genome.modes.len() as u32;
         }
+
+        if !genomes.is_empty() {
+            let orientations: Vec<[f32; 4]> = genomes.iter().map(|g| g.initial_orientation.to_array()).collect();
+            queue.write_buffer(&self.genome_initial_orientations, 0, bytemuck::cast_slice(&orientations));
+        }
+        let sync_params = GCParams {
+            genome_capacity: self.cell_capacity, genome_ring_capacity: GENOME_RING_CAPACITY,
+            max_modes_per_genome: genomes.len() as u32, _pad1: 0,
+        };
+        queue.write_buffer(&self.ref_count_sync_params_buffer, 0, bytemuck::bytes_of(&sync_params));
 
         // Only reset the ring state on the very first call.
         // After that the GPU mutation shader owns next_genome_id and next_mode_offset -
@@ -2613,9 +2633,9 @@ impl MutationSystem {
             let initial_ring_state: [u32; 5] = [
                 0,                    // [0] head
                 0,                    // [1] tail
-                genomes.len() as u32, // [2] next_genome_id (starts after user genomes)
-                offset,               // [3] next_mode_offset (starts after user genome modes)
-                offset,               // [4] max_active_mode_offset - must match [3] so
+                AUTHORED_GENOME_RESERVE.max(genomes.len() as u32), // [2] GPU ID partition
+                AUTHORED_MODE_RESERVE.max(offset), // [3] GPU mode partition
+                AUTHORED_MODE_RESERVE.max(offset), // [4] max_active_mode_offset - must match [3] so
                                       //     mode_offset_reset never resets below user genome data
             ];
             queue.write_buffer(
@@ -2627,6 +2647,14 @@ impl MutationSystem {
         }
 
         self.user_genome_count = genomes.len() as u32;
+    }
+
+    /// Whether the scene has installed the mutation pipeline's buffer bindings.
+    pub fn bindings_initialized(&self) -> bool {
+        self.buffers_bind_group.is_some()
+            && self.collect_input_bind_group.is_some()
+            && self.gc_bind_group.is_some()
+            && self.ref_count_sync_bind_group.is_some()
     }
 
     /// Build bind groups. Call after triple buffer or genome buffers change.
@@ -2673,6 +2701,8 @@ impl MutationSystem {
         mode_properties_v7_buffer: &wgpu::Buffer,
         mode_properties_v14_buffer: &wgpu::Buffer,
         glueocyte_cell_adhesion_flags_buffer: &wgpu::Buffer,
+        embryocyte_defaults_v9: &wgpu::Buffer,
+        embryocyte_defaults_v10: &wgpu::Buffer,
     ) {
         self.params_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mutation Params Bind Group"),
@@ -2702,6 +2732,7 @@ impl MutationSystem {
                     binding: 5,
                     resource: self.genome_ref_counts_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry { binding: 6, resource: self.genome_initial_orientations.as_entire_binding() },
             ],
         }));
 
@@ -2892,6 +2923,8 @@ impl MutationSystem {
                     binding: 38,
                     resource: glueocyte_cell_adhesion_flags_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry { binding: 39, resource: embryocyte_defaults_v9.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 40, resource: embryocyte_defaults_v10.as_entire_binding() },
             ],
         }));
     }
@@ -3017,7 +3050,7 @@ impl MutationSystem {
         let sync_params = GCParams {
             genome_capacity: self.cell_capacity,
             genome_ring_capacity: GENOME_RING_CAPACITY,
-            max_modes_per_genome: 0,
+            max_modes_per_genome: self.user_genome_count,
             _pad1: 0,
         };
         queue.write_buffer(
@@ -3055,7 +3088,7 @@ impl MutationSystem {
     /// Call this AFTER the division execute pass completes.
     pub fn dispatch(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         current_frame: u32,
@@ -3152,6 +3185,11 @@ impl MutationSystem {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
+    }
+
+    /// Genome reclamation is required for fusion even with radiation disabled.
+    pub fn maintain_genomes(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+        if !self.ring_initialized || self.gc_bind_group.is_none() || self.ref_count_sync_bind_group.is_none() { return; }
         // Stage 3: Periodic genome reference count synchronization + GC
         // Run every GC_INTERVAL_FRAMES (120 frames) to avoid race conditions
         // This gives mutations time to stabilize before GC recycles genomes
@@ -3161,11 +3199,7 @@ impl MutationSystem {
         if should_run_gc {
             // Step 0: Clear max_active_mode_offset before GC scan
             // genome_ring_state[4] = 0
-            queue.write_buffer(
-                &self.genome_ring_state_buffer,
-                16,
-                bytemuck::bytes_of(&0u32),
-            );
+            encoder.clear_buffer(&self.genome_ring_state_buffer, 16, Some(4));
 
             if let Some(sync_bg) = &self.ref_count_sync_bind_group {
                 // Step 1: Clear all ref_counts to 0
@@ -3196,18 +3230,6 @@ impl MutationSystem {
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
 
-                // Step 2b: Re-apply immortality for user genomes so GC never recycles them.
-                // The clear pass zeroed their ref_counts; the count pass only adds live cells.
-                // If there are no live cells yet (e.g. right after reset), user genomes would
-                // have ref_count=0 and get recycled, breaking mutation for the new session.
-                let immortal: u32 = u32::MAX;
-                for i in 0..self.user_genome_count as u64 {
-                    queue.write_buffer(
-                        &self.genome_ref_counts_buffer,
-                        i * std::mem::size_of::<u32>() as u64,
-                        bytemuck::bytes_of(&immortal),
-                    );
-                }
             }
 
             // Step 3: Genome garbage collection
@@ -3225,17 +3247,6 @@ impl MutationSystem {
                 pass.dispatch_workgroups(workgroups, 1, 1);
             }
 
-            // Reset next_genome_id ([2]) back to user_genome_count after GC.
-            // This allows the monotonic path to allocate IDs that GC hasn't yet
-            // recycled into the free ring, while keeping IDs 0..user_genome_count
-            // reserved for immortal user genomes.
-            let next_id_reset: u32 = self.user_genome_count;
-            queue.write_buffer(
-                &self.genome_ring_state_buffer,
-                8,
-                bytemuck::bytes_of(&next_id_reset),
-            );
-
             // Step 4: Mode buffer compaction
             // Reset next_mode_offset to max_active_mode_offset (computed by GC shader)
             // This reclaims all trailing unused mode buffer space.
@@ -3245,10 +3256,10 @@ impl MutationSystem {
                     Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("Mode Offset Reset Bind Group"),
                         layout: &self.mode_offset_reset_layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.genome_ring_state_buffer.as_entire_binding(),
-                        }],
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: self.genome_ring_state_buffer.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: self.genome_meta_buffer.as_entire_binding() },
+                        ],
                     }));
             }
 
@@ -3261,8 +3272,7 @@ impl MutationSystem {
                 pass.set_pipeline(&self.mode_offset_reset_pipeline);
                 pass.set_bind_group(0, reset_bg, &[]);
 
-                // Single-thread dispatch (1,1,1)
-                pass.dispatch_workgroups(1, 1, 1);
+                pass.dispatch_workgroups(GENOME_RING_CAPACITY.div_ceil(64), 1, 1);
             }
         }
     }
@@ -3351,6 +3361,61 @@ mod tests {
         available_mode_pool_capacity, buffer_id, data_type, initial_mode_pool_capacity,
         MutationSystem,
     };
+
+    #[test]
+    fn metadata_sync_preserves_gpu_genomes_and_allocator() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(&Default::default());
+            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                ..Default::default()
+            }).await.unwrap();
+            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: adapter.limits(),
+                ..Default::default()
+            }).await.unwrap();
+            let mut system = MutationSystem::new(&device, &queue, 64);
+            // Readback access is needed only by this regression test.
+            system.genome_ref_counts_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: super::GENOME_RING_CAPACITY as u64 * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let genomes = vec![crate::genome::Genome::default(); 950];
+            system.sync_genome_metadata(&queue, &genomes);
+            let gpu_meta = [7u32, 12345, 3, 42];
+            let gpu_ring = [2u32, 9, 1000, 20000, 20000];
+            queue.write_buffer(&system.genome_meta_buffer, 950 * 16, bytemuck::cast_slice(&gpu_meta));
+            queue.write_buffer(&system.genome_ref_counts_buffer, 950 * 4, bytemuck::bytes_of(&17u32));
+            queue.write_buffer(&system.genome_ring_state_buffer, 0, bytemuck::cast_slice(&gpu_ring));
+            let start = std::time::Instant::now();
+            system.sync_genome_metadata(&queue, &genomes);
+            eprintln!("950-genome batched metadata upload: {:?}", start.elapsed());
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None, size: 68,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&system.genome_meta_buffer, 949 * 16, &readback, 0, 32);
+            encoder.copy_buffer_to_buffer(&system.genome_ref_counts_buffer, 949 * 4, &readback, 32, 8);
+            encoder.copy_buffer_to_buffer(&system.genome_ring_state_buffer, 0, &readback, 40, 20);
+            queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            readback.slice(..).map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            rx.recv().unwrap().unwrap();
+            let data = readback.slice(..).get_mapped_range();
+            let words: &[u32] = bytemuck::cast_slice(&data);
+            let modes = genomes[0].modes.len() as u32;
+            assert_eq!(&words[..4], &[modes, 949 * modes, genomes[949].initial_mode.max(0) as u32, u32::MAX]);
+            assert_eq!(&words[4..8], &gpu_meta);
+            assert_eq!(&words[8..10], &[u32::MAX, 17]);
+            assert_eq!(&words[10..15], &gpu_ring);
+        });
+    }
 
     #[test]
     fn default_vulnerability_table_prefers_existing_mode_mutations() {

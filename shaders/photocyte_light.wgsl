@@ -38,9 +38,9 @@ struct PhotocyteParams {
     // Minimum light intensity to gain any mass (threshold)
     min_light_threshold: f32,
     ambient_floor: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
+    light_dir_x: f32,
+    light_dir_y: f32,
+    light_dir_z: f32,
 }
 
 // Physics bind group (group 0)
@@ -155,6 +155,16 @@ fn sample_light(world_pos: vec3<f32>) -> f32 {
     return light_field[idx];
 }
 
+// The occupancy field includes this cell. Sampling only its center can
+// mistake its own opaque voxel footprint for shade. Probe the sun-facing
+// surface beyond that footprint, while retaining local geothermal exposure.
+fn sample_photocyte_light(pos: vec3<f32>, mass: f32) -> f32 {
+    let toward_sun = vec3<f32>(photocyte_params.light_dir_x, photocyte_params.light_dir_y, photocyte_params.light_dir_z);
+    let radius = clamp(mass, 0.5, 2.0);
+    let surface = pos + toward_sun * (radius + photocyte_params.cell_size);
+    return max(sample_light(pos), sample_light(surface));
+}
+
 fn signal_value(cell_idx: u32, channel: u32) -> f32 {
     let packed = atomicLoad(&signal_flags[cell_idx * SIGNAL_CHANNELS + min(channel, SIGNAL_CHANNELS - 1u)]);
     return decode_signal(packed);
@@ -175,7 +185,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Skip dead cells
-    if (death_flags[cell_idx] == 1u) {
+    if (death_flags[cell_idx] != 0u) {
         return;
     }
 
@@ -243,7 +253,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let max_nutrients = min(split_nutrient_thresholds[cell_idx], 200.0) * 2.0;
-    let light_intensity = sample_light(pos);
+    let light_intensity = sample_photocyte_light(pos, positions[cell_idx].w);
 
     let ambient_floor = clamp(photocyte_params.ambient_floor, 0.0, 0.95);
     let direct_sun = clamp(

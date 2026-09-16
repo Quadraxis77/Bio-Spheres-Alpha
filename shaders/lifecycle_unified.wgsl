@@ -318,7 +318,7 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // === DEATH DETECTION ===
     // Read nutrients from nutrients_buffer (fixed-point i32)
     let nutrients = fixed_to_float(atomicLoad(&nutrients_buffer[cell_idx]));
-    let was_dead = death_flags[cell_idx] == 1u;
+    let was_dead = death_flags[cell_idx] != 0u;
 
     // Check for invalid mode index (corrupted cell from mutation)
     let mode_idx = mode_indices[cell_idx];
@@ -404,7 +404,8 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     if ((should_die && !was_dead) || externally_marked_dead) {
         // Newly dead cell - push slot to ring buffer for recycling
-        death_flags[cell_idx] = 1u;
+        // Preserve fusion removal (2): recycle the slot without a death burst.
+        if (!was_dead) { death_flags[cell_idx] = 1u; }
         push_free_slot(cell_idx);
 
         // Decrement live cell count
@@ -443,7 +444,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Skip dead cells
-    if (death_flags[cell_idx] == 1u) {
+    if (death_flags[cell_idx] != 0u) {
         division_flags[cell_idx] = 0u;
         return;
     }
@@ -543,7 +544,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // their reserve at 10 units/sec. When attached, AND-logic release triggers fire
     // division_flags = 2u which signals division_execute to drop all adhesions.
     // Gametocytes (13) share the full Embryocyte lifecycle: reserve storage, release
-    // triggers, and free-cell reserve burn. The only difference is that a free Gametocyte
+    // triggers, and slower reserve burn even while attached. A free Gametocyte
     // should never self-hatch - split_interval is set to the >59 sentinel at default time,
     // so the "free -> divide" branch fires only when the user has configured it explicitly.
     if (cell_type == 10u || cell_type == 13u) {
@@ -557,15 +558,20 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         }
 
+        // Gametes have a tiny maintenance cost throughout life, attached or
+        // free. Embryocytes keep their existing detached reserve burn.
+        let reserve_burn_rate = select(10.0, 0.1, cell_type == 13u);
+        if (cell_type == 13u || emb_adh_count == 0u) {
+            let burn = u32(reserve_burn_rate * params.delta_time * 1000.0 + 0.5);
+            let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
+            atomicStore(&embryocyte_reserves[cell_idx], cur_reserve - min(burn, cur_reserve));
+        }
+
         if (emb_adh_count == 0u) {
-            // Free (no connections): burn reserve at 10 units/sec, and divide when the
+            // Free (no connections): embryos divide when the
             // split timer elapses. split_interval is the "hatch timer" - the embryocyte
             // divides once it has been free for long enough (age >= split_interval).
             // split_interval > 59.0 is the sentinel for "never split".
-            // Reserve is stored x1000 (fixed-point), so burn rate * 1000.
-            let burn = u32(10.0 * params.delta_time * 1000.0 + 0.5);
-            let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
-            atomicStore(&embryocyte_reserves[cell_idx], cur_reserve - min(burn, cur_reserve));
 
             // Gametocytes never split. Release/merge is their only reproduction path.
             if (cell_type == 13u) {
@@ -783,7 +789,7 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         
         // Skip if neighbor is out of bounds or dead
-        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
+        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] != 0u) {
             continue;
         }
         

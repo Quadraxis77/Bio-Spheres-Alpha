@@ -258,7 +258,7 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     let cell_count = cell_count_buffer[0];
     if (cell_idx >= cell_count) { return; }
-    if (death_flags[cell_idx] == 1u) { return; }
+    if (death_flags[cell_idx] != 0u) { return; }
 
     let mode_idx = mode_indices[cell_idx];
     if (mode_idx >= arrayLength(&mode_cell_types)) { return; }
@@ -308,7 +308,7 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let other_idx = spatial_grid_cells[offset + k];
                     if (other_idx == cell_idx) { continue; }
                     if (other_idx >= cell_count) { continue; }
-                    if (death_flags[other_idx] == 1u) { continue; }
+                    if (death_flags[other_idx] != 0u) { continue; }
 
                     let other_pos = positions_in[other_idx].xyz;
                     let other_mass = positions_in[other_idx].w;
@@ -406,7 +406,7 @@ fn bond_release(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     let cell_count = cell_count_buffer[0];
     if (cell_idx >= cell_count) { return; }
-    if (death_flags[cell_idx] == 1u) { return; }
+    if (death_flags[cell_idx] != 0u) { return; }
 
     let mode_idx = mode_indices[cell_idx];
     if (mode_idx >= arrayLength(&mode_cell_types)) { return; }

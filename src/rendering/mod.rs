@@ -183,3 +183,5 @@ pub use volumetric_fog::VolumetricFogRenderer;
 pub use voxel_renderer::{VoxelInstance, VoxelRenderer};
 pub use water_particles::WaterParticleRenderer;
 pub use world_sphere::{WorldSphereParams, WorldSphereRenderer};
+
+pub mod particle_draw;

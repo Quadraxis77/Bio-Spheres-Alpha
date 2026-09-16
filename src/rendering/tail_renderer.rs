@@ -182,6 +182,7 @@ pub struct TailRenderer {
     camera_buffer: wgpu::Buffer,
     lighting_buffer: wgpu::Buffer,
     light_color: [f32; 3],
+    light_dir: [f32; 3],
     bind_group: wgpu::BindGroup,
     // Indexed indirect buffer for GPU rendering (persistent, updated via copy)
     indexed_indirect_buffer: wgpu::Buffer,
@@ -492,10 +493,13 @@ impl TailRenderer {
             push_constant_ranges: &[],
         });
 
+        let shadow_layout =
+            crate::cell::type_registry::CellTypeRegistry::create_shadow_bind_group_layout(device);
+
         // Create pipeline layout for GPU instances
         let gpu_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Tail GPU Pipeline Layout"),
-            bind_group_layouts: &[&gpu_bind_group_layout],
+            bind_group_layouts: &[&gpu_bind_group_layout, &shadow_layout],
             push_constant_ranges: &[],
         });
 
@@ -720,6 +724,7 @@ impl TailRenderer {
             camera_buffer,
             lighting_buffer,
             light_color: [1.0, 0.98, 0.95], // Default warm white
+            light_dir: [-0.5, -0.7, -0.5],
             bind_group,
             indexed_indirect_buffer,
             plumage_indexed_indirect_buffer,
@@ -910,11 +915,15 @@ impl TailRenderer {
         self.light_color = color;
     }
 
+    pub fn set_light_dir(&mut self, direction: [f32; 3]) {
+        self.light_dir = direction;
+    }
+
     /// Update lighting uniform
     fn update_lighting(&self, queue: &wgpu::Queue) {
         let uniform = TailLightingUniform {
-            light_dir: [-0.5, -0.7, -0.5],
-            ambient: 0.15,
+            light_dir: self.light_dir,
+            ambient: 0.0,
             light_color: self.light_color,
             _padding: 0.0,
         };
@@ -1807,7 +1816,11 @@ impl TailRenderer {
         width: u32,
         height: u32,
         cell_capacity: usize,
+        shadow_bind_group: Option<&wgpu::BindGroup>,
     ) {
+        let Some(shadow_bind_group) = shadow_bind_group else {
+            return;
+        };
         // Update dimensions for correct aspect ratio
         self.width = width;
         self.height = height;
@@ -1902,6 +1915,7 @@ impl TailRenderer {
             });
 
             render_pass.set_pipeline(&self.gpu_pipeline);
+            render_pass.set_bind_group(1, shadow_bind_group, &[]);
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);

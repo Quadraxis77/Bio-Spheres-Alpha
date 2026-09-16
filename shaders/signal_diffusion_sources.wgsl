@@ -26,6 +26,8 @@
 @group(0) @binding(23) var<storage, read> grid_cells: array<u32>;
 @group(0) @binding(24) var<uniform> spatial: vec4<f32>; // half_world,cell_size,resolution,max_per_voxel
 
+@group(0) @binding(25) var<storage, read_write> activity: atomic<u32>;
+
 fn voxel(p: vec3<f32>) -> u32 {
     let c = vec3<i32>(floor((p - params.grid_origin.xyz) / params.grid_cell));
     if (any(c < vec3<i32>(0)) || any(c >= vec3<i32>(i32(params.resolution)))) { return 0xffffffffu; }
@@ -114,5 +116,12 @@ fn sources(@builtin(global_invocation_id) id: vec3<u32>) {
 
     }
     for(var group=0u;group<4u;group++){production[cell*4u+group]=values[group];}
+    // A zero field cannot transport anything. Include residual concentrations
+    // and freshly funded production so waking sources and decay stay exact.
+    var has_signal = false;
+    for(var group=0u;group<4u;group++){
+        has_signal = has_signal || any(current[cell*4u+group] != vec4<f32>(0.0)) || any(values[group] != vec4<f32>(0.0));
+    }
+    if(has_signal && atomicLoad(&activity)==0u){atomicStore(&activity,1u);}
     states[cell]=state;
 }

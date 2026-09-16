@@ -66,9 +66,9 @@ pub struct PhotocyteParams {
     pub geothermal_mass_per_second_full_light: f32,
     pub min_light_threshold: f32,
     pub ambient_floor: f32,
-    pub _pad1: f32,
-    pub _pad2: f32,
-    pub _pad3: f32,
+    pub light_dir_x: f32,
+    pub light_dir_y: f32,
+    pub light_dir_z: f32,
 }
 
 /// Parameters for surface shadow sampling (used by cave and cell shaders)
@@ -1720,9 +1720,9 @@ impl LightFieldSystem {
             geothermal_mass_per_second_full_light: self.geothermal_mass_per_second_full_light,
             min_light_threshold: self.min_light_threshold,
             ambient_floor: self.ambient_floor,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
+            light_dir_x: self.light_dir[0],
+            light_dir_y: self.light_dir[1],
+            light_dir_z: self.light_dir[2],
         };
         queue.write_buffer(
             &self.photocyte_params_buffer,

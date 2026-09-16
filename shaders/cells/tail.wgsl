@@ -126,13 +126,13 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Simple diffuse lighting
     let light_dir = normalize(lighting.light_dir);
-    let ndotl = max(dot(in.world_normal, -light_dir), 0.0);
+    let ndotl = max(dot(normalize(in.world_normal), -light_dir), 0.0);
     let diffuse = ndotl * lighting.light_color;
     
     // Slight darkening toward tip
     let tip_darken = 1.0 - in.t * 0.3;
     
-    let final_color = in.color.rgb * (lighting.ambient + diffuse) * tip_darken;
+    let final_color = in.color.rgb * (lighting.ambient + (1.0 - lighting.ambient) * diffuse) * tip_darken;
     
     return vec4<f32>(final_color, in.color.a);
 }

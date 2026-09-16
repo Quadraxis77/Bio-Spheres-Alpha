@@ -362,7 +362,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    if (death_flags[cell_idx] == 1u) {
+    if (death_flags[cell_idx] != 0u) {
         cell_water_next[cell_idx] = 0.0;
         cell_heat_energy_next[cell_idx] = 0.0;
         cell_cached_temperature_next[cell_idx] = BASE_ENV_TEMP;

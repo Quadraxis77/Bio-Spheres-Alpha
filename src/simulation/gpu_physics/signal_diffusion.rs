@@ -3,7 +3,6 @@ use super::adhesion::MAX_ADHESIONS_PER_CELL;
 use super::{AdhesionBuffers, GpuTripleBufferSystem};
 use crate::simulation::signal_diffusion::DiffusionSettings;
 use bytemuck::{Pod, Zeroable};
-#[cfg(test)]
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
@@ -162,6 +161,7 @@ pub struct SignalDiffusionPipeline {
     sources: wgpu::ComputePipeline,
     receivers: wgpu::ComputePipeline,
     spatial: wgpu::Buffer,
+    activity: wgpu::Buffer,
     current: usize,
     mode_data: Vec<DiffusionMode>,
 }
@@ -169,6 +169,12 @@ impl SignalDiffusionPipeline {
     pub fn new(device: &wgpu::Device, capacity: u32) -> Self {
         Self {
             settings: Default::default(),
+            activity: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Signal Field Activity"),
+                // Standalone transport starts enabled; live ticks reduce this on GPU.
+                contents: bytemuck::cast_slice(&[1u32]),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }),
             concentrations: std::array::from_fn(|_| {
                 storage(device, "Signal Concentration", capacity as u64 * 64)
             }),
@@ -296,6 +302,7 @@ impl SignalDiffusionPipeline {
                 edges,
                 adjacency,
                 &self.states,
+                &self.activity,
             ],
         );
         {
@@ -344,6 +351,7 @@ impl SignalDiffusionPipeline {
             pass.set_bind_group(0, &prepare_bind, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
+        encoder.clear_buffer(&self.activity, 0, None);
         let source_bind = bind(
             device,
             &self.sources,
@@ -373,6 +381,7 @@ impl SignalDiffusionPipeline {
                 &b.spatial_grid_counts,
                 &b.spatial_grid_cells,
                 &self.spatial,
+                &self.activity,
             ],
         );
         {
@@ -424,7 +433,10 @@ mod tests {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
             let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    ..Default::default()
+                })
                 .await
                 .expect("GPU diffusion validation requires an adapter");
             eprintln!("Diffusion GPU: {:?}", adapter.get_info());
@@ -581,6 +593,46 @@ mod tests {
             assert!((actual.iter().map(|v| v[0]).sum::<f32>() - 1000.0).abs() < 0.02);
         }
     }
+    #[test]
+    fn idle_field_wakes_for_new_sources_and_preserves_residuals() {
+        let (device, queue) = device();
+        let b = GpuTripleBufferSystem::new(&device, 4);
+        let mut a = AdhesionBuffers::new(&device, 4);
+        a.initialize(&queue);
+        let mut p = SignalDiffusionPipeline::new(&device, 4);
+        let mut genome = crate::genome::Genome::default();
+        genome.modes[0].regulation_emit_channel = -1;
+        p.sync_modes(&device, &queue, &[genome.clone()]);
+        b.sync_signal_settings(&queue, &[genome.clone()]);
+        b.sync_regulation_params(&queue, &[genome.clone()]);
+        queue.write_buffer(&b.cell_count_buffer, 0, bytemuck::cast_slice(&[2u32, 2, 0, 0]));
+        queue.write_buffer(&b.cell_ids, 0, bytemuck::cast_slice(&[1u32, 2]));
+        queue.write_buffer(&b.cell_types, 0, bytemuck::cast_slice(&[1u32; 4]));
+        queue.write_buffer(&b.nutrients_buffer, 0, bytemuck::cast_slice(&[100000i32; 4]));
+        let mut previous = 0.0;
+        for tick in 0..5 {
+            if tick == 2 || tick == 3 {
+                genome.modes[0].regulation_emit_channel = if tick == 2 { 8 } else { -1 };
+                genome.modes[0].regulation_emit_value = 300.0;
+                b.sync_regulation_params(&queue, &[genome.clone()]);
+            }
+            let mut encoder = device.create_command_encoder(&Default::default());
+            p.encode_tick(&device, &queue, &mut encoder, 0, params(2, p.settings),
+                &b, &a, None, None, None, [200.0, 6.25, 64.0, 16.0]);
+            queue.submit([encoder.finish()]);
+            let field = read(&device, &queue, p.current_field(), 2);
+            if tick < 2 {
+                assert!(field.iter().flatten().all(|v| *v == 0.0));
+            } else if tick == 2 {
+                assert!(field[0][8] > 0.0, "new sources must wake transport immediately");
+            } else {
+                let expected = previous * params(2, p.settings).retention;
+                assert!((field[0][8] - expected).abs() < 0.0001, "silent sources must retain decaying signals");
+            }
+            previous = field[0][8];
+        }
+    }
+
     #[test]
     fn gpu_gameplay_sources_self_reception_and_slot_reuse() {
         let (device, queue) = device();
