@@ -97,7 +97,7 @@ var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
 var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
 
 @group(1) @binding(11)
-var<storage, read_write> death_flags: array<u32>;
+var<storage, read> death_flags: array<u32>;
 
 @group(2) @binding(0)
 var<uniform> audio_params: DivisionAudioParams;

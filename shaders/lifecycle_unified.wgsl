@@ -324,21 +324,24 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let mode_idx = mode_indices[cell_idx];
     let has_invalid_mode = mode_idx >= arrayLength(&mode_cell_types);
 
-    // Determine if this cell is an Embryocyte (cell_type == 10).
-    var is_embryocyte = false;
+    // Embryocytes and Gametocytes are reserve-only cells. Their regular nutrient
+    // field is intentionally not metabolized, so it must not keep them alive once
+    // their reserve has been exhausted.
+    var is_reserve_only = false;
     if (!has_invalid_mode) {
-        is_embryocyte = mode_cell_types[mode_idx] == 10u;
+        let cell_type = mode_cell_types[mode_idx];
+        is_reserve_only = cell_type == 10u || cell_type == 13u;
     }
 
-    // Embryocyte reserve management:
+    // Reserve-only cell management:
     // - Reserve burn rate: 10 units/sec when free (no adhesions - checked in division_scan).
     //   death_scan does not have adhesion data, so burn is applied in division_scan.
-    // - Death: Embryocytes die when reserve == 0 after a short newborn feed grace.
-    // Non-Embryocyte cells: die when nutrients < threshold AND reserve == 0.
+    // - Death: reserve-only cells die when reserve == 0 after a short newborn feed grace.
+    // Other cells die when nutrients < threshold AND reserve == 0.
     let reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
     var is_dead: bool;
-    if (is_embryocyte) {
-        // Newly budded attached Embryocytes can be born with zero reserve once
+    if (is_reserve_only) {
+        // Newly budded attached reserve-only cells can be born with zero reserve once
         // the parent organism no longer has inherited startup reserve. Division
         // execute also marks both children split-deferred for a few frames, so
         // nutrient_transport may be unable to fill the new egg before this death
@@ -458,7 +461,9 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_type = mode_cell_types[mode_idx];
 
     let thermal_state = cell_thermal_state[cell_idx];
-    if (thermal_state <= THERMAL_STATE_FROZEN || thermal_state >= THERMAL_STATE_HEAT_SHOCK) {
+    let thermal_division_blocked =
+        thermal_state <= THERMAL_STATE_FROZEN || thermal_state >= THERMAL_STATE_HEAT_SHOCK;
+    if (thermal_division_blocked && cell_type != 10u && cell_type != 13u) {
         division_flags[cell_idx] = 0u;
         return;
     }
@@ -565,6 +570,14 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let burn = u32(reserve_burn_rate * params.delta_time * 1000.0 + 0.5);
             let cur_reserve = atomicLoad(&embryocyte_reserves[cell_idx]);
             atomicStore(&embryocyte_reserves[cell_idx], cur_reserve - min(burn, cur_reserve));
+        }
+
+        // Thermal stress blocks release/hatching, but not metabolism. Normal cells
+        // also keep metabolizing while thermally blocked, so reserve-only cells must
+        // continue burning reserve to avoid becoming immortal in a persistent state.
+        if (thermal_division_blocked) {
+            division_flags[cell_idx] = 0u;
+            return;
         }
 
         if (emb_adh_count == 0u) {

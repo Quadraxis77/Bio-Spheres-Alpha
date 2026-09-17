@@ -2018,20 +2018,21 @@ pub fn physics_step_with_genome(
     // Remove any cells that starved, matching GPU death threshold.
     // - Standard cells (non-Embryocyte): die when nutrients < 1.0 AND reserve == 0.
     //   A non-zero reserve extends life (reserve burns first in update_nutrient_growth).
-    // - Embryocytes (cell_type == 10): die when reserve == 0 after a short newborn
-    //   feed grace. The grace matches the GPU path, where freshly split children are
-    //   briefly blocked from nutrient transport before an attached egg can be filled.
+    // - Reserve-only cells (Embryocytes and Gametocytes): die when reserve == 0 after
+    //   a short newborn feed grace. Their regular nutrient field is intentionally not
+    //   metabolized and therefore cannot keep them alive. The grace matches the GPU
+    //   path, where freshly split children are briefly blocked from nutrient transport.
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     const EMBRYOCYTE_NEWBORN_FEED_GRACE: f32 = 0.2;
     let starved: Vec<usize> = (0..state.cell_count)
         .filter(|&i| {
             let mode_index = state.mode_indices[i];
-            let is_embryocyte = genome
+            let is_reserve_only = genome
                 .modes
                 .get(mode_index)
-                .map(|m| m.cell_type == 10)
+                .map(|m| matches!(m.cell_type, 10 | 13))
                 .unwrap_or(false);
-            if is_embryocyte {
+            if is_reserve_only {
                 state.reserves[i] == 0
                     && current_time - state.birth_times[i] >= EMBRYOCYTE_NEWBORN_FEED_GRACE
             } else {

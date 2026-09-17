@@ -88,9 +88,9 @@ var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
 @group(1) @binding(10)
 var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
 
-// Death flags for biologically-plausible overcrowding cull.
+// Death flags are read only so dead cells are excluded from the grid.
 @group(1) @binding(11)
-var<storage, read_write> death_flags: array<u32>;
+var<storage, read> death_flags: array<u32>;
 
 // Per-cell slot within its bucket's fixed spatial_grid_cells array, or
 // SENTINEL_OVERFLOW if the cell missed the fixed slots and went to the

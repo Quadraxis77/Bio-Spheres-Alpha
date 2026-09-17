@@ -1,9 +1,9 @@
 use bio_spheres::genome::Genome;
 use bio_spheres::simulation::preview_physics::{
     check_embryocyte_release_triggers, transport_nutrients_through_adhesions,
-    update_embryocyte_reserve_burn, update_nutrient_growth,
+    physics_step_with_genome, update_embryocyte_reserve_burn, update_nutrient_growth,
 };
-use bio_spheres::simulation::CanonicalState;
+use bio_spheres::simulation::{CanonicalState, PhysicsConfig};
 use glam::{Quat, Vec3};
 
 #[test]
@@ -220,6 +220,24 @@ fn gamete_burn_saturates_and_embryo_metabolism_is_unchanged() {
     state.adhesion_manager.remove_all_connections_for_cell(&mut state.adhesion_connections, 0);
     update_embryocyte_reserve_burn(&mut state, &genome, 1.0);
     assert_eq!(state.reserves[0], 10_000);
+}
+
+#[test]
+fn gamete_dies_when_reserve_empties_even_with_stale_nutrients() {
+    let (genome, mut state) = attached_gamete();
+    state
+        .adhesion_manager
+        .remove_all_connections_for_cell(&mut state.adhesion_connections, 0);
+    state.remove_cells(&[1]);
+    state.reserves[0] = 1;
+    state.nutrients[0] = 100.0;
+
+    physics_step_with_genome(&mut state, &genome, &PhysicsConfig::default(), 1.0, None);
+
+    assert_eq!(
+        state.cell_count, 0,
+        "a gamete's unused nutrient field must not prevent reserve starvation"
+    );
 }
 
 #[test]

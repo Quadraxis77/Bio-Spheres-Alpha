@@ -418,7 +418,7 @@ pub struct GpuTripleBufferSystem {
     pub embryocyte_defaults_v10: wgpu::Buffer,
 
     /// Per-cell Embryocyte reserve buffer (one u32 per cell).
-    /// Embryocytes: sole energy source; burns at 10 units/sec when free.
+    /// Embryocytes and Gametocytes: sole energy source; burn at their lifecycle rate.
     /// Non-Embryocytes: provides extended life; burns before normal nutrients.
     /// Halved on division: child_reserve = parent_reserve >> 1.
     pub embryocyte_reserve_buffer: wgpu::Buffer,

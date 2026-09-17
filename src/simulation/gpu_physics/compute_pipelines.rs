@@ -3495,12 +3495,12 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Death flags - spatial grid build marks cells that exceed bucket capacity
+                // Death flags (read-only) - dead cells are excluded from the grid
                 wgpu::BindGroupLayoutEntry {
                     binding: 11,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -5484,18 +5484,18 @@ impl GpuPhysicsPipelines {
                     },
                     count: None,
                 },
-                // Binding 11: Death flags (read-write - collision culls impossible overcrowding)
+                // Binding 11: Death flags (read-only - collision never decides cell death)
                 wgpu::BindGroupLayoutEntry {
                     binding: 11,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
                 },
-                // Binding 12: Cell adhesion indices (read-only - bonded cells are exempt from density culling)
+                // Binding 12: Cell adhesion indices (retained for bind-group compatibility)
                 wgpu::BindGroupLayoutEntry {
                     binding: 12,
                     visibility: wgpu::ShaderStages::COMPUTE,

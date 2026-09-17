@@ -242,9 +242,49 @@ fn readback_typed<T: bytemuck::Pod>(
     src_buffer: &wgpu::Buffer,
     count: usize,
 ) -> Result<Vec<T>, SnapshotError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
     let byte_count = (count * std::mem::size_of::<T>()) as u64;
     let bytes = readback_buffer_bytes(device, queue, src_buffer, 0, byte_count)?;
-    Ok(bytemuck::cast_slice::<u8, T>(&bytes).to_vec())
+    decode_readback_bytes(&bytes)
+}
+
+fn decode_readback_bytes<T: bytemuck::Pod>(bytes: &[u8]) -> Result<Vec<T>, SnapshotError> {
+    let element_size = std::mem::size_of::<T>();
+    if element_size == 0 || bytes.len() % element_size != 0 {
+        return Err(SnapshotError::GpuReadback(format!(
+            "readback byte count {} is not a multiple of element size {element_size}",
+            bytes.len()
+        )));
+    }
+
+    Ok(bytes
+        .chunks_exact(element_size)
+        .map(bytemuck::pod_read_unaligned)
+        .collect())
+}
+
+#[cfg(test)]
+mod readback_tests {
+    use super::decode_readback_bytes;
+
+    #[test]
+    fn empty_typed_readback_result_does_not_require_alignment() {
+        let values = decode_readback_bytes::<[u32; 4]>(&[]).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn typed_readback_conversion_accepts_unaligned_bytes() {
+        let source = [1u32, 2, 3, 4];
+        let mut storage = vec![0u8; std::mem::size_of_val(&source) + 1];
+        storage[1..].copy_from_slice(bytemuck::cast_slice(&source));
+
+        let values = decode_readback_bytes::<u32>(&storage[1..]).unwrap();
+        assert_eq!(values, source);
+    }
 }
 
 fn capture_gpu_adult_snapshots(

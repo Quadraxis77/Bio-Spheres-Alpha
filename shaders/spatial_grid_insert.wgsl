@@ -76,9 +76,9 @@ var<storage, read_write> spatial_grid_overflow_grid_indices: array<u32>;
 @group(1) @binding(10)
 var<storage, read_write> spatial_grid_overflow_count: array<atomic<u32>>;
 
-// Death flags for biologically-plausible overcrowding cull.
+// Death flags are read only so dead cells are excluded from the grid.
 @group(1) @binding(11)
-var<storage, read_write> death_flags: array<u32>;
+var<storage, read> death_flags: array<u32>;
 
 const MAX_CELLS_PER_GRID: u32 = 16u;
 const OCCUPATION_CELL_CULL_THRESHOLD: u32 = 16u;
