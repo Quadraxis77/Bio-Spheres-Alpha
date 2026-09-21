@@ -54,6 +54,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 gif = "0.13"
 dirs = "5.0"
 kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis", "wav", "pcm"] }
+keep-active = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5.3"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["wincon", "consoleapi", "winuser", "libloaderapi", "basetsd"] }

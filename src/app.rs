@@ -145,6 +145,9 @@ enum DeferredAction {
 }
 
 pub struct App {
+    /// Prevents system sleep while focused or while an unpaused simulation runs.
+    sleep_inhibitor: crate::sleep_inhibitor::SleepInhibitor,
+    window_focused: bool,
     window: Arc<Window>,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -234,7 +237,12 @@ impl App {
         let initial_music_volume = ui.state.music_volume;
         let initial_sfx_volume = ui.state.sfx_volume;
 
+        let window_focused = window.has_focus();
+        let sleep_inhibitor = crate::sleep_inhibitor::SleepInhibitor::new(window_focused);
+
         Self {
+            sleep_inhibitor,
+            window_focused,
             window,
             queue,
             config,
@@ -1881,6 +1889,9 @@ impl App {
                 self.render();
             }
             WindowEvent::Focused(focused) => {
+                self.window_focused = *focused;
+                self.sync_sleep_inhibitor();
+
                 // Clear drag state when window loses focus
                 if !focused && self.editor_state.radial_menu.dragging_cell.is_some() {
                     log::info!("Clearing drag state due to window focus loss");
@@ -2635,6 +2646,8 @@ impl App {
     }
 
     fn render(&mut self) {
+        self.sync_sleep_inhibitor();
+
         // Don't render if surface has zero dimensions
         if self.config.width == 0 || self.config.height == 0 {
             return;
@@ -4945,6 +4958,15 @@ impl App {
 
     pub fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+
+    /// Keep the machine awake while the window is focused. Once a simulation
+    /// is running, preserve it across focus loss, screen locking, and lid close.
+    fn sync_sleep_inhibitor(&mut self) {
+        let simulation_running = self.app_phase == AppPhase::InGame
+            && !self.scene_manager.active_scene().is_paused();
+        self.sleep_inhibitor
+            .set_active(self.window_focused || simulation_running);
     }
 
     /// Get the next scheduled frame time for 60fps limiting

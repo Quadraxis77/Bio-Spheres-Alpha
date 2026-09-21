@@ -58,6 +58,9 @@ struct CaveParams {
     mesh_smoothing_factor: f32,
     mesh_smooth_normals: u32,
     flat_ground_enabled: u32,
+    watershed_lakes: array<vec4<f32>, 2>,
+    watershed_route_a: array<vec4<f32>, 6>,
+    watershed_route_b: array<vec4<f32>, 6>,
 }
 
 @group(0) @binding(0) var<uniform> params: PhysicsParams;
@@ -179,6 +182,203 @@ fn warp_domain(pos: vec3<f32>) -> vec3<f32> {
     );
 }
 
+// Keep cave-noise samples constant through most of each vertical band, then
+// transition quickly to the next band. This mirrors the CPU cave mesh and
+// fluid-solid generators, producing walkable shelves and steep connecting
+// cliffs while retaining the organic X/Z outline.
+fn terrace_cave_sample_position(pos: vec3<f32>) -> vec3<f32> {
+    let terrace_height = clamp(cave_params.world_radius * 0.055, 6.0, 14.0);
+    let level_position = (pos.y - cave_params.world_center.y) / terrace_height;
+    let lower_level = floor(level_position);
+    let within_level = level_position - lower_level;
+    let riser_fraction = 0.18;
+    let riser_t = clamp(
+        (within_level - (1.0 - riser_fraction)) / riser_fraction,
+        0.0,
+        1.0,
+    );
+    let smooth_riser = riser_t * riser_t * (3.0 - 2.0 * riser_t);
+    return vec3<f32>(
+        pos.x,
+        cave_params.world_center.y + (lower_level + smooth_riser) * terrace_height,
+        pos.z,
+    );
+}
+
+fn watershed_smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = clamp((value - edge0) / max(edge1 - edge0, 0.000001), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+fn lake_basin_profile(
+    point: vec2<f32>,
+    center: vec2<f32>,
+    radii: vec2<f32>,
+) -> vec2<f32> {
+    let elliptical_distance = length((point - center) / radii);
+    let depression = 1.0 - watershed_smoothstep(0.38, 0.78, elliptical_distance);
+    let influence = 1.0 - watershed_smoothstep(1.20, 1.55, elliptical_distance);
+    return vec2<f32>(depression, influence);
+}
+
+fn terraced_watershed_height(world_height: f32) -> f32 {
+    return terrace_cave_sample_position(vec3<f32>(
+        cave_params.world_center.x,
+        world_height,
+        cave_params.world_center.z,
+    )).y;
+}
+
+fn river_route_sample(
+    point: vec2<f32>,
+    route: array<vec4<f32>, 6>,
+) -> vec3<f32> {
+    var best = vec3<f32>(0.0, 1000000.0, 0.0);
+    for (var i = 0u; i < 5u; i++) {
+        let start = route[i];
+        let end = route[i + 1u];
+        if (start.w <= 0.0 || end.w <= 0.0) {
+            continue;
+        }
+        let start_xz = start.xz;
+        let end_xz = end.xz;
+        let direction = end_xz - start_xz;
+        let length_squared = dot(direction, direction);
+        if (length_squared <= 0.000001) {
+            continue;
+        }
+        let t = clamp(dot(point - start_xz, direction) / length_squared, 0.0, 1.0);
+        let route_point = start_xz + direction * t;
+        let route_distance = distance(point, route_point);
+        if (route_distance < best.y) {
+            best = vec3<f32>(
+                start.y + (end.y - start.y) * t,
+                route_distance,
+                start.w + (end.w - start.w) * t,
+            );
+        }
+    }
+    return best;
+}
+
+fn blend_watershed_surface(
+    base_density: f32,
+    pos_y: f32,
+    surface_y: f32,
+    horizontal_influence: f32,
+) -> f32 {
+    let radius = max(cave_params.world_radius, 1.0);
+    let terrace_height = clamp(radius * 0.055, 6.0, 14.0);
+    let vertical_offset = pos_y - surface_y;
+    var vertical_influence = 0.0;
+    if (vertical_offset >= 0.0) {
+        vertical_influence = 1.0 - watershed_smoothstep(
+            terrace_height * 3.0,
+            terrace_height * 4.0,
+            vertical_offset,
+        );
+    } else {
+        vertical_influence = 1.0 - watershed_smoothstep(
+            terrace_height * 1.5,
+            terrace_height * 2.5,
+            -vertical_offset,
+        );
+    }
+    let influence = horizontal_influence * vertical_influence;
+    let surface_softness = clamp(radius * 0.008, 1.0, 3.0);
+    let terrain_density = cave_params.threshold
+        + clamp((surface_y - pos_y) / surface_softness, -0.5, 0.5);
+    return base_density + (terrain_density - base_density) * influence;
+}
+
+fn carve_watershed_surface(
+    base_density: f32,
+    pos_y: f32,
+    surface_y: f32,
+    horizontal_influence: f32,
+) -> f32 {
+    return min(
+        base_density,
+        blend_watershed_surface(
+            base_density,
+            pos_y,
+            surface_y,
+            horizontal_influence,
+        ),
+    );
+}
+
+fn apply_cave_watershed_density(pos: vec3<f32>, base_density: f32) -> f32 {
+    let radius = max(cave_params.world_radius, 1.0);
+    let point = pos.xz;
+    let basin_depth = clamp(radius * 0.045, 5.0, 11.0);
+    let channel_depth = clamp(radius * 0.018, 2.5, 5.0);
+    var density = base_density;
+
+    for (var i = 0u; i < 2u; i++) {
+        let lake = cave_params.watershed_lakes[i];
+        if (lake.w <= 0.0) {
+            continue;
+        }
+        let basin = lake_basin_profile(
+            point,
+            lake.xz,
+            vec2<f32>(lake.w, lake.w * 0.78),
+        );
+        density = blend_watershed_surface(
+            density,
+            pos.y,
+            lake.y - basin.x * basin_depth,
+            basin.y,
+        );
+    }
+
+    let route_a = river_route_sample(point, cave_params.watershed_route_a);
+    if (route_a.z > 0.0) {
+        let cross_section = 1.0 - watershed_smoothstep(
+            route_a.z * 0.35,
+            route_a.z,
+            route_a.y,
+        );
+        let influence = 1.0 - watershed_smoothstep(
+            route_a.z,
+            route_a.z * 1.65,
+            route_a.y,
+        );
+        density = carve_watershed_surface(
+            density,
+            pos.y,
+            terraced_watershed_height(route_a.x) - cross_section * channel_depth,
+            influence,
+        );
+    }
+
+    let route_b = river_route_sample(point, cave_params.watershed_route_b);
+    if (route_b.z > 0.0) {
+        let cross_section = 1.0 - watershed_smoothstep(
+            route_b.z * 0.35,
+            route_b.z,
+            route_b.y,
+        );
+        let influence = 1.0 - watershed_smoothstep(
+            route_b.z,
+            route_b.z * 1.65,
+            route_b.y,
+        );
+        density = carve_watershed_surface(
+            density,
+            pos.y,
+            terraced_watershed_height(route_b.x) - cross_section * channel_depth,
+            influence,
+        );
+    }
+    return density;
+}
+
+fn shape_cave_sample_position(pos: vec3<f32>) -> vec3<f32> {
+    return terrace_cave_sample_position(pos);
+}
+
 fn flat_ground_surface_height(pos: vec3<f32>) -> f32 {
     let base_height = cave_params.world_center.y - cave_params.world_radius / 3.0;
     let phase = f32(cave_params.seed) * 0.013;
@@ -222,7 +422,7 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     }
 
     // Apply domain warping for organic shapes
-    let warped_pos = warp_domain(pos);
+    let warped_pos = shape_cave_sample_position(warp_domain(pos));
 
     // Get base noise value using FBM
     let noise = fbm(warped_pos);
@@ -232,15 +432,14 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     // Higher density = more solid rock, lower = more open tunnels
     let cave_threshold = clamp(cave_params.density, 0.0, 1.0);
 
-    // Solid rock where noise is above threshold, open tunnels where below
+    // Solid rock where noise is above threshold, open tunnels where below.
+    var base_density = cave_params.threshold - 0.5;
     if (noise > cave_threshold) {
         // Solid rock region - above marching cubes threshold
         let wall_factor = (noise - cave_threshold) / max(1.0 - cave_threshold, 0.001);
-        return cave_params.threshold + wall_factor * 0.5;
-    } else {
-        // Open tunnel/cave space - below marching cubes threshold
-        return cave_params.threshold - 0.5;
+        base_density = cave_params.threshold + wall_factor * 0.5;
     }
+    return apply_cave_watershed_density(pos, base_density);
 }
 
 fn collision_grid_value(p: vec3<u32>, size: u32) -> f32 {
