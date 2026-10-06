@@ -119,5 +119,6 @@ pub mod input;
 pub mod rendering;
 pub mod scene;
 pub mod simulation;
+pub mod sleep_inhibitor;
 pub mod ui;
 pub mod updater;

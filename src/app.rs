@@ -53,7 +53,7 @@ use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    window::{CursorIcon, Window, WindowId},
+    window::{CursorIcon, Fullscreen, Window, WindowId},
 };
 
 /// High-level application phase.
@@ -164,6 +164,9 @@ pub struct App {
     vr: Option<crate::vr::VrState>,
     #[cfg(feature = "vr")]
     vr_input_state: (bool, bool, bool, std::time::Instant),
+    /// Prevents system sleep while focused or while an unpaused simulation runs.
+    sleep_inhibitor: crate::sleep_inhibitor::SleepInhibitor,
+    window_focused: bool,
     window: Arc<Window>,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -172,6 +175,9 @@ pub struct App {
     ui: UiSystem,
     last_render_time: std::time::Instant,
     frame_count: u32,
+    cpu_phase_totals_ms: [f64; 8],
+    cpu_phase_max_ms: [f64; 8],
+    frame_lateness_max_ms: f64,
     fps_timer: std::time::Instant,
     /// Persistent genome editor state
     editor_state: crate::ui::panel_context::GenomeEditorState,
@@ -451,11 +457,19 @@ impl App {
         dock_manager: DockManager,
         mut ui: UiSystem,
     ) -> Self {
+        // Apply the saved window preference after UI settings have loaded.
+        if ui.state.fullscreen {
+            window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
+        }
+
         // Build the main menu scene before moving `ui` into the struct so we
         // can access `ui.renderer` mutably without fighting the borrow checker.
         let main_menu_scene = MainMenuScene::new(&device, &queue, &config, &mut ui.renderer);
         let initial_music_volume = ui.state.music_volume;
         let initial_sfx_volume = ui.state.sfx_volume;
+
+        let window_focused = window.has_focus();
+        let sleep_inhibitor = crate::sleep_inhibitor::SleepInhibitor::new(window_focused);
 
         Self {
             mirror_fallback: None,
@@ -463,6 +477,8 @@ impl App {
             vr: None,
             #[cfg(feature = "vr")]
             vr_input_state: (false, false, false, std::time::Instant::now()),
+            sleep_inhibitor,
+            window_focused,
             window,
             queue,
             config,
@@ -471,6 +487,9 @@ impl App {
             ui,
             last_render_time: std::time::Instant::now(),
             frame_count: 0,
+            cpu_phase_totals_ms: [0.0; 8],
+            cpu_phase_max_ms: [0.0; 8],
+            frame_lateness_max_ms: 0.0,
             fps_timer: std::time::Instant::now(),
             editor_state: crate::ui::panel_context::GenomeEditorState::new(),
             mouse_position: (0.0, 0.0),
@@ -680,7 +699,7 @@ impl App {
 
         let aspect = w / h;
         let cam_pos = preview_scene.camera.position();
-        let cam_rot = preview_scene.camera.rotation;
+        let cam_rot = preview_scene.camera.view_rotation();
 
         let ndc_x = (mx / w) * 2.0 - 1.0;
         let ndc_y = 1.0 - (my / h) * 2.0;
@@ -924,8 +943,8 @@ impl App {
 
         let view_matrix = glam::Mat4::look_at_rh(
             scene.camera.position(),
-            scene.camera.position() + scene.camera.rotation * glam::Vec3::NEG_Z,
-            scene.camera.rotation * glam::Vec3::Y,
+            scene.camera.position() + scene.camera.view_rotation() * glam::Vec3::NEG_Z,
+            scene.camera.view_rotation() * glam::Vec3::Y,
         );
         let proj_matrix = scene.camera.projection_matrix(width / height, 0.1, 5000.0);
         let clip = proj_matrix * view_matrix * world_pos.extend(1.0);
@@ -979,8 +998,8 @@ impl App {
             return;
         };
 
-        let camera_right = preview_scene.camera.rotation * glam::Vec3::X;
-        let camera_up = preview_scene.camera.rotation * glam::Vec3::Y;
+        let camera_right = preview_scene.camera.view_rotation() * glam::Vec3::X;
+        let camera_up = preview_scene.camera.view_rotation() * glam::Vec3::Y;
         let radius_world = selection.formation_range;
         let right_edge = Self::preview_world_to_screen(
             preview_scene,
@@ -1623,7 +1642,7 @@ impl App {
                             let aspect = w / h;
 
                             let cam_pos = preview_scene.camera.position();
-                            let cam_rot = preview_scene.camera.rotation;
+                            let cam_rot = preview_scene.camera.view_rotation();
 
                             let ndc_x = (mx / w) * 2.0 - 1.0;
                             let ndc_y = 1.0 - (my / h) * 2.0;
@@ -1896,7 +1915,7 @@ impl App {
                         let aspect = w / h;
 
                         let cam_pos = preview_scene.camera.position();
-                        let cam_rot = preview_scene.camera.rotation;
+                        let cam_rot = preview_scene.camera.view_rotation();
 
                         let ndc_x = (mx / w) * 2.0 - 1.0;
                         let ndc_y = 1.0 - (my / h) * 2.0;
@@ -1984,12 +2003,9 @@ impl App {
                 // Only pass to camera if egui doesn't want the input
                 if !self.ui.wants_scroll_input() {
                     let camera = self.scene_manager.active_scene_mut().camera_mut();
-                    let previous_sprint_multiplier = camera.sprint_multiplier;
                     camera.handle_scroll(*delta);
-                    if (camera.sprint_multiplier - previous_sprint_multiplier).abs() > f32::EPSILON
-                    {
-                        self.ui.state.camera_sprint_multiplier = camera.sprint_multiplier;
-                    }
+                    self.ui.state.camera_sprint_multiplier = camera.sprint_multiplier;
+                    self.ui.state.camera_alternate_speed_multiplier = camera.alternate_speed_multiplier;
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -2125,6 +2141,9 @@ impl App {
                 self.render();
             }
             WindowEvent::Focused(focused) => {
+                self.window_focused = *focused;
+                self.sync_sleep_inhibitor();
+
                 // Clear drag state when window loses focus
                 if !focused && self.editor_state.radial_menu.dragging_cell.is_some() {
                     log::info!("Clearing drag state due to window focus loss");
@@ -2228,6 +2247,8 @@ impl App {
                 return;
             };
 
+        let was_fullscreen = self.ui.state.fullscreen;
+        let mut fullscreen = was_fullscreen;
         let menu_response = Self::render_main_menu_ui(
             &self.ui.ctx.clone(),
             left_id,
@@ -2238,10 +2259,21 @@ impl App {
             panel_h,
             self.ui.state.tutorial.ever_shown,
             &mut self.main_menu_settings_open,
+            &mut fullscreen,
             &mut self.ui.state.music_volume,
             &mut self.ui.state.sfx_volume,
             &mut self.ui.state.desktop_render_fps,
         );
+        if fullscreen != was_fullscreen {
+            self.window.set_fullscreen(if fullscreen {
+                Some(Fullscreen::Borderless(self.window.current_monitor()))
+            } else {
+                None
+            });
+            self.ui.state.fullscreen = fullscreen;
+            self.ui.mark_ui_state_dirty();
+            self.ui.save_ui_state();
+        }
         if menu_response.audio_settings_changed {
             self.audio
                 .set_volumes(self.ui.state.music_volume, self.ui.state.sfx_volume);
@@ -2388,6 +2420,7 @@ impl App {
         _panel_h: f32,
         ever_shown: bool,
         settings_open: &mut bool,
+        fullscreen: &mut bool,
         music_volume: &mut f32,
         sfx_volume: &mut f32,
         desktop_render_fps: &mut u32,
@@ -2801,6 +2834,9 @@ impl App {
                                 .text("Frame rate limit"),
                         )
                         .changed();
+                    ui.checkbox(fullscreen, "Fullscreen")
+                        .on_hover_text("Fill the current screen without window borders.");
+                    ui.separator();
                     audio_settings_changed |= ui
                         .add(
                             egui::Slider::new(music_volume, 0.0..=1.0)
@@ -2819,6 +2855,7 @@ impl App {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("Defaults").clicked() {
+                            *fullscreen = false;
                             *music_volume = 0.18;
                             *sfx_volume = 0.45;
                             *desktop_render_fps = 120;
@@ -2879,6 +2916,7 @@ impl App {
     }
 
     fn render(&mut self) {
+        self.sync_sleep_inhibitor();
         #[cfg(feature = "vr")]
         if let Some(vr) = &mut self.vr {
             if let Err(error) = vr.begin_frame() {
@@ -2931,6 +2969,9 @@ impl App {
             return;
         }
 
+        self.frame_lateness_max_ms = self.frame_lateness_max_ms.max(
+            now.saturating_duration_since(self.next_frame_time).as_secs_f64() * 1000.0,
+        );
         let dt = now
             .duration_since(self.last_render_time)
             .as_secs_f32()
@@ -3083,6 +3124,7 @@ impl App {
         self.scene_manager.update(dt);
 
         let camera = self.scene_manager.active_scene().camera();
+        let audio_started = std::time::Instant::now();
         let listener = (camera.position(), camera.view_rotation());
         #[cfg(feature = "vr")]
         let listener = self
@@ -3123,6 +3165,7 @@ impl App {
             self.audio.play_event(event);
         }
         self.audio.update();
+        let audio_ms = audio_started.elapsed().as_secs_f64() * 1000.0;
 
         // Poll for async tool operation results (GPU mode only)
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
@@ -3314,13 +3357,16 @@ impl App {
                 crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES,
                 crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
             );
-            camera.sprint_multiplier = self.ui.state.camera_sprint_multiplier.clamp(1.0, 20.0);
+            camera.sprint_multiplier = self.ui.state.camera_sprint_multiplier.clamp(0.05, 20.0);
+            camera.alternate_speed_multiplier = self.ui.state.camera_alternate_speed_multiplier.clamp(0.05, 20.0);
             camera.zoom_speed = self.ui.state.camera_scroll_sensitivity.clamp(0.01, 2.0);
         }
 
+        let acquire_started = std::time::Instant::now();
         let Some(output) = self.acquire_presentation_frame() else {
             return;
         };
+        let acquire_done = std::time::Instant::now();
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -3338,6 +3384,7 @@ impl App {
             gpu_scene.set_occlusion_min_screen_size(self.ui.state.occlusion_min_screen_size);
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
+            gpu_scene.audio_readbacks_enabled = self.ui.state.sfx_volume > 0.0;
             gpu_scene.set_gpu_timing_enabled(self.ui.state.gpu_timing_enabled);
             gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
 
@@ -3501,6 +3548,7 @@ impl App {
             );
         }
 
+        let scene_done = std::time::Instant::now();
         // Pull the latest GPU frame timing breakdown (lags a few frames behind
         // due to async readback) for the performance monitor.
         if self.ui.state.gpu_timing_enabled {
@@ -3548,8 +3596,8 @@ impl App {
         }
 
         // Update culling stats from GPU scene using non-blocking async read
-        // Only if GPU readbacks are enabled (can be disabled to avoid CPU-GPU sync overhead)
-        if self.ui.state.gpu_readbacks_enabled && !gpu_headless {
+        // Copy scheduling is gated by telemetry; drain existing maps even when disabled.
+        {
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                 // Poll for any pending async stats read
                 if gpu_scene.instance_builder.poll_culling_stats(&self.device) {
@@ -3562,10 +3610,9 @@ impl App {
                     );
                 }
 
-                // Start a new async read periodically (once per second)
-                if self.performance.should_refresh_culling_stats() {
-                    gpu_scene.instance_builder.start_culling_stats_read();
-                }
+                // The builder schedules a copy only when enabled and due.
+                // Always drain a previously submitted sample after toggling off.
+                gpu_scene.instance_builder.start_culling_stats_read();
             }
         }
 
@@ -4872,6 +4919,7 @@ impl App {
             pixels_per_point: self.window.scale_factor() as f32,
         };
 
+        let ui_build_done = std::time::Instant::now();
         // Render egui
         #[cfg(feature = "vr")]
         self.render_vr_ui(&egui_output);
@@ -4929,7 +4977,9 @@ impl App {
         // Submit egui commands (includes the screenshot copy if requested)
         self.queue.submit(std::iter::once(encoder.finish()));
 
+        let present_started = std::time::Instant::now();
         output.present();
+        let present_done = std::time::Instant::now();
 
         // -- Process screenshot readback ----------------------------------------
         // Runs after present() - the staging buffer is already populated.
@@ -5199,10 +5249,30 @@ impl App {
         // under the default file-logger filter without needing RUST_LOG set;
         // once/sec is cheap enough not to reintroduce the logging-on-the-
         // hot-path stutter the [audio-diag] lines caused earlier.
+        let phase_ms = [
+            acquire_started.duration_since(now).as_secs_f64() * 1000.0,
+            acquire_done.duration_since(acquire_started).as_secs_f64() * 1000.0,
+            scene_done.duration_since(acquire_done).as_secs_f64() * 1000.0,
+            ui_build_done.duration_since(scene_done).as_secs_f64() * 1000.0,
+            present_started.duration_since(ui_build_done).as_secs_f64() * 1000.0,
+            present_done.duration_since(present_started).as_secs_f64() * 1000.0,
+            present_done.elapsed().as_secs_f64() * 1000.0,
+            audio_ms, // A subset of Update, useful for separating environment audio.
+        ];
+        for (i, ms) in phase_ms.iter().enumerate() {
+            self.cpu_phase_totals_ms[i] += ms;
+            self.cpu_phase_max_ms[i] = self.cpu_phase_max_ms[i].max(*ms);
+        }
         self.frame_count += 1;
         if self.fps_timer.elapsed().as_secs_f32() >= 1.0 {
-            let fps = self.frame_count;
-            let frame_ms = if fps > 0 { 1000.0 / fps as f32 } else { 0.0 };
+            let elapsed_seconds = self.fps_timer.elapsed().as_secs_f64();
+            let frames = self.frame_count.max(1) as f64;
+            let fps = (frames / elapsed_seconds).round() as u32;
+            let frame_ms = elapsed_seconds * 1000.0 / frames;
+            let cpu_phases = ["Update", "Acquire", "Scene", "UI Build", "UI Submit", "Present", "Deferred", "Audio subset"]
+                .iter().enumerate().map(|(i, label)| format!(
+                    "{label}={:.2}/{:.2}ms", self.cpu_phase_totals_ms[i] / frames, self.cpu_phase_max_ms[i],
+                )).collect::<Vec<_>>().join(", ");
 
             let segments = self.performance.gpu_segment_times_ms();
             let gpu_total_ms: f32 = segments.iter().sum();
@@ -5215,14 +5285,21 @@ impl App {
 
             let gpu_scene = self.scene_manager.gpu_scene();
             let rain_intensity = gpu_scene.map_or(0.0, |s| s.rain_audio_intensity);
-            let splash_particles = gpu_scene
-                .and_then(|s| s.rain_splash_particle_renderer.as_ref())
-                .map_or(0, |r| r.particle_count());
             let cell_count = gpu_scene.map_or(0, |s| s.current_cell_count);
             let physics_steps = gpu_scene.map_or(0, |s| s.last_physics_steps);
 
+            let gpu_sample_age_ms = gpu_scene.and_then(|scene| scene.gpu_timer.as_ref())
+                .and_then(|timer| timer.sample_age_ms());
             log::warn!(
-                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms physics_steps={physics_steps} | {segments_str} | rain_intensity={rain_intensity:.2} splash_particles={splash_particles} cells={cell_count}"
+                "[perf-cpu] avg/max: {cpu_phases} | deadline_late_max={:.2}ms gpu_sample_age_ms={gpu_sample_age_ms:?}",
+                self.frame_lateness_max_ms,
+            );
+            self.cpu_phase_totals_ms = [0.0; 8];
+            self.cpu_phase_max_ms = [0.0; 8];
+            self.frame_lateness_max_ms = 0.0;
+
+            log::warn!(
+                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms physics_steps={physics_steps} | {segments_str} | rain_intensity={rain_intensity:.2} cells={cell_count}"
             );
 
             self.frame_count = 0;
@@ -5232,6 +5309,15 @@ impl App {
 
     pub fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+
+    /// Keep the machine awake while the window is focused. Once a simulation
+    /// is running, preserve it across focus loss, screen locking, and lid close.
+    fn sync_sleep_inhibitor(&mut self) {
+        let simulation_running = self.app_phase == AppPhase::InGame
+            && !self.scene_manager.active_scene().is_paused();
+        self.sleep_inhibitor
+            .set_active(self.window_focused || simulation_running);
     }
 
     /// Get the next scheduled desktop frame deadline.
@@ -5390,6 +5476,22 @@ impl ApplicationHandler for AppState {
         }))
         .unwrap();
 
+        // wgpu 27 exposes ray queries through Vulkan. A platform's default
+        // backend (notably DX12) may omit them even on ray-tracing hardware.
+        // Prefer a surface-compatible RT adapter when the default lacks queries.
+        let adapter = if !adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY) {
+            let mut ray_adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::VULKAN)
+                .into_iter().filter(|candidate| {
+                    candidate.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+                        && candidate.is_surface_supported(&surface)
+                }).collect();
+            ray_adapters.sort_by_key(|candidate| match candidate.get_info().device_type {
+                wgpu::DeviceType::DiscreteGpu => 0,
+                wgpu::DeviceType::IntegratedGpu => 1,
+                _ => 2,
+            });
+            ray_adapters.into_iter().next().unwrap_or(adapter)
+        } else { adapter };
         #[cfg(feature = "vr")]
         let adapter = vr_graphics
             .as_ref()
@@ -5431,7 +5533,16 @@ impl ApplicationHandler for AppState {
         }
 
         let create_desktop_device = || {
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            let mut required_features = required_features;
+            let hardware_ray_queries = adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+            if hardware_ray_queries {
+                required_features |= wgpu::Features::EXPERIMENTAL_RAY_QUERY;
+            }
+            log::info!("Luminocyte occlusion: {}", if hardware_ray_queries {
+                "hardware ray tracing"
+            } else { "voxel fallback (ray queries unsupported by adapter/backend)" });
+
+            let mut device_descriptor = wgpu::DeviceDescriptor {
                 label: Some("Bio-Spheres Device"),
                 required_features,
                 required_limits: wgpu::Limits {
@@ -5450,11 +5561,32 @@ impl ApplicationHandler for AppState {
                     max_buffer_size: buffer_size_limit,
                     ..wgpu::Limits::default()
                 },
-                memory_hints: Default::default(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: Default::default(),
-                experimental_features: Default::default(),
-            }))
-            .expect("Failed to create wgpu device — check log for adapter limits")
+                experimental_features: if hardware_ray_queries {
+                    // SAFETY: opt into wgpu's experimental ray-query implementation;
+                    // all geometry/build/binding operations use its validated safe API.
+                    unsafe { wgpu::ExperimentalFeatures::enabled() }
+                } else { Default::default() },
+            };
+            if hardware_ray_queries {
+                device_descriptor.required_limits = device_descriptor.required_limits
+                    .using_acceleration_structure_values(adapter.limits());
+            }
+            let requested_device = pollster::block_on(adapter.request_device(&device_descriptor));
+            match requested_device {
+                Ok(pair) => pair,
+                Err(error) if hardware_ray_queries => {
+                    log::warn!("Ray-query device creation failed ({error}); retrying with voxel lighting");
+                    device_descriptor.required_features.remove(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+                    device_descriptor.experimental_features = Default::default();
+                    device_descriptor.required_limits = device_descriptor.required_limits
+                        .using_acceleration_structure_values(wgpu::Limits::default());
+                    pollster::block_on(adapter.request_device(&device_descriptor))
+                        .expect("Failed to create fallback wgpu device")
+                }
+                Err(error) => panic!("Failed to create wgpu device: {error}"),
+            }
         };
         #[cfg(feature = "vr")]
         let (device, queue) = vr_graphics
@@ -5463,6 +5595,7 @@ impl ApplicationHandler for AppState {
             .unwrap_or_else(create_desktop_device);
         #[cfg(not(feature = "vr"))]
         let (device, queue) = create_desktop_device();
+        log::info!("Luminocyte ray queries enabled on device: {}", device.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY));
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);

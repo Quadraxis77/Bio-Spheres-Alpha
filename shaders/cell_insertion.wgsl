@@ -377,12 +377,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 0 cells and never process the newly inserted cell.
     atomicMax(&cell_count_buffer[0], slot + 1u);
     
+    initialize_cell(slot, insertion_params);
+}
+
+fn initialize_cell(slot: u32, newborn: CellInsertionParams) {
     // Initialize position and mass in ALL THREE triple buffer sets
     let position_mass = vec4<f32>(
-        insertion_params.position.x,
-        insertion_params.position.y,
-        insertion_params.position.z,
-        insertion_params.mass
+        newborn.position.x,
+        newborn.position.y,
+        newborn.position.z,
+        newborn.mass
     );
     positions_0[slot] = position_mass;
     positions_1[slot] = position_mass;
@@ -390,9 +394,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Initialize velocity in ALL THREE triple buffer sets
     let velocity_data = vec4<f32>(
-        insertion_params.velocity.x,
-        insertion_params.velocity.y,
-        insertion_params.velocity.z,
+        newborn.velocity.x,
+        newborn.velocity.y,
+        newborn.velocity.z,
         0.0
     );
     velocities_0[slot] = velocity_data;
@@ -400,9 +404,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     velocities_2[slot] = velocity_data;
     
     // Initialize rotation in ALL THREE triple buffer sets
-    rotations_0[slot] = insertion_params.rotation;
-    rotations_1[slot] = insertion_params.rotation;
-    rotations_2[slot] = insertion_params.rotation;
+    rotations_0[slot] = newborn.rotation;
+    rotations_1[slot] = newborn.rotation;
+    rotations_2[slot] = newborn.rotation;
     
     // Zero angular velocity in ALL THREE triple buffer sets.
     // Recycled slots retain the dead cell's angular velocity; new slots may have
@@ -417,23 +421,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     
     // Initialize genome orientation (same as initial rotation for newly inserted cells)
-    genome_orientations[slot] = insertion_params.rotation;
+    genome_orientations[slot] = newborn.rotation;
     
     // Initialize cell state for division system (single buffers)
-    birth_times[slot] = insertion_params.birth_time;
-    split_intervals[slot] = insertion_params.split_interval;
-    split_nutrient_thresholds[slot] = insertion_params.split_mass; // split_mass param holds converted nutrient threshold
+    birth_times[slot] = newborn.birth_time;
+    split_intervals[slot] = newborn.split_interval;
+    split_nutrient_thresholds[slot] = newborn.split_mass; // split_mass param holds converted nutrient threshold
+    split_ready_frame[slot] = -1;
     split_counts[slot] = 0u; // New cell hasn't split yet
     
     // Convert max_splits: -1 (infinite) -> 0 (unlimited in GPU)
-    let gpu_max_splits = insertion_params.max_splits;
+    let gpu_max_splits = newborn.max_splits;
     max_splits[slot] = gpu_max_splits;
     
-    genome_ids[slot] = insertion_params.genome_id;
-    mode_indices[slot] = insertion_params.mode_index;
+    genome_ids[slot] = newborn.genome_id;
+    mode_indices[slot] = newborn.mode_index;
     
     // Use provided cell_id or atomically generate new one
-    let assigned_cell_id = insertion_params.cell_id;
+    let assigned_cell_id = newborn.cell_id;
     var final_cell_id: u32;
     if (assigned_cell_id == 0u) {
         // Generate new cell ID atomically
@@ -450,15 +455,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    let root_hash = development_root_hash(insertion_params.genome_id, insertion_params.mode_index);
+    let root_hash = development_root_hash(newborn.genome_id, newborn.mode_index);
     development_addresses[slot] = vec4<u32>(final_cell_id + 1u, root_hash.lo, root_hash.hi, 0u);
     parent_lineage_hashes_out[slot] = vec2<u32>(0u, 0u);
     organism_cell_ids[slot] = 1u;
     
     // Initialize cell properties from genome mode
-    nutrient_gain_rates[slot] = insertion_params.nutrient_gain_rate;
-    max_cell_sizes[slot] = insertion_params.max_cell_size;
-    stiffnesses[slot] = insertion_params.stiffness;
+    nutrient_gain_rates[slot] = newborn.nutrient_gain_rate;
+    max_cell_sizes[slot] = newborn.max_cell_size;
+    stiffnesses[slot] = newborn.stiffness;
     
     // Initialize lifecycle flags
     death_flags[slot] = 0u; // Alive
@@ -468,22 +473,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // If initial_nutrients is non-zero, use it directly (e.g. gamete merge where the
     // combined reserve doesn't cover a full nutrient pool).
     // Otherwise default to 100.0 full = 100000 in fixed-point.
-    let nutrient_value = select(100000i, i32(insertion_params.initial_nutrients), insertion_params.initial_nutrients != 0u);
+    let nutrient_value = select(100000i, i32(newborn.initial_nutrients), newborn.initial_nutrients != 0u);
     atomicStore(&nutrients_buffer[slot], nutrient_value);
     
     // Initialize cell type (0 = Test, 1 = Flagellocyte, etc.)
-    cell_types[slot] = insertion_params.cell_type;
+    cell_types[slot] = newborn.cell_type;
     
-    // Initialize reserve.
-    // If insertion_params.initial_reserve is non-zero, use it directly (e.g. gamete merge).
-    // Otherwise fall back to cell-type default: Embryocytes and Gametocytes start full,
-    // all other types start at 0.
-    let is_storage = (insertion_params.cell_type == 10u || insertion_params.cell_type == 13u);
-    let default_reserve = select(0u, 65535000u, is_storage);
-    let reserve_value = select(default_reserve, insertion_params.initial_reserve, insertion_params.initial_reserve != 0u);
-    atomicStore(&embryocyte_reserves[slot], reserve_value);
+    // The CPU resolves defaults. An explicit zero from fusion must remain zero.
+    atomicStore(&embryocyte_reserves[slot], newborn.initial_reserve);
 
-    let initial_water = physiology_water_capacity(insertion_params.cell_type);
+    let initial_water = physiology_water_capacity(newborn.cell_type);
     let initial_heat_energy = physiology_heat_for_temperature(INITIAL_CELL_TEMPERATURE, initial_water);
     cell_water[slot] = initial_water;
     cell_heat_energy[slot] = initial_heat_energy;

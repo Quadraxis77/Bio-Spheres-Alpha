@@ -1,14 +1,9 @@
 //! Gametocyte Merge Detection System
 //!
 //! GPU compute pass that detects when two Gametocyte cells from different organisms
-//! come into contact. On detection, both are marked for death and a merge event is
-//! written to `merge_events_buffer` for CPU-side processing.
+//! come into contact. On detection, both are marked as fused and a merge event is
+//! written to `merge_events_buffer` for GPU crossover and offspring initialization.
 //!
-//! The CPU reads the events asynchronously each frame (via a staging buffer) and:
-//!   1. Performs genome crossover on the two parent genomes
-//!   2. Adds the new hybrid genome to the simulation
-//!   3. Spawns a new single-cell organism at the merge midpoint
-
 /// Maximum gamete merge events recorded per frame.
 pub const MAX_GAMETE_MERGE_EVENTS: u32 = 64;
 
@@ -17,21 +12,6 @@ pub const EVENT_STRIDE: u32 = 8;
 
 /// Total u32s in the events buffer (1 counter + events).
 pub const EVENTS_BUFFER_U32S: u32 = 1 + MAX_GAMETE_MERGE_EVENTS * EVENT_STRIDE;
-
-/// A single gamete merge event decoded from the GPU buffer.
-#[derive(Debug, Clone, Copy)]
-pub struct GameteMergeEvent {
-    pub cell_a_idx: u32,
-    pub cell_b_idx: u32,
-    pub genome_a_id: u32,
-    pub genome_b_id: u32,
-    pub spawn_x: f32,
-    pub spawn_y: f32,
-    pub spawn_z: f32,
-    /// Combined reserve from both gametes (x1000 fixed-point, capped at 65535000).
-    /// Passed as `initial_reserve` when spawning the offspring Embryocyte.
-    pub combined_reserve: u32,
-}
 
 /// GPU system for gamete contact detection and merge event collection.
 pub struct GametocyteMergeSystem {
@@ -44,8 +24,6 @@ pub struct GametocyteMergeSystem {
     /// Cleared to zero at the start of each frame before dispatch.
     pub merge_events_buffer: wgpu::Buffer,
 
-    /// CPU-readable staging buffer for async readback of merge events.
-    pub staging_buffer: wgpu::Buffer,
 }
 
 impl GametocyteMergeSystem {
@@ -143,7 +121,7 @@ impl GametocyteMergeSystem {
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        // 1: death_flags (read_write - marks cells dead)
+                        // 1: removal flags (read_write - atomically claims fused cells)
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
@@ -211,6 +189,26 @@ impl GametocyteMergeSystem {
                     wgpu::BindGroupLayoutEntry {
                         // 7: embryocyte_reserves (read-only)
                         binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -298,26 +296,18 @@ impl GametocyteMergeSystem {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Gamete Merge Events Staging"),
-            size: events_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Self {
             pipeline,
             bind_group_layout_0,
             bind_group_layout_1,
             bind_group_layout_2,
             merge_events_buffer,
-            staging_buffer,
         }
     }
 
     /// Clear the events counter before each frame's dispatch.
-    pub fn clear_events(&self, queue: &wgpu::Queue) {
-        queue.write_buffer(&self.merge_events_buffer, 0, bytemuck::cast_slice(&[0u32]));
+    pub fn clear_events(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.clear_buffer(&self.merge_events_buffer, 0, Some(4));
     }
 
     /// Create bind group for group 0 (physics params + positions + cell_count).
@@ -374,6 +364,8 @@ impl GametocyteMergeSystem {
         mode_indices: &wgpu::Buffer,
         mode_properties_v13: &wgpu::Buffer,
         embryocyte_reserves: &wgpu::Buffer,
+        genome_meta: &wgpu::Buffer,
+        mode_cell_types: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Gametocyte Cell Data BG"),
@@ -410,6 +402,14 @@ impl GametocyteMergeSystem {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: embryocyte_reserves.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: genome_meta.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: mode_cell_types.as_entire_binding(),
                 },
             ],
         })
@@ -452,7 +452,7 @@ impl GametocyteMergeSystem {
         spatial_bg: &wgpu::BindGroup,
         cell_capacity: usize,
     ) {
-        let workgroups = ((cell_capacity as u32) + 255) / 256;
+        let workgroups = ((cell_capacity as u32) + 63) / 64;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Gametocyte Merge Pass"),
             timestamp_writes: None,
@@ -464,44 +464,6 @@ impl GametocyteMergeSystem {
         pass.dispatch_workgroups(workgroups, 1, 1);
     }
 
-    /// Copy events buffer to staging buffer for CPU readback (called after dispatch, before submit).
-    pub fn schedule_readback(&self, encoder: &mut wgpu::CommandEncoder) {
-        encoder.copy_buffer_to_buffer(
-            &self.merge_events_buffer,
-            0,
-            &self.staging_buffer,
-            0,
-            (EVENTS_BUFFER_U32S * 4) as u64,
-        );
-    }
-
-    /// Parse merge events from a raw byte slice (read from the staging buffer).
-    /// Returns decoded events, clamped to what was actually recorded.
-    pub fn parse_events(data: &[u8]) -> Vec<GameteMergeEvent> {
-        if data.len() < 4 {
-            return Vec::new();
-        }
-        let words: &[u32] = bytemuck::cast_slice(data);
-        let event_count = (words[0] as usize).min(MAX_GAMETE_MERGE_EVENTS as usize);
-        let mut events = Vec::with_capacity(event_count);
-        for i in 0..event_count {
-            let base = 1 + i * EVENT_STRIDE as usize;
-            if base + 7 >= words.len() {
-                break;
-            }
-            events.push(GameteMergeEvent {
-                cell_a_idx: words[base],
-                cell_b_idx: words[base + 1],
-                genome_a_id: words[base + 2],
-                genome_b_id: words[base + 3],
-                spawn_x: f32::from_bits(words[base + 4]),
-                spawn_y: f32::from_bits(words[base + 5]),
-                spawn_z: f32::from_bits(words[base + 6]),
-                combined_reserve: words[base + 7],
-            });
-        }
-        events
-    }
 }
 
 #[cfg(test)]
@@ -524,7 +486,7 @@ mod tests {
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("Gametocyte Merge Test Device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: adapter.limits(),
                     memory_hints: Default::default(),
                     trace: Default::default(),
                     experimental_features: Default::default(),

@@ -443,7 +443,9 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let local_weight = clamp(geo.w * geo_transmittance, 0.0, GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE);
     // Photocyte metabolism reads this scalar. It should include usable light
     // sources (sunlight and geothermal), but not the ambient visual floor.
-    light_field[idx] = max(intensity, local_weight);
+    // All sources share one radiative-energy field. This makes sunlight and
+    // local sources additive for surfaces, volumetric haze, and photocytes.
+    light_field[idx] = intensity + local_weight;
     let sunlight_color = sun_color * ray_tint * voxel_tint;
     let local_blend = local_weight / max(intensity + local_weight, 0.001);
     let resolved_color = mix(sunlight_color, local_glow, local_blend);

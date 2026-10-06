@@ -168,8 +168,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 free_adhesion_slots[free_slot_idx] = adhesion_idx;
             } else {
                 // Check if either cell is dead
-                let cell_a_dead = death_flags[cell_a] == 1u;
-                let cell_b_dead = death_flags[cell_b] == 1u;
+                let cell_a_dead = death_flags[cell_a] != 0u;
+                let cell_b_dead = death_flags[cell_b] != 0u;
                 
                 if (cell_a_dead || cell_b_dead) {
                     // Mark adhesion as inactive
@@ -243,7 +243,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // CRITICAL: Clear adhesion indices for dead cells
     // This prevents future adhesion physics from reading stale indices
-    if (thread_id < cell_count && death_flags[thread_id] == 1u) {
+    if (thread_id < cell_count && death_flags[thread_id] != 0u) {
         // Cell is dead - clear all its adhesion indices
         let base_offset = thread_id * MAX_ADHESIONS_PER_CELL;
         for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {

@@ -1438,10 +1438,10 @@ fn render_headless_section(ui: &mut Ui, context: &mut PanelContext, state: &mut 
         });
 
         ui.horizontal(|ui| {
-            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU readbacks");
+            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU telemetry");
             ui.label(
                 egui::RichText::new(if state.gpu_readbacks_enabled {
-                    "live counts enabled"
+                    "culling and climate statistics enabled"
                 } else {
                     "reduced CPU/GPU synchronization"
                 })
@@ -3464,8 +3464,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
 
     // GPU Readbacks toggle at the top
     ui.horizontal(|ui| {
-        ui.checkbox(&mut state.gpu_readbacks_enabled, "Enable GPU Readbacks")
-            .on_hover_text("Allow the CPU to read back cell data from the GPU for the Cell Inspector. Disable to reduce GPU-CPU synchronization overhead if the inspector is not needed");
+        ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU Telemetry")
+            .on_hover_text("Read culling and climate statistics at a reduced rate. Cell counts, active camera follow, audio and explicit inspection remain available; GPU timing has its own switch.");
         ui.checkbox(&mut state.gpu_timing_enabled, "GPU Frame Timing")
             .on_hover_text("Measure per-segment GPU frame time with timestamp queries. Disable to remove timestamp query and readback overhead");
     });
@@ -6882,6 +6882,38 @@ fn render_light_settings_organized(
             }
         });
 
+    egui::CollapsingHeader::new("Luminocyte Lighting")
+        .default_open(true)
+        .show(ui, |ui| {
+            let emission = context.scene_manager.gpu_scene()
+                .and_then(|scene| scene.light_field_system.as_ref())
+                .map(|light| &light.luminocyte_emission);
+            let supported = emission.is_some_and(|e| e.hardware_ray_tracing_supported());
+            // Show the effective choice without overwriting a saved preference
+            // when settings are opened on a machine without ray-query support.
+            let mut enabled = supported && context.editor_state.luminocyte_ray_tracing;
+            let response = ui.add_enabled(supported,
+                egui::Checkbox::new(&mut enabled, "Hardware Ray Tracing"))
+                .on_hover_text("On: hardware rays test cave voxel boxes. Off: voxel ray marching tests the same cave mask. Both use the same lighting grid and falloff, so appearance is usually similar. Neither traces the detailed cave surface or cell shadows.")
+                .on_disabled_hover_text("Hardware ray tracing is unavailable on the active graphics device. Your GPU, driver, and graphics backend must support ray queries. Luminocyte lighting uses voxel ray marching instead.");
+            if response.changed() {
+                context.editor_state.luminocyte_ray_tracing = enabled;
+                if let Some(emission) = emission {
+                    emission.set_hardware_ray_tracing_enabled(enabled);
+                }
+                changed = true;
+            }
+            let active = emission.is_some_and(|e| e.hardware_ray_tracing_active());
+            ui.weak(if active {
+                "Lighting type: Hardware ray tracing (cave voxels)"
+            } else if enabled {
+                "Lighting type: Voxel ray marching (hardware geometry pending or unavailable)"
+            } else {
+                "Lighting type: Voxel ray marching"
+            });
+            ui.weak("Visible underwater haze uses the Volumetric Fog setting below.");
+        });
+
     // Everything below is rendering/engine tuning the player doesn't touch
     // during normal play - gated behind Advanced to keep the panel focused on
     // sun brightness, day/night cycles, timing, and color.
@@ -8283,14 +8315,14 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     ui.label(format!("Mode: {:?}", camera.mode));
     ui.label(format!("Distance: {:.1}", camera.distance));
 
-    ui.label("Walk Speed:")
-        .on_hover_text("Camera movement speed while holding Shift in FreeFly mode");
+    ui.label("Base Movement Speed:")
+        .on_hover_text("Base movement speed shared by both FreeFly speed settings");
     ui.add(egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
-    ui.label("Run Speed:").on_hover_text(
-        "Normal FreeFly speed multiplier. Adjust with the scroll wheel while flying",
+    ui.label("Speed 1:").on_hover_text(
+        "Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed while flying",
     );
     let sprint_response = ui.add(
-        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 1.0..=20.0)
+        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 0.05..=20.0)
             .custom_formatter(|value, _| format!("{value:.1}x")),
     );
     let mut sprint_multiplier_changed = sprint_response.changed();
@@ -8300,6 +8332,19 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     }
     if sprint_multiplier_changed {
         camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
+    }
+    ui.label("Speed 2:")
+        .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
+    let alternate_response = ui.add(
+        egui::Slider::new(&mut ui_state.camera_alternate_speed_multiplier, 0.05..=20.0)
+            .logarithmic(true)
+            .custom_formatter(|value, _| format!("{value:.2}x")),
+    );
+    if alternate_response.double_clicked() {
+        ui_state.camera_alternate_speed_multiplier = 1.0;
+    }
+    if alternate_response.changed() || alternate_response.double_clicked() {
+        camera.alternate_speed_multiplier = ui_state.camera_alternate_speed_multiplier;
     }
     ui.label("Zoom Speed:")
         .on_hover_text("How fast scrolling zooms the camera in Orbit mode");
@@ -9814,13 +9859,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         });
 
                         ui.label("Signal Value:")
-                            .on_hover_text("Value emitted on the channel when the condition is met");
+                            .on_hover_text("Nonnegative signal quantity produced per second while the condition is met");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, -1000.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(1.0).range(-1000.0..=1000.0));
+                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(1.0).range(0.0..=1000.0));
                         });
 
                         ui.separator();
@@ -10093,13 +10138,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         });
 
                         ui.label("Signal Value:")
-                            .on_hover_text("Value emitted on the channel when the condition is met");
+                            .on_hover_text("Nonnegative signal quantity produced per second while the condition is met");
                         ui.horizontal(|ui| {
                             let available = ui.available_width();
                             let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                             ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, -1000.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(1.0).range(-1000.0..=1000.0));
+                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, 0.0..=1000.0).show_value(false));
+                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(1.0).range(0.0..=1000.0));
                         });
 
                         ui.separator();
@@ -10317,13 +10362,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     // Signal Value
                     ui.label("Signal Value:")
-                        .on_hover_text("Signed strength emitted when the ray detects its target. Ordinary signal routes retain 95%; Vasculocyte-to-Vasculocyte roads retain 98.75%");
+                        .on_hover_text("Nonnegative signal quantity produced per second while the ray detects its target. Signal diffuses through all eligible connections and degrades over time");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, -1000.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(-1000.0..=1000.0));
+                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, 0.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(0.0..=1000.0));
                     });
 
                     // Ray Length
@@ -11105,22 +11150,22 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                 if mode.regulation_emit_channel >= 8 {
                     ui.label("Emit Value:")
-                        .on_hover_text("Signed signal strength broadcast from this cell. Ordinary signal routes retain 95%; Vasculocyte-to-Vasculocyte roads retain 98.75%");
+                        .on_hover_text("Nonnegative signal quantity produced per second. Production adds to the local concentration; diffusion transfers it to connected cells");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, -1000.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(-1000.0..=1000.0));
+                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, 0.0..=1000.0).show_value(false));
+                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(0.0..=1000.0));
                     });
 
                     ui.label("Network Reach:")
-                        .on_hover_text("Signals follow the selected active routes across ordinary cell-to-cell adhesions. Reach is determined by attenuation and receiver threshold, not a hop budget");
+                        .on_hover_text("Signals diffuse through all ordinary cell-to-cell adhesions. Production, conductance, degradation, and receiver thresholds determine effective range");
                     ui.horizontal(|ui| {
                         let available = ui.available_width();
                         let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
                         ui.style_mut().spacing.slider_width = slider_width;
-                        ui.label("Reach follows every connected active signal route; there is no hop limit.");
+                        ui.label("Signal spreads over time through every eligible connection, with no hop cutoff.");
                     });
                 }
             });
@@ -11420,7 +11465,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
             // Nutrient Settings Group (Green)
             group_container(ui, "Nutrient Settings", egui::Color32::from_rgb(100, 180, 120), |ui| {
                 ui.label("Nutrient Priority:")
-                    .on_hover_text("How aggressively this cell competes for nutrients from its vascular connections. Higher priority cells are fed first. Embryocytes use 4.0, gonads 3.5, structural cells 1.0–1.5, vascular pipes 0.4");
+                    .on_hover_text("Controls nutrient sharing through attached cells. For gametocytes and embryocytes, priority directly multiplies reserve intake: 0.5 halves it, 1.0 is normal, and 2.0 doubles it. Baseline intake per feeding connection is 10 nutrients/sec for gametocytes and 100 for embryocytes, subject to available food. Donors retain their safety buffer.");
                 ui.horizontal(|ui| {
                     let available = ui.available_width();
                     let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };

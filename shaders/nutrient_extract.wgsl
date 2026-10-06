@@ -54,6 +54,18 @@ fn is_water_voxel(voxel_index: u32) -> bool {
     return fluid_type == 1u;  // Water fluid type
 }
 
+// Stable integer mixing avoids float/sine precision patterns at large voxel IDs.
+// Separate axis seeds decorrelate X/Y/Z; the top 24 bits map uniformly to [0, 1).
+fn particle_random(voxel_index: u32, seed: u32) -> f32 {
+    var h = voxel_index ^ seed;
+    h ^= h >> 16u;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13u;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16u;
+    return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
 // Convert voxel index to world position
 fn voxel_to_world(voxel_index: u32) -> vec3<f32> {
     let grid_res = params.grid_resolution;
@@ -109,13 +121,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;  // Particle buffer full
     }
     
-    // Add some randomness to position within voxel
-    let offset = vec3<f32>(
-        fract(sin(f32(voxel_index) * 7.3)) * 0.8 - 0.4,
-        fract(sin(f32(voxel_index) * 13.7)) * 0.8 - 0.4,
-        fract(sin(f32(voxel_index) * 19.1)) * 0.8 - 0.4
-    ) * params.cell_size;
-    
+    // One stable, independently randomized 3D position across the full voxel.
+    // Seed by voxel identity, never the nondeterministic output allocation order.
+    let offset = (vec3<f32>(
+        particle_random(voxel_index, 0x68bc21ebu),
+        particle_random(voxel_index, 0x02e5be93u),
+        particle_random(voxel_index, 0x967a889bu)
+    ) - vec3<f32>(0.5)) * params.cell_size;
+
     // Lit by the local light field and overall sun brightness - no ambient
     // self-illumination (nutrients in dark water render dark).
     let light = clamp(light_field[voxel_index] * params.sun_brightness, 0.0, 1.2);

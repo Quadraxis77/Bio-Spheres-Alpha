@@ -139,11 +139,10 @@ struct GpuBoulder {
 @group(2) @binding(8) var<storage, read> boulder_state: array<GpuBoulder>;
 @group(2) @binding(9) var<storage, read> boulder_count: array<u32>;
 @group(2) @binding(10) var<storage, read_write> boulder_force_accum: array<atomic<i32>>;
-@group(2) @binding(11) var<storage, read_write> death_flags: array<u32>;
+@group(2) @binding(11) var<storage, read> death_flags: array<u32>;
 @group(2) @binding(12) var<storage, read> cell_adhesion_indices: array<i32>;
 
 const MAX_CELLS_PER_GRID: u32 = 16u;
-const MAX_ADHESIONS_PER_CELL: u32 = 20u;
 const FIXED_POINT_SCALE: f32 = 1000.0;
 const FRICTION_COEFF: f32 = 0.3;
 const BOUNDARY_REDIRECT_FORCE: f32 = 15.0;
@@ -158,7 +157,6 @@ const MEDIUM_BUCKET_SAMPLE_LIMIT: u32 = 8u;
 const DENSE_BUCKET_SAMPLE_LIMIT: u32 = 6u;
 const EXTREME_BUCKET_SAMPLE_LIMIT: u32 = 4u;
 const OVERFLOW_PAIR_WINDOW: u32 = 16u;
-const OVERCROWD_BUCKET_THRESHOLD: u32 = 16u;
 const INVALID_ORGANISM_LABEL: u32 = 0xFFFFFFFFu;
 
 // 13 forward neighbor offsets split into 3 rotation groups.
@@ -258,29 +256,6 @@ fn add_torque(cell_idx: u32, torque: vec3<f32>) {
 
 fn live_cell(cell_idx: u32) -> bool {
     return cell_idx < cell_count_buffer[0] && death_flags[cell_idx] == 0u && positions_in[cell_idx].w >= 0.5;
-}
-
-fn has_adhesion_connection(cell_idx: u32) -> bool {
-    let base = cell_idx * MAX_ADHESIONS_PER_CELL;
-    for (var i = 0u; i < MAX_ADHESIONS_PER_CELL; i++) {
-        if (cell_adhesion_indices[base + i] >= 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn cull_overcrowded_overflow_cell(cell_idx: u32, grid_idx: u32) -> bool {
-    if (spatial_grid_counts[grid_idx] <= OVERCROWD_BUCKET_THRESHOLD) {
-        return false;
-    }
-
-    if (has_adhesion_connection(cell_idx)) {
-        return false;
-    }
-
-    death_flags[cell_idx] = 1u;
-    return true;
 }
 
 fn should_collide(a_idx: u32, b_idx: u32) -> bool {
@@ -667,9 +642,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (overflow_idx < capped_overflow_count) {
         let overflow_cell     = spatial_grid_overflow_cells[overflow_idx];
         let overflow_grid_idx = spatial_grid_overflow_grid_indices[overflow_idx];
-        if (cull_overcrowded_overflow_cell(overflow_cell, overflow_grid_idx)) {
-            return;
-        }
         if (overflow_phase != 0u) {
             return;
         }

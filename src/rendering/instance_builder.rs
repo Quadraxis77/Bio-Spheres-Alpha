@@ -143,6 +143,9 @@ pub struct InstanceBuilder {
 
     // Async stats readback state
     stats_map_pending: bool,
+    stats_readback_enabled: bool,
+    stats_copy_ready: bool,
+    stats_last_copy: Option<std::time::Instant>,
     stats_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 
     // Cave solid-mask culling
@@ -886,6 +889,9 @@ impl InstanceBuilder {
             min_distance: 0.0,
             last_visible_count: 0,
             stats_map_pending: false,
+            stats_readback_enabled: false,
+            stats_copy_ready: false,
+            stats_last_copy: None,
             stats_receiver: None,
             temp_positions: Vec::new(),
             temp_rotations: Vec::new(),
@@ -1913,26 +1919,11 @@ impl InstanceBuilder {
             );
         }
 
-        // Copy counters to readback buffer for stats (only if not currently mapped)
-        if !self.stats_map_pending {
-            let counter_count = 4 + CellType::MAX_TYPES;
-            encoder.copy_buffer_to_buffer(
-                &self.counters_buffer,
-                0,
-                &self.counters_readback_buffer,
-                0,
-                (counter_count * 4) as u64, // All counters
-            );
-        }
+        self.encode_stats_readback(encoder);
 
-        // For stats display, use capacity (actual count is in GPU buffer)
+        // Dispatch/draw eligibility remains conservative and independent of
+        // optional statistics. Keep last_stats as the last measured sample.
         self.last_visible_count = cell_capacity as u32;
-        self.last_stats = CullingStats {
-            total_cells: cell_capacity as u32,
-            visible_cells: cell_capacity as u32,
-            frustum_culled: 0,
-            occluded: 0,
-        };
     }
 
     /// Run the compute shader to build instance data with culling.
@@ -2041,15 +2032,38 @@ impl InstanceBuilder {
         self.last_stats
     }
 
-    /// Start an async read of culling statistics.
-    /// Call poll_culling_stats() to check if the read is complete.
-    /// This is non-blocking and won't cause frame spikes.
+    /// Encode a bounded-rate telemetry sample before submission.
+    fn encode_stats_readback(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        // Sample optional telemetry once per second, not every rendered frame.
+        if self.stats_readback_enabled && !self.stats_map_pending && !self.stats_copy_ready
+            && self.stats_last_copy.is_none_or(|t| t.elapsed().as_secs_f32() >= 1.0)
+        {
+            let counter_count = 4 + CellType::MAX_TYPES;
+            encoder.copy_buffer_to_buffer(
+                &self.counters_buffer,
+                0,
+                &self.counters_readback_buffer,
+                0,
+                (counter_count * 4) as u64, // All counters
+            );
+            self.stats_copy_ready = true;
+            self.stats_last_copy = Some(std::time::Instant::now());
+        }
+
+    }
+
+    pub fn set_stats_readback_enabled(&mut self, enabled: bool) {
+        self.stats_readback_enabled = enabled;
+    }
+
+    /// Map a freshly submitted sample; never map while its copy is unsubmitted.
     pub fn start_culling_stats_read(&mut self) {
         // Don't start a new read if one is already pending
-        if self.stats_map_pending {
+        if self.stats_map_pending || !self.stats_copy_ready {
             return;
         }
 
+        self.stats_copy_ready = false;
         let buffer_slice = self.counters_readback_buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -2254,5 +2268,54 @@ impl InstanceBuilder {
     /// Get the counters buffer for debug readback.
     pub fn counters_buffer(&self) -> &wgpu::Buffer {
         &self.counters_buffer
+    }
+}
+
+#[cfg(test)]
+mod readback_tests {
+    use super::*;
+    #[test]
+    fn culling_telemetry_only_copies_when_enabled_due_and_unmapped() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(&Default::default());
+            let adapter = instance.request_adapter(&Default::default()).await.unwrap();
+            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: adapter.limits(), ..Default::default()
+            }).await.unwrap();
+            let mut builder = InstanceBuilder::new(&device, 32);
+            queue.write_buffer(&builder.counters_buffer, 0, bytemuck::cast_slice(&[12u32, 20, 5, 3]));
+            let mut encoder = device.create_command_encoder(&Default::default());
+            builder.encode_stats_readback(&mut encoder);
+            builder.start_culling_stats_read();
+            assert!(!builder.stats_copy_ready && !builder.stats_map_pending);
+            builder.set_stats_readback_enabled(true);
+            builder.encode_stats_readback(&mut encoder);
+            assert!(builder.stats_copy_ready);
+            queue.submit([encoder.finish()]);
+            builder.start_culling_stats_read();
+            builder.set_stats_readback_enabled(false);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            builder.encode_stats_readback(&mut encoder);
+            assert!(!builder.stats_copy_ready);
+            queue.submit([encoder.finish()]);
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            assert!(builder.poll_culling_stats(&device));
+            assert_eq!(builder.last_culling_stats().visible_cells, 12);
+            assert_eq!(builder.last_culling_stats().total_cells, 20);
+            assert!(!builder.stats_map_pending);
+            builder.set_stats_readback_enabled(true);
+            // A completed read does not authorize another copy until the period expires.
+            builder.stats_last_copy = Some(std::time::Instant::now());
+            let mut encoder = device.create_command_encoder(&Default::default());
+            builder.encode_stats_readback(&mut encoder);
+            assert!(!builder.stats_copy_ready);
+            builder.stats_last_copy = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+            builder.encode_stats_readback(&mut encoder);
+            assert!(builder.stats_copy_ready);
+            queue.submit([encoder.finish()]);
+            builder.start_culling_stats_read();
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            assert!(builder.poll_culling_stats(&device));
+        });
     }
 }

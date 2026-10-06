@@ -19,11 +19,8 @@
 //!   index rotates with the triple-buffer system.
 //! - The particle counter is a monotonically-increasing atomic that wraps at
 //!   `MAX_PARTICLES`, giving a ring-buffer effect with no CPU readback needed.
-//! - `particle_count` for the draw call is derived from the counter value written
-//!   by the GPU last frame (one-frame latency via a staging buffer readback that
-//!   completes asynchronously).
+//! - Draw arguments are generated from the current GPU counter without readback.
 
-use std::sync::mpsc::Receiver;
 
 use bytemuck::{Pod, Zeroable};
 
@@ -70,8 +67,7 @@ pub struct DeathParticleRenderer {
     // Buffers
     pub particle_buffer: wgpu::Buffer,
     pub counter_buffer: wgpu::Buffer,
-    counter_staging_buffer: wgpu::Buffer,
-    counter_readback_receiver: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    draw: super::particle_draw::ParticleDraw,
     /// Snapshot of death_flags from the previous frame.
     pub prev_death_flags_buffer: wgpu::Buffer,
     params_buffer: wgpu::Buffer,
@@ -83,8 +79,6 @@ pub struct DeathParticleRenderer {
     // State
     pub max_particles: u32,
     time: f32,
-    /// How many particles to draw this frame (updated from counter staging readback).
-    particle_count: u32,
     #[allow(dead_code)]
     cell_capacity: u32,
 }
@@ -134,12 +128,7 @@ impl DeathParticleRenderer {
             mapped_at_creation: false,
         });
 
-        let counter_staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Death Counter Staging"),
-            size: std::mem::size_of::<ParticleCounter>() as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let draw = super::particle_draw::ParticleDraw::new(device, &counter_buffer, 6, max_particles);
 
         let prev_death_flags_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Death Particle Prev Death Flags"),
@@ -382,15 +371,13 @@ impl DeathParticleRenderer {
             compute_bind_group_layout,
             particle_buffer,
             counter_buffer,
-            counter_staging_buffer,
-            counter_readback_receiver: None,
+            draw,
             prev_death_flags_buffer,
             params_buffer,
             camera_bind_group_layout,
             render_bind_group_layout,
             max_particles,
             time: 0.0,
-            particle_count: 0,
             cell_capacity,
         }
     }
@@ -515,62 +502,10 @@ impl DeathParticleRenderer {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        // Copy counter only when the previous staging readback has completed.
-        if self.counter_readback_receiver.is_none() {
-            encoder.copy_buffer_to_buffer(
-                &self.counter_buffer,
-                0,
-                &self.counter_staging_buffer,
-                0,
-                std::mem::size_of::<ParticleCounter>() as u64,
-            );
-        }
+        self.draw.encode(encoder);
     }
 
-    /// Poll the staging buffer for the particle count written last frame.
-    /// Call this after `queue.submit()`.
-    pub fn poll_particle_count(&mut self, device: &wgpu::Device) {
-        use std::sync::mpsc::channel;
 
-        if self.counter_readback_receiver.is_none() {
-            let (sender, receiver) = channel();
-            self.counter_staging_buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |result| {
-                    let _ = sender.send(result);
-                });
-            self.counter_readback_receiver = Some(receiver);
-        }
-
-        let _ = device.poll(wgpu::PollType::Poll);
-
-        let Some(receiver) = self.counter_readback_receiver.as_ref() else {
-            return;
-        };
-
-        match receiver.try_recv() {
-            Ok(Ok(())) => {
-                {
-                    let buffer_slice = self.counter_staging_buffer.slice(..);
-                    let data = buffer_slice.get_mapped_range();
-                    let count: &[u32] = bytemuck::cast_slice(&data);
-                    // Counter is monotonically increasing; clamp to ring buffer size.
-                    self.particle_count = count[0].min(self.max_particles);
-                }
-
-                self.counter_staging_buffer.unmap();
-                self.counter_readback_receiver = None;
-            }
-            Ok(Err(err)) => {
-                log::warn!("Death particle counter readback failed: {err:?}");
-                self.counter_readback_receiver = None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.counter_readback_receiver = None;
-            }
-        }
-    }
 
     /// Render death particles.
     pub fn render(
@@ -581,9 +516,6 @@ impl DeathParticleRenderer {
         camera_bind_group: &wgpu::BindGroup,
         render_bind_group: &wgpu::BindGroup,
     ) {
-        if self.particle_count == 0 {
-            return;
-        }
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Death Particle Pass"),
@@ -612,7 +544,7 @@ impl DeathParticleRenderer {
         render_pass.set_bind_group(0, camera_bind_group, &[]);
         render_pass.set_bind_group(1, render_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
-        render_pass.draw(0..6, 0..self.particle_count);
+        render_pass.draw_indirect(&self.draw.args, 0);
     }
 
     /// Camera bind group layout (for creating the camera bind group in gpu_scene).
@@ -620,8 +552,5 @@ impl DeathParticleRenderer {
         &self.camera_bind_group_layout
     }
 
-    /// Current particle count (updated from staging readback).
-    pub fn particle_count(&self) -> u32 {
-        self.particle_count
-    }
+
 }

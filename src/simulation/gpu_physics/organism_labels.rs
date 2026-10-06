@@ -80,9 +80,6 @@ pub struct OrganismLabelSystem {
     #[allow(dead_code)]
     cell_workgroups: u32,
 
-    debug_staging: wgpu::Buffer,
-    debug_copy_pending: bool,
-    debug_map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     debug_frame: u32,
 }
 
@@ -295,13 +292,7 @@ impl OrganismLabelSystem {
             ],
         });
 
-        // Debug staging
-        let debug_staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Label Debug Staging"),
-            size: 32 * 4,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+
 
         Self {
             label_buffer,
@@ -321,10 +312,7 @@ impl OrganismLabelSystem {
             stable_id_map_buffer,
             stable_id_counter_buffer,
             cell_workgroups,
-            debug_staging,
-            debug_copy_pending: false,
-            debug_map_receiver: None,
-            debug_frame: 0,
+                    debug_frame: 0,
         }
     }
 
@@ -432,12 +420,7 @@ impl OrganismLabelSystem {
             stable_pass.dispatch_workgroups(active_workgroups, 1, 1);
         }
 
-        // Debug readback every 120 frames.
-        if self.debug_frame % 120 == 0 {
-            let copy_size = (32 * 4).min(self.label_buffer.size());
-            encoder.copy_buffer_to_buffer(&self.label_buffer, 0, &self.debug_staging, 0, copy_size);
-            self.debug_copy_pending = true;
-        }
+
     }
 
     /// Write the run_init flag into the label state buffer.
@@ -461,37 +444,6 @@ impl OrganismLabelSystem {
             _pad5: 0,
         };
         queue.write_buffer(&self.label_state_buffer, 0, bytemuck::bytes_of(&state));
-    }
-
-    pub fn poll_debug_readback(&mut self, device: &wgpu::Device) {
-        // Start the map_async on the first poll after a copy was recorded.
-        if self.debug_copy_pending && self.debug_map_receiver.is_none() {
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.debug_staging
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |r| {
-                    tx.send(r).ok();
-                });
-            self.debug_map_receiver = Some(rx);
-            self.debug_copy_pending = false;
-        }
-
-        if let Some(ref rx) = self.debug_map_receiver {
-            let _ = device.poll(wgpu::PollType::Poll);
-            match rx.try_recv() {
-                Ok(Ok(())) => {
-                    // Data is ready - read and discard (debug only).
-                    drop(self.debug_staging.slice(..).get_mapped_range());
-                    self.debug_staging.unmap();
-                    self.debug_map_receiver = None;
-                }
-                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.debug_staging.unmap();
-                    self.debug_map_receiver = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {} // still in flight
-            }
-        }
     }
 
     // -- Private ---------------------------------------------------------------

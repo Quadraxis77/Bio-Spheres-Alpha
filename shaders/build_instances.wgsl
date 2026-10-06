@@ -430,7 +430,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Skip dead cells (check death_flags set by lifecycle system)
     // Death flags are set when nutrients < 1.0 (DEATH_NUTRIENT_THRESHOLD)
-    if (death_flags[idx] == 1u) {
+    if (death_flags[idx] != 0u) {
         return;
     }
 

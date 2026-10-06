@@ -242,9 +242,49 @@ fn readback_typed<T: bytemuck::Pod>(
     src_buffer: &wgpu::Buffer,
     count: usize,
 ) -> Result<Vec<T>, SnapshotError> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+
     let byte_count = (count * std::mem::size_of::<T>()) as u64;
     let bytes = readback_buffer_bytes(device, queue, src_buffer, 0, byte_count)?;
-    Ok(bytemuck::cast_slice::<u8, T>(&bytes).to_vec())
+    decode_readback_bytes(&bytes)
+}
+
+fn decode_readback_bytes<T: bytemuck::Pod>(bytes: &[u8]) -> Result<Vec<T>, SnapshotError> {
+    let element_size = std::mem::size_of::<T>();
+    if element_size == 0 || bytes.len() % element_size != 0 {
+        return Err(SnapshotError::GpuReadback(format!(
+            "readback byte count {} is not a multiple of element size {element_size}",
+            bytes.len()
+        )));
+    }
+
+    Ok(bytes
+        .chunks_exact(element_size)
+        .map(bytemuck::pod_read_unaligned)
+        .collect())
+}
+
+#[cfg(test)]
+mod readback_tests {
+    use super::decode_readback_bytes;
+
+    #[test]
+    fn empty_typed_readback_result_does_not_require_alignment() {
+        let values = decode_readback_bytes::<[u32; 4]>(&[]).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn typed_readback_conversion_accepts_unaligned_bytes() {
+        let source = [1u32, 2, 3, 4];
+        let mut storage = vec![0u8; std::mem::size_of_val(&source) + 1];
+        storage[1..].copy_from_slice(bytemuck::cast_slice(&source));
+
+        let values = decode_readback_bytes::<u32>(&storage[1..]).unwrap();
+        assert_eq!(values, source);
+    }
 }
 
 fn capture_gpu_adult_snapshots(
@@ -1368,6 +1408,19 @@ impl GpuScene {
             genomes_yaml.push(yaml);
         }
 
+        let gpu_genomes = if let Some(mutation) = self.mutation_system.as_ref() {
+            crate::simulation::gpu_physics::genome_snapshot::capture(
+                device, queue, &self.gpu_triple_buffers, &self.adhesion_buffers, mutation,
+                self.instance_builder.mode_colors_buffer(), self.instance_builder.mode_emissive_buffer(),
+                genome_ids.iter().zip(&death_flags).filter_map(|(&id, &dead)| (dead == 0).then_some(id)),
+                self.genomes.len(),
+            ).map_err(SnapshotError::GpuReadback)?
+        } else { Vec::new() };
+        let development_addresses = readback_typed(device, queue, &self.gpu_triple_buffers.development_addresses, slots)?;
+        let parent_lineage_hashes = readback_typed(device, queue, &self.gpu_triple_buffers.parent_lineage_hashes, slots)?;
+        let organism_cell_ids = readback_typed(device, queue, &self.gpu_triple_buffers.organism_cell_ids, slots)?;
+        let gpu_next_id: Vec<u32> = readback_typed(device, queue, &self.gpu_triple_buffers.next_cell_id, 1)?;
+
         // -- Cave parameters ---------------------------------------------------
         let cave_active = self.cave_renderer.is_some();
         let (
@@ -1453,10 +1506,14 @@ impl GpuScene {
             cell_adhesion_indices,
             adhesion_allocated_count,
             genomes_yaml,
+            gpu_genomes,
+            development_addresses,
+            parent_lineage_hashes,
+            organism_cell_ids,
             lineage_archive,
             current_time: self.current_time,
             current_frame: self.current_frame,
-            next_cell_id: self.next_cell_id,
+            next_cell_id: gpu_next_id[0],
             time_scale: self.time_scale,
             gravity: self.gravity,
             gravity_mode: self.gravity_mode,
@@ -1565,6 +1622,7 @@ impl GpuScene {
             genomes.push(genome);
         }
         self.genomes = genomes;
+        self.update_has_oculocytes();
         self.lineage_archive = snapshot.lineage_archive.clone();
         self.lineage_archive.migrate_legacy_snapshots();
         self.lineage_archive
@@ -1590,21 +1648,18 @@ impl GpuScene {
         if slots > 0 {
             let mut canonical = CanonicalState::new(scene_capacity as usize);
 
-            // Compute live cell count from death flags.
-            let live_count = snapshot
-                .death_flags
-                .iter()
-                .take(slots)
-                .filter(|&&d| d == 0)
-                .count();
-            canonical.cell_count = live_count;
+            // Upload the complete high-water range, including holes left by
+            // fused/dead parents. Restore live/death counters separately below.
+            canonical.cell_count = slots;
 
             // Populate per-cell arrays for all slots up to `slots`.
             // Dead slots are included so that slot indices remain stable.
             for i in 0..slots {
                 let pm = snapshot.positions_and_mass[i];
                 canonical.positions[i] = glam::Vec3::new(pm[0], pm[1], pm[2]);
-                canonical.masses[i] = pm[3];
+                // Dead slots are already placed in the restored free ring.
+                // Clear their mass so death_scan cannot enqueue them twice.
+                canonical.masses[i] = if snapshot.death_flags[i] == 0 { pm[3] } else { 0.0 };
                 canonical.radii[i] = pm[3].clamp(0.5, 2.0);
 
                 let v = snapshot.velocities[i];
@@ -1697,6 +1752,39 @@ impl GpuScene {
         // Mark instance builder dirty so rendering picks up the new state.
         self.instance_builder.mark_all_dirty();
         self.genomes_dirty = true;
+        self.sync_dirty_genomes(device, queue);
+        if let Some(mutation) = self.mutation_system.as_mut() {
+            crate::simulation::gpu_physics::genome_snapshot::restore(
+                queue, &self.gpu_triple_buffers, &self.adhesion_buffers, mutation,
+                self.instance_builder.mode_colors_buffer(), self.instance_builder.mode_emissive_buffer(),
+                &snapshot.gpu_genomes, self.genomes.len(),
+                self.genomes.iter().map(|g| g.modes.len() as u32).sum(),
+            ).map_err(SnapshotError::GpuReadback)?;
+        }
+        if slots > 0 {
+            // CanonicalState uses local mode indices; snapshots store absolute GPU
+            // indices. Preserve them exactly for both authored and GPU-born genomes.
+            queue.write_buffer(&self.gpu_triple_buffers.mode_indices, 0, bytemuck::cast_slice(&snapshot.mode_indices));
+            queue.write_buffer(&self.gpu_triple_buffers.death_flags, 0, bytemuck::cast_slice(&snapshot.death_flags));
+            let free: Vec<u32> = snapshot.death_flags.iter().enumerate().filter_map(|(i, &d)| (d != 0).then_some(i as u32)).collect();
+            let live = slots as u32 - free.len() as u32;
+            queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&[slots as u32, live]));
+            queue.write_buffer(&self.gpu_triple_buffers.ring_state, 0, bytemuck::cast_slice(&[0u32, free.len() as u32, slots as u32, 0]));
+            if !free.is_empty() {
+                queue.write_buffer(&self.gpu_triple_buffers.free_slot_ring, 0, bytemuck::cast_slice(&free));
+            }
+            if snapshot.development_addresses.len() == slots {
+                queue.write_buffer(&self.gpu_triple_buffers.development_addresses, 0, bytemuck::cast_slice(&snapshot.development_addresses));
+            }
+            if snapshot.parent_lineage_hashes.len() == slots {
+                queue.write_buffer(&self.gpu_triple_buffers.parent_lineage_hashes, 0, bytemuck::cast_slice(&snapshot.parent_lineage_hashes));
+            }
+            if snapshot.organism_cell_ids.len() == slots {
+                queue.write_buffer(&self.gpu_triple_buffers.organism_cell_ids, 0, bytemuck::cast_slice(&snapshot.organism_cell_ids));
+            }
+            self.current_cell_count = live;
+            crate::simulation::gpu_physics::genome_snapshot::restore_cell_properties(device, queue, &self.gpu_triple_buffers, slots as u32);
+        }
 
         // -- Restore cave parameters -------------------------------------------
         // Cave geometry is fully deterministic from its scalar params, so we

@@ -540,7 +540,7 @@ impl MossSystem {
     pub fn run_growth(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
+        device: &wgpu::Device,
         growth_bind_group: &wgpu::BindGroup,
         delta_time: f32,
         world_radius: f32,
@@ -571,10 +571,11 @@ impl MossSystem {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(
+        crate::simulation::gpu_upload::encode_buffer_write(
+            device,
+            encoder,
             &self.growth_params_buffer,
-            0,
-            bytemuck::cast_slice(&[params]),
+            bytemuck::bytes_of(&params),
         );
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {

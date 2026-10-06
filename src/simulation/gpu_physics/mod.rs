@@ -13,12 +13,16 @@ pub mod compute_pipelines;
 pub mod devorocyte_consumption;
 pub mod dynamic_buffers;
 pub mod gametocyte_merge;
+pub mod gpu_fusion;
+pub mod genome_snapshot;
 pub mod genome_buffers;
 pub mod genome_compaction;
 pub mod gpu_cell_inspector;
 pub mod gpu_scene_integration;
 pub mod gpu_tool_operations;
 pub mod light_field;
+pub mod luminocyte_emission;
+mod luminocyte_ray_tracing;
 pub mod moss;
 pub mod mutation;
 pub mod organism_labels;
@@ -26,6 +30,7 @@ pub mod phagocyte_consumption;
 pub mod scaffold;
 pub mod signal_backbone_topology;
 pub mod signal_backbone_v2;
+pub mod signal_diffusion;
 pub mod triple_buffer;
 
 pub use adhesion_buffers::AdhesionBuffers;
@@ -40,7 +45,7 @@ pub use compute_pipelines::{
 };
 pub use devorocyte_consumption::DevorocyteConsumptionSystem;
 pub use dynamic_buffers::{DynamicBuffer, DynamicGenomeBufferManager};
-pub use gametocyte_merge::{GameteMergeEvent, GametocyteMergeSystem};
+pub use gametocyte_merge::GametocyteMergeSystem;
 pub use genome_buffers::{GenomeBufferGroup, GenomeBufferManager, MAX_GENOMES};
 pub use gpu_cell_inspector::{
     AsyncReadbackManager, GpuCellInspector, ReadbackId, ReadbackResult, ReadbackStats,
@@ -66,3 +71,5 @@ pub use signal_backbone_v2::{
     SignalBackboneValuePipeline, SignalTickClock,
 };
 pub use triple_buffer::GpuTripleBufferSystem;
+
+pub mod organism_follow;

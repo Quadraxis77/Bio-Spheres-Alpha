@@ -3,7 +3,10 @@
 //! This module generates a solid mask that treats the entire cave volume as solid.
 //! It uses the exact same noise function and cave settings to replicate the cave volume.
 
-use crate::rendering::cave_system::{flat_ground_surface_height, CaveParams};
+use crate::rendering::cave_system::{
+    apply_cave_watershed_density, flat_ground_surface_height, shape_cave_sample_position,
+    CaveParams,
+};
 use glam::Vec3;
 
 /// Solid mask generator for fluid system
@@ -223,7 +226,7 @@ impl SolidMaskGenerator {
         }
 
         // Apply domain warping for organic shapes (same as cave system)
-        let warped_pos = self.warp_domain(pos, params);
+        let warped_pos = shape_cave_sample_position(self.warp_domain(pos, params), params);
 
         // Get base noise value using FBM (same as cave system)
         let noise = self.fbm(warped_pos, params);
@@ -233,9 +236,16 @@ impl SolidMaskGenerator {
         // Higher density = more solid rock, lower = more open tunnels
         let cave_threshold = params.density.clamp(0.0, 1.0);
 
-        // Solid rock where noise is above threshold, open tunnels where below
-        // This matches the cave generation logic exactly
-        noise > cave_threshold
+        // Solid rock where noise is above threshold, open tunnels where below.
+        // The coherent watershed override then replaces fragmented noise near
+        // designed lake and river floors with the same density used by the mesh.
+        let base_density = if noise > cave_threshold {
+            let wall_factor = (noise - cave_threshold) / (1.0 - cave_threshold).max(0.001);
+            params.threshold + wall_factor * 0.5
+        } else {
+            params.threshold - 0.5
+        };
+        apply_cave_watershed_density(pos, base_density, params) > params.threshold
     }
 
     /// Hash function for single random value at integer coordinates (same as cave system)

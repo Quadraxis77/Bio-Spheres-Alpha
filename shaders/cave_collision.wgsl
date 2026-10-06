@@ -1,14 +1,6 @@
-// Cave Collision SDF Shader
-// 
-// Implements GPU-based SDF collision detection using Voronoi-based cave generation.
-// Uses 3D Voronoi cells with random wall thresholds for clear wall/air regions.
-//
-// Voronoi cave approach:
-// - Each Voronoi cell has a random "wall threshold" (0-1)
-// - If wall_density > wall_threshold, the cell is a CAVE OBSTACLE (solid)
-// - Caves are SOLID OBSTACLES that cells must avoid
-// - Cells stay in OPEN SPACE (non-cave cells)
-// - When in a cave cell, cells are pushed OUT into open space
+// Cell collision against the density grid used to generate the cave mesh.
+// Includes geothermal vent walls and carved openings. Density gradients
+// provide contact normals without per-cell triangle searches.
 
 struct PhysicsParams {
     delta_time: f32,
@@ -66,6 +58,9 @@ struct CaveParams {
     mesh_smoothing_factor: f32,
     mesh_smooth_normals: u32,
     flat_ground_enabled: u32,
+    watershed_lakes: array<vec4<f32>, 2>,
+    watershed_route_a: array<vec4<f32>, 6>,
+    watershed_route_b: array<vec4<f32>, 6>,
 }
 
 @group(0) @binding(0) var<uniform> params: PhysicsParams;
@@ -78,7 +73,7 @@ struct CaveParams {
 @group(0) @binding(7) var<storage, read> angular_velocities: array<vec4<f32>>;
 
 @group(1) @binding(0) var<uniform> cave_params: CaveParams;
-@group(1) @binding(1) var<storage, read> solid_mask: array<u32>;
+@group(1) @binding(1) var<storage, read> collision_density: array<f32>;
 
 // Constants
 const EPSILON: f32 = 0.0001;
@@ -87,7 +82,7 @@ const ROLLING_CONTACT_FRICTION: f32 = 0.18;
 const CAVE_RESTITUTION: f32 = 0.08;
 const CAVE_RESTING_SPEED: f32 = 2.0;
 const CAVE_MAX_CORRECTION_PER_STEP: f32 = 0.18;
-const CAVE_CONTACT_SLOP: f32 = 0.12;
+const CAVE_CONTACT_SLOP: f32 = 0.02;
 const CAVE_POSITION_CORRECTION_FRACTION: f32 = 0.22;
 const CAVE_REST_SPEED: f32 = 0.08;
 
@@ -187,6 +182,203 @@ fn warp_domain(pos: vec3<f32>) -> vec3<f32> {
     );
 }
 
+// Keep cave-noise samples constant through most of each vertical band, then
+// transition quickly to the next band. This mirrors the CPU cave mesh and
+// fluid-solid generators, producing walkable shelves and steep connecting
+// cliffs while retaining the organic X/Z outline.
+fn terrace_cave_sample_position(pos: vec3<f32>) -> vec3<f32> {
+    let terrace_height = clamp(cave_params.world_radius * 0.055, 6.0, 14.0);
+    let level_position = (pos.y - cave_params.world_center.y) / terrace_height;
+    let lower_level = floor(level_position);
+    let within_level = level_position - lower_level;
+    let riser_fraction = 0.18;
+    let riser_t = clamp(
+        (within_level - (1.0 - riser_fraction)) / riser_fraction,
+        0.0,
+        1.0,
+    );
+    let smooth_riser = riser_t * riser_t * (3.0 - 2.0 * riser_t);
+    return vec3<f32>(
+        pos.x,
+        cave_params.world_center.y + (lower_level + smooth_riser) * terrace_height,
+        pos.z,
+    );
+}
+
+fn watershed_smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = clamp((value - edge0) / max(edge1 - edge0, 0.000001), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+fn lake_basin_profile(
+    point: vec2<f32>,
+    center: vec2<f32>,
+    radii: vec2<f32>,
+) -> vec2<f32> {
+    let elliptical_distance = length((point - center) / radii);
+    let depression = 1.0 - watershed_smoothstep(0.38, 0.78, elliptical_distance);
+    let influence = 1.0 - watershed_smoothstep(1.20, 1.55, elliptical_distance);
+    return vec2<f32>(depression, influence);
+}
+
+fn terraced_watershed_height(world_height: f32) -> f32 {
+    return terrace_cave_sample_position(vec3<f32>(
+        cave_params.world_center.x,
+        world_height,
+        cave_params.world_center.z,
+    )).y;
+}
+
+fn river_route_sample(
+    point: vec2<f32>,
+    route: array<vec4<f32>, 6>,
+) -> vec3<f32> {
+    var best = vec3<f32>(0.0, 1000000.0, 0.0);
+    for (var i = 0u; i < 5u; i++) {
+        let start = route[i];
+        let end = route[i + 1u];
+        if (start.w <= 0.0 || end.w <= 0.0) {
+            continue;
+        }
+        let start_xz = start.xz;
+        let end_xz = end.xz;
+        let direction = end_xz - start_xz;
+        let length_squared = dot(direction, direction);
+        if (length_squared <= 0.000001) {
+            continue;
+        }
+        let t = clamp(dot(point - start_xz, direction) / length_squared, 0.0, 1.0);
+        let route_point = start_xz + direction * t;
+        let route_distance = distance(point, route_point);
+        if (route_distance < best.y) {
+            best = vec3<f32>(
+                start.y + (end.y - start.y) * t,
+                route_distance,
+                start.w + (end.w - start.w) * t,
+            );
+        }
+    }
+    return best;
+}
+
+fn blend_watershed_surface(
+    base_density: f32,
+    pos_y: f32,
+    surface_y: f32,
+    horizontal_influence: f32,
+) -> f32 {
+    let radius = max(cave_params.world_radius, 1.0);
+    let terrace_height = clamp(radius * 0.055, 6.0, 14.0);
+    let vertical_offset = pos_y - surface_y;
+    var vertical_influence = 0.0;
+    if (vertical_offset >= 0.0) {
+        vertical_influence = 1.0 - watershed_smoothstep(
+            terrace_height * 3.0,
+            terrace_height * 4.0,
+            vertical_offset,
+        );
+    } else {
+        vertical_influence = 1.0 - watershed_smoothstep(
+            terrace_height * 1.5,
+            terrace_height * 2.5,
+            -vertical_offset,
+        );
+    }
+    let influence = horizontal_influence * vertical_influence;
+    let surface_softness = clamp(radius * 0.008, 1.0, 3.0);
+    let terrain_density = cave_params.threshold
+        + clamp((surface_y - pos_y) / surface_softness, -0.5, 0.5);
+    return base_density + (terrain_density - base_density) * influence;
+}
+
+fn carve_watershed_surface(
+    base_density: f32,
+    pos_y: f32,
+    surface_y: f32,
+    horizontal_influence: f32,
+) -> f32 {
+    return min(
+        base_density,
+        blend_watershed_surface(
+            base_density,
+            pos_y,
+            surface_y,
+            horizontal_influence,
+        ),
+    );
+}
+
+fn apply_cave_watershed_density(pos: vec3<f32>, base_density: f32) -> f32 {
+    let radius = max(cave_params.world_radius, 1.0);
+    let point = pos.xz;
+    let basin_depth = clamp(radius * 0.045, 5.0, 11.0);
+    let channel_depth = clamp(radius * 0.018, 2.5, 5.0);
+    var density = base_density;
+
+    for (var i = 0u; i < 2u; i++) {
+        let lake = cave_params.watershed_lakes[i];
+        if (lake.w <= 0.0) {
+            continue;
+        }
+        let basin = lake_basin_profile(
+            point,
+            lake.xz,
+            vec2<f32>(lake.w, lake.w * 0.78),
+        );
+        density = blend_watershed_surface(
+            density,
+            pos.y,
+            lake.y - basin.x * basin_depth,
+            basin.y,
+        );
+    }
+
+    let route_a = river_route_sample(point, cave_params.watershed_route_a);
+    if (route_a.z > 0.0) {
+        let cross_section = 1.0 - watershed_smoothstep(
+            route_a.z * 0.35,
+            route_a.z,
+            route_a.y,
+        );
+        let influence = 1.0 - watershed_smoothstep(
+            route_a.z,
+            route_a.z * 1.65,
+            route_a.y,
+        );
+        density = carve_watershed_surface(
+            density,
+            pos.y,
+            terraced_watershed_height(route_a.x) - cross_section * channel_depth,
+            influence,
+        );
+    }
+
+    let route_b = river_route_sample(point, cave_params.watershed_route_b);
+    if (route_b.z > 0.0) {
+        let cross_section = 1.0 - watershed_smoothstep(
+            route_b.z * 0.35,
+            route_b.z,
+            route_b.y,
+        );
+        let influence = 1.0 - watershed_smoothstep(
+            route_b.z,
+            route_b.z * 1.65,
+            route_b.y,
+        );
+        density = carve_watershed_surface(
+            density,
+            pos.y,
+            terraced_watershed_height(route_b.x) - cross_section * channel_depth,
+            influence,
+        );
+    }
+    return density;
+}
+
+fn shape_cave_sample_position(pos: vec3<f32>) -> vec3<f32> {
+    return terrace_cave_sample_position(pos);
+}
+
 fn flat_ground_surface_height(pos: vec3<f32>) -> f32 {
     let base_height = cave_params.world_center.y - cave_params.world_radius / 3.0;
     let phase = f32(cave_params.seed) * 0.013;
@@ -230,7 +422,7 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     }
 
     // Apply domain warping for organic shapes
-    let warped_pos = warp_domain(pos);
+    let warped_pos = shape_cave_sample_position(warp_domain(pos));
 
     // Get base noise value using FBM
     let noise = fbm(warped_pos);
@@ -240,19 +432,41 @@ fn sample_cave_density(pos: vec3<f32>) -> f32 {
     // Higher density = more solid rock, lower = more open tunnels
     let cave_threshold = clamp(cave_params.density, 0.0, 1.0);
 
-    // Solid rock where noise is above threshold, open tunnels where below
+    // Solid rock where noise is above threshold, open tunnels where below.
+    var base_density = cave_params.threshold - 0.5;
     if (noise > cave_threshold) {
         // Solid rock region - above marching cubes threshold
         let wall_factor = (noise - cave_threshold) / max(1.0 - cave_threshold, 0.001);
-        return cave_params.threshold + wall_factor * 0.5;
-    } else {
-        // Open tunnel/cave space - below marching cubes threshold
-        return cave_params.threshold - 0.5;
+        base_density = cave_params.threshold + wall_factor * 0.5;
     }
+    return apply_cave_watershed_density(pos, base_density);
 }
 
+fn collision_grid_value(p: vec3<u32>, size: u32) -> f32 {
+    return collision_density[p.x + p.y * size + p.z * size * size];
+}
+
+// Trilinear density matches the mesh's grid and includes opaque vent walls
+// and carved openings. Re-evaluating terrain noise here omits both.
 fn sample_collision_density(pos: vec3<f32>) -> f32 {
-    return sample_cave_density(pos);
+    let extent = cave_params.world_radius + 3.0;
+    let resolution = cave_params.grid_resolution;
+    let size = resolution + 1u;
+    let grid = (pos - cave_params.world_center + vec3<f32>(extent))
+        * (f32(resolution) / (2.0 * extent));
+    if (any(grid < vec3<f32>(0.0)) || any(grid > vec3<f32>(f32(resolution)))) {
+        return 1.0;
+    }
+    let lo = min(vec3<u32>(floor(grid)), vec3<u32>(resolution - 1u));
+    let hi = lo + vec3<u32>(1u);
+    let f = grid - vec3<f32>(lo);
+    let z0 = mix(
+        mix(collision_grid_value(lo, size), collision_grid_value(vec3<u32>(hi.x, lo.y, lo.z), size), f.x),
+        mix(collision_grid_value(vec3<u32>(lo.x, hi.y, lo.z), size), collision_grid_value(vec3<u32>(hi.x, hi.y, lo.z), size), f.x), f.y);
+    let z1 = mix(
+        mix(collision_grid_value(vec3<u32>(lo.x, lo.y, hi.z), size), collision_grid_value(vec3<u32>(hi.x, lo.y, hi.z), size), f.x),
+        mix(collision_grid_value(vec3<u32>(lo.x, hi.y, hi.z), size), collision_grid_value(hi, size), f.x), f.y);
+    return mix(z0, z1, f.z);
 }
 
 fn raw_sdf_gradient(pos: vec3<f32>, h: f32) -> vec3<f32> {
@@ -322,40 +536,65 @@ fn estimate_penetration_depth(pos: vec3<f32>, radius: f32, density_overlap: f32,
     return select(0.0, radius * 0.25, center_is_solid);
 }
 
-// Apply position-based collision - directly moves cells out of solid rock into cave tunnels.
-// Center-based contact avoids preemptively pushing cells away while their center
-// is still in open space, which otherwise makes them stand off from the surface.
+// Conservative broad phase: trilinear density cannot exceed the maximum
+// corner value. Usually eight grid reads reject a cell far from any wall.
+fn sphere_may_touch_rock(pos: vec3<f32>, radius: f32) -> bool {
+    let extent = cave_params.world_radius + 3.0;
+    let resolution = cave_params.grid_resolution;
+    let scale = f32(resolution) / (2.0 * extent);
+    let grid = (pos - cave_params.world_center + vec3<f32>(extent)) * scale;
+    let lo = vec3<i32>(floor(grid - vec3<f32>(radius * scale)));
+    let hi = vec3<i32>(ceil(grid + vec3<f32>(radius * scale)));
+    if (any(lo < vec3<i32>(0)) || any(hi > vec3<i32>(i32(resolution)))) { return true; }
+    for (var z = lo.z; z <= hi.z; z++) {
+        for (var y = lo.y; y <= hi.y; y++) {
+            for (var x = lo.x; x <= hi.x; x++) {
+                if (collision_grid_value(vec3<u32>(u32(x), u32(y), u32(z)), resolution + 1u) > cave_params.threshold) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Normal points into open space; w is sphere penetration in world units.
+fn cave_sphere_contact(pos: vec3<f32>, radius: f32) -> vec4<f32> {
+    if (!sphere_may_touch_rock(pos, radius)) { return vec4<f32>(0.0); }
+    let center_density = sample_collision_density(pos);
+    let normal = -compute_sdf_gradient(pos, radius);
+    if (center_density > cave_params.threshold) {
+        let depth = estimate_penetration_depth(pos, radius, center_density - cave_params.threshold, true);
+        return vec4<f32>(normal, radius + depth);
+    }
+    // Probe the actual sphere surface toward the wall, including diagonal
+    // contacts. The density threshold itself does not change with cell size.
+    let surface = pos - normal * radius;
+    let surface_density = sample_collision_density(surface);
+    let overlap = surface_density - cave_params.threshold;
+    if (overlap <= 0.0) { return vec4<f32>(0.0); }
+    // Interpolate the crossing along the center-to-surface segment. Probing
+    // beyond this contact can cross the far side of a thin vent wall and
+    // underestimate its gradient. This also saves six extra density samples.
+    let depth = radius * overlap / max(surface_density - center_density, EPSILON);
+    return vec4<f32>(normal, depth);
+}
+
+// Apply bounded position correction and velocity response at the sphere surface.
 fn apply_cave_collision_force(cell_idx: u32, pos: vec3<f32>, radius: f32, mass: f32, dt: f32) {
     if (cave_params.collision_enabled == 0u) {
         return;
     }
-
-    let center_density = sample_collision_density(pos);
-    let radius_threshold = cave_params.threshold;
-
-    if (center_density > radius_threshold) {
-        // Compute gradient pointing toward lower density (into open cave space)
-        let normal = -compute_sdf_gradient(pos, radius);  // Points into cave (away from wall)
-
-        // Penetration estimate. Cave density is a smooth scalar field, not a
-        // true SDF, so estimate world-space depth from local density gradient
-        // instead of scaling by cave scale or a voxel size.
-        let density_overlap = center_density - radius_threshold;
-        let penetration = estimate_penetration_depth(
-            pos,
-            radius,
-            density_overlap,
-            true
-        );
-
+    let contact = cave_sphere_contact(pos, radius);
+    let normal = contact.xyz;
+    let penetration = contact.w;
+    if (penetration > 0.0) {
         var vel = velocities[cell_idx].xyz;
         let vel_into_wall = dot(vel, -normal);
 
         if (penetration > CAVE_CONTACT_SLOP) {
-            // Soft depenetration. Cave density is not a true signed-distance
-            // field, so `penetration + radius` behaves like a teleport near
-            // high-gradient/voxelized walls. Leave a small contact slop and
-            // correct a bounded fraction so cells can settle and roll.
+            // Leave a small contact slop and correct a bounded fraction so
+            // cells can settle and roll without abrupt position jumps.
             let correction_distance = min(
                 max(penetration - CAVE_CONTACT_SLOP, 0.0) * CAVE_POSITION_CORRECTION_FRACTION,
                 CAVE_MAX_CORRECTION_PER_STEP
@@ -431,6 +670,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let collision_radius = calculate_radius_from_mass(mass);
 
-    // Apply force-based cave collision (modifies velocity only)
+    // Resolve sphere contact (position, velocity, and rolling torque)
     apply_cave_collision_force(idx, pos, collision_radius, mass, params.delta_time);
 }

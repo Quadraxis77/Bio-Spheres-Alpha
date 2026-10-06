@@ -17,9 +17,9 @@ pub struct GpuCellInsertion {
     params_buffer: wgpu::Buffer,
 
     /// Bind groups for cell insertion (writes to all 3 buffer sets)
-    physics_bind_group: wgpu::BindGroup,
-    params_bind_group: wgpu::BindGroup,
-    state_bind_group: wgpu::BindGroup,
+    pub(super) physics_bind_group: wgpu::BindGroup,
+    pub(super) params_bind_group: wgpu::BindGroup,
+    pub(super) state_bind_group: wgpu::BindGroup,
 }
 
 impl GpuCellInsertion {
@@ -382,7 +382,7 @@ impl GpuCellInsertion {
             max_splits,
             cell_id: 0, // Let shader generate new cell ID
             cell_type,
-            initial_reserve: if cell_type == 10 { 65535000 } else { 0 },
+            initial_reserve: if cell_type == 10 || cell_type == 13 { 65535000 } else { 0 },
             initial_nutrients: 0,
             _pad4: 0,
         };
@@ -511,7 +511,7 @@ impl GpuCellInsertion {
             cell_id,
             cell_type,
             initial_reserve: initial_reserve_override.unwrap_or_else(|| {
-                if cell_type == 10 {
+                if cell_type == 10 || cell_type == 13 {
                     65535000
                 } else {
                     0

@@ -116,6 +116,16 @@ pub struct GpuSceneSnapshot {
     /// All genomes present in the scene at save time, serialised as YAML
     /// strings using the existing genome serialization path.
     pub genomes_yaml: Vec<String>,
+    /// Exact live GPU-born genomes; authored YAML remains separate.
+    #[serde(default)]
+    pub gpu_genomes: Vec<crate::simulation::gpu_physics::genome_snapshot::SavedGpuGenome>,
+    #[serde(default)]
+    pub development_addresses: Vec<[u32; 4]>,
+    #[serde(default)]
+    pub parent_lineage_hashes: Vec<[u32; 2]>,
+    #[serde(default)]
+    pub organism_cell_ids: Vec<u32>,
+
 
     /// Lightweight lineage/bestiary history for the ecosystem viewer.
     ///

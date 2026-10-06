@@ -2,11 +2,13 @@
 //!
 //! This module generates organic cave networks within the spherical world using:
 //! - Smooth interpolated hash-based noise for procedural generation
+//! - Terraced vertical sampling for walkable plateaus and steep connecting cliffs
+//! - Elevated lake basins connected to lowlands by descending river channels
 //! - Signed distance fields for smooth cave boundaries
 //! - Marching cubes algorithm for parametric mesh generation
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -18,6 +20,15 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 3],
     _padding: f32,
+}
+
+const WATERSHED_ROUTE_POINTS: usize = 6;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct WatershedPoint {
+    position: [f32; 3],
+    width: f32,
 }
 
 /// Cave generation parameters
@@ -98,6 +109,12 @@ pub struct CaveParams {
     /// a flat top surface that can render as sandy ocean floor.
     pub flat_ground_enabled: u32,
 
+    /// Terrain-derived lake centers and downhill river polylines. These are
+    /// regenerated whenever cave geometry parameters change.
+    watershed_lakes: [WatershedPoint; 2],
+    watershed_route_a: [WatershedPoint; WATERSHED_ROUTE_POINTS],
+    watershed_route_b: [WatershedPoint; WATERSHED_ROUTE_POINTS],
+
     /// Cave appearance preset index. 0 = Layered Shale, 1 = Lava Tubes.
     pub appearance: u32,
     pub rock_dark_color: [f32; 3],
@@ -135,7 +152,7 @@ pub struct CaveParams {
     pub rock_geometry_conform: f32,
     pub rock_parallax_depth: f32,
 
-    _padding: [f32; 123],
+    _padding: [f32; 67],
 }
 
 impl Default for CaveParams {
@@ -177,6 +194,9 @@ impl Default for CaveParams {
             mesh_smoothing_factor: DEFAULT_MESH_SMOOTHING_FACTOR,
             mesh_smooth_normals: 0,
             flat_ground_enabled: 0,
+            watershed_lakes: [WatershedPoint::zeroed(); 2],
+            watershed_route_a: [WatershedPoint::zeroed(); WATERSHED_ROUTE_POINTS],
+            watershed_route_b: [WatershedPoint::zeroed(); WATERSHED_ROUTE_POINTS],
             appearance: 0,
             rock_dark_color: [0.105, 0.100, 0.092],
             rock_layer_scale: 0.075,
@@ -212,7 +232,7 @@ impl Default for CaveParams {
             rock_seam_high: 0.98,
             rock_geometry_conform: 0.0,
             rock_parallax_depth: 0.0,
-            _padding: [0.0; 123],
+            _padding: [0.0; 67],
         }
     }
 }
@@ -241,6 +261,188 @@ fn flat_ground_density(pos: Vec3, params: &CaveParams) -> Option<f32> {
     }
 
     Some(params.threshold + (depth / params.scale.max(0.001)).clamp(0.0, 0.5))
+}
+
+/// Height of one naturally scaled cave terrace.
+///
+/// Keeping this tied to world size gives the marching-cubes grid several rows
+/// per shelf at the standard 128-cell resolution without making small worlds
+/// look like a stack of oversized slabs.
+pub(crate) fn cave_terrace_height(params: &CaveParams) -> f32 {
+    (params.world_radius * 0.055).clamp(6.0, 14.0)
+}
+
+/// Quantize the vertical component used to sample cave noise into broad shelves
+/// separated by narrow, smooth risers.
+///
+/// X/Z remain organic, so terrace outlines still follow the cave pattern. The
+/// final 18% of each height band is a Hermite-smoothed transition to the next
+/// level; the other 82% samples one constant elevation. The constant portion
+/// extrudes X/Z boundaries into cliffs, while the compressed transition keeps
+/// floor and ceiling changes within a thin, flat-ish shelf band.
+pub(crate) fn terrace_cave_sample_position(pos: Vec3, params: &CaveParams) -> Vec3 {
+    const RISER_FRACTION: f32 = 0.18;
+
+    let terrace_height = cave_terrace_height(params);
+    let center_y = params.world_center[1];
+    let level_position = (pos.y - center_y) / terrace_height;
+    let lower_level = level_position.floor();
+    let within_level = level_position - lower_level;
+    let riser_start = 1.0 - RISER_FRACTION;
+    let riser_t = ((within_level - riser_start) / RISER_FRACTION).clamp(0.0, 1.0);
+    let smooth_riser = riser_t * riser_t * (3.0 - 2.0 * riser_t);
+
+    Vec3::new(
+        pos.x,
+        center_y + (lower_level + smooth_riser) * terrace_height,
+        pos.z,
+    )
+}
+
+fn smoothstep_range(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = ((value - edge0) / (edge1 - edge0).max(f32::EPSILON)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn lake_basin_profile(point: Vec2, center: Vec2, radii: Vec2) -> (f32, f32) {
+    let elliptical_distance = ((point - center) / radii).length();
+    let depression = 1.0 - smoothstep_range(0.38, 0.78, elliptical_distance);
+    let influence = 1.0 - smoothstep_range(1.20, 1.55, elliptical_distance);
+    (depression, influence)
+}
+
+fn terraced_watershed_height(world_height: f32, params: &CaveParams) -> f32 {
+    terrace_cave_sample_position(
+        Vec3::new(params.world_center[0], world_height, params.world_center[2]),
+        params,
+    )
+    .y
+}
+
+fn river_route_sample(
+    point: Vec2,
+    route: &[WatershedPoint; WATERSHED_ROUTE_POINTS],
+) -> Option<(f32, f32, f32)> {
+    let mut best: Option<(f32, f32, f32)> = None;
+    for segment in route.windows(2) {
+        let start = segment[0];
+        let end = segment[1];
+        if start.width <= 0.0 || end.width <= 0.0 {
+            continue;
+        }
+        let start_xz = Vec2::new(start.position[0], start.position[2]);
+        let end_xz = Vec2::new(end.position[0], end.position[2]);
+        let direction = end_xz - start_xz;
+        let length_squared = direction.length_squared();
+        if length_squared <= f32::EPSILON {
+            continue;
+        }
+        let t = ((point - start_xz).dot(direction) / length_squared).clamp(0.0, 1.0);
+        let distance = point.distance(start_xz + direction * t);
+        let elevation = start.position[1] + (end.position[1] - start.position[1]) * t;
+        let width = start.width + (end.width - start.width) * t;
+        if best.is_none_or(|(_, best_distance, _)| distance < best_distance) {
+            best = Some((elevation, distance, width));
+        }
+    }
+    best
+}
+
+fn blend_watershed_surface(
+    base_density: f32,
+    pos_y: f32,
+    surface_y: f32,
+    horizontal_influence: f32,
+    params: &CaveParams,
+) -> f32 {
+    let radius = params.world_radius.max(1.0);
+    let terrace_height = cave_terrace_height(params);
+    let vertical_offset = pos_y - surface_y;
+    let vertical_influence = if vertical_offset >= 0.0 {
+        1.0 - smoothstep_range(terrace_height * 3.0, terrace_height * 4.0, vertical_offset)
+    } else {
+        1.0 - smoothstep_range(terrace_height * 1.5, terrace_height * 2.5, -vertical_offset)
+    };
+    let influence = horizontal_influence * vertical_influence;
+    let surface_softness = (radius * 0.008).clamp(1.0, 3.0);
+    let terrain_density =
+        params.threshold + ((surface_y - pos_y) / surface_softness).clamp(-0.5, 0.5);
+    base_density + (terrain_density - base_density) * influence
+}
+
+fn carve_watershed_surface(
+    base_density: f32,
+    pos_y: f32,
+    surface_y: f32,
+    horizontal_influence: f32,
+    params: &CaveParams,
+) -> f32 {
+    base_density.min(blend_watershed_surface(
+        base_density,
+        pos_y,
+        surface_y,
+        horizontal_influence,
+        params,
+    ))
+}
+
+/// Replace fragmented 3D noise inside the designed watershed with a coherent
+/// local height field: solid below each floor and open above it.
+///
+/// Wide horizontal and vertical feather regions return the field to ordinary
+/// cave noise outside the lakes and channels. Lake centers and river polylines
+/// come from a terrain survey stored in `CaveParams`, rather than fixed stamps.
+/// Each basin has a broad, flat elevated rim, while river elevations reuse the
+/// terrace transform and can only subtract density along downhill routes.
+pub(crate) fn apply_cave_watershed_density(
+    pos: Vec3,
+    base_density: f32,
+    params: &CaveParams,
+) -> f32 {
+    let radius = params.world_radius.max(1.0);
+    let point = Vec2::new(pos.x, pos.z);
+    let basin_depth = (radius * 0.045).clamp(5.0, 11.0);
+    let channel_depth = (radius * 0.018).clamp(2.5, 5.0);
+    let mut density = base_density;
+
+    for lake in params.watershed_lakes {
+        if lake.width <= 0.0 {
+            continue;
+        }
+        let center = Vec2::new(lake.position[0], lake.position[2]);
+        let (depth, influence) =
+            lake_basin_profile(point, center, Vec2::new(lake.width, lake.width * 0.78));
+        density = blend_watershed_surface(
+            density,
+            pos.y,
+            lake.position[1] - depth * basin_depth,
+            influence,
+            params,
+        );
+    }
+
+    for route in [&params.watershed_route_a, &params.watershed_route_b] {
+        let Some((raw_elevation, distance, width)) = river_route_sample(point, route) else {
+            continue;
+        };
+        let cross_section = 1.0 - smoothstep_range(width * 0.35, width, distance);
+        let influence = 1.0 - smoothstep_range(width, width * 1.65, distance);
+        let elevation = terraced_watershed_height(raw_elevation, params);
+        density = carve_watershed_surface(
+            density,
+            pos.y,
+            elevation - cross_section * channel_depth,
+            influence,
+            params,
+        );
+    }
+
+    density
+}
+
+/// Apply all large-scale terrain shaping before sampling cave noise.
+pub(crate) fn shape_cave_sample_position(pos: Vec3, params: &CaveParams) -> Vec3 {
+    terrace_cave_sample_position(pos, params)
 }
 
 /// Vertex data for cave mesh (rendering)
@@ -303,11 +505,11 @@ pub struct CaveSystemRenderer {
     width: u32,
     height: u32,
 
-    // SDF collision (no mesh buffers needed)
+    // Density-grid collision (no triangle buffers needed)
     collision_bind_group: wgpu::BindGroup,
     collision_pipeline: wgpu::ComputePipeline,
     collision_layout: Arc<wgpu::BindGroupLayout>,
-    collision_solid_mask: wgpu::Buffer,
+    collision_density: wgpu::Buffer,
 
     // Shadow field bind group (set each frame from light field system)
     shadow_bind_group: Option<wgpu::BindGroup>,
@@ -326,9 +528,11 @@ impl CaveSystemRenderer {
         // Set world dimensions before generating mesh
         params.world_center = [0.0, 0.0, 0.0];
         params.world_radius = world_radius;
+        Self::prepare_watershed_layout(&mut params);
 
         // Generate initial cave mesh with correct world size
-        let (vertices, indices, culled_fragment_regions) = Self::generate_cave_mesh(&params);
+        let (vertices, indices, culled_fragment_regions, collision_density) =
+            Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
 
         // Create parameter buffer
@@ -679,8 +883,7 @@ impl CaveSystemRenderer {
             ],
         });
 
-        // Create collision bind group layout. The solid mask mirrors the cave mesh
-        // and geothermal vent carving; a 1-voxel dummy is bound until fluid buffers exist.
+        // Collision samples the same density grid used for marching cubes, including vents.
         let collision_layout = Arc::new(device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label: Some("Cave Collision Layout"),
@@ -709,9 +912,9 @@ impl CaveSystemRenderer {
             },
         ));
 
-        let collision_solid_mask = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Dummy Cave Collision Solid Mask"),
-            contents: bytemuck::cast_slice(&[0u32]),
+        let collision_density = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Collision Density"),
+            contents: bytemuck::cast_slice(&collision_density),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
@@ -726,7 +929,7 @@ impl CaveSystemRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: collision_solid_mask.as_entire_binding(),
+                    resource: collision_density.as_entire_binding(),
                 },
             ],
         });
@@ -784,7 +987,7 @@ impl CaveSystemRenderer {
             collision_bind_group,
             collision_pipeline,
             collision_layout,
-            collision_solid_mask,
+            collision_density,
             shadow_bind_group: None,
         }
     }
@@ -796,8 +999,11 @@ impl CaveSystemRenderer {
         queue: &wgpu::Queue,
         mut params: CaveParams,
     ) {
+        Self::prepare_watershed_layout(&mut params);
+
         // Regenerate mesh
-        let (vertices, indices, culled_fragment_regions) = Self::generate_cave_mesh(&params);
+        let (vertices, indices, culled_fragment_regions, collision_density) =
+            Self::generate_cave_mesh(&params);
         params.triangle_count = (indices.len() / 3) as u32;
 
         self.params = params;
@@ -805,8 +1011,12 @@ impl CaveSystemRenderer {
         // Update uniform buffer
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        // Recreate collision bind group so it sees the updated params buffer while
-        // preserving the current solid-mask buffer binding.
+        // Replace density along with the mesh, including changes in grid resolution.
+        self.collision_density = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cave Collision Density"),
+            contents: bytemuck::cast_slice(&collision_density),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Cave Collision Bind Group"),
             layout: &self.collision_layout,
@@ -817,7 +1027,7 @@ impl CaveSystemRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: self.collision_solid_mask.as_entire_binding(),
+                    resource: self.collision_density.as_entire_binding(),
                 },
             ],
         });
@@ -1040,29 +1250,11 @@ impl CaveSystemRenderer {
     /// Build spatial grid for collision detection
     /// This should be called after mesh generation or parameter updates
     // Spatial grid building is no longer needed with SDF-based collision
-    // The SDF is evaluated directly at runtime without precomputation
+    // Collision density is uploaded when the mesh is generated.
 
     /// Get collision bind group for physics integration
     pub fn collision_bind_group(&self) -> &wgpu::BindGroup {
         &self.collision_bind_group
-    }
-
-    pub fn set_collision_solid_mask(&mut self, device: &wgpu::Device, solid_mask: &wgpu::Buffer) {
-        self.collision_solid_mask = solid_mask.clone();
-        self.collision_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Cave Collision Bind Group"),
-            layout: &self.collision_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.collision_solid_mask.as_entire_binding(),
-                },
-            ],
-        });
     }
 
     /// Get cave params buffer for bind group creation (e.g. cilia force spatial group)
@@ -1163,7 +1355,8 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
             p / warp_scale + glam::Vec3::new(73.9, 19.4, 67.2),
             warp_seed,
         ) - 0.5;
-        let warped = p + glam::Vec3::new(wx, wy, wz) * warp_strength;
+        let warped =
+            shape_cave_sample_position(p + glam::Vec3::new(wx, wy, wz) * warp_strength, params);
 
         // FBM
         let mut value = 0.0f32;
@@ -1181,12 +1374,13 @@ pub fn cave_sdf_push_out(pos: glam::Vec3, params: &CaveParams, camera_radius: f3
         let noise = value / max_val;
 
         let cave_threshold = params.density.clamp(0.0, 1.0);
-        if noise > cave_threshold {
+        let base_density = if noise > cave_threshold {
             let wall_factor = (noise - cave_threshold) / (1.0 - cave_threshold).max(0.001);
             params.threshold + wall_factor * 0.5
         } else {
             params.threshold - 0.5
-        }
+        };
+        apply_cave_watershed_density(p, base_density, params)
     };
 
     // -- collision response ----------------------------------------------------
@@ -1311,7 +1505,7 @@ pub fn nearest_cave_wall(
         let wx = value_noise_3d(p / warp_scale, warp_seed) - 0.5;
         let wy = value_noise_3d(p / warp_scale + Vec3::new(31.7, 47.3, 13.1), warp_seed) - 0.5;
         let wz = value_noise_3d(p / warp_scale + Vec3::new(73.9, 19.4, 67.2), warp_seed) - 0.5;
-        let warped = p + Vec3::new(wx, wy, wz) * warp_strength;
+        let warped = shape_cave_sample_position(p + Vec3::new(wx, wy, wz) * warp_strength, params);
 
         let mut value = 0.0f32;
         let mut amplitude = 1.0f32;
@@ -1328,12 +1522,13 @@ pub fn nearest_cave_wall(
         let noise = value / max_val.max(0.001);
 
         let cave_threshold = params.density.clamp(0.0, 1.0);
-        if noise > cave_threshold {
+        let base_density = if noise > cave_threshold {
             let wall_factor = (noise - cave_threshold) / (1.0 - cave_threshold).max(0.001);
             params.threshold + wall_factor * 0.5
         } else {
             params.threshold - 0.5
-        }
+        };
+        apply_cave_watershed_density(p, base_density, params)
     };
 
     // 14 evenly-spread directions (6 face centers + 8 cube corners of a unit
@@ -1510,10 +1705,231 @@ pub fn cull_isolated_solid_chunks(solid: &mut [bool], dims: usize, min_voxels: u
 }
 
 impl CaveSystemRenderer {
+    fn terrain_floor_height(
+        xz: Vec2,
+        preferred_height: Option<f32>,
+        params: &CaveParams,
+    ) -> Option<f32> {
+        let center_y = params.world_center[1];
+        let radius = params.world_radius;
+        let terrace_height = cave_terrace_height(params);
+        let (top, bottom) = if let Some(preferred) = preferred_height {
+            (
+                (preferred + terrace_height * 3.0).min(center_y + radius * 0.78),
+                (preferred - radius * 0.30).max(center_y - radius * 0.10),
+            )
+        } else {
+            (center_y + radius * 0.72, center_y + radius * 0.08)
+        };
+        let step =
+            (radius * 2.0 / params.grid_resolution.max(32) as f32).max(terrace_height * 0.28);
+        let mut y = top;
+        let mut open_above =
+            Self::sample_base_density(Vec3::new(xz.x, y, xz.y), params) < params.threshold;
+
+        while y > bottom {
+            y -= step;
+            let solid =
+                Self::sample_base_density(Vec3::new(xz.x, y, xz.y), params) >= params.threshold;
+            if open_above && solid {
+                return Some(terraced_watershed_height(y + step * 0.5, params));
+            }
+            open_above = !solid;
+        }
+        None
+    }
+
+    fn build_downhill_route(
+        lake: WatershedPoint,
+        params: &CaveParams,
+        seed_offset: u32,
+    ) -> [WatershedPoint; WATERSHED_ROUTE_POINTS] {
+        let mut route = [WatershedPoint::zeroed(); WATERSHED_ROUTE_POINTS];
+        if lake.width <= 0.0 {
+            return route;
+        }
+
+        let center = Vec2::new(lake.position[0], lake.position[2]);
+        let radius = params.world_radius;
+        let channel_width = (radius * 0.040).clamp(4.0, 10.0);
+        let start_distance = lake.width * 0.92;
+        let mut best_start: Option<(Vec2, f32)> = None;
+        for direction_index in 0..16 {
+            let angle = std::f32::consts::TAU * direction_index as f32 / 16.0;
+            let candidate = center + Vec2::new(angle.cos(), angle.sin()) * start_distance;
+            if let Some(height) =
+                Self::terrain_floor_height(candidate, Some(lake.position[1]), params)
+            {
+                if best_start.is_none_or(|(_, best_height)| height < best_height) {
+                    best_start = Some((candidate, height));
+                }
+            }
+        }
+
+        let Some((start_xz, start_height)) = best_start else {
+            return route;
+        };
+        route[0] = WatershedPoint {
+            position: [start_xz.x, start_height.min(lake.position[1]), start_xz.y],
+            width: channel_width,
+        };
+
+        let mut previous_xz = center;
+        let step_distance = radius * 0.075;
+        for point_index in 1..WATERSHED_ROUTE_POINTS {
+            let current = route[point_index - 1];
+            let current_xz = Vec2::new(current.position[0], current.position[2]);
+            let previous_direction = (current_xz - previous_xz).normalize_or_zero();
+            let mut best: Option<(f32, Vec2, f32)> = None;
+
+            for direction_index in 0..16 {
+                let angle = std::f32::consts::TAU * direction_index as f32 / 16.0;
+                let direction = Vec2::new(angle.cos(), angle.sin());
+                if previous_direction.length_squared() > 0.0
+                    && previous_direction.dot(direction) < -0.10
+                {
+                    continue;
+                }
+                let candidate = current_xz + direction * step_distance;
+                if (candidate - Vec2::new(params.world_center[0], params.world_center[2])).length()
+                    > radius * 0.72
+                {
+                    continue;
+                }
+                if route[..point_index].iter().any(|point| {
+                    Vec2::new(point.position[0], point.position[2]).distance(candidate)
+                        < step_distance * 0.55
+                }) {
+                    continue;
+                }
+                if params.watershed_lakes.iter().any(|other_lake| {
+                    if other_lake.width <= 0.0 {
+                        return false;
+                    }
+                    let lake_center = Vec2::new(other_lake.position[0], other_lake.position[2]);
+                    let segment = candidate - current_xz;
+                    let segment_length_squared = segment.length_squared().max(f32::EPSILON);
+                    let t = ((lake_center - current_xz).dot(segment) / segment_length_squared)
+                        .clamp(0.0, 1.0);
+                    lake_center.distance(current_xz + segment * t) < other_lake.width * 0.78
+                }) {
+                    continue;
+                }
+
+                let Some(floor_height) =
+                    Self::terrain_floor_height(candidate, Some(current.position[1]), params)
+                else {
+                    continue;
+                };
+                let uphill = (floor_height - current.position[1]).max(0.0);
+                let turn_penalty = (1.0 - previous_direction.dot(direction).max(-0.25))
+                    * cave_terrace_height(params)
+                    * 0.65;
+                let jitter = Self::hash1(
+                    point_index as i32,
+                    direction_index,
+                    seed_offset as i32,
+                    params.seed,
+                ) * cave_terrace_height(params)
+                    * 0.08;
+                let score = floor_height + uphill * 8.0 + turn_penalty + jitter;
+                if best.is_none_or(|(best_score, _, _)| score < best_score) {
+                    best = Some((score, candidate, floor_height));
+                }
+            }
+
+            previous_xz = current_xz;
+            let Some((_, next_xz, sampled_height)) = best else {
+                break;
+            };
+            let downhill_height = sampled_height.min(current.position[1]);
+            route[point_index] = WatershedPoint {
+                position: [next_xz.x, downhill_height, next_xz.y],
+                width: channel_width * (1.0 + point_index as f32 * 0.035),
+            };
+        }
+        route
+    }
+
+    fn prepare_watershed_layout(params: &mut CaveParams) {
+        params.watershed_lakes = [WatershedPoint::zeroed(); 2];
+        params.watershed_route_a = [WatershedPoint::zeroed(); WATERSHED_ROUTE_POINTS];
+        params.watershed_route_b = [WatershedPoint::zeroed(); WATERSHED_ROUTE_POINTS];
+
+        let center = Vec2::new(params.world_center[0], params.world_center[2]);
+        let radius = params.world_radius;
+        let stability_offset = radius * 0.035;
+        let mut candidates: Vec<(f32, WatershedPoint)> = Vec::new();
+        for candidate_index in 0..40i32 {
+            let angle = Self::hash1(candidate_index, 11, 23, params.seed) * std::f32::consts::TAU;
+            let radial =
+                radius * (0.10 + 0.48 * Self::hash1(candidate_index, 37, 53, params.seed).sqrt());
+            let xz = center + Vec2::new(angle.cos(), angle.sin()) * radial;
+            let Some(height) = Self::terrain_floor_height(xz, None, params) else {
+                continue;
+            };
+
+            let mut roughness = 0.0f32;
+            let mut neighbor_count = 0usize;
+            for direction in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+                if let Some(neighbor_height) = Self::terrain_floor_height(
+                    xz + direction * stability_offset,
+                    Some(height),
+                    params,
+                ) {
+                    roughness = roughness.max((neighbor_height - height).abs());
+                    neighbor_count += 1;
+                }
+            }
+            if neighbor_count < 3 || roughness > cave_terrace_height(params) * 1.6 {
+                continue;
+            }
+
+            let elevation = height - params.world_center[1];
+            let score = elevation - roughness * 2.5;
+            candidates.push((
+                score,
+                WatershedPoint {
+                    position: [xz.x, height, xz.y],
+                    width: (radius * 0.11).clamp(10.0, 26.0),
+                },
+            ));
+        }
+
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for (_, candidate) in candidates {
+            if params.watershed_lakes[0].width <= 0.0 {
+                params.watershed_lakes[0] = candidate;
+            } else {
+                let first = Vec2::new(
+                    params.watershed_lakes[0].position[0],
+                    params.watershed_lakes[0].position[2],
+                );
+                let next = Vec2::new(candidate.position[0], candidate.position[2]);
+                if first.distance(next) >= radius * 0.24 {
+                    params.watershed_lakes[1] = candidate;
+                    break;
+                }
+            }
+        }
+
+        params.watershed_route_a =
+            Self::build_downhill_route(params.watershed_lakes[0], params, 101);
+        params.watershed_route_b =
+            Self::build_downhill_route(params.watershed_lakes[1], params, 211);
+
+        let active_lakes = params
+            .watershed_lakes
+            .iter()
+            .filter(|lake| lake.width > 0.0)
+            .count();
+        log::info!("Terrain survey generated {active_lakes} elevated watershed(s)");
+    }
+
     /// Generate cave mesh using marching cubes
     fn generate_cave_mesh(
         params: &CaveParams,
-    ) -> (Vec<CaveVertex>, Vec<u32>, Vec<CulledCaveFragment>) {
+    ) -> (Vec<CaveVertex>, Vec<u32>, Vec<CulledCaveFragment>, Vec<f32>) {
         let resolution = params.grid_resolution as usize;
         let world_center = Vec3::from(params.world_center);
         let world_radius = params.world_radius;
@@ -1635,7 +2051,23 @@ impl CaveSystemRenderer {
             params.mesh_smooth_normals != 0,
         );
 
-        (vertices, indices, culled_fragment_regions)
+        // Flatten with X contiguous, matching the GPU sampler. Clear regions
+        // removed by post-mesh fragment culling to avoid invisible colliders.
+        let mut collision_density = vec![0.0; grid_size * grid_size * grid_size];
+        let origin = world_center - Vec3::splat(cave_generation_radius);
+        for z in 0..grid_size {
+            for y in 0..grid_size {
+                for x in 0..grid_size {
+                    let pos = origin + Vec3::new(x as f32, y as f32, z as f32) * cell_size;
+                    let culled = culled_fragment_regions.iter().any(|fragment| {
+                        pos.cmpge(fragment.min).all() && pos.cmple(fragment.max).all()
+                    });
+                    collision_density[x + y * grid_size + z * grid_size * grid_size] =
+                        if culled { params.threshold - 0.5 } else { density_grid[x][y][z] };
+                }
+            }
+        }
+        (vertices, indices, culled_fragment_regions, collision_density)
     }
 
     /// Seal tiny closed boundary loops left by ambiguous marching-cubes cases.
@@ -2173,8 +2605,8 @@ impl CaveSystemRenderer {
         )
     }
 
-    /// Sample density at a point using value noise with domain warping
-    fn sample_density(pos: Vec3, params: &CaveParams) -> f32 {
+    /// Sample the unmodified cave density used by terrain-aware hydrology.
+    fn sample_base_density(pos: Vec3, params: &CaveParams) -> f32 {
         // Distance from world center (spherical constraint)
         let world_center = Vec3::from(params.world_center);
         let dist_from_center = (pos - world_center).length();
@@ -2194,7 +2626,7 @@ impl CaveSystemRenderer {
         }
 
         // Apply domain warping for organic shapes
-        let warped_pos = Self::warp_domain(pos, params);
+        let warped_pos = shape_cave_sample_position(Self::warp_domain(pos, params), params);
 
         // Get base noise value using FBM
         let noise = Self::fbm(warped_pos, params);
@@ -2205,14 +2637,22 @@ impl CaveSystemRenderer {
         let cave_threshold = params.density.clamp(0.0, 1.0);
 
         // Solid rock where noise is above threshold, open tunnels where below
-        if noise > cave_threshold {
+        let base_density = if noise > cave_threshold {
             // Solid rock region - above marching cubes threshold
             let wall_factor = (noise - cave_threshold) / (1.0 - cave_threshold).max(0.001);
             params.threshold + wall_factor * 0.5
         } else {
             // Open tunnel/cave space - below marching cubes threshold
             params.threshold - 0.5
-        }
+        };
+        base_density
+    }
+
+    /// Sample density at a point using value noise, terracing, and the
+    /// terrain-derived watershed layout.
+    fn sample_density(pos: Vec3, params: &CaveParams) -> f32 {
+        let base_density = Self::sample_base_density(pos, params);
+        apply_cave_watershed_density(pos, base_density, params)
     }
 }
 
@@ -2932,3 +3372,167 @@ const TRI_TABLE: [[u8; 16]; 256] = [
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     ],
 ];
+
+#[cfg(test)]
+mod vent_collision_tests {
+    use super::*;
+
+    #[test]
+    fn cave_terracing_has_broad_plateaus_and_short_risers() {
+        let params = CaveParams::default();
+        let terrace_height = cave_terrace_height(&params);
+        let center_y = params.world_center[1];
+
+        let lower_shelf = terrace_cave_sample_position(
+            Vec3::new(3.0, center_y + terrace_height * 0.10, 5.0),
+            &params,
+        );
+        let upper_edge_of_shelf = terrace_cave_sample_position(
+            Vec3::new(3.0, center_y + terrace_height * 0.75, 5.0),
+            &params,
+        );
+        let riser = terrace_cave_sample_position(
+            Vec3::new(3.0, center_y + terrace_height * 0.90, 5.0),
+            &params,
+        );
+        let next_shelf = terrace_cave_sample_position(
+            Vec3::new(3.0, center_y + terrace_height * 1.10, 5.0),
+            &params,
+        );
+
+        assert_eq!(lower_shelf.x, 3.0);
+        assert_eq!(lower_shelf.z, 5.0);
+        assert!((upper_edge_of_shelf.y - lower_shelf.y).abs() < 1.0e-5);
+        assert!(riser.y > lower_shelf.y + terrace_height * 0.05);
+        assert!((next_shelf.y - lower_shelf.y - terrace_height).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn terrain_survey_builds_downhill_subtractive_watersheds() {
+        let mut params = CaveParams::default();
+        // Exercise the checked-in cave preset rather than an idealized noise
+        // field so the terrain-following route remains covered for gameplay.
+        params.density = 0.58500004;
+        params.scale = 250.0;
+        params.octaves = 2;
+        params.seed = 780;
+        params.grid_resolution = 128;
+        params.flat_ground_enabled = 1;
+        CaveSystemRenderer::prepare_watershed_layout(&mut params);
+        let radius = params.world_radius;
+        let lake = params.watershed_lakes[0];
+        assert!(
+            lake.width > 0.0,
+            "terrain survey should find an elevated floor"
+        );
+
+        let basin_depth = (radius * 0.045).clamp(5.0, 11.0);
+        let lake_surface = lake.position[1] - basin_depth;
+
+        let (inner_rim_depth, inner_rim_influence) =
+            lake_basin_profile(Vec2::new(0.90, 0.0), Vec2::ZERO, Vec2::ONE);
+        let (outer_rim_depth, outer_rim_influence) =
+            lake_basin_profile(Vec2::new(1.10, 0.0), Vec2::ZERO, Vec2::ONE);
+        assert_eq!(inner_rim_depth, 0.0);
+        assert_eq!(outer_rim_depth, 0.0);
+        assert_eq!(inner_rim_influence, 1.0);
+        assert_eq!(outer_rim_influence, 1.0);
+
+        // Even contradictory procedural densities cannot perforate the core
+        // of the designed lake floor.
+        let below_lake = Vec3::new(lake.position[0], lake_surface - 2.0, lake.position[2]);
+        let above_lake = Vec3::new(lake.position[0], lake_surface + 2.0, lake.position[2]);
+        let below_density =
+            apply_cave_watershed_density(below_lake, params.threshold - 0.5, &params);
+        let above_density =
+            apply_cave_watershed_density(above_lake, params.threshold + 0.5, &params);
+        assert!(below_density > params.threshold);
+        assert!(above_density < params.threshold);
+
+        // Surveyed route points must never climb, and the river operation must
+        // only remove density—even where the existing terrain is already open.
+        for segment in params.watershed_route_a.windows(2) {
+            if segment[1].width <= 0.0 {
+                break;
+            }
+            assert!(segment[1].position[1] <= segment[0].position[1] + 1.0e-5);
+        }
+        let active_route_points = params
+            .watershed_route_a
+            .iter()
+            .take_while(|point| point.width > 0.0)
+            .count();
+        assert!(active_route_points >= 5);
+        let start = params.watershed_route_a[0];
+        let end = params.watershed_route_a[1];
+        let channel = WatershedPoint {
+            position: [
+                (start.position[0] + end.position[0]) * 0.5,
+                (start.position[1] + end.position[1]) * 0.5,
+                (start.position[2] + end.position[2]) * 0.5,
+            ],
+            width: (start.width + end.width) * 0.5,
+        };
+        let channel_depth = (radius * 0.018).clamp(2.5, 5.0);
+        let channel_pos = Vec3::new(
+            channel.position[0],
+            terraced_watershed_height(channel.position[1], &params) - channel_depth + 2.0,
+            channel.position[2],
+        );
+        let solid_base = params.threshold + 0.5;
+        let open_base = params.threshold - 0.5;
+        assert!(apply_cave_watershed_density(channel_pos, solid_base, &params) < solid_base);
+        assert!(apply_cave_watershed_density(channel_pos, open_base, &params) <= open_base);
+    }
+
+    #[test]
+    fn vent_walls_are_in_uploaded_collision_density() {
+        let mut params = CaveParams::default();
+        params.world_radius = 32.0;
+        params.grid_resolution = 64;
+        params.density = 1.0;
+        params.flat_ground_enabled = 1;
+        params.geothermal_enabled = 1;
+        params.isolated_chunk_cull_volume = 0.0;
+        let (_, _, _, density) = CaveSystemRenderer::generate_cave_mesh(&params);
+        let size = params.grid_resolution as usize + 1;
+        assert_eq!(density.len(), size * size * size);
+        let extent = params.world_radius + 3.0;
+        let spacing = 2.0 * extent / params.grid_resolution as f32;
+        let origin = Vec3::from(params.world_center) - Vec3::splat(extent);
+        let mut added_walls = 0;
+        for z in 0..size {
+            for y in 0..size {
+                for x in 0..size {
+                    let pos = origin + Vec3::new(x as f32, y as f32, z as f32) * spacing;
+                    if density[x + y * size + z * size * size] > params.threshold
+                        && CaveSystemRenderer::sample_density(pos, &params) < params.threshold
+                    {
+                        added_walls += 1;
+                    }
+                }
+            }
+        }
+        assert!(added_walls > 0, "vent walls must collide even where procedural terrain is empty");
+    }
+
+    #[test]
+    fn cave_collision_shader_validates() {
+        for (name, source) in [
+            (
+                "collision",
+                include_str!("../../shaders/cave_collision.wgsl"),
+            ),
+            ("render", include_str!("../../shaders/cave_system.wgsl")),
+        ] {
+            let module = wgpu::naga::front::wgsl::parse_str(source)
+                .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(source)));
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|error| panic!("{name} shader must validate: {error}"));
+        }
+    }
+}

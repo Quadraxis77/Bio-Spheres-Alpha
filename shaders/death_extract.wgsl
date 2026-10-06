@@ -76,6 +76,7 @@ fn spawn_new(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
+    // Fusion uses removal state 2 and must not emit tissue fragments.
     let is_dead    = death_flags[cell_idx] == 1u;
     let was_dead   = prev_death_flags[cell_idx] == 1u;
     let newly_dead = is_dead && !was_dead;

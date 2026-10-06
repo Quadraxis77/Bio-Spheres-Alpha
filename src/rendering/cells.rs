@@ -311,6 +311,10 @@ impl CellRenderer {
     /// Returns (texture_view, sampler). Run once at init - the texture is static.
 
     /// Set the shadow bind group (called each frame from gpu_scene)
+    pub(crate) fn shadow_bind_group(&self) -> Option<&wgpu::BindGroup> {
+        self.shadow_bind_group.as_ref()
+    }
+
     pub fn set_shadow_bind_group(&mut self, bind_group: wgpu::BindGroup) {
         self.shadow_bind_group = Some(bind_group);
     }

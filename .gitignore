@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target
+/.git-repair-backups/
 Cargo.lock
 
 # IDE and editor files
@@ -24,6 +25,9 @@ nul
 
 # Crash logs
 crash_log_*.txt
+
+# Local screenshots captured while running the application
+biospheres-*.png
 
 # Reproducible signal benchmark runs generate hundreds of raw samples. Keep the
 # compact acceptance reports, matrix definitions, and scripts under version

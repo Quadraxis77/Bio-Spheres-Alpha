@@ -154,7 +154,7 @@ fn is_frozen_state(state: u32) -> bool {
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let cell_idx = global_id.x;
     let cell_count = cell_count_buffer[0];
-    if (cell_idx >= cell_count || death_flags[cell_idx] == 1u) {
+    if (cell_idx >= cell_count || death_flags[cell_idx] != 0u) {
         return;
     }
 
@@ -187,7 +187,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         let neighbor_idx = connection.cell_b_index;
-        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] == 1u) {
+        if (neighbor_idx >= cell_count || death_flags[neighbor_idx] != 0u) {
             continue;
         }
 

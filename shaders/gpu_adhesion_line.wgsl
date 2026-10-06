@@ -47,10 +47,9 @@ var<storage, read> adhesion_counts: array<u32>;
 var<storage, read> cell_count_buffer: array<u32>;
 
 @group(1) @binding(4)
-var<storage, read> signal_flags: array<atomic<u32>>;
+var<storage, read> signal_flags: array<u32>;
 
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
-const BOND_FLAG_SIGNAL_ACTIVE: u32 = 4u;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -116,14 +115,23 @@ fn vs_main(
     let pos_b = positions[connection.cell_b_index].xyz;
     let midpoint = (pos_a + pos_b) * 0.5;
     
-    // Routing is visible even while silent: selected signal routes are yellow,
-    // valid redundant standby routes are black. Signal magnitude never changes it.
+    // Highlight signal activity, rather than merely eligible connectivity.
     let is_signal_capable = (connection.bond_flags & BOND_FLAG_BARRIER_BALL) == 0u;
-    let route_active = (connection.bond_flags & BOND_FLAG_SIGNAL_ACTIVE) != 0u;
+    var signal_active = false;
+    if (is_signal_capable) {
+        for (var channel = 0u; channel < 16u; channel++) {
+            let a = signal_flags[connection.cell_a_index * 16u + channel] & 0x7ffu;
+            let b = signal_flags[connection.cell_b_index * 16u + channel] & 0x7ffu;
+            if (a > 0u && b > 0u) {
+                signal_active = true;
+                break;
+            }
+        }
+    }
     let sig_color = select(
         vec4<f32>(0.0, 0.0, 0.0, 1.0),
         vec4<f32>(1.0, 1.0, 0.0, 1.0),
-        is_signal_capable && route_active
+        signal_active
     );
     
     // Compute billboard perpendicular direction
@@ -146,16 +154,7 @@ fn vs_main(
     var seg_end: vec3<f32>;
     var zone_col: vec4<f32>;
     
-    if (is_signal_capable) {
-        if (half_seg == 0u) {
-            seg_start = pos_a;
-            seg_end = midpoint;
-        } else {
-            seg_start = midpoint;
-            seg_end = pos_b;
-        }
-        zone_col = sig_color;
-    } else if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
+    if ((connection.bond_flags & BOND_FLAG_BARRIER_BALL) != 0u) {
         if (half_seg == 0u) {
             seg_start = pos_a;
             seg_end = midpoint;
@@ -223,8 +222,8 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // abs(edge_factor): 0.0 at center, 1.0 at edges
     let t = abs(in.edge_factor);
-    // Outer 50% is outline (signal color), inner 50% is zone color
-    // This makes signal visualization much more prominent
-    let blend = smoothstep(0.25, 0.75, t);
+    // Keep a distinct zone-colored core with a signal outline on BOTH sides.
+    // The narrow transition softens the border without washing out the core.
+    let blend = smoothstep(0.45, 0.55, t);
     return mix(in.zone_color, in.signal_color, blend);
 }

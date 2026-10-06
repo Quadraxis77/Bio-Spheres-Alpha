@@ -286,6 +286,7 @@ pub struct GpuFluidSimulator {
     // Light field (read-only, 128^3 f32 per voxel, owned by LightFieldSystem;
     // cloned here so per-call bind groups can include it alongside the cached one).
     light_field_buffer: wgpu::Buffer,
+    luminocyte_emission_buffer: wgpu::Buffer,
 
     // Atmospheric humidity field (128^3 atomic u32 per voxel, fixed-point *256, ~8MB).
     // Diffused/condensed via dedicated compute passes; read by the light field
@@ -387,6 +388,12 @@ pub struct GpuFluidSimulator {
     temp_stats_buffer: wgpu::Buffer,
     temp_stats_staging_buffer: wgpu::Buffer,
     temp_stats_copy_pending: std::cell::Cell<bool>,
+    telemetry_enabled: std::cell::Cell<bool>,
+    audio_readbacks_enabled: std::cell::Cell<bool>,
+    listener_readbacks_enabled: std::cell::Cell<bool>,
+    last_climate_readback: std::cell::Cell<Option<std::time::Instant>>,
+    last_climate_update: std::cell::Cell<Option<std::time::Instant>>,
+    last_listener_readback: std::cell::Cell<Option<std::time::Instant>>,
     temp_stats_map_receiver:
         std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
     /// Set when the static-water fill or phase pass actually changes water/ice
@@ -408,6 +415,7 @@ impl GpuFluidSimulator {
         world_center: Vec3,
         solid_mask_buffer: wgpu::Buffer,
         light_field_buffer: &wgpu::Buffer,
+        luminocyte_emission_buffer: &wgpu::Buffer,
     ) -> Self {
         let world_diameter = world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
@@ -773,6 +781,16 @@ impl GpuFluidSimulator {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -1280,6 +1298,10 @@ impl GpuFluidSimulator {
                     binding: 9,
                     resource: geothermal_heat_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: luminocyte_emission_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -1329,6 +1351,7 @@ impl GpuFluidSimulator {
             state_buffer,
             solid_mask_buffer,
             light_field_buffer: light_field_buffer.clone(),
+            luminocyte_emission_buffer: luminocyte_emission_buffer.clone(),
             humidity_buffer,
             phase_debt_buffer,
             temp_field_buffer,
@@ -1412,6 +1435,12 @@ impl GpuFluidSimulator {
             temp_stats_buffer,
             temp_stats_staging_buffer,
             temp_stats_copy_pending: std::cell::Cell::new(false),
+            telemetry_enabled: std::cell::Cell::new(true),
+            audio_readbacks_enabled: std::cell::Cell::new(true),
+            listener_readbacks_enabled: std::cell::Cell::new(true),
+            last_climate_readback: std::cell::Cell::new(None),
+            last_climate_update: std::cell::Cell::new(None),
+            last_listener_readback: std::cell::Cell::new(None),
             temp_stats_map_receiver: std::cell::RefCell::new(None),
             static_surface_mesh_changed: std::cell::Cell::new(false),
             avg_water_temp_c: std::cell::Cell::new(0.0),
@@ -1465,6 +1494,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 9,
                     resource: self.geothermal_heat_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: self.luminocyte_emission_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1733,6 +1766,18 @@ impl GpuFluidSimulator {
     /// outside the simulated grid (e.g. camera outside the world sphere)
     /// can't be underwater by definition, so this resolves that case
     /// immediately without waiting on a readback.
+    pub fn configure_readbacks(&self, telemetry: bool, audio: bool, listener: bool) {
+        self.telemetry_enabled.set(telemetry);
+        self.audio_readbacks_enabled.set(audio);
+        self.listener_readbacks_enabled.set(listener);
+    }
+
+    fn climate_readback_due(&self) -> bool {
+        // Static-water phase changes also invalidate the cached surface mesh.
+        (self.telemetry_enabled.get() || self.static_water_world_enabled.get())
+            && self.last_climate_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 250)
+    }
+
     pub fn set_listener_position(&self, position: Vec3) {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
@@ -1851,7 +1896,9 @@ impl GpuFluidSimulator {
         let Some(index) = self.listener_grid_index.get() else {
             return;
         };
-        if !self.listener_water_copy_pending.get()
+        if self.listener_readbacks_enabled.get()
+            && self.last_listener_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 33)
+            && !self.listener_water_copy_pending.get()
             && self.listener_water_readback_receiver.borrow().is_none()
         {
             let offset = (index as u64) * std::mem::size_of::<u32>() as u64;
@@ -1863,6 +1910,7 @@ impl GpuFluidSimulator {
                 std::mem::size_of::<u32>() as u64,
             );
             self.listener_water_copy_pending.set(true);
+            self.last_listener_readback.set(Some(std::time::Instant::now()));
         }
     }
 
@@ -2067,7 +2115,7 @@ impl GpuFluidSimulator {
                 // Copy after the phase pass so slot 6 includes this tick's
                 // successful water<->ice transitions. Reset only after a copy
                 // is queued; otherwise the counter survives readback pressure.
-                if !self.temp_stats_copy_pending.get()
+                if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
                     && self.temp_stats_map_receiver.borrow().is_none()
                 {
                     encoder.copy_buffer_to_buffer(
@@ -2083,6 +2131,7 @@ impl GpuFluidSimulator {
                         Some(std::mem::size_of::<u32>() as u64),
                     );
                     self.temp_stats_copy_pending.set(true);
+                self.last_climate_readback.set(Some(std::time::Instant::now()));
                 }
             }
             return;
@@ -2113,7 +2162,7 @@ impl GpuFluidSimulator {
                 pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
-            if !self.temp_stats_copy_pending.get()
+            if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
                 && self.temp_stats_map_receiver.borrow().is_none()
             {
                 encoder.copy_buffer_to_buffer(
@@ -2124,6 +2173,7 @@ impl GpuFluidSimulator {
                     self.temp_stats_buffer.size(),
                 );
                 self.temp_stats_copy_pending.set(true);
+                self.last_climate_readback.set(Some(std::time::Instant::now()));
             }
         }
 
@@ -2213,6 +2263,7 @@ impl GpuFluidSimulator {
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        if !self.audio_readbacks_enabled.get() { return; }
         // Skip while the previous sample is still being consumed. Dynamic
         // callers already schedule this at 15 Hz; static mode may call more
         // often briefly while old flow/rain sources decay toward silence.
@@ -2566,14 +2617,11 @@ impl GpuFluidSimulator {
         &self.nutrient_voxels_buffer
     }
 
-    /// Populate nutrients in water voxels using drifting noise pattern
-    /// Called once before a rendered frame's fixed-step batch. Fluid time advances
-    /// once per rendered frame, and consumed voxels remain marked for the epoch, so
-    /// repeating this full-volume pass inside catch-up would be identical work.
+    /// Populate nutrients using cell simulation time, independent of fluid/render cadence.
     pub fn populate_nutrients(
         &self,
         _device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        simulation_time: f32,
         encoder: &mut wgpu::CommandEncoder,
         nutrient_density: f32,
         delta_time: f32,
@@ -2586,14 +2634,6 @@ impl GpuFluidSimulator {
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
 
-        // Use the fluid sim's own time directly. The fluid sim already wraps at 65536s
-        // (well within f32 precision), and that wrap is a fixed constant so the epoch
-        // counter resets cleanly at the same point every time. A separate wrap period
-        // based on epoch_spacing caused misaligned discontinuities: when the fluid sim
-        // time crossed a multiple of (epoch_spacing * 8192) the nutrient time would
-        // jump, clearing all nutrients for one frame.
-        let wrapped_time = self.time.get();
-
         let params = NutrientPopulateParams {
             grid_resolution: GRID_RESOLUTION,
             cell_size,
@@ -2602,7 +2642,7 @@ impl GpuFluidSimulator {
             grid_origin_z: grid_origin.z,
             world_radius: self.world_radius,
             nutrient_density,
-            time: wrapped_time,
+            time: simulation_time,
             delta_time,
             epoch_duration,
             epoch_spacing,
@@ -2610,10 +2650,11 @@ impl GpuFluidSimulator {
             despawn_start,
             _pad: [0.0; 3],
         };
-        queue.write_buffer(
+        crate::simulation::gpu_upload::encode_buffer_write(
+            _device,
+            encoder,
             &self.nutrient_populate_params_buffer,
-            0,
-            bytemuck::cast_slice(&[params]),
+            bytemuck::bytes_of(&params),
         );
 
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
@@ -2656,27 +2697,31 @@ impl GpuFluidSimulator {
                         // alongside liquid water - a frozen pool must read frozen
                         // within seconds, not minutes (the old 0.01 rate made the
                         // water readout lag so far behind it was misleading).
-                        const WATER_EMA_RATE: f32 = 0.2;
-                        const AIR_EMA_RATE: f32 = 0.2;
-                        const HUMIDITY_EMA_RATE: f32 = 0.2;
+                        // Preserve responsiveness independently of sample rate.
+                        let now = std::time::Instant::now();
+                        let rate = self.last_climate_update.replace(Some(now))
+                            .map_or(1.0, |previous| 1.0 - (-now.duration_since(previous).as_secs_f32() / 0.3).exp());
 
                         if stats[1] > 0 {
                             let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;
                             let prev = self.avg_water_temp_c.get();
                             self.avg_water_temp_c
-                                .set(prev + (avg_c - prev) * WATER_EMA_RATE);
+                                .set(prev + (avg_c - prev) * rate);
                         }
                         if stats[3] > 0 {
                             let avg_c = (stats[2] as f32 / stats[3] as f32) - 50.0;
                             let prev = self.avg_air_temp_c.get();
                             self.avg_air_temp_c
-                                .set(prev + (avg_c - prev) * AIR_EMA_RATE);
+                                .set(prev + (avg_c - prev) * rate);
                         }
                         if stats.len() >= 6 && stats[5] > 0 {
                             let avg = (stats[4] as f32 / stats[5] as f32) / 255.0;
                             let prev = self.avg_humidity.get();
                             self.avg_humidity
-                                .set(prev + (avg - prev) * HUMIDITY_EMA_RATE);
+                                .set(prev + (avg - prev) * rate);
+                        }
+                        if stats.len() >= 7 && stats[6] > 0 {
+                            self.static_surface_mesh_changed.set(true);
                         }
                         if stats.len() >= 7 && stats[6] > 0 {
                             self.static_surface_mesh_changed.set(true);
@@ -2967,7 +3012,7 @@ mod frame_timing_tests {
                 .request_device(&wgpu::DeviceDescriptor {
                     label: Some("Fluid Timing Test"),
                     required_limits: wgpu::Limits {
-                        max_storage_buffers_per_shader_stage: 10,
+                        max_storage_buffers_per_shader_stage: 11,
                         ..Default::default()
                     },
                     ..Default::default()
@@ -2987,12 +3032,19 @@ mod frame_timing_tests {
                 usage: wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             });
+            let luminocyte_emission = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Fluid Timing Luminocyte Emission"),
+                size: voxel_bytes * 4,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
             let simulator = GpuFluidSimulator::new(
                 &device,
                 20.0,
                 Vec3::ZERO,
                 solid_mask,
                 &light_field,
+                &luminocyte_emission,
             );
             simulator.set_static_water_world(false);
             simulator.set_surface_pressure(0.625);

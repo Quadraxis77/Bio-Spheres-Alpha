@@ -96,6 +96,7 @@ impl PreviewScene {
         let split_ring_renderer = SplitRingRenderer::new(device, queue, surface_config);
         let mut tail_renderer = TailRenderer::new(device, surface_config.format, capacity);
         tail_renderer.set_light_color(PREVIEW_LIGHT_COLOR);
+        tail_renderer.set_light_dir(PREVIEW_LIGHT_DIR);
         let fov_cone_renderer = FovConeRenderer::new(device, surface_config);
         let skybox_renderer = PreviewSkyboxRenderer::new(device, surface_config.format);
 

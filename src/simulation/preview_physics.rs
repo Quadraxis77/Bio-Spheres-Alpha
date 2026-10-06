@@ -1066,7 +1066,7 @@ pub fn consume_swim_nutrients(state: &mut CanonicalState, genome: &Genome, dt: f
 /// they must receive nutrients through adhesion connections from other cells.
 /// Mass and radius are derived from nutrients: mass = 1.0 + nutrients/100.0
 ///
-/// Embryocytes (cell_type == 10) skip this function entirely - their energy
+/// Embryocytes and Gametocytes (cell types 10 and 13) skip this function entirely - their energy
 /// comes exclusively from the reserve field (see `update_embryocyte_reserve_burn`
 /// and `transport_nutrients_through_adhesions`).
 ///
@@ -1080,8 +1080,8 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         if let Some(mode) = genome.modes.get(mode_index) {
-            // Embryocytes skip normal metabolism entirely - reserve-only energy system
-            if mode.cell_type == 10 {
+            // Embryocytes and Gametocytes skip normal metabolism entirely - reserve-only energy system
+            if matches!(mode.cell_type, 10 | 13) {
                 continue;
             }
 
@@ -1203,43 +1203,51 @@ pub fn update_nutrient_growth(state: &mut CanonicalState, genome: &Genome, dt: f
     }
 }
 
-/// Burn Embryocyte reserve for free (detached) Embryocytes at 10 units/sec,
-/// and tick the accumulation timer for attached Embryocytes.
+/// Burn reserve for gametes at 0.1 units/sec and detached embryos at 10 units/sec,
+/// and tick the release timer while attached.
 ///
 /// - **Attached** (>=1 active adhesion): increment `embryocyte_timers[i]` by `dt`.
-/// - **Free** (no adhesions): burn `reserve` at 10 units/sec.
+/// - Gametes burn reserve whether attached or free; embryos only burn when free.
 ///
 /// This runs after `transport_nutrients_through_adhesions` so reserve
 /// has already been topped up by nutrient transport this tick.
 pub fn update_embryocyte_reserve_burn(state: &mut CanonicalState, genome: &Genome, dt: f32) {
-    const RESERVE_BURN_RATE: f32 = 10.0; // units/sec when free
+    const EMBRYO_RESERVE_BURN_RATE: f32 = 10.0;
+    const GAMETE_RESERVE_BURN_RATE: f32 = 0.1;
 
     for i in 0..state.cell_count {
         let mode_index = state.mode_indices[i];
         let Some(mode) = genome.modes.get(mode_index) else {
             continue;
         };
-        if mode.cell_type != 10 {
+        if !matches!(mode.cell_type, 10 | 13) {
             continue;
         }
 
         let adhesion_count = state
             .adhesion_manager
             .count_active_adhesions(i, &state.adhesion_connections);
+        if mode.cell_type == 13 || adhesion_count == 0 {
+            let rate = if mode.cell_type == 13 {
+                GAMETE_RESERVE_BURN_RATE
+            } else {
+                EMBRYO_RESERVE_BURN_RATE
+            };
+            // Match GPU fixed-point rounding; saturate when reserves run out.
+            let burn = (rate * dt * 1000.0 + 0.5) as u32;
+            state.reserves[i] = state.reserves[i].saturating_sub(burn);
+        }
         if adhesion_count > 0 {
             // Attached: tick the accumulation timer
             state.embryocyte_timers[i] += dt;
         } else {
-            // Free: burn reserve (stored x1000 fixed-point, so burn rate * 1000)
-            let burn = (RESERVE_BURN_RATE * dt * 1000.0) as u32;
-            state.reserves[i] = state.reserves[i].saturating_sub(burn);
             // Reset timer (will restart when re-attached)
             state.embryocyte_timers[i] = 0.0;
         }
     }
 }
 
-/// Check AND-logic release triggers for attached Embryocytes.
+/// Check AND-logic release triggers for attached Embryocytes and Gametocytes.
 ///
 /// All *enabled* triggers must be satisfied simultaneously for release to occur.
 /// When triggered, all adhesions for the cell are dropped (it becomes free).
@@ -1258,7 +1266,7 @@ pub fn check_embryocyte_release_triggers(state: &mut CanonicalState, genome: &Ge
         let Some(mode) = genome.modes.get(mode_index) else {
             continue;
         };
-        if mode.cell_type != 10 {
+        if !matches!(mode.cell_type, 10 | 13) {
             continue;
         }
 
@@ -1379,18 +1387,19 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         let nutrients_a = state.nutrients[cell_a];
         let nutrients_b = state.nutrients[cell_b];
 
-        let is_embryo_a_pass1 = mode_a.cell_type == 10;
-        let is_embryo_b_pass1 = mode_b.cell_type == 10;
+        let is_embryo_a_pass1 = matches!(mode_a.cell_type, 10 | 13);
+        let is_embryo_b_pass1 = matches!(mode_b.cell_type, 10 | 13);
 
-        // Embryocyte fill rate: scale the rate cap by priority so high-priority
-        // embryocytes can receive faster than the base 30/sec.
-        // Embryocytes are always a pure sink - treat their "pressure" as 0 so the
-        // sender always pushes toward them as long as it has nutrients. The rate cap
-        // (not the pressure diff) is what limits fill speed.
+        // Priority scales reserve intake above and below the baseline:
+        // gametes 10/sec, embryocytes 100/sec, at priority 1.
+        let reserve_rate = |mode: &crate::genome::ModeSettings| {
+            let baseline = if mode.cell_type == 13 { 10.0 } else { TRANSPORT_RATE };
+            baseline * mode.nutrient_priority.max(0.0)
+        };
         let embryo_rate_cap = if is_embryo_b_pass1 {
-            TRANSPORT_RATE * mode_b.nutrient_priority.max(1.0)
+            reserve_rate(mode_b)
         } else if is_embryo_a_pass1 {
-            TRANSPORT_RATE * mode_a.nutrient_priority.max(1.0)
+            reserve_rate(mode_a)
         } else {
             TRANSPORT_RATE
         };
@@ -1448,9 +1457,10 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
     }
 
     // Pass 3: apply lerped, scaled transfers with transport-rate-adjusted pressure.
-    // Snapshot all nutrient values before applying any transfers so the order of
-    // connection processing doesn't affect the result (matches GPU single-snapshot semantics).
+    // Snapshot donor budgets before applying transfers; incoming food becomes
+    // available to send next tick, while outgoing transfers share this budget.
     let nutrients_snap: Vec<f32> = state.nutrients[..n].to_vec();
+    let mut nutrients_sent = vec![0.0f32; n];
     let mut nutrient_deltas = vec![0.0f32; n];
     let lerp_t = (LERP_SPEED * dt).min(1.0);
 
@@ -1474,18 +1484,18 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         // Clamp by available nutrients and receiver capacity
         let mode_a = genome.modes.get(state.mode_indices[cell_a]).unwrap();
         let mode_b = genome.modes.get(state.mode_indices[cell_b]).unwrap();
-        let min_a = if mode_a.prioritize_when_low {
+        let min_a = if mode_a.prioritize_when_low || matches!(mode_b.cell_type, 10 | 13) {
             10.0
         } else {
             0.0
         };
-        let min_b = if mode_b.prioritize_when_low {
+        let min_b = if mode_b.prioritize_when_low || matches!(mode_a.cell_type, 10 | 13) {
             10.0
         } else {
             0.0
         };
-        let is_embryo_a = mode_a.cell_type == 10;
-        let is_embryo_b = mode_b.cell_type == 10;
+        let is_embryo_a = matches!(mode_a.cell_type, 10 | 13);
+        let is_embryo_b = matches!(mode_b.cell_type, 10 | 13);
 
         let transfer_blocked = (transfer > 0.0 && is_embryo_a) || (transfer < 0.0 && is_embryo_b);
         if transfer_blocked {
@@ -1495,9 +1505,10 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             continue;
         }
 
-        // Use snapshotted nutrients for can_give/can_recv so connection order doesn't matter
-        let snap_a = nutrients_snap[cell_a];
-        let snap_b = nutrients_snap[cell_b];
+        // Incoming nutrients cannot be re-sent this tick. Deduct earlier outgoing
+        // transfers so multiple reserve receivers cannot spend the same budget.
+        let snap_a = nutrients_snap[cell_a] - nutrients_sent[cell_a];
+        let snap_b = nutrients_snap[cell_b] - nutrients_sent[cell_b];
 
         let actual = if transfer > 0.0 {
             let can_give = (snap_a - min_a).max(0.0);
@@ -1522,6 +1533,12 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
             };
             transfer.max(-(can_give.min(can_recv)))
         };
+
+        if actual > 0.0 {
+            nutrients_sent[cell_a] += actual;
+        } else {
+            nutrients_sent[cell_b] -= actual;
+        }
 
         // Route the transfer: if the receiver is an Embryocyte, add to reserve instead of nutrients.
         if transfer > 0.0 && is_embryo_b {
@@ -2001,20 +2018,21 @@ pub fn physics_step_with_genome(
     // Remove any cells that starved, matching GPU death threshold.
     // - Standard cells (non-Embryocyte): die when nutrients < 1.0 AND reserve == 0.
     //   A non-zero reserve extends life (reserve burns first in update_nutrient_growth).
-    // - Embryocytes (cell_type == 10): die when reserve == 0 after a short newborn
-    //   feed grace. The grace matches the GPU path, where freshly split children are
-    //   briefly blocked from nutrient transport before an attached egg can be filled.
+    // - Reserve-only cells (Embryocytes and Gametocytes): die when reserve == 0 after
+    //   a short newborn feed grace. Their regular nutrient field is intentionally not
+    //   metabolized and therefore cannot keep them alive. The grace matches the GPU
+    //   path, where freshly split children are briefly blocked from nutrient transport.
     const DEATH_NUTRIENT_THRESHOLD: f32 = 1.0;
     const EMBRYOCYTE_NEWBORN_FEED_GRACE: f32 = 0.2;
     let starved: Vec<usize> = (0..state.cell_count)
         .filter(|&i| {
             let mode_index = state.mode_indices[i];
-            let is_embryocyte = genome
+            let is_reserve_only = genome
                 .modes
                 .get(mode_index)
-                .map(|m| m.cell_type == 10)
+                .map(|m| matches!(m.cell_type, 10 | 13))
                 .unwrap_or(false);
-            if is_embryocyte {
+            if is_reserve_only {
                 state.reserves[i] == 0
                     && current_time - state.birth_times[i] >= EMBRYOCYTE_NEWBORN_FEED_GRACE
             } else {
@@ -2029,7 +2047,7 @@ pub fn physics_step_with_genome(
     // Form contact adhesion bonds for Glueocyte cells
     form_glueocyte_contact_bonds(state, genome, current_time);
 
-    // Run the fixed-rate cached-backbone signal system.
+    // Run fixed-rate conservative signal diffusion.
     let boundary_radius = config.sphere_radius;
     crate::simulation::signal_system::run_signal_system(
         state,

@@ -492,6 +492,9 @@ pub struct CanonicalState {
     /// Signal channels for each cell: signal_channels[cell_index * 16 + channel]
     /// None = null (no signal on this channel), Some(value) = active signal
     pub signal_channels: Vec<Option<f32>>,
+    /// Unsaturated quantity in equal unit transport volumes.
+    pub signal_concentrations: Vec<[f32; 16]>,
+    pub signal_diffusion: crate::simulation::signal_diffusion::DiffusionSettings,
 
     /// Whether any cell has an active signal (optimization flag to skip rendering checks)
     pub has_any_signal: bool,
@@ -551,10 +554,6 @@ pub struct CanonicalState {
     /// between signal ticks.
     pub signal_tick_accumulator: f32,
     pub signal_tick_index: u64,
-    /// Source-independent CPU topology cache. Phase 4 will replace signature
-    /// detection with explicit generation commits and incremental repair.
-    pub signal_topology_signature: u64,
-    pub signal_cached_forest: Option<crate::simulation::signal_backbone_bench::CachedForest>,
     pub signal_invalid_processor_outputs: u64,
 
     /// Per-cell internal water reserve for slow physiology.
@@ -837,6 +836,8 @@ impl CanonicalState {
 
             // Signal system - all channels null by default
             signal_channels: vec![None; capacity * 16],
+            signal_concentrations: vec![[0.0; 16]; capacity],
+            signal_diffusion: Default::default(),
             has_any_signal: false,
             muscle_contractions: vec![0.0; capacity],
 
@@ -855,8 +856,6 @@ impl CanonicalState {
             signal_light_samples: vec![0.0; capacity],
             signal_tick_accumulator: 0.0,
             signal_tick_index: 0,
-            signal_topology_signature: 0,
-            signal_cached_forest: None,
             signal_invalid_processor_outputs: 0,
 
             // Hidden physiology state. Temperature starts in the ideal band:
@@ -979,6 +978,7 @@ impl CanonicalState {
         self.embryocyte_timers[index] = 0.0;
         self.stemocyte_delay_timers[index] = 0.0;
         self.memo_state[index] = 0.0;
+        self.signal_concentrations[index] = [0.0; 16];
         self.signal_processor_output[index] = 0.0;
         self.signal_processor_channel[index] = 0;
         self.signal_processor_config[index] = 0;
@@ -1109,6 +1109,7 @@ impl CanonicalState {
         self.embryocyte_timers[slot_index] = 0.0;
         self.stemocyte_delay_timers[slot_index] = 0.0;
         self.memo_state[slot_index] = 0.0;
+        self.signal_concentrations[slot_index] = [0.0; 16];
         self.signal_processor_output[slot_index] = 0.0;
         self.signal_processor_channel[slot_index] = 0;
         self.signal_processor_config[slot_index] = 0;
@@ -1187,6 +1188,7 @@ impl CanonicalState {
             self.embryocyte_timers[cell_index] = self.embryocyte_timers[last_index];
             self.stemocyte_delay_timers[cell_index] = self.stemocyte_delay_timers[last_index];
             self.memo_state[cell_index] = self.memo_state[last_index];
+            self.signal_concentrations[cell_index] = self.signal_concentrations[last_index];
             self.signal_processor_output[cell_index] = self.signal_processor_output[last_index];
             self.signal_processor_channel[cell_index] = self.signal_processor_channel[last_index];
             self.signal_processor_config[cell_index] = self.signal_processor_config[last_index];

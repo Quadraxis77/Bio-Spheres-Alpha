@@ -603,21 +603,7 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Two Ways to Emit",
-        body: "There are two kinds of emitter, and they work very differently.\n\n\
-               Sensory (event-driven) — sensory cell types such as oculocytes, \
-               photocytes, and lipocytes emit on channels 0–7 only when they \
-               detect a target or cross an internal threshold. The signal is \
-               absent between events, so receivers can distinguish \
-               'condition met' from 'no condition'. Many cell types share \
-               this range — an oculocyte spots food, a photocyte reports \
-               light level, a lipocyte reports fat reserves, all on the \
-               same set of channels.\n\n\
-               Regulation Emit (continuous) — any mode can turn on a constant \
-               broadcast on any developmental channel (8–15). Every frame that \
-               cell is alive it writes its configured value onto the channel. \
-               There is no on/off edge — the signal is simply always present \
-               while the cell exists. Use this for positional identity, \
-               maturity markers, or body-wide pressure signals.",
+        body: "Conditional sources add signal while their condition is met. Oculocytes detect targets; photocytes and lipocytes compare light or storage with a threshold. When production stops, existing signal continues to diffuse and fade.\n\nRegulation Emit continuously adds signal on a developmental channel (8–15). The configured value is quantity produced per second. Sustained production balances degradation and creates a gradient. Use this for positional identity, maturity markers, or body-wide cues.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::CellTypeDropdown,
@@ -626,19 +612,7 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "How Signals Travel — Summation",
-        body: "Each propagation step, a cell looks at every bonded neighbor \
-               and SUMS the attenuated contributions it can receive on that \
-               channel. Positive and negative contributions cancel before final saturation.\n\n\
-               This means signal strength reflects how many sources are \
-               nearby, not just whether any single source is strong enough. \
-               Two cells each emitting value 10 combine to produce value ~20 \
-               at a shared neighbor.\n\n\
-               Signal attenuates on every backbone edge, so \
-               distant sources contribute less than close ones. The combined \
-               value is saturated to the signed -1000..1000 range.\n\n\
-               Practical implication: set a threshold higher than any single \
-               emitter's value and the receiver only fires when a cluster of \
-               emitters surrounds it — quorum sensing.",
+        body: "Signal concentration spreads through every eligible adhesion, including loops and redundant connections. Each connection transfers existing signal from higher to lower concentration; it does not copy it.\n\nMultiple sources on the same channel add production and reinforce each other. An isolated sustained source is strongest locally after the field settles. Propagation takes simulation time, and every cell loses signal through degradation.\n\nTransport concentrations are nonnegative. Receiver inputs are capped at 1000, while the underlying field can continue accumulating. Use receiver inversion for inhibition. Range depends on production, conductance, degradation, and thresholds, with no hard hop cutoff.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::AdhesionSettingsPanel,
@@ -647,19 +621,7 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Seeing Signals Propagate",
-        body: "When signals are active, the adhesion bonds between cells \
-               light up as the signal passes through them. This is the \
-               easiest way to confirm a signal is actually reaching its \
-               destination.\n\n\
-               If your organism is tightly packed and the bonds are hard \
-               to see, use the Adhesion Expansion button in the viewport \
-               toolbar. It stretches all bonds to their maximum length so \
-               the network is visible and spread out. The signal lighting \
-               still works in this mode.\n\n\
-               If a bond is not lighting up, the signal is not reaching \
-               that cell — either the channel or listener polarity does \
-               not match, or there is no active backbone path between the \
-               emitter and receiver.",
+        body: "Each adhesion has a two-part core showing the attached zone at each end: A is green, B is blue, and C is red. The outline turns yellow when both connected cells have a received signal on the same channel. Otherwise the outline stays black. Redundant connections participate too. Yellow indicates signal activity; it does not measure the amount transferred.\n\nUse the channel inspector to check the local received value. Signal needs time to reach distant cells and fades after production stops.\n\nIf bonds are difficult to see, the Adhesion Expansion control spreads the network out. Check that the source produces on the receiver’s channel and that the local value reaches the receiver’s threshold.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::AdhesionSettingsPanel,
@@ -668,21 +630,7 @@ pub const TUTORIAL_STEPS: &[TutorialStepData] = &[
 
     TutorialStepData {
         title: "Receiving and Reacting",
-        body: "Any cell that reads a signal channel compares the incoming \
-               value against a threshold and changes its behaviour \
-               accordingly. A Flagellocyte can switch between two speeds \
-               depending on whether the signal is above or below the \
-               threshold. Division and mode-switching can be gated the \
-               same way — a cell only divides when it receives the cue.\n\n\
-               The receiver and emitter must share the same channel number \
-               and be connected by an unbroken active signal backbone. \
-               If any of those conditions \
-               isn't met, the receiver sees nothing regardless of what \
-               the emitter does.\n\n\
-               Invert threshold — check 'Invert' to flip the logic: the \
-               cell reacts when the signal DROPS below the threshold. Use \
-               this for absence gating — a cell that goes dormant when its \
-               support signal disappears.",
+        body: "A receiver compares its local channel value with a threshold and changes behavior accordingly. A Flagellocyte can switch speeds, and division or mode switching can wait for a cue.\n\nThe source and receiver use the same channel. Connected cells exchange signal gradually, and a source receives its own local signal too. Breaking a link stops transfer through that link; existing concentrations continue to diffuse through remaining links and degrade.\n\nInvert flips the threshold rule, allowing a cell to react when a support signal drops below its threshold. Memorocytes provide explicit memory; ordinary reception does not produce more signal.",
         gate_hint: "",
         gate:       StepGate::None,
         target:     TutorialTarget::CellTypeDropdown,
