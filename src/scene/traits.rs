@@ -37,6 +37,36 @@ pub trait Scene {
         outline_width: f32,
     );
 
+    /// Draw another view of the prepared world without advancing simulation.
+    fn render_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
+        world_diameter: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        lod_debug_colors: bool,
+        outline_width: f32,
+    ) {
+        self.render(
+            device,
+            queue,
+            view,
+            cell_type_visuals,
+            world_diameter,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+            lod_debug_colors,
+            outline_width,
+        );
+    }
+
     /// Handle window resize.
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32);
 

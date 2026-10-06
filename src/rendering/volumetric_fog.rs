@@ -601,7 +601,7 @@ impl VolumetricFogRenderer {
         view_proj: glam::Mat4,
         camera_pos: glam::Vec3,
         camera_rotation: glam::Quat,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         time: f32,
         light_dir: [f32; 3],
         grid_resolution: u32,
@@ -616,12 +616,11 @@ impl VolumetricFogRenderer {
         // Update camera uniforms
         let inv_view_proj = view_proj.inverse();
         let aspect = (self.fog_width as f32 / self.fog_height.max(1) as f32).max(0.001);
-        let horizontal_fov_degrees = horizontal_fov_degrees.clamp(
-            crate::ui::camera::MIN_HORIZONTAL_FOV_DEGREES,
-            crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
+        let projection = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(), aspect, 0.1, 5000.0,
         );
-        let tan_half_horizontal_fov = (horizontal_fov_degrees.to_radians() * 0.5).tan();
-        let tan_half_vertical_fov = tan_half_horizontal_fov / aspect;
+        let tan_half_horizontal_fov = 1.0 / projection.x_axis.x;
+        let tan_half_vertical_fov = 1.0 / projection.y_axis.y;
         let camera_uniform = FogCameraUniforms {
             view_proj: view_proj.to_cols_array_2d(),
             inv_view_proj: inv_view_proj.to_cols_array_2d(),

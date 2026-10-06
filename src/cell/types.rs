@@ -834,10 +834,11 @@ impl CellType {
             }
 
             CellType::Gametocyte => {
-                "A reproductive gamete cell. When two Gametocytes from different \
+                "A reproductive gamete cell. When two Gametocytes produced by different \
                  organisms come into contact, their genomes are crossed over and a \
                  new hybrid offspring organism is spawned. Gametocytes never split; \
-                 they only detach and merge. Both Gametocytes then die."
+                 they only detach and merge. Gametes from the same parent cannot merge. \
+                 Both Gametocytes then die."
             }
 
             CellType::Cognocyte => {
@@ -1171,8 +1172,6 @@ impl CellType {
                 // Sealed pipe by default - exchange ports must be explicitly enabled.
                 mode.vascular_nutrient_transport = true;
                 mode.vascular_outlet = false;
-                mode.vascular_signal_transport = false;
-                mode.vascular_signal_exchange = false;
             }
             CellType::Gametocyte => {
                 // Gametocytes behave like Embryocytes: nutrients go into reserve,

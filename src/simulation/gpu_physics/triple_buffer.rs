@@ -2379,8 +2379,8 @@ impl GpuTripleBufferSystem {
         }
     }
 
-    /// Sync Vasculocyte mode properties for the nutrient/signal transport shaders.
-    /// v12: [nutrient_transport, nutrient_exchange, signal_transport, signal_exchange]
+    /// Sync Vasculocyte mode properties for nutrient transport.
+    /// v12: [nutrient_transport, nutrient_exchange, reserved, reserved]
     pub fn sync_vasculocyte_mode_properties(
         &self,
         queue: &wgpu::Queue,
@@ -2396,16 +2396,8 @@ impl GpuTripleBufferSystem {
                         0.0
                     },
                     if mode.vascular_outlet { 1.0 } else { 0.0 },
-                    if mode.vascular_signal_transport {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                    if mode.vascular_signal_exchange {
-                        1.0
-                    } else {
-                        0.0
-                    },
+                    0.0,
+                    0.0,
                 ]);
             }
         }
@@ -2432,16 +2424,8 @@ impl GpuTripleBufferSystem {
                         0.0
                     },
                     if mode.vascular_outlet { 1.0 } else { 0.0 },
-                    if mode.vascular_signal_transport {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                    if mode.vascular_signal_exchange {
-                        1.0
-                    } else {
-                        0.0
-                    },
+                    0.0,
+                    0.0,
                 ]
             })
             .collect();

@@ -2,7 +2,7 @@
 
 use crate::genome::Genome;
 use crate::simulation::adhesion_inheritance::{
-    count_backbone_duplicates_on_division, inherit_adhesions_on_division,
+    count_signal_bond_duplicates_on_division, inherit_adhesions_on_division,
 };
 use crate::simulation::canonical_state::{CanonicalState, CellDevelopmentAddress, DivisionEvent};
 use glam::{EulerRot, Quat, Vec3};
@@ -224,10 +224,9 @@ pub fn division_step(
             child_a_split_count: i32,
             child_b_split_count: i32,
             create_sibling_adhesion: bool,
-            sibling_is_backbone: bool,
-            backbone_duplicate_budget: usize,
-            backbone_construction_cost: f32,
-            parent_creator_identity: u32,
+            sibling_is_signal_bond: bool,
+            signal_bond_duplicate_budget: usize,
+            signal_bond_construction_cost: f32,
             child_a_development_address: CellDevelopmentAddress,
             child_b_development_address: CellDevelopmentAddress,
         }
@@ -455,15 +454,14 @@ pub fn division_step(
                     || (mode.child_a_after_split_keep_adhesion
                         && mode.child_b_after_split_keep_adhesion);
                 let sibling_requested = mode.parent_make_adhesion && after_split_sibling_allowed;
-                let sibling_is_backbone =
-                    sibling_requested && mode.adhesion_settings.creates_backbone;
+                let sibling_is_signal_bond = sibling_requested;
                 let construction_cost =
-                    crate::simulation::signal_system::backbone_construction_cost(
+                    crate::simulation::signal_system::signal_bond_construction_cost(
                         state.split_nutrient_thresholds[parent_idx],
                     );
-                let backbone_construction_cost = construction_cost.unwrap_or(0.0);
+                let signal_bond_construction_cost = construction_cost.unwrap_or(0.0);
                 let requested_duplicates = construction_cost.map_or(0, |_| {
-                    count_backbone_duplicates_on_division(
+                    count_signal_bond_duplicates_on_division(
                         state,
                         genome,
                         mode_index,
@@ -471,19 +469,19 @@ pub fn division_step(
                         parent_split_count,
                     )
                 });
-                let backbone_duplicate_budget = if backbone_construction_cost == 0.0 {
+                let signal_bond_duplicate_budget = if signal_bond_construction_cost == 0.0 {
                     requested_duplicates
                 } else {
                     requested_duplicates.min(
-                        (parent_nutrients / backbone_construction_cost)
+                        (parent_nutrients / signal_bond_construction_cost)
                             .floor()
                             .max(0.0) as usize,
                     )
                 };
                 let after_duplicate_reservations = parent_nutrients
-                    - backbone_construction_cost * backbone_duplicate_budget as f32;
-                let distributable_nutrients = if sibling_is_backbone {
-                    crate::simulation::signal_system::reserve_backbone_construction(
+                    - signal_bond_construction_cost * signal_bond_duplicate_budget as f32;
+                let distributable_nutrients = if sibling_is_signal_bond {
+                    crate::simulation::signal_system::reserve_signal_bond_construction(
                         after_duplicate_reservations,
                         state.split_nutrient_thresholds[parent_idx],
                     )
@@ -577,10 +575,9 @@ pub fn division_step(
                     child_a_split_count,
                     child_b_split_count,
                     create_sibling_adhesion,
-                    sibling_is_backbone,
-                    backbone_duplicate_budget,
-                    backbone_construction_cost,
-                    parent_creator_identity: parent_cell_id,
+                    sibling_is_signal_bond,
+                    signal_bond_duplicate_budget,
+                    signal_bond_construction_cost,
                     child_a_development_address,
                     child_b_development_address,
                 });
@@ -708,15 +705,14 @@ pub fn division_step(
                 current_time,
                 data.parent_split_count,
                 data.parent_radius, // Use the saved pre-split parent radius, not the child's post-split radius
-                data.backbone_duplicate_budget,
-                data.parent_creator_identity,
+                data.signal_bond_duplicate_budget,
             );
             let unused_duplicate_reservations = data
-                .backbone_duplicate_budget
+                .signal_bond_duplicate_budget
                 .saturating_sub(inherited_backbones_created);
             if unused_duplicate_reservations != 0 {
                 let refund =
-                    data.backbone_construction_cost * unused_duplicate_reservations as f32 * 0.5;
+                    data.signal_bond_construction_cost * unused_duplicate_reservations as f32 * 0.5;
                 state.nutrients[data.child_a_slot] += refund;
                 state.nutrients[data.child_b_slot] += refund;
             }
@@ -823,16 +819,9 @@ pub fn division_step(
                         child_b_split_ratio,
                         current_time,
                     );
-                    if data.sibling_is_backbone {
-                        if let Some(connection_index) = result {
-                            crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
-                                &mut state.adhesion_connections,
-                                connection_index,
-                                data.parent_creator_identity,
-                                false,
-                            );
-                        } else {
-                            let refund = data.backbone_construction_cost * 0.5;
+                    if data.sibling_is_signal_bond {
+                        if result.is_none() {
+                            let refund = data.signal_bond_construction_cost * 0.5;
                             state.nutrients[data.child_a_slot] += refund;
                             state.nutrients[data.child_b_slot] += refund;
                         }
@@ -1039,10 +1028,9 @@ pub fn division_step_multi(
             child_a_split_count: i32,
             child_b_split_count: i32,
             create_sibling_adhesion: bool,
-            sibling_is_backbone: bool,
-            backbone_duplicate_budget: usize,
-            backbone_construction_cost: f32,
-            parent_creator_identity: u32,
+            sibling_is_signal_bond: bool,
+            signal_bond_duplicate_budget: usize,
+            signal_bond_construction_cost: f32,
             child_a_development_address: CellDevelopmentAddress,
             child_b_development_address: CellDevelopmentAddress,
             split_direction_local: Vec3,
@@ -1220,13 +1208,13 @@ pub fn division_step_multi(
                 || (mode.child_a_after_split_keep_adhesion
                     && mode.child_b_after_split_keep_adhesion);
             let sibling_requested = mode.parent_make_adhesion && after_split_sibling_allowed;
-            let sibling_is_backbone = sibling_requested && mode.adhesion_settings.creates_backbone;
-            let construction_cost = crate::simulation::signal_system::backbone_construction_cost(
+            let sibling_is_signal_bond = sibling_requested;
+            let construction_cost = crate::simulation::signal_system::signal_bond_construction_cost(
                 state.split_nutrient_thresholds[parent_idx],
             );
-            let backbone_construction_cost = construction_cost.unwrap_or(0.0);
+            let signal_bond_construction_cost = construction_cost.unwrap_or(0.0);
             let requested_duplicates = construction_cost.map_or(0, |_| {
-                count_backbone_duplicates_on_division(
+                count_signal_bond_duplicates_on_division(
                     state,
                     genome,
                     mode_index,
@@ -1234,19 +1222,19 @@ pub fn division_step_multi(
                     parent_split_count,
                 )
             });
-            let backbone_duplicate_budget = if backbone_construction_cost == 0.0 {
+            let signal_bond_duplicate_budget = if signal_bond_construction_cost == 0.0 {
                 requested_duplicates
             } else {
                 requested_duplicates.min(
-                    (parent_nutrients / backbone_construction_cost)
+                    (parent_nutrients / signal_bond_construction_cost)
                         .floor()
                         .max(0.0) as usize,
                 )
             };
-            let after_duplicate_reservations =
-                parent_nutrients - backbone_construction_cost * backbone_duplicate_budget as f32;
-            let distributable_nutrients = if sibling_is_backbone {
-                crate::simulation::signal_system::reserve_backbone_construction(
+            let after_duplicate_reservations = parent_nutrients
+                - signal_bond_construction_cost * signal_bond_duplicate_budget as f32;
+            let distributable_nutrients = if sibling_is_signal_bond {
+                crate::simulation::signal_system::reserve_signal_bond_construction(
                     after_duplicate_reservations,
                     state.split_nutrient_thresholds[parent_idx],
                 )
@@ -1329,10 +1317,9 @@ pub fn division_step_multi(
                 child_a_split_count,
                 child_b_split_count,
                 create_sibling_adhesion,
-                sibling_is_backbone,
-                backbone_duplicate_budget,
-                backbone_construction_cost,
-                parent_creator_identity: parent_cell_id,
+                sibling_is_signal_bond,
+                signal_bond_duplicate_budget,
+                signal_bond_construction_cost,
                 child_a_development_address,
                 child_b_development_address,
                 split_direction_local: Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * Vec3::Z,
@@ -1450,15 +1437,14 @@ pub fn division_step_multi(
                 current_time,
                 data.parent_split_count,
                 data.parent_radius,
-                data.backbone_duplicate_budget,
-                data.parent_creator_identity,
+                data.signal_bond_duplicate_budget,
             );
             let unused_duplicate_reservations = data
-                .backbone_duplicate_budget
+                .signal_bond_duplicate_budget
                 .saturating_sub(inherited_backbones_created);
             if unused_duplicate_reservations != 0 {
                 let refund =
-                    data.backbone_construction_cost * unused_duplicate_reservations as f32 * 0.5;
+                    data.signal_bond_construction_cost * unused_duplicate_reservations as f32 * 0.5;
                 state.nutrients[data.child_a_slot] += refund;
                 state.nutrients[data.child_b_slot] += refund;
             }
@@ -1558,16 +1544,9 @@ pub fn division_step_multi(
                         child_b_split_ratio,
                         current_time,
                     );
-                    if data.sibling_is_backbone {
-                        if let Some(connection_index) = result {
-                            crate::cell::adhesion_manager::AdhesionConnectionManager::classify_signal_backbone(
-                                &mut state.adhesion_connections,
-                                connection_index,
-                                data.parent_creator_identity,
-                                false,
-                            );
-                        } else {
-                            let refund = data.backbone_construction_cost * 0.5;
+                    if data.sibling_is_signal_bond {
+                        if result.is_none() {
+                            let refund = data.signal_bond_construction_cost * 0.5;
                             state.nutrients[data.child_a_slot] += refund;
                             state.nutrients[data.child_b_slot] += refund;
                         }

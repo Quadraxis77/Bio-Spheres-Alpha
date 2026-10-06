@@ -1014,6 +1014,7 @@ impl UiSystem {
         scene_request: &mut crate::ui::panel_context::SceneModeRequest,
         performance: &crate::ui::performance::PerformanceMetrics,
     ) -> egui::FullOutput {
+        let frame_dt = self.ctx.input(|input| input.unstable_dt).clamp(0.0, 0.1);
         if let Some(gpu_scene) = scene_manager.gpu_scene() {
             if let Some(scan_frame) = gpu_scene.lineage_archive.last_scan_frame {
                 if self.last_report_scan_frame != Some(scan_frame)
@@ -1285,7 +1286,7 @@ impl UiSystem {
                             }
                             // Tick error timer
                             if editor_state.name_field_error {
-                                editor_state.name_field_error_timer -= 1.0 / 60.0;
+                                editor_state.name_field_error_timer -= frame_dt;
                                 if editor_state.name_field_error_timer <= 0.0 {
                                     editor_state.name_field_error = false;
                                 }
@@ -2047,13 +2048,12 @@ impl UiSystem {
                 self.genome_browser.open_load();
             }
 
-            let dt_for_browser = 1.0 / 60.0; // approximate; good enough for animation
             crate::ui::genome_browser::render_genome_browser(
                 &self.ctx,
                 &mut self.genome_browser,
                 genome,
                 editor_state,
-                dt_for_browser,
+                frame_dt,
             );
         }
 
@@ -2724,16 +2724,16 @@ impl UiSystem {
         }
 
         // -- Toast notifications -----------------------------------------------
-        crate::ui::toast::tick_toasts(&mut self.toasts, 1.0 / 60.0);
+        crate::ui::toast::tick_toasts(&mut self.toasts, frame_dt);
         crate::ui::toast::render_toasts(&self.ctx, &self.toasts);
-        self.tick_and_render_camera_mode_notification(1.0 / 60.0);
+        self.tick_and_render_camera_mode_notification(frame_dt);
 
         // -- Loading GIF overlay (shown during GIF capture) --------------------
         if editor_state.gif_capture.is_some() && !self.loading_gif_frames.is_empty() {
             // Advance loading animation at 20fps
-            self.loading_gif_timer += 1.0 / 60.0;
-            if self.loading_gif_timer >= 1.0 / 20.0 {
-                self.loading_gif_timer = 0.0;
+            self.loading_gif_timer += frame_dt;
+            while self.loading_gif_timer >= 1.0 / 20.0 {
+                self.loading_gif_timer -= 1.0 / 20.0;
                 self.loading_gif_frame =
                     (self.loading_gif_frame + 1) % self.loading_gif_frames.len();
             }
@@ -2969,6 +2969,10 @@ fn show_windows_menu(
             }
         });
     });
+
+    ui.add_space(6.0);
+    ui.add(egui::Slider::new(&mut state.desktop_render_fps, 30..=120).text("Frame rate limit"))
+        .on_hover_text("Desktop rendering limit in FPS. Physics and fluid keep their own simulation rates.");
 
     ui.add_space(6.0);
     ui.label("Horizontal FOV:")

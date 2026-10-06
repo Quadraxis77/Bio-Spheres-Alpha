@@ -3,6 +3,7 @@
 //! This module provides the scene abstraction and management for different
 //! simulation modes (Preview and GPU).
 
+mod frame_timing;
 pub mod gpu_scene;
 pub mod gpu_timer;
 pub mod lineage;

@@ -41,11 +41,6 @@ pub struct DivisionAudioCollectDispatch<'a> {
     pub readback_buffer: &'a wgpu::Buffer,
     pub dispatch_workgroups: u32,
     pub copy_bytes: u64,
-    /// Clear the candidate buffer/count before this dispatch. Only the first
-    /// physics step of a render frame should clear - later steps in the same
-    /// frame accumulate their candidates so a multi-step frame doesn't lose
-    /// every step but the last to the once-per-frame readback.
-    pub clear_before_collect: bool,
 }
 // MAX_ADHESION_CONNECTIONS is now dynamic (adhesion_buffers.max_connections)
 
@@ -175,16 +170,25 @@ pub fn execute_gpu_physics_step(
     // because the GPU's DMA engine handles bulk zeroing without compute shader overhead.
     // PERFORMANCE: Skip clearing when no cells - saves ~15MB DMA per physics step
     if _cell_count_hint > 0 {
-        encoder.clear_buffer(&triple_buffers.mass_deltas_buffer, 0, None);
-        encoder.clear_buffer(&triple_buffers.spatial_grid_counts, 0, None);
-        encoder.clear_buffer(&triple_buffers.occupied_grid_count, 0, None);
+        // These buffers are indexed by cell slot, so only the used persistent
+        // high-water range can be read by this or a later step.
+        let active_scalar_bytes = _cell_count_hint.min(triple_buffers.capacity) as u64 * 4;
+        encoder.clear_buffer(
+            &triple_buffers.mass_deltas_buffer,
+            0,
+            Some(active_scalar_bytes),
+        );
         encoder.clear_buffer(&triple_buffers.spatial_grid_overflow_count, 0, None);
-        encoder.clear_buffer(&adhesion_buffers.force_accum_x, 0, None);
-        encoder.clear_buffer(&adhesion_buffers.force_accum_y, 0, None);
-        encoder.clear_buffer(&adhesion_buffers.force_accum_z, 0, None);
-        encoder.clear_buffer(&adhesion_buffers.torque_accum_x, 0, None);
-        encoder.clear_buffer(&adhesion_buffers.torque_accum_y, 0, None);
-        encoder.clear_buffer(&adhesion_buffers.torque_accum_z, 0, None);
+        for buffer in [
+            &adhesion_buffers.force_accum_x,
+            &adhesion_buffers.force_accum_y,
+            &adhesion_buffers.force_accum_z,
+            &adhesion_buffers.torque_accum_x,
+            &adhesion_buffers.torque_accum_y,
+            &adhesion_buffers.torque_accum_z,
+        ] {
+            encoder.clear_buffer(buffer, 0, Some(active_scalar_bytes));
+        }
         // Clear boulder force accumulator so cell-push forces don't accumulate across frames
         if let Some(bfa) = boulder_force_accum {
             encoder.clear_buffer(bfa, 0, None);
@@ -216,6 +220,21 @@ pub fn execute_gpu_physics_step(
     // running, so they'd never lose nutrients and never die.
     let effective_cell_count = (_cell_count_hint + 255) / 256 * 256; // Round up to workgroup boundary
     let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+
+    // Clear only buckets occupied by the preceding step. The occupied list was
+    // built alongside that grid and cannot contain more entries than the cell
+    // high-water range used for this dispatch. Reset its counter only after the
+    // sparse clear pass has consumed it.
+    {
+        let mut clear_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Spatial Grid Sparse Clear"),
+            timestamp_writes: None,
+        });
+        clear_pass.set_pipeline(&pipelines.spatial_grid_clear);
+        clear_pass.set_bind_group(0, spatial_grid_bind_group, &[]);
+        clear_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+    encoder.clear_buffer(&triple_buffers.occupied_grid_count, 0, Some(4));
 
     // Muscle contraction pass: compute per-cell contraction values BEFORE the main physics pass.
     // Running in a separate compute pass ensures a pipeline barrier so all writes to
@@ -947,8 +966,15 @@ pub fn execute_lifecycle_pipeline(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, lifecycle_bind_group, &[]);
         compute_pass.set_bind_group(2, &cached_bind_groups.lifecycle_adhesion, &[]);
-        let adhesion_workgroups = (adhesion_buffers.max_connections + WORKGROUP_SIZE_ADHESION - 1)
-            / WORKGROUP_SIZE_ADHESION;
+        // Every bond consumes two of the twenty endpoint slots per cell. Since
+        // effective_slots is a persistent cell-slot high-water mark, ten bonds
+        // per used slot safely bounds every allocated adhesion index without
+        // launching over unused configured capacity.
+        let reachable_adhesion_slots = effective_slots
+            .saturating_mul(10)
+            .min(adhesion_buffers.max_connections);
+        let adhesion_workgroups =
+            (reachable_adhesion_slots + WORKGROUP_SIZE_ADHESION - 1) / WORKGROUP_SIZE_ADHESION;
         compute_pass.dispatch_workgroups(adhesion_workgroups, 1, 1);
 
         drop(compute_pass);
@@ -987,10 +1013,8 @@ pub fn execute_lifecycle_pipeline(
         drop(compute_pass);
 
         if let Some(audio) = division_audio_collect {
-            if audio.clear_before_collect {
-                encoder.clear_buffer(audio.candidate_buffer, 0, Some(audio.copy_bytes));
-                encoder.clear_buffer(audio.candidate_count_buffer, 0, Some(16));
-            }
+            encoder.clear_buffer(audio.candidate_buffer, 0, Some(audio.copy_bytes));
+            encoder.clear_buffer(audio.candidate_count_buffer, 0, Some(16));
 
             let mut audio_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Division Audio Collect"),

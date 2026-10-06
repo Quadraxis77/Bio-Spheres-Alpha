@@ -80,8 +80,6 @@ const SIGNAL_CHANNELS: u32 = 16u;
 const GLUEOCYTE_CELL_TYPE: u32 = 6u;
 const BOND_FLAG_GLUEOCYTE: u32 = 1u;
 const BOND_FLAG_BARRIER_BALL: u32 = 2u;
-const BOND_FLAG_SIGNAL_BACKBONE: u32 = 4u;
-const BACKBONE_CONSTRUCTION_FRACTION: f32 = 0.05;
 
 // ---- Group 0: Physics ----
 
@@ -117,10 +115,6 @@ const BACKBONE_CONSTRUCTION_FRACTION: f32 = 0.05;
 @group(3) @binding(5) var<storage, read_write> death_flags: array<u32>;
 // Per-cell organism labels (for self-adhesion filtering)
 @group(3) @binding(6) var<storage, read> organism_labels: array<u32>;
-@group(3) @binding(7) var<storage, read> adhesion_settings_v2: array<vec4<f32>>;
-@group(3) @binding(8) var<storage, read> cell_ids: array<u32>;
-@group(3) @binding(9) var<storage, read_write> nutrients_buffer: array<atomic<i32>>;
-@group(3) @binding(10) var<storage, read> split_nutrient_thresholds: array<f32>;
 
 // ---- Helpers ----
 
@@ -196,22 +190,6 @@ fn count_active_adhesions(cell_idx: u32) -> u32 {
         }
     }
     return count;
-}
-
-// Reserve the complete one-time construction charge before allocating a bond.
-// The compare/exchange loop makes affordability exact when multiple creators
-// contend for the same nutrient account. Callers refund on allocation failure.
-fn try_reserve_construction(cell_idx: u32, cost: i32) -> bool {
-    if (cost <= 0i) { return true; }
-    loop {
-        let available = atomicLoad(&nutrients_buffer[cell_idx]);
-        if (available < cost) { return false; }
-        let result = atomicCompareExchangeWeak(
-            &nutrients_buffer[cell_idx], available, available - cost
-        );
-        if (result.exchanged) { return true; }
-    }
-    return false;
 }
 
 // Check whether two cells are already connected.
@@ -361,24 +339,9 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let other_count = count_active_adhesions(other_idx);
                     if (other_count >= MAX_ADHESIONS_PER_CELL) { continue; }
 
-                    let creates_backbone = mode_idx < arrayLength(&adhesion_settings_v2)
-                        && adhesion_settings_v2[mode_idx].w > 0.5;
-                    let construction_cost_fixed = i32(round(
-                        max(split_nutrient_thresholds[cell_idx], 0.0)
-                            * BACKBONE_CONSTRUCTION_FRACTION * 1000.0
-                    ));
-                    let construction_reserved = !creates_backbone
-                        || try_reserve_construction(cell_idx, construction_cost_fixed);
-                    if (!construction_reserved) {
-                        continue;
-                    }
-
                     // Allocate slot
                     let slot = allocate_adhesion_slot();
                     if (slot == 0xFFFFFFFFu) {
-                        if (creates_backbone) {
-                            atomicAdd(&nutrients_buffer[cell_idx], construction_cost_fixed);
-                        }
                         return;
                     } // at capacity
 
@@ -399,9 +362,8 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     conn.is_active    = 1u;
                     conn.zone_a       = 2u; // ZoneC (equatorial - no zone preference)
                     conn.zone_b       = 2u;
-                    conn.bond_flags   = BOND_FLAG_GLUEOCYTE | BOND_FLAG_BARRIER_BALL
-                        | select(0u, BOND_FLAG_SIGNAL_BACKBONE, creates_backbone);
-                    conn._align_pad1  = select(0u, cell_ids[cell_idx], creates_backbone);
+                    conn.bond_flags   = BOND_FLAG_GLUEOCYTE | BOND_FLAG_BARRIER_BALL;
+                    conn._align_pad1  = 0u;
                     conn.anchor_direction_a = vec4<f32>(anchor_a, 0.0);
                     conn.anchor_direction_b = vec4<f32>(anchor_b, 0.0);
                     // Identity quaternions for twist references (no twist constraint)
@@ -424,9 +386,6 @@ fn bond_create(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         atomicSub(&adhesion_counts[1], 1u);
                         let free_top = atomicAdd(&adhesion_counts[2], 1u);
                         free_adhesion_slots[free_top] = slot;
-                        if (creates_backbone) {
-                            atomicAdd(&nutrients_buffer[cell_idx], construction_cost_fixed);
-                        }
                     }
 
                     // Only form one new bond per frame per glueocyte to avoid

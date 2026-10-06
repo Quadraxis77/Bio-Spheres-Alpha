@@ -12,6 +12,18 @@ use bytemuck::{Pod, Zeroable};
 const GRID_RESOLUTION: u32 = 128;
 const TOTAL_VOXELS: usize = (GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
 
+fn accumulate_growth_time(pending: &mut f64, dt: f32, tick_skip: u32) -> Option<f32> {
+    if !dt.is_finite() || dt <= 0.0 {
+        return None;
+    }
+    *pending += f64::from(dt);
+    let interval = (f64::from(tick_skip) + 1.0) / 60.0;
+    if *pending + 1e-7 < interval {
+        return None;
+    }
+    Some(std::mem::take(pending) as f32)
+}
+
 /// Uniform parameters for the moss growth compute shader
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -80,9 +92,9 @@ pub struct MossSystem {
     cell_size: f32,
     grid_origin: [f32; 3],
 
-    // Frame counter for throttle (run every 4th frame)
-    frame_counter: u32,
-    /// How many rendered frames to skip between growth dispatches (default 3 = run every 4th frame)
+    /// Sum actual simulation time across skipped growth dispatches.
+    growth_elapsed_pending: f64,
+    /// Number of 60 Hz simulation ticks to skip (default 3 = 15 Hz growth).
     pub growth_frame_skip: u32,
 }
 
@@ -393,7 +405,7 @@ impl MossSystem {
             grid_resolution,
             cell_size,
             grid_origin,
-            frame_counter: 0,
+            growth_elapsed_pending: 0.0,
             growth_frame_skip: 3,
         }
     }
@@ -524,7 +536,7 @@ impl MossSystem {
     }
 
     /// Run the moss growth/erosion compute pass.
-    /// Throttled to every `growth_frame_skip + 1` frames (default: every 4th frame).
+    /// Throttled in simulation time (default: 15 Hz), independent of rendering.
     pub fn run_growth(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -533,12 +545,13 @@ impl MossSystem {
         delta_time: f32,
         world_radius: f32,
     ) {
-        self.frame_counter += 1;
-        if self.frame_counter <= self.growth_frame_skip {
+        let Some(accumulated_dt) = accumulate_growth_time(
+            &mut self.growth_elapsed_pending,
+            delta_time,
+            self.growth_frame_skip,
+        ) else {
             return;
-        }
-        let accumulated_dt = delta_time * (self.growth_frame_skip + 1) as f32;
-        self.frame_counter = 0;
+        };
 
         let params = MossGrowthParams {
             grid_resolution: self.grid_resolution,
@@ -612,5 +625,37 @@ impl MossSystem {
 
         let workgroups = (cell_capacity + 255) / 256;
         pass.dispatch_workgroups(workgroups, 1, 1);
+    }
+}
+
+#[cfg(test)]
+mod frame_timing_tests {
+    use super::accumulate_growth_time;
+
+    #[test]
+    fn moss_growth_cadence_and_elapsed_time_do_not_follow_render_fps() {
+        for fps in [30, 60, 90, 120] {
+            let mut pending = 0.0;
+            let mut dispatches = 0;
+            let mut elapsed = 0.0;
+            for _ in 0..fps * 4 {
+                if let Some(dt) = accumulate_growth_time(&mut pending, 1.0 / fps as f32, 3) {
+                    dispatches += 1;
+                    elapsed += f64::from(dt);
+                }
+            }
+            assert_eq!(dispatches, 60, "render rate: {fps}");
+            assert!((elapsed - 4.0).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn moss_growth_retains_jittered_time_instead_of_multiplying_the_last_delta() {
+        let mut pending = 0.0;
+        assert_eq!(accumulate_growth_time(&mut pending, 0.01, 3), None);
+        assert_eq!(accumulate_growth_time(&mut pending, 0.02, 3), None);
+        let dt = accumulate_growth_time(&mut pending, 0.04, 3).unwrap();
+        assert!((dt - 0.07).abs() < 1e-6);
+        assert_eq!(pending, 0.0);
     }
 }

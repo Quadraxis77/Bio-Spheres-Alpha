@@ -123,6 +123,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Bounds check
     if (mode_idx >= arrayLength(&mode_cell_types) || mode_idx >= arrayLength(&signal_settings_v3)) { return; }
 
+    // Gametocytes are terminal reproductive cells. They may detach, merge, or
+    // die, but can never escape the no-division rule by switching modes.
+    if (mode_cell_types[mode_idx] == 13u) { return; }
+
     let ss_v3 = signal_settings_v3[mode_idx];
     let ss_v4 = signal_settings_v4[mode_idx];
 

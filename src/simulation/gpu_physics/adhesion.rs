@@ -34,8 +34,7 @@ pub const MAX_ADHESIONS_PER_CELL: usize = 20;
 /// Used by the glueocyte cell-adhesion shader to selectively release only its own bonds.
 pub const BOND_FLAG_GLUEOCYTE: u32 = 1 << 0;
 pub const BOND_FLAG_BARRIER_BALL: u32 = 1 << 1;
-pub const BOND_FLAG_SIGNAL_BACKBONE: u32 = 1 << 2;
-pub const BOND_FLAG_SIGNAL_ACTIVE: u32 = 1 << 3;
+pub const BOND_FLAG_SIGNAL_ACTIVE: u32 = 1 << 2;
 
 /// Legacy constant - buffer sizes now derived dynamically from cell_capacity * MAX_ADHESIONS_PER_CELL / 2
 /// in AdhesionBuffers::new(). Kept for reference only.
@@ -58,10 +57,10 @@ pub struct GpuAdhesionConnection {
     pub zone_a: u32, // offset 16
     /// Zone classification for cell B (0=ZoneA, 1=ZoneB, 2=ZoneC)
     pub zone_b: u32, // offset 20
-    /// Bond flags, including immutable backbone and mutable active-route bits.
+    /// Bond flags, including mechanical-joint type and mutable active-route bits.
     pub bond_flags: u32, // offset 24
-    /// Stable identity of the cell that paid one-time construction, or zero.
-    pub signal_creator_identity: u32, // offset 28
+    /// Reserved for alignment.
+    pub _signal_route_pad: u32, // offset 28
     /// Anchor direction for cell A in local cell space (xyz = direction, w = padding)
     pub anchor_direction_a: [f32; 4], // offset 32-47 (16 bytes)
     /// Anchor direction for cell B in local cell space (xyz = direction, w = padding)
@@ -90,7 +89,7 @@ impl GpuAdhesionConnection {
             zone_a: 0,
             zone_b: 0,
             bond_flags: 0,
-            signal_creator_identity: 0,
+            _signal_route_pad: 0,
             anchor_direction_a: [0.0, 0.0, 1.0, 0.0],
             anchor_direction_b: [0.0, 0.0, -1.0, 0.0],
             twist_reference_a: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
@@ -119,7 +118,7 @@ impl GpuAdhesionConnection {
             zone_a: 1,     // Zone B (positive split direction)
             zone_b: 0,     // Zone A (negative split direction)
             bond_flags: 0, // division bond - not glueocyte-created
-            signal_creator_identity: 0,
+            _signal_route_pad: 0,
             anchor_direction_a: [anchor_a.x, anchor_a.y, anchor_a.z, 0.0],
             anchor_direction_b: [anchor_b.x, anchor_b.y, anchor_b.z, 0.0],
             twist_reference_a: [twist_ref_a.x, twist_ref_a.y, twist_ref_a.z, twist_ref_a.w],
@@ -156,9 +155,8 @@ pub struct GpuAdhesionSettings {
     pub twist_constraint_damping: f32,
     /// Whether twist constraint is enabled (bool as i32)
     pub enable_twist_constraint: i32,
-    /// Whether future cell-to-cell bonds created by this mode are backbone eligible.
-    /// Packed in adhesion_settings_v2.w on GPU.
-    pub creates_backbone: i32,
+    /// Reserved padding; adhesion_settings_v2.w has no authored behavior.
+    pub _padding: i32,
 }
 
 // Verify size at compile time
@@ -178,7 +176,7 @@ impl Default for GpuAdhesionSettings {
             twist_constraint_stiffness: 2.0,
             twist_constraint_damping: 20.0,
             enable_twist_constraint: 1,
-            creates_backbone: 0,
+            _padding: 0,
         }
     }
 }

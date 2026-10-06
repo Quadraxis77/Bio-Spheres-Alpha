@@ -936,6 +936,10 @@ fn default_sfx_volume() -> f32 {
     0.45
 }
 
+fn default_desktop_render_fps() -> u32 {
+    120
+}
+
 /// Global UI state shared across all UI components.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GlobalUiState {
@@ -1001,6 +1005,10 @@ pub struct GlobalUiState {
     /// Horizontal camera field of view shared by preview and GPU scenes.
     #[serde(default = "default_horizontal_fov_degrees")]
     pub horizontal_fov_degrees: f32,
+
+    /// Desktop rendering limit; simulation clocks advance independently.
+    #[serde(default = "default_desktop_render_fps")]
+    pub desktop_render_fps: u32,
 
     /// FreeFly run speed multiplier shared by preview and GPU scenes.
     #[serde(default = "default_camera_sprint_multiplier")]
@@ -1176,6 +1184,7 @@ impl Default for GlobalUiState {
             gpu_timing_enabled: true,
             field_reports_enabled: true,
             horizontal_fov_degrees: default_horizontal_fov_degrees(),
+            desktop_render_fps: default_desktop_render_fps(),
             camera_sprint_multiplier: default_camera_sprint_multiplier(),
             camera_scroll_sensitivity: default_camera_scroll_sensitivity(),
             field_report_interval_seconds: default_field_report_interval_seconds(),
@@ -1216,6 +1225,11 @@ impl Default for GlobalUiState {
 }
 
 impl GlobalUiState {
+    /// Clamp persisted values too, so invalid settings cannot stall or uncap rendering.
+    pub fn desktop_frame_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(1.0 / f64::from(self.desktop_render_fps.clamp(30, 120)))
+    }
+
     /// Get the current scene's config.
     pub fn current_config(&self) -> &SceneUiConfig {
         self.scene_configs
@@ -1382,4 +1396,37 @@ pub enum UiStateSaveError {
     Io(#[from] std::io::Error),
     #[error("RON serialize error: {0}")]
     Ron(#[from] ron::Error),
+}
+
+#[cfg(test)]
+mod desktop_timing_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_ui_state_loads_with_120_fps_default() {
+        let state: GlobalUiState =
+            ron::from_str(include_str!("../../default_ui_state.ron")).unwrap();
+        assert_eq!(state.desktop_render_fps, 120);
+        assert!((state.desktop_frame_interval().as_secs_f64() - 1.0 / 120.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn desktop_limit_survives_save_and_load() {
+        let state = GlobalUiState {
+            desktop_render_fps: 90,
+            ..GlobalUiState::default()
+        };
+        let saved = ron::to_string(&state).unwrap();
+        let loaded: GlobalUiState = ron::from_str(&saved).unwrap();
+        assert_eq!(loaded.desktop_render_fps, 90);
+    }
+
+    #[test]
+    fn invalid_persisted_limits_are_clamped() {
+        let mut state = GlobalUiState::default();
+        state.desktop_render_fps = 0;
+        assert!((state.desktop_frame_interval().as_secs_f64() - 1.0 / 30.0).abs() < 1e-9);
+        state.desktop_render_fps = u32::MAX;
+        assert!((state.desktop_frame_interval().as_secs_f64() - 1.0 / 120.0).abs() < 1e-9);
+    }
 }

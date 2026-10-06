@@ -196,7 +196,7 @@ impl BoulderSystem {
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
         current_time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
     ) {
         self.renderer.render(
             encoder,

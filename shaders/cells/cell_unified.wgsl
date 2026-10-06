@@ -138,11 +138,6 @@ const QUAD_POSITIONS: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
 );
 
 const PI: f32 = 3.14159265359;
-const SHADOWED_CELL_DETAIL_FLOOR: f32 = 0.18;
-
-fn luminance_max(color: vec3<f32>) -> f32 {
-    return max(max(color.r, color.g), color.b);
-}
 
 // ============================================================================
 // Quaternion helpers
@@ -1160,10 +1155,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
         let ndotl = max(dot(world_normal_front, -light_dir), 0.0);
         let diffuse = ndotl * local_light_color * shadow;
-        let direct_amount = clamp(luminance_max(diffuse), 0.0, 1.0);
         var simple_color =
             base_color * (lighting.ambient + (1.0 - lighting.ambient) * diffuse);
-        simple_color += base_color * SHADOWED_CELL_DETAIL_FLOOR * (1.0 - direct_amount);
 
         // Preserve inexpensive material cues and emissive visibility without
         // evaluating any type-specific procedural detail.
@@ -1171,7 +1164,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let spec = pow(max(dot(world_normal_front, half_vec), 0.0), in.visual_params.y);
         simple_color += spec * in.visual_params.x * local_light_color * shadow;
         let fresnel = pow(1.0 - max(dot(world_normal_front, view_dir), 0.0), 3.0);
-        simple_color += vec3<f32>(fresnel * in.visual_params.z);
+        simple_color += fresnel * in.visual_params.z * local_light_color * shadow;
 
         // Match the transmitted backlight used by the full-detail path. Without
         // this, backlit cells gain or lose a broad warm term exactly when the
@@ -1615,15 +1608,11 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);
     let front_diffuse = front_ndotl * local_light_color * shadow;
 
-    // Apply diffuse to the detailed composite, but keep the ambient/shadow floor
-    // anchored to base_color. LOD 0 uses the same base-color floor, so cells no
-    // longer jump darker or lighter at the fixed detail-switch distance.
+    // Apply scene lighting to the detailed composite. Non-emissive cell material
+    // receives no artificial fill light in shadow.
     let unlit_composited = composited;
-    let direct_amount = clamp(luminance_max(front_diffuse), 0.0, 1.0);
-    let shadowed_detail = unlit_composited * SHADOWED_CELL_DETAIL_FLOOR * (1.0 - direct_amount);
     composited = base_color * lighting.ambient
-        + composited * ((1.0 - lighting.ambient) * front_diffuse)
-        + shadowed_detail;
+        + composited * ((1.0 - lighting.ambient) * front_diffuse);
 
     // Specular highlight on membrane surface (uses perturbed normal for ridge highlights)
     let half_vec = normalize(-light_dir + view_dir);
@@ -1632,7 +1621,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     // Fresnel rim (membrane reflection)
     let fresnel = pow(1.0 - max(dot(perturbed_normal, view_dir), 0.0), 3.0);
-    let fresnel_contribution = fresnel * in.visual_params.z;
+    let fresnel_contribution = fresnel * in.visual_params.z * local_light_color * shadow;
 
     // Subsurface scattering (light bleeding through from behind).
     // Keep it tied to the sampled scene light so full-detail cells do not

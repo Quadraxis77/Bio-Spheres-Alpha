@@ -422,10 +422,8 @@ impl RainSplashParticleRenderer {
         })
     }
 
-    /// Spawn + age passes. Call once per fluid step, after the fluid sim has
-    /// updated `water_velocity` for this step (so "falling" classification is
-    /// current) - `compute_bind_group` must reference this step's fluid_state/
-    /// water_velocity buffers.
+    /// Age rings every rendered frame; spawn only after a fresh fluid tick so
+    /// rendering faster does not create extra impacts from stale velocities.
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
@@ -438,6 +436,7 @@ impl RainSplashParticleRenderer {
         gravity_mode: u32,
         water_alpha: f32,
         dt: f32,
+        spawn_new: bool,
     ) {
         self.time += dt;
 
@@ -455,7 +454,7 @@ impl RainSplashParticleRenderer {
         };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
-        {
+        if spawn_new {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Rain Splash Spawn Pass"),
                 timestamp_writes: None,

@@ -3,6 +3,7 @@ use crate::simulation::gpu_physics::{AdhesionBuffers, GpuTripleBufferSystem};
 use wgpu::util::DeviceExt;
 
 const MAX_GPU_SCAFFOLD_RULES: usize = 4096;
+const GPU_SCAFFOLD_PHASE_COUNT: u32 = 8;
 
 const SELECTOR_ANY: u32 = 0;
 const SELECTOR_MODE: u32 = 1;
@@ -37,7 +38,7 @@ struct GpuScaffoldParams {
     rule_count: u32,
     cell_slots: u32,
     pass_index: u32,
-    _pad0: u32,
+    source_phase: u32,
 }
 
 pub struct GpuScaffoldSystem {
@@ -52,6 +53,7 @@ pub struct GpuScaffoldSystem {
     /// which caused pass 0 data to be overwritten by pass 1 before dispatch.
     params_buffers: [wgpu::Buffer; 2],
     rule_count: u32,
+    dispatch_phase: u32,
 }
 
 impl GpuScaffoldSystem {
@@ -62,6 +64,9 @@ impl GpuScaffoldSystem {
                 buffer_entry(0, true, false, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(1, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(2, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(3, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(4, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(5, true, true, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let cell_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -73,9 +78,7 @@ impl GpuScaffoldSystem {
                 buffer_entry(3, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(4, true, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(5, true, true, wgpu::ShaderStages::COMPUTE),
-                buffer_entry(6, true, true, wgpu::ShaderStages::COMPUTE),
-                buffer_entry(7, false, true, wgpu::ShaderStages::COMPUTE),
-                buffer_entry(8, true, true, wgpu::ShaderStages::COMPUTE),
+                buffer_entry(9, true, true, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let adhesion_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -86,7 +89,6 @@ impl GpuScaffoldSystem {
                 buffer_entry(2, false, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(3, false, true, wgpu::ShaderStages::COMPUTE),
                 buffer_entry(4, false, true, wgpu::ShaderStages::COMPUTE),
-                buffer_entry(5, true, true, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let rule_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -133,7 +135,7 @@ impl GpuScaffoldSystem {
                 rule_count: 0,
                 cell_slots: 0,
                 pass_index: pass_index as u32,
-                _pad0: 0,
+                source_phase: 0,
             };
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("GPU Scaffold Params Pass {pass_index}")),
@@ -151,6 +153,7 @@ impl GpuScaffoldSystem {
             rules_buffer,
             params_buffers,
             rule_count: 0,
+            dispatch_phase: 0,
         }
     }
 
@@ -185,24 +188,29 @@ impl GpuScaffoldSystem {
         }
 
         self.rule_count = rules.len() as u32;
+        self.dispatch_phase = 0;
         if !rules.is_empty() {
             queue.write_buffer(&self.rules_buffer, 0, bytemuck::cast_slice(&rules));
         }
     }
 
     pub fn dispatch(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         buffers: &GpuTripleBufferSystem,
         adhesion_buffers: &AdhesionBuffers,
+        organism_labels: &wgpu::Buffer,
         position_buffer_index: usize,
         cell_slots: u32,
     ) {
         if self.rule_count == 0 || cell_slots == 0 {
             return;
         }
+
+        let source_phase = self.dispatch_phase;
+        self.dispatch_phase = (self.dispatch_phase + 1) % GPU_SCAFFOLD_PHASE_COUNT;
 
         let physics_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("GPU Scaffold Physics BG"),
@@ -219,6 +227,18 @@ impl GpuScaffoldSystem {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: buffers.cell_count_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.spatial_grid_counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.spatial_grid_cells.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.cell_grid_indices.as_entire_binding(),
                 },
             ],
         });
@@ -251,16 +271,8 @@ impl GpuScaffoldSystem {
                     resource: buffers.organism_cell_ids.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: buffers.cell_ids.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: buffers.nutrients_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: buffers.split_nutrient_thresholds.as_entire_binding(),
+                    binding: 9,
+                    resource: organism_labels.as_entire_binding(),
                 },
             ],
         });
@@ -288,22 +300,18 @@ impl GpuScaffoldSystem {
                     binding: 4,
                     resource: adhesion_buffers.adhesion_counts.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: adhesion_buffers.adhesion_settings_v2.as_entire_binding(),
-                },
             ],
         });
         let workgroups = (cell_slots + 127) / 128;
-        // Write rule_count and cell_slots into both params buffers up front.
-        // pass_index is baked in at construction and never changes, so we only
-        // need to update the two fields that vary per dispatch.
+        // Write the current rule count, live-slot bound, and source phase into
+        // both params buffers up front. Both endpoint passes must visit the same
+        // source shard; pass_index remains baked into the corresponding buffer.
         for (pass_index, buf) in self.params_buffers.iter().enumerate() {
             let params = GpuScaffoldParams {
                 rule_count: self.rule_count,
                 cell_slots,
                 pass_index: pass_index as u32,
-                _pad0: 0,
+                source_phase,
             };
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&params));
         }

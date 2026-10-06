@@ -2453,8 +2453,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             for value in [-1000i32, -500, -399, 0, 399, 500, 1000] {
                 for mode in 0..3u32 {
                     for invert in 0..2u32 {
-                        let response_mode = crate::genome::SignalResponseMode::from_i32(mode as i32);
-                        cases.push([(value as u32) & 0x7ff, 400.0f32.to_bits(), mode * 2 + invert, 0]);
+                        let response_mode =
+                            crate::genome::SignalResponseMode::from_i32(mode as i32);
+                        cases.push([
+                            (value as u32) & 0x7ff,
+                            400.0f32.to_bits(),
+                            mode * 2 + invert,
+                            0,
+                        ]);
                         expected.push(crate::simulation::signal_system::listener_active(
                             value as f32,
                             400.0,

@@ -44,6 +44,8 @@ pub enum SceneType {
 
 /// Camera controller - Space Engineers style 6DOF camera (matches BioSpheres-Q)
 pub struct CameraController {
+    /// Native controller pointing ray, independent of either eye's projection.
+    pub interaction_ray: Option<(Vec3, Vec3)>,
     // Core camera state
     pub center: Vec3,
     pub distance: f32,
@@ -96,6 +98,7 @@ pub struct CameraController {
     pub roll_speed: f32,
     pub zoom_speed: f32,
     pub horizontal_fov_degrees: f32,
+    render_view: Option<crate::rendering::RenderView>,
     pub enable_spring: bool,
     pub spring_stiffness: f32,
     pub spring_damping: f32,
@@ -130,6 +133,7 @@ impl CameraController {
         let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
 
         Self {
+            interaction_ray: None,
             center: Vec3::ZERO,
             distance: 600.0,
             target_distance: 600.0,
@@ -157,6 +161,7 @@ impl CameraController {
             roll_speed: 1.5,
             zoom_speed: 0.2,
             horizontal_fov_degrees: DEFAULT_HORIZONTAL_FOV_DEGREES,
+            render_view: None,
             enable_spring: true,
             spring_stiffness: 50.0,
             spring_damping: 0.9,
@@ -170,6 +175,7 @@ impl CameraController {
         let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
 
         Self {
+            interaction_ray: None,
             center: Vec3::ZERO,
             distance: 500.0, // Orbit at 500 units
             target_distance: 500.0,
@@ -197,6 +203,7 @@ impl CameraController {
             roll_speed: 1.5,
             zoom_speed: 0.2,
             horizontal_fov_degrees: DEFAULT_HORIZONTAL_FOV_DEGREES,
+            render_view: None,
             enable_spring: true,
             spring_stiffness: 50.0,
             spring_damping: 0.9,
@@ -210,6 +217,7 @@ impl CameraController {
         let initial_rotation = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4);
 
         Self {
+            interaction_ray: None,
             center: Vec3::ZERO,
             distance: 50.0, // Orbit at 50 units
             target_distance: 50.0,
@@ -237,6 +245,7 @@ impl CameraController {
             roll_speed: 1.5,
             zoom_speed: 0.2,
             horizontal_fov_degrees: DEFAULT_HORIZONTAL_FOV_DEGREES,
+            render_view: None,
             enable_spring: true,
             spring_stiffness: 50.0,
             spring_damping: 0.9,
@@ -329,8 +338,22 @@ impl CameraController {
         Self::vertical_fov_radians_for_horizontal(self.horizontal_fov_degrees, aspect)
     }
 
+    /// Overrides the rendered viewpoint without changing navigation or spring state.
+    pub fn set_render_view(
+        &mut self,
+        view: Option<crate::rendering::RenderView>,
+    ) -> Option<crate::rendering::RenderView> {
+        std::mem::replace(&mut self.render_view, view)
+    }
+
+    pub fn render_projection(&self) -> crate::rendering::CameraProjection {
+        self.render_view
+            .map(|view| view.projection)
+            .unwrap_or_else(|| self.horizontal_fov_degrees.into())
+    }
+
     pub fn projection_matrix(&self, aspect: f32, near: f32, far: f32) -> glam::Mat4 {
-        glam::Mat4::perspective_rh(self.vertical_fov_radians(aspect), aspect, near, far)
+        self.render_projection().matrix(aspect, near, far)
     }
 
     pub fn view_ray_direction(&self, ndc_x: f32, ndc_y: f32, aspect: f32) -> glam::Vec3 {
@@ -342,6 +365,45 @@ impl CameraController {
         let tan_half_vertical = tan_half_horizontal / aspect;
 
         glam::Vec3::new(ndc_x * tan_half_horizontal, ndc_y * tan_half_vertical, -1.0).normalize()
+    }
+
+    pub fn interaction_ray_from_ndc(&self, x: f32, y: f32, aspect: f32) -> (Vec3, Vec3) {
+        self.interaction_ray.unwrap_or_else(|| {
+            (
+                self.position(),
+                self.view_rotation() * self.view_ray_direction(x, y, aspect),
+            )
+        })
+    }
+
+    /// Move the navigation rig; headset pose is applied separately without springs.
+    #[cfg(feature = "vr")]
+    pub fn move_vr_rig(
+        &mut self,
+        movement: glam::Vec2,
+        yaw: f32,
+        head_rotation: Quat,
+        distance: f32,
+    ) {
+        if movement.length_squared() < 0.04 && yaw == 0.0 {
+            return;
+        }
+        let anchor = self.position();
+        let heading = self.view_rotation() * head_rotation * Vec3::NEG_Z;
+        let forward = Vec3::new(heading.x, 0.0, heading.z).normalize_or_zero();
+        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let motion = if movement.length_squared() >= 0.04 {
+            movement.clamp_length_max(1.0)
+        } else {
+            glam::Vec2::ZERO
+        };
+        self.center = anchor + (right * motion.x + forward * motion.y) * distance;
+        self.distance = 0.0;
+        self.target_distance = 0.0;
+        self.mode = CameraMode::FreeFly;
+        self.rotation = (Quat::from_rotation_y(yaw) * self.view_rotation()).normalize();
+        self.target_rotation = self.rotation;
+        self.look_offset = Quat::IDENTITY;
     }
 
     /// Update the world boundary sphere radius used to auto-fit the orbit distance.
@@ -385,6 +447,9 @@ impl CameraController {
 
     /// Get the current camera position in world space
     pub fn position(&self) -> Vec3 {
+        if let Some(view) = self.render_view {
+            return view.position;
+        }
         let offset = self.rotation * Vec3::new(0.0, 0.0, self.distance);
         self.center + offset
     }
@@ -469,6 +534,9 @@ impl CameraController {
     /// middle-mouse free-look offset (Orbit mode only). Orbit position/distance
     /// (see `position()`) is unaffected by this offset.
     pub fn view_rotation(&self) -> Quat {
+        if let Some(view) = self.render_view {
+            return view.rotation;
+        }
         if self.mode == CameraMode::Orbit {
             (self.rotation * self.look_offset).normalize()
         } else {
@@ -756,9 +824,8 @@ impl CameraController {
                             + dt / MEMBRANE_PUSH_THROUGH_SECONDS)
                             .min(1.0);
                     } else {
-                        self.boundary_push_progress = (self.boundary_push_progress
-                            - dt / MEMBRANE_RELEASE_SECONDS)
-                            .max(0.0);
+                        self.boundary_push_progress =
+                            (self.boundary_push_progress - dt / MEMBRANE_RELEASE_SECONDS).max(0.0);
                     }
 
                     // Fully resisted at progress 0 (can still nudge the membrane
@@ -799,6 +866,46 @@ impl CameraController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eye_override_preserves_navigation_state() {
+        let mut camera = CameraController::new_for_gpu_scene();
+        let rig_position = camera.position();
+        let rig_rotation = camera.rotation;
+        let rig_center = camera.center;
+        let eye = crate::rendering::RenderView {
+            position: rig_position + Vec3::new(1.0, 2.0, 3.0),
+            rotation: Quat::from_rotation_y(0.3),
+            projection: crate::rendering::CameraProjection::from_fov(
+                -0.6, 0.8, -0.7, 0.9, 0.1, 100.0,
+            ),
+            width: 2000,
+            height: 2100,
+        };
+        assert!(camera.set_render_view(Some(eye)).is_none());
+        assert_eq!(camera.position(), eye.position);
+        assert_eq!(camera.view_rotation(), eye.rotation);
+        assert_eq!(camera.center, rig_center);
+        assert_eq!(camera.rotation, rig_rotation);
+        camera.set_render_view(None);
+        assert_eq!(camera.position(), rig_position);
+    }
+
+    #[cfg(feature = "vr")]
+    #[test]
+    fn vr_snap_turn_preserves_rig_position_without_spring_delay() {
+        let mut camera = CameraController::new_for_gpu_scene();
+        let position = camera.position();
+        camera.move_vr_rig(
+            glam::Vec2::ZERO,
+            std::f32::consts::FRAC_PI_6,
+            Quat::IDENTITY,
+            1.0,
+        );
+        assert!((camera.position() - position).length() < 1e-5);
+        assert_eq!(camera.rotation, camera.target_rotation);
+        assert_eq!(camera.mode, CameraMode::FreeFly);
+    }
 
     fn quat_matches(a: Quat, b: Quat) -> bool {
         // q and -q represent the same rotation.

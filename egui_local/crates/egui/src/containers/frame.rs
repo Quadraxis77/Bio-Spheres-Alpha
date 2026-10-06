@@ -380,7 +380,7 @@ pub struct Prepared {
 
     /// Add your widgets to this UI so it ends up within the frame.
     pub content_ui: Ui,
-    
+
     /// The maximum content rect that was set when the frame was created.
     max_content_rect: Rect,
 }

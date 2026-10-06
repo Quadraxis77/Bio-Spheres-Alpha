@@ -586,22 +586,14 @@ impl CellRenderer {
         lod_threshold_low: f32,
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
     ) {
         // Calculate view matrix from camera position and rotation
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
 
         // Calculate projection matrix (perspective)
         let aspect = self.width as f32 / self.height as f32;
-        let proj = Mat4::perspective_rh(
-            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
-                horizontal_fov_degrees,
-                aspect,
-            ),
-            aspect,
-            0.1,
-            5000.0,
-        );
+        let proj = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
 
         let view_proj = proj * view;
 
@@ -896,7 +888,7 @@ impl CellRenderer {
         lod_threshold_high: f32,
         _lod_debug_colors: bool,
         outline_width: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         selected_mode_indices: &[usize],
     ) {
         if state.cell_count == 0 {
@@ -1043,7 +1035,7 @@ impl CellRenderer {
         lod_threshold_medium: f32,
         lod_threshold_high: f32,
         outline_width: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
     ) {
         if visible_count == 0 {
             return;

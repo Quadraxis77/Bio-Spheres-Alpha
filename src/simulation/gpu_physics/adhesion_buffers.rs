@@ -14,7 +14,7 @@
 //! ### Adhesion Settings (split into 3 x 16-byte sub-buffers per mode)
 //! - `adhesion_settings_v0`: [can_break, break_force, rest_length, linear_spring_stiffness]
 //! - `adhesion_settings_v1`: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
-//! - `adhesion_settings_v2`: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, creates_backbone]
+//! - `adhesion_settings_v2`: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, reserved]
 //!
 //! ### Adhesion Counts
 //! - `adhesion_counts`: [total_count, live_count, free_top, padding]
@@ -38,7 +38,7 @@ pub struct AdhesionBuffers {
     /// Per-mode adhesion settings split into 3 x vec4 sub-buffers (16 bytes each).
     /// v0: [can_break, break_force, rest_length, linear_spring_stiffness]
     /// v1: [linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation]
-    /// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, creates_backbone]
+    /// v2: [twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, reserved]
     pub adhesion_settings_v0: wgpu::Buffer,
     pub adhesion_settings_v1: wgpu::Buffer,
     pub adhesion_settings_v2: wgpu::Buffer,
@@ -343,7 +343,7 @@ impl AdhesionBuffers {
                     s.twist_constraint_stiffness,
                     s.twist_constraint_damping,
                     if s.enable_twist_constraint { 1.0 } else { 0.0 },
-                    if s.creates_backbone { 1.0 } else { 0.0 },
+                    0.0,
                 ]);
             }
         }

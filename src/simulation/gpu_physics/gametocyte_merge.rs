@@ -154,7 +154,7 @@ impl GametocyteMergeSystem {
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
-                        // 2: organism_labels
+                        // 2: development_addresses (persistent organism identity)
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
@@ -369,7 +369,7 @@ impl GametocyteMergeSystem {
         device: &wgpu::Device,
         cell_types: &wgpu::Buffer,
         death_flags: &wgpu::Buffer,
-        organism_labels: &wgpu::Buffer,
+        development_addresses: &wgpu::Buffer,
         genome_ids: &wgpu::Buffer,
         mode_indices: &wgpu::Buffer,
         mode_properties_v13: &wgpu::Buffer,
@@ -389,7 +389,7 @@ impl GametocyteMergeSystem {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: organism_labels.as_entire_binding(),
+                    resource: development_addresses.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -501,5 +501,38 @@ impl GametocyteMergeSystem {
             });
         }
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GametocyteMergeSystem;
+
+    #[test]
+    fn pipeline_accepts_persistent_parent_identity_binding() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .expect("a GPU adapter is required for Gametocyte shader validation");
+            let (device, _queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("Gametocyte Merge Test Device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: Default::default(),
+                    trace: Default::default(),
+                    experimental_features: Default::default(),
+                })
+                .await
+                .expect("Gametocyte merge test device");
+
+            let _system = GametocyteMergeSystem::new(&device);
+        });
     }
 }

@@ -263,7 +263,7 @@ impl GpuAdhesionLineRenderer {
         data_bind_group: &wgpu::BindGroup,
         camera_pos: Vec3,
         camera_rotation: glam::Quat,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
     ) {
         // Update camera uniform
         let forward = camera_rotation * Vec3::NEG_Z;
@@ -272,15 +272,7 @@ impl GpuAdhesionLineRenderer {
 
         let view_matrix = Mat4::look_at_rh(camera_pos, look_target, up);
         let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = Mat4::perspective_rh(
-            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
-                horizontal_fov_degrees,
-                aspect,
-            ),
-            aspect,
-            0.1,
-            5000.0,
-        );
+        let proj_matrix = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
         let view_proj = proj_matrix * view_matrix;
 
         let camera_uniform = CameraUniform {

@@ -292,7 +292,10 @@ fn should_collide(a_idx: u32, b_idx: u32) -> bool {
 }
 
 fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
-    if (a_idx == b_idx || !should_collide(a_idx, b_idx) || !live_cell(a_idx) || !live_cell(b_idx)) {
+    // Both endpoints came from the live-only spatial grid built immediately
+    // before this pass; repeating death, mass, and cell-count loads per pair is
+    // redundant and particularly expensive in dense neighborhoods.
+    if (a_idx == b_idx || !should_collide(a_idx, b_idx)) {
         return;
     }
 
@@ -369,7 +372,7 @@ fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
 // of the real contacts. Keep the normal separation force so piles still breathe,
 // but skip angular friction for sampled high-density contacts.
 fn resolve_cell_pair_dense(a_idx: u32, b_idx: u32) {
-    if (a_idx == b_idx || !should_collide(a_idx, b_idx) || !live_cell(a_idx) || !live_cell(b_idx)) {
+    if (a_idx == b_idx || !should_collide(a_idx, b_idx)) {
         return;
     }
 
@@ -410,10 +413,6 @@ fn resolve_cell_pair_dense(a_idx: u32, b_idx: u32) {
 }
 
 fn apply_single_cell_forces(cell_idx: u32) {
-    if (!live_cell(cell_idx)) {
-        return;
-    }
-
     let pos = positions_in[cell_idx].xyz;
     let vel = velocities_in[cell_idx].xyz;
     let mass = positions_in[cell_idx].w;
@@ -646,10 +645,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // == u32::MAX) are handled entirely by Pass D below to avoid
     // double-resolving their pairs against the bucket's stored cells.
     // -------------------------------------------------------------------------
-    if (dispatch_idx < cell_count_buffer[0]) {
+    if (dispatch_idx < cell_count_buffer[0] && live_cell(dispatch_idx)) {
         apply_single_cell_forces(dispatch_idx);
 
-        if (live_cell(dispatch_idx) && cell_grid_slot[dispatch_idx] < MAX_CELLS_PER_GRID) {
+        if (cell_grid_slot[dispatch_idx] < MAX_CELLS_PER_GRID) {
             let grid_idx = cell_grid_indices[dispatch_idx];
             resolve_intra_bucket(dispatch_idx, grid_idx);
             resolve_cross_bucket(dispatch_idx, grid_idx);

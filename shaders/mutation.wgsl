@@ -1646,7 +1646,7 @@ fn apply_mutation(
         // element_offset encodes: sub-buffer = offset / 4, component = offset % 4
         //   offsets 0-3  -> adhesion_settings_v0 (can_break, break_force, rest_length, linear_spring_stiffness)
         //   offsets 4-7  -> adhesion_settings_v1 (linear_spring_damping, orientation_spring_stiffness, orientation_spring_damping, max_angular_deviation)
-        //   offsets 8-11 -> adhesion_settings_v2 (twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint, creates_backbone)
+        //   offsets 8-10 -> adhesion_settings_v2 (twist_constraint_stiffness, twist_constraint_damping, enable_twist_constraint)
         case 11u: {
             let sub_buf = entry.element_offset / 4u;
             let comp = entry.element_offset % 4u;

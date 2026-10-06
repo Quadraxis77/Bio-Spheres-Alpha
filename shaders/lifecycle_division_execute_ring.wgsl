@@ -290,13 +290,12 @@ var<storage, read_write> free_adhesion_slots: array<u32>;
 @group(3) @binding(4)
 var<storage, read_write> adhesion_counts: array<atomic<u32>>;
 
-// [twist stiffness, twist damping, twist enabled, creates_backbone]
+// [twist stiffness, twist damping, twist enabled, reserved]
 @group(3) @binding(5)
 var<storage, read> adhesion_settings_v2: array<vec4<f32>>;
 
-const BOND_FLAG_SIGNAL_BACKBONE: u32 = 4u;
-const BOND_FLAG_SIGNAL_ACTIVE: u32 = 8u;
-const BACKBONE_CONSTRUCTION_FRACTION: f32 = 0.05;
+const BOND_FLAG_SIGNAL_ACTIVE: u32 = 4u;
+const SIGNAL_BOND_CONSTRUCTION_FRACTION: f32 = 0.05;
 
 fn decode_signal(raw: u32) -> f32 {
     return f32(bitcast<i32>((raw & 0x7ffu) << 21u) >> 21u);
@@ -886,11 +885,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             && child_b_after_split_keep_adhesion_flags[parent_mode_idx] == 1u
         );
     let sibling_requested = parent_make_adhesion && after_split_sibling_allowed;
-    let parent_creates_backbone = parent_mode_idx < arrayLength(&adhesion_settings_v2)
-        && adhesion_settings_v2[parent_mode_idx].w > 0.5;
-    let sibling_is_backbone = sibling_requested && parent_creates_backbone;
+    let sibling_is_signal_bond = sibling_requested;
     let parent_construction_cost = max(split_nutrient_thresholds[cell_idx], 0.0)
-        * BACKBONE_CONSTRUCTION_FRACTION;
+        * SIGNAL_BOND_CONSTRUCTION_FRACTION;
 
     // A Zone-C inheritance creates one new physical duplicate. Reserve every
     // affordable duplicate from the parent's pool before that pool is split.
@@ -904,8 +901,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         child_b_after_split_keep_adhesion_flags[parent_mode_idx] == 1u,
         will_reach_max_splits
     );
-    var requested_backbone_duplicates = 0u;
-    if (parent_creates_backbone && division_child_a_keep && division_child_b_keep) {
+    var requested_signal_bond_duplicates = 0u;
+    if (division_child_a_keep && division_child_b_keep) {
         let parent_base = cell_idx * MAX_ADHESIONS_PER_CELL;
         for (var inherited_slot = 0u; inherited_slot < MAX_ADHESIONS_PER_CELL; inherited_slot++) {
             let inherited_idx_signed = atomicLoad(&cell_adhesion_indices[parent_base + inherited_slot]);
@@ -920,30 +917,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 inherited.cell_a_index == cell_idx
             );
             if (classify_zone(inherited_anchor, split_dir_local, parent_split_ratio) == 2u) {
-                requested_backbone_duplicates++;
+                requested_signal_bond_duplicates++;
             }
         }
     }
-    var backbone_duplicate_budget = requested_backbone_duplicates;
+    var signal_bond_duplicate_budget = requested_signal_bond_duplicates;
     if (parent_construction_cost > 0.0) {
-        backbone_duplicate_budget = min(
-            requested_backbone_duplicates,
+        signal_bond_duplicate_budget = min(
+            requested_signal_bond_duplicates,
             u32(floor(max(parent_nutrients, 0.0) / parent_construction_cost))
         );
     }
     let after_duplicate_reservations = parent_nutrients
-        - f32(backbone_duplicate_budget) * parent_construction_cost;
+        - f32(signal_bond_duplicate_budget) * parent_construction_cost;
     let sibling_construction_cost = select(
         0.0,
         parent_construction_cost,
-        sibling_is_backbone
+        sibling_is_signal_bond
     );
     let sibling_affordable = after_duplicate_reservations >= sibling_construction_cost;
     let create_sibling_adhesion = sibling_requested && sibling_affordable;
     let distributable_nutrients = select(
         after_duplicate_reservations,
         after_duplicate_reservations - sibling_construction_cost,
-        sibling_is_backbone && sibling_affordable
+        sibling_is_signal_bond && sibling_affordable
     );
     let child_a_nutrients = distributable_nutrients * 0.5;
     let child_b_nutrients = distributable_nutrients * 0.5;
@@ -971,12 +968,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Allocate both child cell IDs up front so we can derive organism IDs before any writes.
     // A non-initial parent that routes into the genome's initial mode starts a new organism.
-    // Initial-mode self-renewal stays in the same organism with deterministic child IDs.
+    // An Embryocyte hatch with no sibling bond also starts two new organisms: the parent
+    // can only divide while detached, so neither child has another developmental route
+    // back to the other.
+    // Without fresh scopes, GPU scaffold rules can cross-brace the two unrelated descendants.
+    // Initial-mode self-renewal for non-Embryocytes stays in the same organism.
     let child_a_id = atomicAdd(&next_cell_id[0], 1u);
     let child_b_id = atomicAdd(&next_cell_id[0], 1u);
     let parent_is_initial_mode = parent_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[parent_mode_idx] != 0u;
-    let child_a_is_new_org = !parent_is_initial_mode && child_a_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_a_mode_idx] != 0u;
-    let child_b_is_new_org = !parent_is_initial_mode && child_b_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_b_mode_idx] != 0u;
+    let parent_is_embryocyte = mode_cell_types[parent_mode_idx] == 10u;
+    let detached_embryocyte_hatch = parent_is_embryocyte && !create_sibling_adhesion;
+    let child_a_is_new_org = detached_embryocyte_hatch
+        || (!parent_is_initial_mode && child_a_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_a_mode_idx] != 0u);
+    let child_b_is_new_org = detached_embryocyte_hatch
+        || (!parent_is_initial_mode && child_b_mode_idx < arrayLength(&is_initial_mode) && is_initial_mode[child_b_mode_idx] != 0u);
     // child_a uses child_b_id as its new org seed; child_b uses child_b_id+1.
     // These are safe unique values: child_b_id is freshly allocated and no cell has it as org_id.
     let child_a_org_id = select(base_org_id, child_b_id, child_a_is_new_org);
@@ -1158,12 +1163,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             connection.is_active = 1u;
             connection.zone_a = zone_a;
             connection.zone_b = zone_b;
-            connection._align_pad.x = select(
-                0u,
-                BOND_FLAG_SIGNAL_BACKBONE,
-                sibling_is_backbone
-            );
-            connection._align_pad.y = select(0u, parent_cell_id, sibling_is_backbone);
+            connection._align_pad.x = 0u;
+            connection._align_pad.y = 0u;
             connection.anchor_direction_a = vec4<f32>(anchor_a_local, 0.0);
             connection.anchor_direction_b = vec4<f32>(anchor_b_local, 0.0);
             // Set twist references to child GENOME orientations (genome-pure, no physics)
@@ -1258,7 +1259,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Track adhesion counts for each child
     var child_a_adhesion_count = 0u;
     var child_b_adhesion_count = 0u;
-    var backbone_duplicates_created = 0u;
+    var signal_bond_duplicates_created = 0u;
     
     // Re-add the sibling adhesion (if created)
     if (sibling_adhesion_slot != 0xFFFFFFFFu) {
@@ -1445,9 +1446,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
             
             // Create duplicate for Child B
-            let duplicate_is_backbone = parent_creates_backbone;
-            let duplicate_affordable = !duplicate_is_backbone
-                || backbone_duplicates_created < backbone_duplicate_budget;
+            let duplicate_is_signal_bond = true;
+            let duplicate_affordable =
+                signal_bond_duplicates_created < signal_bond_duplicate_budget;
             var dup_slot = 0xFFFFFFFFu;
             if (duplicate_affordable) {
                 dup_slot = allocate_adhesion_slot();
@@ -1466,8 +1467,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 dup_conn.mode_index = conn.mode_index;
                 dup_conn.is_active = 1u;
                 dup_conn._align_pad = vec2<u32>(
-                    select(0u, BOND_FLAG_SIGNAL_BACKBONE, duplicate_is_backbone),
-                    select(0u, parent_cell_id, duplicate_is_backbone)
+                    0u,
+                    0u
                 );
                 dup_conn.birth_time = params.current_time;
                 dup_conn._pad = 0u;
@@ -1538,8 +1539,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                     atomicSub(&adhesion_counts[1], 1u);
                     free_adhesion_slot(dup_slot);
-                } else if (duplicate_is_backbone) {
-                    backbone_duplicates_created++;
+                } else if (duplicate_is_signal_bond) {
+                    signal_bond_duplicates_created++;
                 }
 
             }
@@ -1548,11 +1549,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Allocation/registration can fail after reservation. Return unused parent
     // reservations evenly because the parent nutrient pool has already split.
-    let unused_duplicate_reservations = backbone_duplicate_budget - backbone_duplicates_created;
+    let unused_duplicate_reservations =
+        signal_bond_duplicate_budget - signal_bond_duplicates_created;
     var refund_fixed = i32(round(
         f32(unused_duplicate_reservations) * parent_construction_cost * 500.0
     ));
-    if (sibling_is_backbone && create_sibling_adhesion && sibling_adhesion_slot == 0xFFFFFFFFu) {
+    if (sibling_is_signal_bond && create_sibling_adhesion && sibling_adhesion_slot == 0xFFFFFFFFu) {
         refund_fixed += i32(round(parent_construction_cost * 500.0));
     }
     if (refund_fixed > 0i) {

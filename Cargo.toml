@@ -23,11 +23,14 @@ name = "bio-spheres"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["vr"]
+vr = ["dep:openxr", "dep:ash"]
 signal-backbone-bench = []
 
 [dependencies]
 wgpu = "27.0"
+openxr = { version = "0.22", optional = true, features = ["static"] }
+ash = { version = "0.38", optional = true }
 winit = "0.30"
 pollster = "0.4"
 bytemuck = { version = "1.14", features = ["derive"] }

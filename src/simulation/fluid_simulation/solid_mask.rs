@@ -125,8 +125,7 @@ impl SolidMaskGenerator {
                             continue;
                         }
                         let center = grid_origin
-                            + (Vec3::new(x as f32, y as f32, z as f32)
-                                + Vec3::splat(0.5))
+                            + (Vec3::new(x as f32, y as f32, z as f32) + Vec3::splat(0.5))
                                 * cell_size;
                         if (center - self.world_center).length() >= fragment_clear_radius {
                             continue;
@@ -407,8 +406,7 @@ mod tests {
             for y in 0..grid_size {
                 for x in 0..grid_size {
                     let center = grid_origin
-                        + (Vec3::new(x as f32, y as f32, z as f32) + Vec3::splat(0.5))
-                            * cell_size;
+                        + (Vec3::new(x as f32, y as f32, z as f32) + Vec3::splat(0.5)) * cell_size;
                     if center.length() >= protected_shell_radius {
                         let i = x + y * grid_size + z * grid_size * grid_size;
                         assert!(

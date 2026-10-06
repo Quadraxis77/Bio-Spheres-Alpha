@@ -107,6 +107,8 @@
 //! - **Serialization**: `serde` + `ron` (human-readable config files)
 
 pub mod app;
+#[cfg(feature = "vr")]
+pub mod vr;
 pub mod app_dirs;
 pub mod audio;
 pub mod cell;

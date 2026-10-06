@@ -148,9 +148,6 @@ impl Default for ChildSettings {
 /// Adhesion configuration for cell connections
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdhesionSettings {
-    /// Classify affordable cell-to-cell bonds created by this mode as immutable
-    /// signal-backbone bonds. This affects future bonds only.
-    pub creates_backbone: bool,
     pub can_break: bool,
     pub break_force: f32,
     pub rest_length: f32,
@@ -167,7 +164,6 @@ pub struct AdhesionSettings {
 impl Default for AdhesionSettings {
     fn default() -> Self {
         Self {
-            creates_backbone: false,
             can_break: true,
             break_force: 500.0,
             rest_length: 1.0,
@@ -341,8 +337,6 @@ pub struct ModeSettings {
     // Vasculocyte settings
     pub vascular_nutrient_transport: bool, // When true, this mode participates in vascular nutrient pipes
     pub vascular_outlet: bool, // Nutrient exchange port: exchanges with non-vascular neighbors in both directions
-    pub vascular_signal_transport: bool, // When true, this mode participates in vascular signal pipes
-    pub vascular_signal_exchange: bool, // Signal exchange port: exchanges with non-vascular neighbors in both directions
 
     // Gametocyte settings
     pub gametocyte_merge_range: f32, // Extra contact range for merge detection beyond cell radii (0.0 to 2.0)
@@ -635,8 +629,6 @@ impl Default for ModeSettings {
             lipocyte_emit_threshold: 0.8,
             lipocyte_emit_mode: 1,
             lipocyte_emit_value: 10.0,
-            vascular_signal_transport: false,
-            vascular_signal_exchange: false,
             gametocyte_merge_range: 0.5,
             memorocyte_rate: 0.1,
             memorocyte_input_channel: 0,

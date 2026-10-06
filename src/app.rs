@@ -82,6 +82,7 @@ struct MenuUiResponse {
     action: MenuAction,
     hovered: MenuAction,
     audio_settings_changed: bool,
+    display_settings_changed: bool,
 }
 
 const CELL_LINK_HOLD_DURATION: std::time::Duration = std::time::Duration::from_millis(450);
@@ -144,7 +145,25 @@ enum DeferredAction {
     },
 }
 
+struct PresentationFrame {
+    texture: wgpu::Texture,
+    surface: Option<wgpu::SurfaceTexture>,
+}
+
+impl PresentationFrame {
+    fn present(self) {
+        if let Some(surface) = self.surface {
+            surface.present();
+        }
+    }
+}
+
 pub struct App {
+    mirror_fallback: Option<wgpu::Texture>,
+    #[cfg(feature = "vr")]
+    vr: Option<crate::vr::VrState>,
+    #[cfg(feature = "vr")]
+    vr_input_state: (bool, bool, bool, std::time::Instant),
     window: Arc<Window>,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -166,7 +185,7 @@ pub struct App {
     working_genome: crate::genome::Genome,
     /// Performance metrics tracker
     performance: PerformanceMetrics,
-    /// Next frame time for 60fps limiting
+    /// Next frame time for the configurable desktop rendering limit.
     next_frame_time: std::time::Instant,
     /// Active test signal emissions (toggleable)
     test_signal_emissions: Vec<crate::simulation::signal_system::SignalEmission>,
@@ -210,6 +229,218 @@ pub struct App {
 }
 
 impl App {
+    fn acquire_presentation_frame(&mut self) -> Option<PresentationFrame> {
+        #[cfg(feature = "vr")]
+        let native = self.vr.as_ref().is_some_and(|vr| vr.running());
+        #[cfg(not(feature = "vr"))]
+        let native = false;
+        let size = self.window.inner_size();
+        let minimized =
+            size.width == 0 || size.height == 0 || self.window.is_minimized() == Some(true);
+        if !minimized {
+            for attempt in 0..2 {
+                match self.surface.get_current_texture() {
+                    Ok(surface) => {
+                        return Some(PresentationFrame {
+                            texture: surface.texture.clone(),
+                            surface: Some(surface),
+                        })
+                    }
+                    Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost)
+                        if attempt == 0 =>
+                    {
+                        self.surface.configure(&self.device, &self.config)
+                    }
+                    Err(error) => {
+                        log::warn!("Desktop mirror surface: {error}");
+                        break;
+                    }
+                }
+            }
+        }
+        if !native {
+            return None;
+        }
+        let dimensions = (self.config.width.max(1), self.config.height.max(1));
+        if self
+            .mirror_fallback
+            .as_ref()
+            .is_none_or(|texture| (texture.width(), texture.height()) != dimensions)
+        {
+            self.mirror_fallback = Some(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("VR mirror while minimized"),
+                size: wgpu::Extent3d {
+                    width: dimensions.0,
+                    height: dimensions.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            }));
+        }
+        Some(PresentationFrame {
+            texture: self.mirror_fallback.as_ref().unwrap().clone(),
+            surface: None,
+        })
+    }
+    #[cfg(feature = "vr")]
+    fn update_vr_input(&mut self) {
+        let Some(vr) = &self.vr else {
+            if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+                scene.camera.interaction_ray = None;
+            }
+            if let Some(scene) = self.scene_manager.preview_scene_mut() {
+                scene.camera.interaction_ray = None;
+            }
+            if self.vr_input_state.0 {
+                self.handle_event(&WindowEvent::MouseInput {
+                    device_id: winit::event::DeviceId::dummy(),
+                    button: MouseButton::Left,
+                    state: ElementState::Released,
+                });
+                self.vr_input_state.0 = false;
+            }
+            if self.vr_input_state.1 {
+                self.editor_state.radial_menu.close(false);
+                self.vr_input_state.1 = false;
+            }
+            return;
+        };
+        let input = match vr.input() {
+            Ok(input) => input,
+            Err(error) => {
+                log::warn!("Native VR input: {error}");
+                Default::default()
+            }
+        };
+        let scale = vr.world_units_per_meter;
+        let now = std::time::Instant::now();
+        let dt = now
+            .duration_since(self.vr_input_state.3)
+            .as_secs_f32()
+            .min(0.1);
+        self.vr_input_state.3 = now;
+        let yaw = if input.turn.abs() > 0.7 && !self.vr_input_state.2 {
+            self.vr_input_state.2 = true;
+            -input.turn.signum() * std::f32::consts::FRAC_PI_6
+        } else {
+            0.0
+        };
+        if input.turn.abs() < 0.3 {
+            self.vr_input_state.2 = false;
+        }
+        let camera = self.scene_manager.active_scene_mut().camera_mut();
+        if self.app_phase == AppPhase::InGame {
+            camera.move_vr_rig(
+                input.movement,
+                yaw,
+                input.head_rotation.unwrap_or(glam::Quat::IDENTITY),
+                scale * 1.5 * dt,
+            );
+        }
+        camera.interaction_ray = input.ray.map(|(origin, direction)| {
+            (
+                camera.position() + camera.view_rotation() * origin * scale,
+                camera.view_rotation() * direction,
+            )
+        });
+        if let Some(pointer) = input.pointer {
+            self.handle_event(&WindowEvent::CursorMoved {
+                device_id: winit::event::DeviceId::dummy(),
+                position: winit::dpi::PhysicalPosition::new(pointer.x as f64, pointer.y as f64),
+            });
+        } else {
+            let _ = self.ui.handle_event(
+                &self.window,
+                &WindowEvent::CursorLeft {
+                    device_id: winit::event::DeviceId::dummy(),
+                },
+            );
+        }
+        let select = input.select && input.pointer.is_some();
+        if select != self.vr_input_state.0 {
+            self.handle_event(&WindowEvent::MouseInput {
+                device_id: winit::event::DeviceId::dummy(),
+                button: MouseButton::Left,
+                state: if select {
+                    ElementState::Pressed
+                } else {
+                    ElementState::Released
+                },
+            });
+            self.vr_input_state.0 = select;
+        }
+        if input.menu != self.vr_input_state.1 && self.app_phase == AppPhase::InGame {
+            let menu = &mut self.editor_state.radial_menu;
+            if input.menu {
+                let pointer = input.pointer.unwrap_or(glam::Vec2::new(
+                    self.config.width as f32 * 0.5,
+                    self.config.height as f32 * 0.5,
+                ));
+                menu.open(egui::pos2(pointer.x, pointer.y) / self.window.scale_factor() as f32);
+            } else if menu.visible {
+                menu.close(true);
+            } else {
+                menu.alt_held = false;
+            }
+        }
+        self.vr_input_state.1 = input.menu;
+        if input.ray.is_none() {
+            self.editor_state.radial_menu.stop_dragging();
+            if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+                scene.set_dragged_cell(u32::MAX);
+            }
+        }
+    }
+
+    #[cfg(feature = "vr")]
+    fn render_vr_ui(&mut self, output: &egui::FullOutput) {
+        let Some(vr) = &mut self.vr else {
+            return;
+        };
+        let Some(target) = vr.ui_view() else {
+            return;
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Native VR menu"),
+            });
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        let mut native_output = output.clone();
+        native_output.textures_delta.free.clear();
+        self.ui.render(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &target,
+            ScreenDescriptor {
+                size_in_pixels: [self.config.width, self.config.height],
+                pixels_per_point: self.window.scale_factor() as f32,
+            },
+            native_output,
+        );
+        self.queue.submit([encoder.finish()]);
+        vr.mark_ui_drawn();
+    }
+
     pub fn new(
         window: Arc<Window>,
         surface: wgpu::Surface<'static>,
@@ -227,6 +458,11 @@ impl App {
         let initial_sfx_volume = ui.state.sfx_volume;
 
         Self {
+            mirror_fallback: None,
+            #[cfg(feature = "vr")]
+            vr: None,
+            #[cfg(feature = "vr")]
+            vr_input_state: (false, false, false, std::time::Instant::now()),
             window,
             queue,
             config,
@@ -451,7 +687,10 @@ impl App {
         let ray_dir_cam = preview_scene
             .camera
             .view_ray_direction(ndc_x, ndc_y, aspect);
-        let ray_dir = cam_rot * ray_dir_cam;
+        let (cam_pos, ray_dir) = preview_scene
+            .camera
+            .interaction_ray
+            .unwrap_or((cam_pos, cam_rot * ray_dir_cam));
 
         let cell_count = preview_scene.state.display_state.cell_count;
         let mut best_t = f32::MAX;
@@ -1281,6 +1520,13 @@ impl App {
                         physical_size.width,
                         physical_size.height,
                     );
+                    #[cfg(feature = "vr")]
+                    if let Some(vr) = &mut self.vr {
+                        if let Err(error) = vr.resize_ui(physical_size.width, physical_size.height)
+                        {
+                            log::error!("VR menu resize: {error}");
+                        }
+                    }
                     if let Some(menu) = &mut self.main_menu_scene {
                         menu.resize(
                             &self.device,
@@ -1385,7 +1631,10 @@ impl App {
                             let ray_dir_cam = preview_scene
                                 .camera
                                 .view_ray_direction(ndc_x, ndc_y, aspect);
-                            let ray_dir = cam_rot * ray_dir_cam;
+                            let (cam_pos, ray_dir) = preview_scene
+                                .camera
+                                .interaction_ray
+                                .unwrap_or((cam_pos, cam_rot * ray_dir_cam));
 
                             let cell_count = preview_scene.state.display_state.cell_count;
                             let mut best_t = f32::MAX;
@@ -1655,7 +1904,10 @@ impl App {
                         let ray_dir_cam = preview_scene
                             .camera
                             .view_ray_direction(ndc_x, ndc_y, aspect);
-                        let ray_dir = cam_rot * ray_dir_cam;
+                        let (cam_pos, ray_dir) = preview_scene
+                            .camera
+                            .interaction_ray
+                            .unwrap_or((cam_pos, cam_rot * ray_dir_cam));
 
                         let cell_count = preview_scene.state.display_state.cell_count;
                         let mut best_t = f32::MAX;
@@ -1912,17 +2164,8 @@ impl App {
         }
 
         // Acquire swapchain texture.
-        let output = loop {
-            match self.surface.get_current_texture() {
-                Ok(o) => break o,
-                Err(wgpu::SurfaceError::Outdated) => {
-                    self.surface.configure(&self.device, &self.config);
-                }
-                Err(e) => {
-                    log::error!("Main menu surface error: {:?}", e);
-                    return;
-                }
-            }
+        let Some(output) = self.acquire_presentation_frame() else {
+            return;
         };
         let view = output
             .texture
@@ -1960,6 +2203,16 @@ impl App {
 
         // egui frame.
         self.ui.begin_frame(&self.window);
+        #[cfg(feature = "vr")]
+        if self.vr.is_some() {
+            if let Some(pointer) = self.ui.pointer_hover_pos() {
+                self.ui.ctx.debug_painter().circle_stroke(
+                    pointer,
+                    5.0,
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                );
+            }
+        }
 
         let (left_id, right_id, left_name, right_name, panel_w, panel_h) =
             if let Some(menu) = &self.main_menu_scene {
@@ -1987,11 +2240,15 @@ impl App {
             &mut self.main_menu_settings_open,
             &mut self.ui.state.music_volume,
             &mut self.ui.state.sfx_volume,
+            &mut self.ui.state.desktop_render_fps,
         );
         if menu_response.audio_settings_changed {
             self.audio
                 .set_volumes(self.ui.state.music_volume, self.ui.state.sfx_volume);
             self.audio.play_slider_tick();
+            self.ui.mark_ui_state_dirty();
+        }
+        if menu_response.display_settings_changed {
             self.ui.mark_ui_state_dirty();
         }
         if menu_response.hovered != self.main_menu_hovered {
@@ -2016,6 +2273,8 @@ impl App {
             size_in_pixels: [self.config.width, self.config.height],
             pixels_per_point: self.window.scale_factor() as f32,
         };
+        #[cfg(feature = "vr")]
+        self.render_vr_ui(&egui_output);
         self.ui.render(
             &self.device,
             &self.queue,
@@ -2131,6 +2390,7 @@ impl App {
         settings_open: &mut bool,
         music_volume: &mut f32,
         sfx_volume: &mut f32,
+        desktop_render_fps: &mut u32,
     ) -> MenuUiResponse {
         use egui::{Align2, Color32, FontFamily, FontId, Pos2, Rect, Stroke, Vec2};
 
@@ -2160,6 +2420,7 @@ impl App {
         let mut action = MenuAction::None;
         let mut hovered = MenuAction::None;
         let mut audio_settings_changed = false;
+        let mut display_settings_changed = false;
 
         #[allow(deprecated)]
         egui::CentralPanel::default()
@@ -2534,6 +2795,12 @@ impl App {
                 .open(&mut open)
                 .show(ctx, |ui| {
                     ui.set_width(280.0);
+                    display_settings_changed |= ui
+                        .add(
+                            egui::Slider::new(desktop_render_fps, 30..=120)
+                                .text("Frame rate limit"),
+                        )
+                        .changed();
                     audio_settings_changed |= ui
                         .add(
                             egui::Slider::new(music_volume, 0.0..=1.0)
@@ -2554,7 +2821,9 @@ impl App {
                         if ui.button("Defaults").clicked() {
                             *music_volume = 0.18;
                             *sfx_volume = 0.45;
+                            *desktop_render_fps = 120;
                             audio_settings_changed = true;
+                            display_settings_changed = true;
                         }
                         if ui.button("Close").clicked() {
                             *settings_open = false;
@@ -2570,6 +2839,7 @@ impl App {
             action,
             hovered,
             audio_settings_changed,
+            display_settings_changed,
         }
     }
 
@@ -2609,6 +2879,35 @@ impl App {
     }
 
     fn render(&mut self) {
+        #[cfg(feature = "vr")]
+        if let Some(vr) = &mut self.vr {
+            if let Err(error) = vr.begin_frame() {
+                let _ = vr.end_frame();
+                log::error!("Native VR frame failed: {error}");
+                self.vr = None;
+                self.scene_manager
+                    .resize(&self.device, self.config.width, self.config.height);
+            }
+        }
+        #[cfg(feature = "vr")]
+        self.update_vr_input();
+        self.render_frame();
+        #[cfg(feature = "vr")]
+        if let Some(vr) = &mut self.vr {
+            if let Err(error) = vr.end_frame() {
+                log::error!("Native VR presentation failed; returning to desktop: {error}");
+                self.vr = None;
+                self.scene_manager
+                    .resize(&self.device, self.config.width, self.config.height);
+                self.scene_manager
+                    .active_scene_mut()
+                    .camera_mut()
+                    .interaction_ray = None;
+            }
+        }
+    }
+
+    fn render_frame(&mut self) {
         // Don't render if surface has zero dimensions
         if self.config.width == 0 || self.config.height == 0 {
             return;
@@ -2616,9 +2915,19 @@ impl App {
 
         let now = std::time::Instant::now();
 
-        // Skip render if we haven't reached the next frame time (60fps limiter)
+        // Skip render until the next desktop frame deadline.
         // IMPORTANT: This must be BEFORE acquiring surface texture to avoid cleanup issues
-        if now < self.next_frame_time {
+        let runtime_paced = {
+            #[cfg(feature = "vr")]
+            {
+                self.vr.as_ref().is_some_and(|vr| vr.frame_active())
+            }
+            #[cfg(not(feature = "vr"))]
+            {
+                false
+            }
+        };
+        if !runtime_paced && now < self.next_frame_time {
             return;
         }
 
@@ -2628,8 +2937,7 @@ impl App {
             .min(0.1);
         self.last_render_time = now;
 
-        // Schedule next frame for 60fps (16.67ms)
-        self.next_frame_time = now + std::time::Duration::from_micros(16_667);
+        self.next_frame_time = now + self.ui.state.desktop_frame_interval();
 
         // -- Main menu fast path -----------------------------------------------
         if self.app_phase == AppPhase::MainMenu {
@@ -2775,8 +3083,14 @@ impl App {
         self.scene_manager.update(dt);
 
         let camera = self.scene_manager.active_scene().camera();
-        self.audio
-            .set_listener_from_camera(camera.position(), camera.rotation);
+        let listener = (camera.position(), camera.view_rotation());
+        #[cfg(feature = "vr")]
+        let listener = self
+            .vr
+            .as_ref()
+            .and_then(|vr| vr.head_pose(listener.0, listener.1))
+            .unwrap_or(listener);
+        self.audio.set_listener_from_camera(listener.0, listener.1);
         if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
             self.audio
                 .set_listener_environment(gpu_scene.listener_underwater);
@@ -2804,7 +3118,7 @@ impl App {
         } else {
             self.audio.set_listener_environment(false);
         }
-        self.update_audio_world_environment(camera.position());
+        self.update_audio_world_environment(listener.0);
         for event in self.scene_manager.drain_audio_events() {
             self.audio.play_event(event);
         }
@@ -3004,19 +3318,8 @@ impl App {
             camera.zoom_speed = self.ui.state.camera_scroll_sensitivity.clamp(0.01, 2.0);
         }
 
-        let output = loop {
-            match self.surface.get_current_texture() {
-                Ok(output) => break output,
-                Err(wgpu::SurfaceError::Outdated) => {
-                    // Surface is outdated, reconfigure it and retry
-                    self.surface.configure(&self.device, &self.config);
-                    continue;
-                }
-                Err(e) => {
-                    log::error!("Failed to get surface texture: {:?}", e);
-                    return;
-                }
-            }
+        let Some(output) = self.acquire_presentation_frame() else {
+            return;
         };
         let view = output
             .texture
@@ -3147,19 +3450,56 @@ impl App {
 
         // Render 3D scene first (pass cell type visuals from editor state)
         let cell_type_visuals = &self.editor_state.cell_type_visuals;
-        self.scene_manager.render(
-            &self.device,
-            &self.queue,
-            &view,
-            Some(cell_type_visuals),
-            self.ui.state.world_diameter,
-            self.ui.state.lod_scale_factor,
-            self.ui.state.lod_threshold_low,
-            self.ui.state.lod_threshold_medium,
-            self.ui.state.lod_threshold_high,
-            self.ui.state.lod_debug_colors,
-            self.editor_state.cell_outline_width,
-        );
+        #[cfg(feature = "vr")]
+        let native_rendered = if let Some(vr) = &mut self.vr {
+            let camera = self.scene_manager.active_scene().camera();
+            let eyes = vr.eye_views(camera.position(), camera.view_rotation());
+            let rendered = self.scene_manager.render_stereo(
+                &self.device,
+                &self.queue,
+                eyes,
+                cell_type_visuals,
+                self.ui.state.world_diameter,
+                self.ui.state.lod_scale_factor,
+                self.ui.state.lod_threshold_low,
+                self.ui.state.lod_threshold_medium,
+                self.ui.state.lod_threshold_high,
+                self.ui.state.lod_debug_colors,
+                self.editor_state.cell_outline_width,
+            );
+            if rendered {
+                vr.mark_eyes_drawn();
+                vr.render_mirror(&self.queue, &view);
+            }
+            rendered
+        } else {
+            false
+        };
+        #[cfg(not(feature = "vr"))]
+        let native_rendered = false;
+        if !native_rendered {
+            #[cfg(feature = "vr")]
+            if self.vr.is_some() {
+                self.scene_manager.ensure_render_size(
+                    &self.device,
+                    self.config.width,
+                    self.config.height,
+                );
+            }
+            self.scene_manager.render(
+                &self.device,
+                &self.queue,
+                &view,
+                Some(cell_type_visuals),
+                self.ui.state.world_diameter,
+                self.ui.state.lod_scale_factor,
+                self.ui.state.lod_threshold_low,
+                self.ui.state.lod_threshold_medium,
+                self.ui.state.lod_threshold_high,
+                self.ui.state.lod_debug_colors,
+                self.editor_state.cell_outline_width,
+            );
+        }
 
         // Pull the latest GPU frame timing breakdown (lags a few frames behind
         // due to async readback) for the performance monitor.
@@ -3247,6 +3587,16 @@ impl App {
 
         // Begin egui frame
         self.ui.begin_frame(&self.window);
+        #[cfg(feature = "vr")]
+        if self.vr.is_some() {
+            if let Some(pointer) = self.ui.pointer_hover_pos() {
+                self.ui.ctx.debug_painter().circle_stroke(
+                    pointer,
+                    5.0,
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                );
+            }
+        }
 
         // Get current mode info for UI
         let current_mode = self.scene_manager.current_mode();
@@ -4523,6 +4873,8 @@ impl App {
         };
 
         // Render egui
+        #[cfg(feature = "vr")]
+        self.render_vr_ui(&egui_output);
         self.ui.render(
             &self.device,
             &self.queue,
@@ -4882,7 +5234,7 @@ impl App {
         self.window.request_redraw();
     }
 
-    /// Get the next scheduled frame time for 60fps limiting
+    /// Get the next scheduled desktop frame deadline.
     pub fn next_frame_time(&self) -> std::time::Instant {
         self.next_frame_time
     }
@@ -4989,11 +5341,45 @@ impl ApplicationHandler for AppState {
             }
         }
 
+        #[cfg(feature = "vr")]
+        let vr_bootstrap = if std::env::args().any(|arg| arg == "--vr") {
+            match crate::vr::VrBootstrap::new() {
+                Ok(bootstrap) => Some(bootstrap),
+                Err(error) => {
+                    log::error!("Native VR startup: {error}");
+                    crate::vr::show_startup_error(&error);
+                    event_loop.exit();
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(feature = "vr")]
+        let vr_graphics = match vr_bootstrap
+            .as_ref()
+            .map(|vr| vr.create_graphics())
+            .transpose()
+        {
+            Ok(graphics) => graphics,
+            Err(error) => {
+                log::error!("Native VR graphics: {error}");
+                crate::vr::show_startup_error(&error);
+                event_loop.exit();
+                return;
+            }
+        };
         // Initialize wgpu
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         });
+
+        #[cfg(feature = "vr")]
+        let instance = vr_graphics
+            .as_ref()
+            .map(|g| g.instance.clone())
+            .unwrap_or(instance);
 
         let surface = instance.create_surface(window.clone()).unwrap();
 
@@ -5003,6 +5389,12 @@ impl ApplicationHandler for AppState {
             force_fallback_adapter: false,
         }))
         .unwrap();
+
+        #[cfg(feature = "vr")]
+        let adapter = vr_graphics
+            .as_ref()
+            .map(|g| g.adapter.clone())
+            .unwrap_or(adapter);
 
         // Log adapter info to help diagnose GPU-specific issues
         let adapter_info = adapter.get_info();
@@ -5038,30 +5430,39 @@ impl ApplicationHandler for AppState {
             required_features |= timestamp_features;
         }
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Bio-Spheres Device"),
-            required_features,
-            required_limits: wgpu::Limits {
-                // Cell state write bind group uses up to 41 storage buffers on Vulkan/DX12.
-                // Metal (macOS) hard-caps at 31 - requesting 42 panics request_device on Metal.
-                // Use backend to pick the right value; never use adapter.limits() as the
-                // requested value since some drivers report low numbers that would cause
-                // wgpu to validate every bind group against that cap, dropping FPS.
-                max_storage_buffers_per_shader_stage: match adapter_info.backend {
-                    wgpu::Backend::Metal => 31,
-                    _ => 64,
+        let create_desktop_device = || {
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Bio-Spheres Device"),
+                required_features,
+                required_limits: wgpu::Limits {
+                    // Cell state write bind group uses up to 41 storage buffers on Vulkan/DX12.
+                    // Metal (macOS) hard-caps at 31 - requesting 42 panics request_device on Metal.
+                    // Use backend to pick the right value; never use adapter.limits() as the
+                    // requested value since some drivers report low numbers that would cause
+                    // wgpu to validate every bind group against that cap, dropping FPS.
+                    max_storage_buffers_per_shader_stage: match adapter_info.backend {
+                        wgpu::Backend::Metal => 31,
+                        _ => 64,
+                    },
+                    // Clamp to what the adapter actually supports - requesting more than the
+                    // adapter limit causes request_device to fail (panic on .unwrap()).
+                    max_storage_buffer_binding_size: storage_binding_limit,
+                    max_buffer_size: buffer_size_limit,
+                    ..wgpu::Limits::default()
                 },
-                // Clamp to what the adapter actually supports - requesting more than the
-                // adapter limit causes request_device to fail (panic on .unwrap()).
-                max_storage_buffer_binding_size: storage_binding_limit,
-                max_buffer_size: buffer_size_limit,
-                ..wgpu::Limits::default()
-            },
-            memory_hints: Default::default(),
-            trace: Default::default(),
-            experimental_features: Default::default(),
-        }))
-        .expect("Failed to create wgpu device — check log for adapter limits");
+                memory_hints: Default::default(),
+                trace: Default::default(),
+                experimental_features: Default::default(),
+            }))
+            .expect("Failed to create wgpu device — check log for adapter limits")
+        };
+        #[cfg(feature = "vr")]
+        let (device, queue) = vr_graphics
+            .as_ref()
+            .map(|g| (g.device.clone(), g.queue.clone()))
+            .unwrap_or_else(create_desktop_device);
+        #[cfg(not(feature = "vr"))]
+        let (device, queue) = create_desktop_device();
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -5106,13 +5507,42 @@ impl ApplicationHandler for AppState {
             surface_caps.alpha_modes[0]
         };
 
+        #[cfg(feature = "vr")]
+        let vr_state = match (vr_bootstrap, vr_graphics.as_ref()) {
+            (Some(bootstrap), Some(graphics)) => {
+                match crate::vr::VrState::new(
+                    bootstrap,
+                    graphics,
+                    &surface_caps.formats,
+                    width,
+                    height,
+                ) {
+                    Ok(vr) => Some(vr),
+                    Err(error) => {
+                        log::error!("Native VR session: {error}");
+                        crate::vr::show_startup_error(&error);
+                        event_loop.exit();
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
+        #[cfg(feature = "vr")]
+        let surface_format = vr_state
+            .as_ref()
+            .map(|vr| vr.format())
+            .unwrap_or(surface_format);
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             format: surface_format,
             width,
             height,
             // Immediate (no vsync) is not guaranteed on all drivers - fall back to Fifo.
-            present_mode: if surface_caps
+            present_mode: if std::env::args().any(|arg| arg == "--vr") {
+                wgpu::PresentMode::AutoNoVsync
+            } else if surface_caps
                 .present_modes
                 .contains(&wgpu::PresentMode::Immediate)
             {
@@ -5146,6 +5576,11 @@ impl ApplicationHandler for AppState {
             dock_manager,
             ui,
         ));
+
+        #[cfg(feature = "vr")]
+        if let Some(app) = &mut self.app {
+            app.vr = vr_state;
+        }
     }
 
     fn window_event(
@@ -5156,6 +5591,12 @@ impl ApplicationHandler for AppState {
     ) {
         let Some(app) = &mut self.app else { return };
 
+        #[cfg(feature = "vr")]
+        if matches!(event, WindowEvent::RedrawRequested)
+            && app.vr.as_ref().is_some_and(|vr| vr.running())
+        {
+            return;
+        }
         if window_id != app.window().id() {
             return;
         }
@@ -5166,8 +5607,21 @@ impl ApplicationHandler for AppState {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(app) = &self.app {
-            // Limit to 60fps by waiting until next frame time
+        if let Some(app) = &mut self.app {
+            #[cfg(feature = "vr")]
+            if let Some(vr) = &app.vr {
+                if vr.should_exit() {
+                    app.save_persistent_settings();
+                    event_loop.exit();
+                    return;
+                }
+                if vr.running() {
+                    app.render();
+                    event_loop.set_control_flow(ControlFlow::Poll);
+                    return;
+                }
+            }
+            // Wait for the configured desktop frame deadline.
             let next_frame = app.next_frame_time();
             let now = std::time::Instant::now();
 

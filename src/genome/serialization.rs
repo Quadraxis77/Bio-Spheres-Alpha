@@ -415,10 +415,6 @@ pub struct SerializableModeSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vascular_outlet: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vascular_signal_transport: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vascular_signal_exchange: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub gametocyte_merge_range: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memorocyte_rate: Option<f32>,
@@ -500,8 +496,6 @@ pub struct SerializableChildSettings {
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SerializableAdhesionSettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub creates_backbone: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub can_break: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -973,14 +967,6 @@ fn mode_to_serializable(
             default.vascular_nutrient_transport,
         ),
         vascular_outlet: diff_bool(mode.vascular_outlet, default.vascular_outlet),
-        vascular_signal_transport: diff_bool(
-            mode.vascular_signal_transport,
-            default.vascular_signal_transport,
-        ),
-        vascular_signal_exchange: diff_bool(
-            mode.vascular_signal_exchange,
-            default.vascular_signal_exchange,
-        ),
         gametocyte_merge_range: diff_f32(
             mode.gametocyte_merge_range,
             default.gametocyte_merge_range,
@@ -1183,8 +1169,6 @@ impl SerializableModeSettings {
             || self.devorocyte_consume_rate.is_some()
             || self.vascular_nutrient_transport.is_some()
             || self.vascular_outlet.is_some()
-            || self.vascular_signal_transport.is_some()
-            || self.vascular_signal_exchange.is_some()
             || self.gametocyte_merge_range.is_some()
             || self.memorocyte_rate.is_some()
             || self.memorocyte_input_channel.is_some()
@@ -1251,7 +1235,6 @@ fn adhesion_to_serializable(
     default: &AdhesionSettings,
 ) -> Option<SerializableAdhesionSettings> {
     let ser = SerializableAdhesionSettings {
-        creates_backbone: diff_bool(adhesion.creates_backbone, default.creates_backbone),
         can_break: diff_bool(adhesion.can_break, default.can_break),
         break_force: diff_f32(adhesion.break_force, default.break_force),
         rest_length: diff_f32(adhesion.rest_length, default.rest_length),
@@ -1289,8 +1272,7 @@ fn adhesion_to_serializable(
         ),
     };
 
-    if ser.creates_backbone.is_some()
-        || ser.can_break.is_some()
+    if ser.can_break.is_some()
         || ser.break_force.is_some()
         || ser.rest_length.is_some()
         || ser.linear_spring_stiffness.is_some()
@@ -1673,12 +1655,6 @@ fn apply_mode_settings(mode: &mut ModeSettings, ser: &SerializableModeSettings) 
     if let Some(v) = ser.lipocyte_emit_value {
         mode.lipocyte_emit_value = v;
     }
-    if let Some(v) = ser.vascular_signal_transport {
-        mode.vascular_signal_transport = v;
-    }
-    if let Some(v) = ser.vascular_signal_exchange {
-        mode.vascular_signal_exchange = v;
-    }
     if let Some(v) = ser.memorocyte_rate {
         mode.memorocyte_rate = v;
     }
@@ -1748,9 +1724,6 @@ fn apply_child_settings(child: &mut ChildSettings, ser: &SerializableChildSettin
 }
 
 fn apply_adhesion_settings(adhesion: &mut AdhesionSettings, ser: &SerializableAdhesionSettings) {
-    if let Some(creates_backbone) = ser.creates_backbone {
-        adhesion.creates_backbone = creates_backbone;
-    }
     if let Some(can_break) = ser.can_break {
         adhesion.can_break = can_break;
     }
@@ -1951,11 +1924,9 @@ modified_modes:
     fn signed_oscillator_polarity_round_trip() {
         let mut genome = Genome::new_with_mode_count(1);
         genome.modes[0].cognocyte_oscillator_polarity = 2;
-        genome.modes[0].adhesion_settings.creates_backbone = true;
         let yaml = genome.to_yaml_string().unwrap();
         let loaded = Genome::from_yaml_string(&yaml).unwrap();
         assert_eq!(loaded.modes[0].cognocyte_oscillator_polarity, 2);
-        assert!(loaded.modes[0].adhesion_settings.creates_backbone);
     }
 
     #[test]

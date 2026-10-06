@@ -308,6 +308,7 @@ impl PostProcessRenderer {
         boundary_fraction: f32,
         water_crossing_pulse: f32,
         boundary_crossing_pulse: f32,
+        advance_history: bool,
     ) {
         let p = PostProcessParams {
             contrast: self.contrast,
@@ -325,7 +326,7 @@ impl PostProcessRenderer {
         };
         queue.write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&p));
 
-        if self.adapt_enabled {
+        if self.adapt_enabled && advance_history {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("PP Adapt"),
                 timestamp_writes: None,

@@ -389,6 +389,10 @@ pub struct GpuFluidSimulator {
     temp_stats_copy_pending: std::cell::Cell<bool>,
     temp_stats_map_receiver:
         std::cell::RefCell<Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>>,
+    /// Set when the static-water fill or phase pass actually changes water/ice
+    /// occupancy. The renderer consumes this to avoid rebuilding surface nets
+    /// continuously for an otherwise motionless static-water world.
+    static_surface_mesh_changed: std::cell::Cell<bool>,
     /// Exponential moving average of water temperature, in Celsius.
     avg_water_temp_c: std::cell::Cell<f32>,
     /// Exponential moving average of air (empty-voxel) temperature, in Celsius.
@@ -461,7 +465,9 @@ impl GpuFluidSimulator {
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Params Buffer"),
             contents: bytemuck::cast_slice(&[params]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::UNIFORM
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
         });
 
         // Pre-create staging buffer with sub-step values [0,1,2,3] for multi-pass dispatch
@@ -607,10 +613,12 @@ impl GpuFluidSimulator {
             ],
         });
 
-        // Climate accumulator: 6 atomic u32 slots (24 bytes), cleared and
+        // Climate accumulator: 7 atomic u32 slots (28 bytes), cleared and
         // accumulated each tick by update_temperature, then copied to a small
         // staging buffer for async CPU readback to drive the rolling averages.
-        const TEMP_STATS_SIZE: u64 = 6 * std::mem::size_of::<u32>() as u64;
+        // Slot 6 is a static-water phase-change counter written by the phase
+        // shader; keeping it in this existing readback avoids another map.
+        const TEMP_STATS_SIZE: u64 = 7 * std::mem::size_of::<u32>() as u64;
         let temp_stats_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Temperature Stats Buffer"),
             size: TEMP_STATS_SIZE,
@@ -1405,6 +1413,7 @@ impl GpuFluidSimulator {
             temp_stats_staging_buffer,
             temp_stats_copy_pending: std::cell::Cell::new(false),
             temp_stats_map_receiver: std::cell::RefCell::new(None),
+            static_surface_mesh_changed: std::cell::Cell::new(false),
             avg_water_temp_c: std::cell::Cell::new(0.0),
             avg_air_temp_c: std::cell::Cell::new(0.0),
             avg_humidity: std::cell::Cell::new(0.0),
@@ -1461,17 +1470,15 @@ impl GpuFluidSimulator {
         })
     }
 
-    /// Update params buffer
-    fn update_params(
+    fn make_params(
         &self,
-        queue: &wgpu::Queue,
         direction: u32,
         climate_phase: u32,
         time: f32,
         gravity_magnitude: f32,
         gravity_dir: [bool; 3],
         lateral_flow_probabilities: [f32; 4],
-    ) {
+    ) -> GpuFluidParams {
         let world_diameter = self.world_radius * 2.0;
         let cell_size = world_diameter / GRID_RESOLUTION as f32;
         let grid_origin = self.world_center - Vec3::splat(world_diameter / 2.0);
@@ -1491,7 +1498,7 @@ impl GpuFluidSimulator {
             grav_z = gravity_magnitude;
         }
 
-        let params = GpuFluidParams {
+        GpuFluidParams {
             grid_resolution: GRID_RESOLUTION,
             world_radius: self.world_radius,
             cell_size,
@@ -1526,8 +1533,28 @@ impl GpuFluidSimulator {
             snow_melt_rate: self.snow_melt_rate.get(),
             snow_compact_rate: self.snow_compact_rate.get(),
             climate_phase,
-        };
+        }
+    }
 
+    /// Update params for initialization operations submitted outside the tick batch.
+    fn update_params(
+        &self,
+        queue: &wgpu::Queue,
+        direction: u32,
+        climate_phase: u32,
+        time: f32,
+        gravity_magnitude: f32,
+        gravity_dir: [bool; 3],
+        lateral_flow_probabilities: [f32; 4],
+    ) {
+        let params = self.make_params(
+            direction,
+            climate_phase,
+            time,
+            gravity_magnitude,
+            gravity_dir,
+            lateral_flow_probabilities,
+        );
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
     }
 
@@ -1950,8 +1977,7 @@ impl GpuFluidSimulator {
         let run_temperature = climate_phase == 0;
 
         // Update parameters for GPU (required for shader logic) - sub_step starts at 0
-        self.update_params(
-            queue,
+        let params = self.make_params(
             3,
             climate_phase,
             current_time,
@@ -1959,12 +1985,27 @@ impl GpuFluidSimulator {
             gravity_dir,
             lateral_flow_probabilities,
         );
+        // Catch-up ticks share one encoder. Queue writes would all precede the
+        // command buffer, giving every tick the final time/climate phase. An
+        // encoded copy preserves each tick's parameters and resets sub_step.
+        let params_staging = _device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Fluid Tick Parameters"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::COPY_SRC,
+        });
+        encoder.copy_buffer_to_buffer(
+            &params_staging,
+            0,
+            &self.params_buffer,
+            0,
+            std::mem::size_of::<GpuFluidParams>() as u64,
+        );
 
         // Clear water velocity field before simulation (DMA zero-fill)
         encoder.clear_buffer(&self.water_velocity_buffer, 0, None);
 
         // Byte offset of sub_step field in GpuFluidParams.
-        const SUB_STEP_OFFSET: u64 = 76;
+        const SUB_STEP_OFFSET: u64 = std::mem::offset_of!(GpuFluidParams, sub_step) as u64;
         const NUM_FLUID_SUB_STEPS: u32 = 4;
 
         // Spawn continuous water once per frame (only on first sub-step)
@@ -1978,20 +2019,15 @@ impl GpuFluidSimulator {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
-        // Must run before the static-water-world early return below - that
-        // branch returns before reaching the calls at the end of this
-        // function, which otherwise left rain/flow audio state (and the
-        // listener-underwater poll) permanently frozen at whatever they were
-        // the instant static water world was switched on. water_velocity was
-        // just cleared above and stays all-zero for the whole static-mode
-        // step (no swap pass ever runs to repopulate it), so both correctly
-        // settle toward "no flow, no rain" via their existing smoothing
-        // instead of the old sound looping forever with no way to decay.
-        self.update_water_audio_summary(queue, encoder);
-        self.update_listener_water_query(encoder);
-
         if self.static_water_world_enabled.get() {
+            // Static water has no flow or rain. Keep sampling only while old
+            // dynamic audio state is decaying; once it reaches silence there
+            // is no reason to scan the 128^3 fluid volume again.
+            if self.has_environmental_audio_state() {
+                self.update_water_audio_summary(queue, encoder);
+            }
             if self.static_water_world_needs_fill.replace(false) {
+                self.static_surface_mesh_changed.set(true);
                 let bind_group = self.create_bind_group(_device);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Fluid Fill Static Water World"),
@@ -2003,7 +2039,12 @@ impl GpuFluidSimulator {
             }
 
             if run_temperature {
-                encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
+                // Clear the six rolling-stat slots, but leave the phase-change
+                // counter intact until it has been copied. If a prior async map
+                // is still busy, changes accumulate instead of being lost.
+                const ROLLING_STATS_SIZE: u64 = 6 * std::mem::size_of::<u32>() as u64;
+                const PHASE_CHANGE_OFFSET: u64 = ROLLING_STATS_SIZE;
+                encoder.clear_buffer(&self.temp_stats_buffer, 0, Some(ROLLING_STATS_SIZE));
                 {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("Static Water Update Temperature Pass"),
@@ -2013,6 +2054,19 @@ impl GpuFluidSimulator {
                     pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
                     pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
                 }
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Static Water Ice Melt Phase Pass"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&self.static_water_phase_pipeline);
+                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                    pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+                }
+
+                // Copy after the phase pass so slot 6 includes this tick's
+                // successful water<->ice transitions. Reset only after a copy
+                // is queued; otherwise the counter survives readback pressure.
                 if !self.temp_stats_copy_pending.get()
                     && self.temp_stats_map_receiver.borrow().is_none()
                 {
@@ -2023,17 +2077,12 @@ impl GpuFluidSimulator {
                         0,
                         self.temp_stats_buffer.size(),
                     );
+                    encoder.clear_buffer(
+                        &self.temp_stats_buffer,
+                        PHASE_CHANGE_OFFSET,
+                        Some(std::mem::size_of::<u32>() as u64),
+                    );
                     self.temp_stats_copy_pending.set(true);
-                }
-
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Static Water Ice Melt Phase Pass"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&self.static_water_phase_pipeline);
-                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
-                    pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
                 }
             }
             return;
@@ -2135,13 +2184,38 @@ impl GpuFluidSimulator {
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
         }
+
+        // Spatial loop sources are heavily smoothed and their handles update
+        // distance/pan every render frame, so refreshing the expensive voxel
+        // summary at 15 Hz is perceptually equivalent to doing it at 60 Hz.
+        // Run after the swap passes: water_velocity now describes this step's
+        // motion (the previous ordering sampled immediately after clearing it).
+        if climate_phase == 1 {
+            self.update_water_audio_summary(queue, encoder);
+        }
+        self.update_listener_water_query(encoder);
+    }
+
+    fn has_environmental_audio_state(&self) -> bool {
+        !self.flow_audio_sources.borrow().is_empty()
+            || !self.rain_audio_sources.borrow().is_empty()
+            || self.rain_audio_intensity.get() > 0.001
+            || self
+                .flow_bucket_strength
+                .borrow()
+                .iter()
+                .any(|strength| *strength > 0.001)
+            || self
+                .rain_bucket_strength
+                .borrow()
+                .iter()
+                .any(|strength| *strength > 0.001)
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        // Skip only while a previous sample is still being consumed - no
-        // wall-clock delay here, so the (now much cheaper, see
-        // WATER_AUDIO_SAMPLE_STRIDE) cost is spread evenly across frames
-        // instead of concentrated into a periodic spike.
+        // Skip while the previous sample is still being consumed. Dynamic
+        // callers already schedule this at 15 Hz; static mode may call more
+        // often briefly while old flow/rain sources decay toward silence.
         if self.water_audio_copy_pending.get()
             || self.water_audio_readback_receiver.borrow().is_some()
         {
@@ -2493,7 +2567,9 @@ impl GpuFluidSimulator {
     }
 
     /// Populate nutrients in water voxels using drifting noise pattern
-    /// Called every physics step to keep supply balanced with phagocyte consumption
+    /// Called once before a rendered frame's fixed-step batch. Fluid time advances
+    /// once per rendered frame, and consumed voxels remain marked for the epoch, so
+    /// repeating this full-volume pass inside catch-up would be identical work.
     pub fn populate_nutrients(
         &self,
         _device: &wgpu::Device,
@@ -2602,6 +2678,9 @@ impl GpuFluidSimulator {
                             self.avg_humidity
                                 .set(prev + (avg - prev) * HUMIDITY_EMA_RATE);
                         }
+                        if stats.len() >= 7 && stats[6] > 0 {
+                            self.static_surface_mesh_changed.set(true);
+                        }
                     }
                     self.temp_stats_staging_buffer.unmap();
                     finished = true;
@@ -2616,6 +2695,12 @@ impl GpuFluidSimulator {
         if finished {
             *self.temp_stats_map_receiver.borrow_mut() = None;
         }
+    }
+
+    /// Consume the static-water surface invalidation raised by the initial
+    /// fill or by an asynchronously confirmed water/ice phase transition.
+    pub fn take_static_surface_mesh_changed(&self) -> bool {
+        self.static_surface_mesh_changed.replace(false)
     }
 
     /// Rolling average water temperature, in Celsius.
@@ -2860,5 +2945,105 @@ impl GpuFluidSimulator {
             0,
             bytemuck::cast_slice(nutrient_voxels),
         );
+    }
+}
+
+#[cfg(test)]
+mod frame_timing_tests {
+    use super::*;
+
+    #[test]
+    fn batched_fluid_ticks_keep_distinct_gpu_parameters() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    compatible_surface: None,
+                    ..Default::default()
+                })
+                .await
+                .expect("GPU adapter required to validate fluid tick batching");
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("Fluid Timing Test"),
+                    required_limits: wgpu::Limits {
+                        max_storage_buffers_per_shader_stage: 10,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let voxel_bytes = (TOTAL_VOXELS * std::mem::size_of::<u32>()) as u64;
+            let solid_mask = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Fluid Timing Solid Mask"),
+                size: voxel_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let light_field = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Fluid Timing Light Field"),
+                size: voxel_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let simulator = GpuFluidSimulator::new(
+                &device,
+                20.0,
+                Vec3::ZERO,
+                solid_mask,
+                &light_field,
+            );
+            simulator.set_static_water_world(false);
+            simulator.set_surface_pressure(0.625);
+            let params_bytes = std::mem::size_of::<GpuFluidParams>() as u64;
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Fluid Tick Parameter Readback"),
+                size: 4 * params_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            for tick in 0..4 {
+                simulator.step(
+                    &device,
+                    &queue,
+                    &mut encoder,
+                    1.0 / 60.0,
+                    9.8,
+                    [false, true, false],
+                    [1.0, 0.8, 0.6, 0.9],
+                );
+                encoder.copy_buffer_to_buffer(
+                    &simulator.params_buffer,
+                    0,
+                    &readback,
+                    tick * params_bytes,
+                    params_bytes,
+                );
+            }
+            queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+                tx.send(result).unwrap();
+            });
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(30)),
+                })
+                .unwrap();
+            rx.recv().unwrap().unwrap();
+            let mapped = readback.slice(..).get_mapped_range();
+            let ticks: &[GpuFluidParams] = bytemuck::cast_slice(&mapped);
+            for (index, params) in ticks.iter().enumerate() {
+                assert_eq!(params.climate_phase, (index as u32 + 1) % 4);
+                assert!((params.time - (index + 1) as f32 / 60.0).abs() < 1e-6);
+                assert_eq!(params.sub_step, 3);
+                assert_eq!(params.surface_pressure, 0.625);
+            }
+            drop(mapped);
+            readback.unmap();
+        });
     }
 }

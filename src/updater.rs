@@ -171,6 +171,7 @@ fn do_self_replace(new_exe: &Path, canonical: &Path) -> Result<(), String> {
 
     // Step 4: relaunch from the canonical path.
     std::process::Command::new(canonical)
+        .args(std::env::args_os().skip(1))
         .spawn()
         .map_err(|e| format!("cannot relaunch {:?}: {}", canonical, e))?;
 

@@ -181,6 +181,8 @@ pub struct GpuScene {
     pub(super) parent_make_adhesion_flags: Vec<bool>,
     /// Accumulated time for fixed timestep physics
     pub(super) time_accumulator: f32,
+    /// Elapsed frame time consumed once by fluid and visual effects.
+    frame_clock: super::frame_timing::SceneFrameClock,
     /// Current frame counter (for shader time-based logic)
     pub(super) current_frame: i32,
     /// Last simulation frame for which the light field was recomputed.
@@ -261,6 +263,11 @@ pub struct GpuScene {
     /// Frame counter throttling water mesh extraction. The voxel simulation
     /// still runs every frame; this only decimates render-mesh rebuilds.
     fluid_mesh_extract_counter: u32,
+    /// Extra water-only rebuilds after a static fill/phase transition. Water
+    /// density smoothing has temporal history, so one rebuild is not enough
+    /// to converge after a genuine change; this short burst replaces the old
+    /// perpetual every-other-frame work.
+    static_water_smoothing_rebuilds_remaining: u8,
     /// Water freezing threshold (internal 0-255 scale, default 65 = 0°C)
     pub freeze_threshold: u32,
     /// Ice melting threshold (internal 0-255 scale, default 75 = 5°C)
@@ -453,15 +460,8 @@ pub struct GpuScene {
     /// submit-to-map latency be measured directly rather than guessed at, if
     /// this pipeline needs diagnosing again in the future.
     division_audio_readback_claimed_at: Vec<Option<std::time::Instant>>,
-    /// Whether the division-audio candidate buffer has already been cleared
-    /// this render frame. Multiple `run_physics` steps can execute per frame
-    /// (fixed-timestep catch-up); only the first should clear the buffer so
-    /// later steps' candidates accumulate instead of clobbering earlier ones.
-    division_audio_cleared_this_frame: bool,
-    /// Readback staging buffer index selected for this render frame's division-
-    /// audio collection. Chosen once per frame (not per physics step) so every
-    /// catch-up step within the frame accumulates into the same buffer instead
-    /// of exhausting the pool after just a couple of steps.
+    /// Readback staging buffer index selected for this render frame's single
+    /// division-audio collection on the final encoded fixed step.
     division_audio_frame_readback_index: Option<usize>,
     /// Whether any physics step this frame actually dispatched the division-
     /// audio collector using `division_audio_frame_readback_index`.
@@ -516,8 +516,6 @@ pub struct GpuScene {
     pub boulder_system: Option<BoulderSystem>,
     /// Whether boulders are enabled
     pub show_boulders: bool,
-    /// Last physics delta_time (stored so render pass can use it for bubble update)
-    last_delta_time: f32,
     /// Target number of boulders to maintain
     pub boulder_target_count: u32,
     /// Boulder initial moss store (nutrients)
@@ -933,6 +931,7 @@ impl GpuScene {
             genome_buffer_manager,
             parent_make_adhesion_flags: Vec::new(),
             time_accumulator: 0.0,
+            frame_clock: super::frame_timing::SceneFrameClock::default(),
             current_frame: 0,
             last_light_field_update_frame: None,
             light_field_needs_update: true,
@@ -972,6 +971,7 @@ impl GpuScene {
             snow_compact_rate: 1.0,
             thermal_inertia: 4.0,
             fluid_mesh_extract_counter: 0,
+            static_water_smoothing_rebuilds_remaining: 0,
             freeze_threshold: 65,
             melt_threshold: 75,
             snow_threshold: 60,
@@ -1000,7 +1000,6 @@ impl GpuScene {
             previous_world_diameter: 400.0, // Default world diameter
             boulder_system: None,
             show_boulders: true,
-            last_delta_time: 0.016,
             boulder_target_count: 32,
             boulder_initial_moss: 10_000.0,
             boulder_radius: 4.0,
@@ -1075,7 +1074,6 @@ impl GpuScene {
             division_audio_bind_group,
             division_audio_dummy_water_params_buffer,
             division_audio_dummy_water_bitfield_buffer,
-            division_audio_cleared_this_frame: false,
             division_audio_frame_readback_index: None,
             division_audio_frame_readback_used: false,
             pending_audio_events: Vec::new(),
@@ -1185,6 +1183,7 @@ impl GpuScene {
         self.next_cell_id = 0;
         self.current_time = 0.0;
         self.time_accumulator = 0.0;
+        self.frame_clock = super::frame_timing::SceneFrameClock::default();
         self.current_frame = 0;
         self.last_light_field_update_frame = None;
         self.light_field_needs_update = true;
@@ -1197,11 +1196,11 @@ impl GpuScene {
         self.division_audio_readback_claimed_at =
             vec![None; self.division_audio_readback_buffers.len()];
         self.division_audio_readback_write_index = 0;
-        self.division_audio_cleared_this_frame = false;
         self.division_audio_frame_readback_index = None;
         self.division_audio_frame_readback_used = false;
         self.pending_audio_events.clear();
         self.fluid_mesh_extract_counter = 0;
+        self.static_water_smoothing_rebuilds_remaining = 0;
         self.paused = false;
         self.first_frame = true;
         self.dragged_cell_index = u32::MAX;
@@ -1587,7 +1586,7 @@ impl GpuScene {
                             twist_constraint_stiffness: c[0],
                             twist_constraint_damping: c[1],
                             enable_twist_constraint: c[2] as i32,
-                            creates_backbone: c[3] as i32,
+                            _padding: 0,
                         }
                     })
                     .collect(),
@@ -1758,8 +1757,6 @@ impl GpuScene {
                 devorocyte_consume_rate: 30.0,
                 vascular_nutrient_transport: true,
                 vascular_outlet: false,
-                vascular_signal_transport: false,
-                vascular_signal_exchange: false,
                 gametocyte_merge_range: 0.5,
                 memorocyte_rate: 0.1,
                 memorocyte_input_channel: 0,
@@ -1817,7 +1814,6 @@ impl GpuScene {
                 adhesion_settings: {
                     let gpu_as = &adhesion_settings_raw[i];
                     crate::genome::AdhesionSettings {
-                        creates_backbone: gpu_as.creates_backbone != 0,
                         can_break: gpu_as.can_break != 0,
                         break_force: gpu_as.break_force,
                         rest_length: gpu_as.rest_length,
@@ -2179,6 +2175,45 @@ impl GpuScene {
         self.radiation_level > 0.0 && !self.subtle_mutations
     }
 
+    /// CPU cell-count readback trails GPU division by a few frames. Specialized
+    /// per-cell passes use this conservative bound instead of full world capacity;
+    /// the guard covers short newborn bursts without making established worlds
+    /// pay for every never-used slot.
+    fn conservative_cell_dispatch_slots(&self) -> u32 {
+        const ASYNC_NEWBORN_SLOT_GUARD: u32 = 8192;
+        self.total_cell_slots
+            .max(self.current_cell_count)
+            .max(1)
+            .saturating_add(ASYNC_NEWBORN_SLOT_GUARD)
+            .min(self.gpu_triple_buffers.capacity)
+    }
+
+    fn populate_nutrients_for_physics_frame(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        delta_time: f32,
+    ) {
+        let type_mutations_enabled = self.type_mutations_enabled();
+        if !(self.has_phagocytes || type_mutations_enabled || self.show_nutrient_particles) {
+            return;
+        }
+        if let Some(ref simulator) = self.fluid_simulator {
+            simulator.populate_nutrients(
+                device,
+                queue,
+                encoder,
+                self.nutrient_density,
+                delta_time,
+                self.nutrient_epoch_duration,
+                self.nutrient_epoch_spacing,
+                self.nutrient_spawn_end,
+                self.nutrient_despawn_start,
+            );
+        }
+    }
+
     /// Run physics step using GPU compute shaders with zero CPU involvement.
     fn run_physics(
         &mut self,
@@ -2187,6 +2222,7 @@ impl GpuScene {
         queue: &wgpu::Queue,
         delta_time: f32,
         world_diameter: f32,
+        collect_division_audio: bool,
     ) {
         // Note: No CPU-side early-out on current_cell_count here.
         // The GPU shaders check cell_count_buffer[0] (high water mark) internally.
@@ -2194,31 +2230,12 @@ impl GpuScene {
         // when the readback lags behind the actual GPU state.
 
         // Execute pure GPU physics pipeline (7 compute shader stages + cave collision if enabled)
-        // Repopulate nutrient voxels each physics step so phagocyte intake scales with
-        // sim speed. At Nx speed the physics loop runs N steps per frame; phagocytes
-        // consume voxel nutrients each step via atomic CAS (1->2), so populate must
-        // also run each step to reset consumed voxels back to available.
         let type_mutations_enabled = self.type_mutations_enabled();
         let has_phagocytes = self.has_phagocytes || type_mutations_enabled;
         let has_photocytes = self.has_photocytes || type_mutations_enabled;
         let has_devorocytes = self.has_devorocytes || type_mutations_enabled;
         let has_gametocytes = self.has_gametocytes || type_mutations_enabled;
 
-        if has_phagocytes || self.show_nutrient_particles {
-            if let Some(ref simulator) = self.fluid_simulator {
-                simulator.populate_nutrients(
-                    device,
-                    queue,
-                    encoder,
-                    self.nutrient_density,
-                    delta_time,
-                    self.nutrient_epoch_duration,
-                    self.nutrient_epoch_spacing,
-                    self.nutrient_spawn_end,
-                    self.nutrient_despawn_start,
-                );
-            }
-        }
         // Run phagocyte nutrient consumption BEFORE physics so nutrients are available for transport
         if has_phagocytes {
             self.run_phagocyte_consumption(device, encoder, queue);
@@ -2307,62 +2324,47 @@ impl GpuScene {
 
         // Increment frame counter for time-based shader logic
         self.current_frame = self.current_frame.wrapping_add(1);
-        self.last_delta_time = delta_time;
 
         // Execute lifecycle pipeline for cell division (4 compute shader stages)
         // This handles death detection, free slot compaction, and cell division
         // Cell count is updated on GPU by division shader
         //
-        // Up to `max_physics_steps_per_frame` steps can run per render() call (fixed-
-        // timestep catch-up). The candidate readback only happens once per frame, after
-        // all steps complete, but every step still needs to contribute its dividing
-        // cells - otherwise only the first step of each frame is ever heard, and once
-        // the population plateaus at capacity (so each step only produces a handful of
-        // divisions via slot recycling) that 1-in-N sampling made division audio nearly
-        // silent even though cells kept dividing and dying every step. So the collect
-        // pass now runs on *every* step, and only the first step of the frame clears the
-        // candidate buffer - later steps' candidates accumulate on top instead of
-        // clobbering them.
-        //
-        // The readback buffer index is chosen ONCE per render() call (in the caller,
-        // before the physics catch-up loop), not per step here. Toggling it per step
-        // exhausted the 2-buffer pool after just 2 steps, silently skipping the collect
-        // dispatch (and losing that step's divisions) on any frame needing 3+ catch-up
-        // steps - which defeated the "every step contributes" guarantee above.
-        let clear_before_collect = !self.division_audio_cleared_this_frame;
+        // Candidate collection is cosmetic and scans the complete cell range.
+        // The render loop enables it only for the final fixed step encoded this
+        // frame, while division itself continues on every catch-up step.
         let audio_readback_index = self.division_audio_frame_readback_index;
-        let division_audio_collect = if known_cell_slots > 0 && audio_readback_index.is_some() {
-            let params = DivisionAudioParams {
-                listener_position: self.camera.position().to_array(),
-                search_radius_cells: DIVISION_AUDIO_SEARCH_RADIUS_CELLS,
-                grid_resolution: DIVISION_AUDIO_GRID_RESOLUTION,
-                max_cells_per_grid: DIVISION_AUDIO_MAX_CELLS_PER_GRID,
-                max_candidates: DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32,
-                _pad0: 0,
-            };
-            queue.write_buffer(
-                &self.division_audio_params_buffer,
-                0,
-                bytemuck::bytes_of(&params),
-            );
+        let division_audio_collect =
+            if collect_division_audio && known_cell_slots > 0 && audio_readback_index.is_some() {
+                let params = DivisionAudioParams {
+                    listener_position: self.camera.position().to_array(),
+                    search_radius_cells: DIVISION_AUDIO_SEARCH_RADIUS_CELLS,
+                    grid_resolution: DIVISION_AUDIO_GRID_RESOLUTION,
+                    max_cells_per_grid: DIVISION_AUDIO_MAX_CELLS_PER_GRID,
+                    max_candidates: DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32,
+                    _pad0: 0,
+                };
+                queue.write_buffer(
+                    &self.division_audio_params_buffer,
+                    0,
+                    bytemuck::bytes_of(&params),
+                );
 
-            let collector_threads = known_cell_slots.min(self.gpu_triple_buffers.capacity);
-            Some(DivisionAudioCollectDispatch {
-                pipeline: &self.gpu_physics_pipelines.division_audio_collect,
-                bind_group: &self.division_audio_bind_group,
-                candidate_buffer: &self.division_audio_candidates_buffer,
-                candidate_count_buffer: &self.division_audio_candidate_count_buffer,
-                readback_buffer: &self.division_audio_readback_buffers
-                    [audio_readback_index.unwrap_or(0)],
-                dispatch_workgroups: (collector_threads + 63) / 64,
-                copy_bytes: std::mem::size_of::<DivisionAudioCandidate>() as u64
-                    * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
-                clear_before_collect,
-            })
-        } else {
-            None
-        };
-        self.division_audio_cleared_this_frame = true;
+                let collector_threads = known_cell_slots.min(self.gpu_triple_buffers.capacity);
+                Some(DivisionAudioCollectDispatch {
+                    pipeline: &self.gpu_physics_pipelines.division_audio_collect,
+                    bind_group: &self.division_audio_bind_group,
+                    candidate_buffer: &self.division_audio_candidates_buffer,
+                    candidate_count_buffer: &self.division_audio_candidate_count_buffer,
+                    readback_buffer: &self.division_audio_readback_buffers
+                        [audio_readback_index.unwrap_or(0)],
+                    dispatch_workgroups: (collector_threads + 63) / 64,
+                    copy_bytes: std::mem::size_of::<DivisionAudioCandidate>() as u64
+                        * DIVISION_AUDIO_PLAYBACK_CANDIDATES as u64,
+                })
+            } else {
+                None
+            };
+        let division_audio_collect_ran = division_audio_collect.is_some();
 
         let division_pipeline_ran = execute_lifecycle_pipeline(
             device,
@@ -2379,11 +2381,9 @@ impl GpuScene {
             physics_features,
             division_audio_collect,
         );
-        if division_pipeline_ran && audio_readback_index.is_some() {
+        if division_pipeline_ran && division_audio_collect_ran {
             self.division_audio_frame_readback_used = true;
         }
-
-        self.dispatch_scaffold_rules(device, encoder, queue);
 
         // Mutation pass: collect candidates from division results, then apply mutations.
         // Runs after division execute so division_flags and division_slot_assignments are set.
@@ -2520,14 +2520,11 @@ impl GpuScene {
             &self.phagocyte_physics_bind_groups,
             &self.phagocyte_nutrient_bind_group,
         ) {
-            // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
-            // Using total_cell_slots (async readback, lags 1-3 frames) would under-dispatch
-            // and miss cells at higher slot indices during the lag window.
             consumption_system.run(
                 encoder,
                 &physics_bgs[output_idx],
                 nutrient_bg,
-                self.gpu_triple_buffers.capacity,
+                self.conservative_cell_dispatch_slots(),
             );
         }
     }
@@ -2616,11 +2613,9 @@ impl GpuScene {
         }
         let light_field_bg = self.cached_light_field_bind_group.as_ref().unwrap();
 
-        // Dispatch at capacity and let the shader read cell_count_buffer[0].
-        // The CPU live count is async and can lag the GPU-side high-water mark,
-        // which would leave the light field with an empty occupancy grid.
         if self.total_cell_slots > 0 || self.current_cell_count > 0 {
-            let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+            let dispatch_slots = self.conservative_cell_dispatch_slots();
+            let cell_workgroups = (dispatch_slots + 255) / 256;
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Build Cell Occupancy"),
                 timestamp_writes: None,
@@ -2718,14 +2713,15 @@ impl GpuScene {
         let photocyte_physics_bg =
             &self.cached_photocyte_physics_bind_groups.as_ref().unwrap()[output_idx];
 
-        // Dispatch at full capacity - the shader reads cell_count_buffer[0] (the GPU-side
-        // high-water mark) for its own bounds check. Using total_cell_slots (the async
-        // readback value, which lags 1-3 frames) would under-dispatch and miss photocytes
-        // at higher slot indices during the lag window, causing them to receive no light.
-        let cell_workgroups = (self.gpu_triple_buffers.capacity + 255) / 256;
+        let dispatch_slots = self.conservative_cell_dispatch_slots();
+        let cell_workgroups = (dispatch_slots + 255) / 256;
 
         // Clear glow_flags so dead/off luminocytes don't leave stale values.
-        encoder.clear_buffer(&light_field.glow_flags_buffer, 0, None);
+        encoder.clear_buffer(
+            &light_field.glow_flags_buffer,
+            0,
+            Some(dispatch_slots as u64 * 4),
+        );
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2769,15 +2765,16 @@ impl GpuScene {
         // For cell insertion, we write to ALL 3 buffer sets, so any buffer index works
         // For physics output, we use output_buffer_index which is where physics wrote
         let output_idx = self.gpu_triple_buffers.output_buffer_index();
-        // Always copy full capacity so that child B slots created by division are
-        // included even when the GPU-side high-water mark (cell_count_buffer[0]) has
-        // advanced beyond total_cell_slots (which lags 1-3 frames behind the async
-        // readback). If we truncated to total_cell_slots, a new child B at a higher
-        // slot index would not be copied and the instance builder would render stale
-        // data from the previous occupant - causing garbage cells to flicker.
-        // The instance builder shader uses cell_count_buffer[0] (always current) for
-        // its own bounds check, so bytes beyond the true high-water mark are never read.
-        let copy_slots = self.gpu_triple_buffers.capacity as usize;
+        // One division scan can add at most one child per scanned parent. Double
+        // the persistent CPU high-water mark to cover all newborn slots while
+        // avoiding full-capacity copies in young worlds. At larger populations
+        // this naturally saturates at capacity.
+        let copy_slots = self
+            .total_cell_slots
+            .max(self.current_cell_count)
+            .max(1)
+            .saturating_mul(2)
+            .min(self.gpu_triple_buffers.capacity) as usize;
         let vec4_copy_size = (copy_slots * 16) as u64; // Vec4<f32> = 16 bytes
         let u32_copy_size = (copy_slots * 4) as u64; // u32 = 4 bytes
 
@@ -3373,19 +3370,23 @@ impl GpuScene {
     }
 
     fn dispatch_scaffold_rules(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
     ) {
+        let Some(label_system) = self.organism_label_system.as_ref() else {
+            return;
+        };
         self.scaffold_system.dispatch(
             device,
             encoder,
             queue,
             &self.gpu_triple_buffers,
             &self.adhesion_buffers,
+            &label_system.label_buffer,
             self.gpu_triple_buffers.output_buffer_index(),
-            self.gpu_triple_buffers.capacity.max(1),
+            self.total_cell_slots.max(1),
         );
     }
 
@@ -3947,6 +3948,9 @@ impl GpuScene {
         screen_y: f32,
         distance: f32,
     ) -> glam::Vec3 {
+        if let Some((origin, direction)) = self.camera.interaction_ray {
+            return origin + direction * distance;
+        }
         let width = self.renderer.width as f32;
         let height = self.renderer.height as f32;
 
@@ -4393,6 +4397,9 @@ impl GpuScene {
     /// Returns (ray_origin, ray_direction) where ray_origin is the camera position
     /// and ray_direction is the normalized direction from camera through the screen point.
     fn screen_to_ray(&self, screen_x: f32, screen_y: f32) -> (glam::Vec3, glam::Vec3) {
+        if let Some(ray) = self.camera.interaction_ray {
+            return ray;
+        }
         let width = self.renderer.width as f32;
         let height = self.renderer.height as f32;
 
@@ -5603,6 +5610,23 @@ impl GpuScene {
         log::info!("GPU surface nets renderer initialized");
     }
 
+    /// Move the existing water surface renderer into a replacement scene.
+    ///
+    /// This is safe for capacity-only scene recreation because the renderer is
+    /// sized from the viewport and fluid grid, not the cell capacity. Keeping it
+    /// also keeps its smoothed density history and captured reflection cubemap,
+    /// avoiding a sudden change in the water's apparent opacity/reflectivity.
+    pub(crate) fn transfer_water_surface_renderer_from(&mut self, old_scene: &mut Self) -> bool {
+        let Some(surface_nets) = old_scene.gpu_surface_nets.take() else {
+            return false;
+        };
+
+        self.gpu_surface_nets = Some(surface_nets);
+        self.reflection_cubemap_captured = old_scene.reflection_cubemap_captured;
+        self.show_gpu_density_mesh = old_scene.show_gpu_density_mesh;
+        true
+    }
+
     /// Initialize the organism skin renderer.
     /// Safe to call multiple times - no-op if already initialized.
     pub fn initialize_organism_skin(
@@ -6077,6 +6101,7 @@ impl GpuScene {
         self.show_gpu_density_mesh = true;
         self.water_shadow_bind_group_set = false;
         self.fluid_mesh_extract_counter = 0;
+        self.static_water_smoothing_rebuilds_remaining = 0;
     }
 
     /// Initialize the phagocyte nutrient consumption system
@@ -6260,21 +6285,19 @@ impl GpuScene {
             ]);
         }
 
-        // Cache cell data bind group (depends on organism_label_system)
+        // Cache cell data bind group.
         if self.gametocyte_cell_data_bind_group.is_none() {
             let bufs = &self.gpu_triple_buffers;
-            if let Some(org_system) = self.organism_label_system.as_ref() {
-                self.gametocyte_cell_data_bind_group = Some(system.create_cell_data_bind_group(
-                    device,
-                    &bufs.cell_types,
-                    &bufs.death_flags,
-                    &org_system.label_buffer,
-                    &bufs.genome_ids,
-                    &bufs.mode_indices,
-                    &bufs.mode_properties_v13,
-                    &bufs.embryocyte_reserve_buffer,
-                ));
-            }
+            self.gametocyte_cell_data_bind_group = Some(system.create_cell_data_bind_group(
+                device,
+                &bufs.cell_types,
+                &bufs.death_flags,
+                &bufs.development_addresses,
+                &bufs.genome_ids,
+                &bufs.mode_indices,
+                &bufs.mode_properties_v13,
+                &bufs.embryocyte_reserve_buffer,
+            ));
         }
 
         // Cache spatial bind group
@@ -6785,13 +6808,12 @@ impl GpuScene {
             &self.moss_consume_physics_bind_groups,
             &self.moss_consume_moss_bind_group,
         ) {
-            // Dispatch at full capacity - the shader reads cell_count_buffer[0] internally.
             moss.run_consumption(
                 encoder,
                 queue,
                 &physics_bgs[output_idx],
                 moss_bg,
-                self.gpu_triple_buffers.capacity,
+                self.conservative_cell_dispatch_slots(),
             );
         }
     }
@@ -6843,10 +6865,9 @@ impl GpuScene {
             // Update water bitfield for cell physics (compressed 32x for fast lookup)
             simulator.update_water_bitfield(device, encoder);
 
-            // NOTE: Nutrient population moved into run_physics() so it executes every
-            // physics step. At high sim speeds the physics loop runs N steps per frame;
-            // phagocytes consume voxel nutrients each step, so populate must also run
-            // each step to reset consumed voxels and keep supply balanced with demand.
+            // Nutrient epoch population is encoded once before the rendered
+            // frame's fixed-step batch. Repeating it here or inside every catch-up
+            // step would evaluate the same fluid time and epoch state.
         }
     }
 
@@ -7086,6 +7107,7 @@ impl GpuScene {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         dt: f32,
+        spawn_new: bool,
     ) {
         self.ensure_rain_splash_extract_bind_group(device);
 
@@ -7114,6 +7136,7 @@ impl GpuScene {
                 self.gravity_mode,
                 self.water_alpha,
                 dt,
+                spawn_new,
             );
         }
     }
@@ -7242,7 +7265,7 @@ impl GpuScene {
             renderer.snapshot_death_flags(
                 encoder,
                 &self.gpu_triple_buffers.death_flags,
-                self.gpu_triple_buffers.capacity,
+                self.conservative_cell_dispatch_slots(),
             );
         }
     }
@@ -7277,7 +7300,7 @@ impl GpuScene {
             )
         };
 
-        let capacity = self.gpu_triple_buffers.capacity;
+        let capacity = self.conservative_cell_dispatch_slots();
         if let Some(ref mut renderer) = self.death_particle_renderer {
             renderer.update(encoder, queue, &compute_bind_group, capacity, dt);
         }
@@ -8289,6 +8312,7 @@ impl GpuScene {
 
 impl Scene for GpuScene {
     fn update(&mut self, dt: f32) {
+        self.frame_clock.record(dt, self.paused, self.time_scale);
         if self.paused {
             return;
         }
@@ -8319,29 +8343,399 @@ impl Scene for GpuScene {
         _lod_debug_colors: bool,
         outline_width: f32,
     ) {
-        // Sync adhesion settings to GPU only when genomes are added or modified
-        if self.genomes_dirty {
-            self.sync_adhesion_settings(device, queue);
-            // Sync mutation system genome metadata when genomes change
-            if let Some(mutation_system) = &mut self.mutation_system {
-                mutation_system.sync_genome_metadata(queue, &self.genomes);
-            }
-            // Update mode visuals (colors) from CPU genomes.
-            // This must ONLY happen when CPU genomes change, not every frame,
-            // because the mutation shader writes directly to mode_visuals_buffer
-            // for GPU-mutated genomes and a per-frame overwrite would clobber those.
-            if !self.genomes.is_empty() {
-                self.instance_builder.update_mode_visuals_from_genomes(
-                    device,
-                    queue,
-                    &self.genomes,
-                );
-            }
-            self.genomes_dirty = false;
+        self.render_frame(
+            device,
+            queue,
+            view,
+            cell_type_visuals,
+            world_diameter,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+            _lod_debug_colors,
+            outline_width,
+            true,
+        );
+    }
+
+    fn render_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
+        world_diameter: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        _lod_debug_colors: bool,
+        outline_width: f32,
+    ) {
+        let timing = self.gpu_timing_enabled;
+        self.gpu_timing_enabled = false;
+        self.render_frame(
+            device,
+            queue,
+            view,
+            cell_type_visuals,
+            world_diameter,
+            lod_scale_factor,
+            lod_threshold_low,
+            lod_threshold_medium,
+            lod_threshold_high,
+            _lod_debug_colors,
+            outline_width,
+            false,
+        );
+        self.gpu_timing_enabled = timing;
+    }
+
+    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.renderer.resize(device, width, height);
+        self.adhesion_renderer.resize(width, height);
+        self.world_sphere_renderer.resize(width, height);
+        self.tail_renderer.resize(width, height);
+        self.first_frame = true;
+
+        // Resize cave renderer if initialized
+        if let Some(ref mut cave_renderer) = self.cave_renderer {
+            cave_renderer.resize(width, height);
         }
 
-        // Check and update cave world radius if world diameter changed
-        self.check_world_diameter_change(device, queue, world_diameter);
+        // Resize steam particle renderer if initialized
+        if let Some(ref mut steam_particle_renderer) = self.steam_particle_renderer {
+            steam_particle_renderer.resize(width, height);
+        }
+
+        // Resize sun renderer if initialized
+        if let Some(ref mut sun_renderer) = self.sun_renderer {
+            sun_renderer.resize(width, height);
+        }
+
+        // Resize volumetric fog renderer (recreates half-res texture)
+        if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
+            fog_renderer.resize(device, width, height);
+        }
+
+        // Resize post-process renderer (recreates scene intermediate texture)
+        if let Some(ref mut pp) = self.post_process {
+            pp.resize(device, width, height);
+        }
+
+        // Resize depth of field renderer (recreates intermediate textures)
+        if let Some(ref mut dof_renderer) = self.dof_renderer {
+            dof_renderer.resize(device, width, height, self.surface_format);
+        }
+
+        // Resize GPU surface nets (recreates OIT textures)
+        if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
+            gpu_surface_nets.resize(device, width, height);
+        }
+    }
+
+    fn camera(&self) -> &CameraController {
+        &self.camera
+    }
+
+    fn camera_mut(&mut self) -> &mut CameraController {
+        &mut self.camera
+    }
+
+    fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+
+    fn current_time(&self) -> f32 {
+        self.current_time
+    }
+
+    fn cell_count(&self) -> usize {
+        self.current_cell_count as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_photocyte_mass_rate, photocyte_production_multiplier};
+
+    #[test]
+    fn stereo_view_does_not_advance_gpu_simulation_twice() {
+        use super::GpuScene;
+        use crate::scene::Scene;
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..Default::default()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+            .expect("GPU adapter for stereo regression");
+        let (device, queue) = pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: wgpu::Limits {
+                    max_storage_buffers_per_shader_stage: 64,
+                    max_storage_buffer_binding_size: adapter
+                        .limits()
+                        .max_storage_buffer_binding_size
+                        .min(512 * 1024 * 1024),
+                    max_buffer_size: adapter.limits().max_buffer_size.min(512 * 1024 * 1024),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        )
+        .expect("GPU device for stereo regression");
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            width: 64,
+            height: 64,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        let mut scene = GpuScene::with_capacity_and_radius(&device, &queue, &config, 64, 50.0);
+        scene.paused = false;
+        scene.queue_cell_insertion(glam::Vec3::ZERO, crate::genome::Genome::default());
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Stereo test target"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 2,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let views: Vec<_> = (0..2)
+            .map(|layer| {
+                target.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let eye = |x| crate::rendering::RenderView {
+            position: glam::Vec3::new(x, 0.0, 15.0),
+            rotation: glam::Quat::IDENTITY,
+            projection: crate::rendering::CameraProjection::from_fov(
+                -0.7, 0.8, -0.75, 0.75, 0.1, 5000.0,
+            ),
+            width: 64,
+            height: 64,
+        };
+        scene.camera.set_render_view(Some(eye(-0.6)));
+        scene.update(scene.config.fixed_timestep * 2.0);
+        scene.render(
+            &device, &queue, &views[0], None, 100.0, 1.0, 1.0, 1.0, 1.0, false, 0.0,
+        );
+        let counts = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Stereo visible counts"),
+            size: 8,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(
+            scene.instance_builder.get_counters_buffer(),
+            0,
+            &counts,
+            0,
+            4,
+        );
+        queue.submit([encoder.finish()]);
+        let frame = scene.current_frame;
+        let time = scene.current_time;
+        let index = scene.gpu_triple_buffers.current_index();
+        let steps = scene.last_physics_steps;
+        assert!(steps > 0);
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .unwrap();
+        scene.gpu_triple_buffers.poll_cell_count(&device);
+        assert!(!scene.gpu_triple_buffers.is_cell_count_read_pending());
+        scene.camera.set_render_view(Some(eye(0.6)));
+        scene.render_view(
+            &device, &queue, &views[1], None, 100.0, 1.0, 1.0, 1.0, 1.0, false, 0.0,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(
+            scene.instance_builder.get_counters_buffer(),
+            0,
+            &counts,
+            4,
+            4,
+        );
+        queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        counts
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).unwrap();
+            });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .unwrap();
+        receiver.recv().unwrap().unwrap();
+        let count_data = counts.slice(..).get_mapped_range();
+        let visible: &[u32] = bytemuck::cast_slice(&count_data);
+        assert!(
+            visible[0] > 0,
+            "Inserted cells must be visible before the CPU count readback catches up"
+        );
+        assert_eq!(
+            visible[0], visible[1],
+            "Both eyes must contain the inserted cell"
+        );
+        assert_eq!(scene.current_frame, frame);
+        assert_eq!(scene.current_time, time);
+        assert_eq!(scene.last_physics_steps, steps);
+        assert_eq!(scene.gpu_triple_buffers.current_index(), index);
+        assert!(!scene.gpu_triple_buffers.is_cell_count_read_pending());
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Stereo pixels"),
+            size: 32768,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: Some(64),
+                },
+            },
+            wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 2,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        staging
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender.send(result).unwrap();
+            });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .unwrap();
+        receiver.recv().unwrap().unwrap();
+        let pixels = staging.slice(..).get_mapped_range();
+        assert_ne!(
+            &pixels[..16384],
+            &pixels[16384..],
+            "Both eye targets must receive distinct projected views"
+        );
+    }
+
+    #[test]
+    fn photocyte_production_is_centered_on_brightness_2_5() {
+        assert_eq!(photocyte_production_multiplier(0.0), 0.0);
+        assert_eq!(photocyte_production_multiplier(1.25), 0.25);
+        assert_eq!(photocyte_production_multiplier(2.5), 1.0);
+        assert_eq!(photocyte_production_multiplier(3.75), 2.25);
+        assert_eq!(photocyte_production_multiplier(5.0), 4.0);
+
+        let configured_mass_rate = effective_photocyte_mass_rate(0.2);
+        assert_eq!(
+            configured_mass_rate * photocyte_production_multiplier(2.5) * 100.0,
+            20.0
+        );
+        assert_eq!(
+            configured_mass_rate * photocyte_production_multiplier(5.0) * 100.0,
+            80.0
+        );
+
+        let gain_at_brightness_one_full_light =
+            configured_mass_rate * photocyte_production_multiplier(1.0) * 100.0;
+        assert!((gain_at_brightness_one_full_light - 3.2).abs() < 1e-5);
+
+        let gain_at_extremely_low_brightness =
+            configured_mass_rate * photocyte_production_multiplier(0.1) * 100.0;
+        assert!((gain_at_extremely_low_brightness - 0.032).abs() < 1e-5);
+    }
+
+    #[test]
+    fn photocyte_production_stays_within_the_brightness_range() {
+        assert_eq!(photocyte_production_multiplier(-1.0), 0.0);
+        assert_eq!(photocyte_production_multiplier(6.0), 4.0);
+    }
+
+    #[test]
+    fn legacy_photocyte_rates_are_promoted_at_runtime() {
+        assert_eq!(effective_photocyte_mass_rate(0.012), 0.2);
+        assert_eq!(effective_photocyte_mass_rate(0.02), 0.2);
+        assert_eq!(effective_photocyte_mass_rate(0.25), 0.25);
+    }
+}
+
+impl GpuScene {
+    fn render_frame(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: &wgpu::TextureView,
+        cell_type_visuals: Option<&[crate::cell::types::CellTypeVisuals]>,
+        world_diameter: f32,
+        lod_scale_factor: f32,
+        lod_threshold_low: f32,
+        lod_threshold_medium: f32,
+        lod_threshold_high: f32,
+        _lod_debug_colors: bool,
+        outline_width: f32,
+        advance_world: bool,
+    ) {
+        if advance_world {
+            // Sync adhesion settings to GPU only when genomes are added or modified
+            if self.genomes_dirty {
+                self.sync_adhesion_settings(device, queue);
+                // Sync mutation system genome metadata when genomes change
+                if let Some(mutation_system) = &mut self.mutation_system {
+                    mutation_system.sync_genome_metadata(queue, &self.genomes);
+                }
+                // Update mode visuals (colors) from CPU genomes.
+                // This must ONLY happen when CPU genomes change, not every frame,
+                // because the mutation shader writes directly to mode_visuals_buffer
+                // for GPU-mutated genomes and a per-frame overwrite would clobber those.
+                if !self.genomes.is_empty() {
+                    self.instance_builder.update_mode_visuals_from_genomes(
+                        device,
+                        queue,
+                        &self.genomes,
+                    );
+                }
+                self.genomes_dirty = false;
+            }
+
+            // Check and update cave world radius if world diameter changed
+            self.check_world_diameter_change(device, queue, world_diameter);
+        }
 
         // Effective view rotation, including any middle-mouse free-look offset
         // (Orbit mode only). Camera position/distance are unaffected.
@@ -8368,8 +8762,10 @@ impl Scene for GpuScene {
 
         // Prepare organism label system for this frame (writes run_init flag to GPU
         // before the encoder is built, so the shader sees it in the same submit).
-        if let Some(ref label_system) = self.organism_label_system {
-            label_system.prepare_frame(queue);
+        if advance_world {
+            if let Some(ref label_system) = self.organism_label_system {
+                label_system.prepare_frame(queue);
+            }
         }
 
         // Create single command encoder for all GPU work to avoid multiple queue.submit() calls
@@ -8388,7 +8784,7 @@ impl Scene for GpuScene {
         // immediately stops rendering stale moss. The buffer persists between frames and
         // the cave fragment shader reads it unconditionally, so without this clear the
         // old moss stays visible until the buffer is overwritten by new growth.
-        if self.moss_needs_clear {
+        if advance_world && self.moss_needs_clear {
             if let Some(ref moss) = self.moss_system {
                 encoder.clear_buffer(moss.moss_density_buffer(), 0, None);
             }
@@ -8410,291 +8806,350 @@ impl Scene for GpuScene {
                 .as_ref()
                 .map(|simulator| !simulator.paused)
                 .unwrap_or(false);
-        if fluid_active {
-            let dt = 1.0 / 60.0; // Fixed timestep for fluid
-            self.step_fluid_simulation(device, queue, &mut encoder, dt);
-
-            // Extract steam particles from fluid state (GPU compute)
-            if self.show_steam_particles && !self.headless_no_render {
-                self.extract_steam_particles(&mut encoder, device, queue, dt);
-            }
-
-            // Extract water particles from fluid state (GPU compute)
-            if self.show_water_particles && !self.headless_no_render {
-                self.extract_water_particles(&mut encoder, device, queue, dt);
-            }
-
-            // Spawn/age rain splash rings from fluid state (GPU compute)
-            if !self.headless_no_render {
-                self.update_rain_splash_particles(&mut encoder, device, queue, dt);
-            }
-
-            // Extract nutrient particles from fluid state (GPU compute)
-            if self.show_nutrient_particles && !self.headless_no_render {
-                self.extract_nutrient_particles(&mut encoder, device, queue, dt);
-            }
-        }
-
-        // Poll gamete merge events from the staging buffer and process crossovers
-        self.poll_gamete_merge_events(device, queue);
-
-        // Process any pending cell insertion from input handling
-        let cell_inserted = self.process_pending_insertion(device, &mut encoder, queue);
-
-        // Execute any pending tool queries (spatial queries for inspect/drag/remove/boost)
-        self.execute_pending_tool_queries(device, &mut encoder, queue);
-
-        // Poll for cell extraction completion (inspect tool async readback)
-        // This needs to be called each frame to check for completed async readbacks
-        if let Some(ref mut inspector) = self.cell_inspector {
-            inspector.poll_extraction(Some(device));
-        }
-
-        // If a cell was inserted, copy buffers to instance builder before physics
-        if cell_inserted {
-            // Hi-Z won't include the new cell this frame, but the shader guards
-            // occlusion culling with `hiz_mip_count > 0`, so no mode override needed.
-            self.copy_buffers_to_instance_builder(&mut encoder);
-        }
-
-        // Compute light field BEFORE physics loop, throttled by light_field_update_interval.
-        // Needed for: (1) photocyte consumption inside each physics step, (2) volumetric fog rendering
-        let lf_interval = self.light_field_update_interval.max(1);
-        let frame_due = self.current_frame as u32 % lf_interval == 0;
-        let already_updated_this_frame =
-            self.last_light_field_update_frame == Some(self.current_frame);
-        if self.light_field_needs_update
-            || (!self.paused && frame_due && !already_updated_this_frame)
-        {
-            self.run_light_field(device, &mut encoder, queue);
-            self.last_light_field_update_frame = Some(self.current_frame);
-            self.light_field_needs_update = false;
-        }
-
-        // NOTE: Moss growth is dispatched AFTER the cave render pass (near queue.submit)
-        // to avoid a read-after-write pipeline stall on moss_density_buffer.
-        // The cave fragment shader reads moss_density; if growth runs before the render
-        // pass in the same encoder, the GPU serializes them - stalling the render pass
-        // until the 32K-workgroup compute finishes. Moving it after rendering means the
-        // write lands in the buffer that the NEXT frame's render pass will read, which
-        // is a 1-frame lag that is completely invisible for a slowly-changing moss field.
-
-        let is_dragging = self.dragged_cell_index != u32::MAX;
-
-        // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it.
-        // Only write when the value has changed - the buffer retains its last value between frames,
-        // so we only need to update it when dragging starts, the target changes, or dragging stops.
-        if self.dragged_cell_index != self.last_written_dragged_index {
-            queue.write_buffer(
-                &self.gpu_triple_buffers.cell_count_buffer,
-                8, // byte offset for slot [2]
-                bytemuck::cast_slice(&[self.dragged_cell_index]),
-            );
-            self.last_written_dragged_index = self.dragged_cell_index;
-        }
-
-        // Execute drag position update BEFORE physics so adhesion springs see the
-        // correct dragged cell position and can pull connected cells toward it.
-        // update_position.wgsl writes to ALL THREE triple buffers, and
-        // position_update.wgsl preserves the dragged cell's position (copies in->out),
-        // so one dispatch before physics is sufficient.
-        let position_updated = if is_dragging {
-            self.execute_pending_position_updates(device, &mut encoder, queue)
+        let frame_times = if advance_world {
+            self.frame_clock.take(fluid_active)
         } else {
-            false
+            Default::default()
         };
+        let frame_dt = frame_times.wall_seconds;
+        let mut cell_inserted = false;
+        if advance_world {
+            if fluid_active {
+                // Climate and flow rules are per tick: render frequency must not
+                // change their rate. Catch-up steps use distinct encoded uniforms.
+                for _ in 0..frame_times.fluid_steps {
+                    self.step_fluid_simulation(
+                        device,
+                        queue,
+                        &mut encoder,
+                        super::frame_timing::FLUID_TIMESTEP as f32,
+                    );
+                }
 
-        // End of "Physics Setup", start of independently timed topology repair.
-        if self.gpu_timing_enabled {
-            if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 1);
-            }
-        }
+                // Extract steam particles from fluid state (GPU compute)
+                if self.show_steam_particles && !self.headless_no_render {
+                    self.extract_steam_particles(&mut encoder, device, queue, frame_dt);
+                }
 
-        // Phase 4 topology work is encoded at this boundary. Keeping an empty
-        // segment visible is intentional: repair cost cannot hide in propagation.
-        if self.gpu_timing_enabled {
-            if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 2);
-            }
-        }
+                // Extract water particles from fluid state (GPU compute)
+                if self.show_water_particles && !self.headless_no_render {
+                    self.extract_water_particles(&mut encoder, device, queue, frame_dt);
+                }
 
-        // Fixed 15 Hz cached-backbone value ticks. All catch-up ticks stay in
-        // this command encoder and therefore add no queue submission.
-        let elapsed = std::mem::take(&mut self.signal_elapsed_pending);
-        let signal_ticks = if self.signal_backbone.has_static_forest() {
-            self.signal_clock.advance(elapsed)
-        } else {
-            0
-        };
-        let signal_cell_slots = self.total_cell_slots.max(if cell_inserted { 1 } else { 0 });
-        for tick_slot in 0..signal_ticks {
-            let tick = self.signal_clock.begin_tick();
-            self.signal_backbone
-                .write_params(queue, tick_slot, signal_cell_slots, tick, 0xf);
-            self.signal_backbone
-                .encode_sources(&mut encoder, tick_slot, signal_cell_slots);
-            self.signal_backbone
-                .encode_propagation(&mut encoder, 0xf, tick_slot);
-            self.signal_backbone.encode_finalize_and_processors(
-                &mut encoder,
-                tick_slot,
-                signal_cell_slots,
-                true,
-            );
-        }
+                // Spawn/age rain splash rings from fluid state (GPU compute)
+                if !self.headless_no_render {
+                    self.update_rain_splash_particles(
+                        &mut encoder,
+                        device,
+                        queue,
+                        frame_dt,
+                        frame_times.fluid_steps > 0,
+                    );
+                }
 
-        // End of "Signal Processing" segment, start of "Physics & Lifecycle".
-        if self.gpu_timing_enabled {
-            if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 3);
-            }
-        }
-
-        // Snapshot death_flags BEFORE physics runs - needed by spawn_new to detect
-        // the alive->dead transition this frame.
-        if self.show_death_particles && !self.paused && !self.headless_no_render {
-            self.snapshot_death_flags_for_particles(&mut encoder);
-        }
-
-        let mut physics_steps = 0;
-
-        // Execute GPU physics pipeline if not paused and has cells
-        // Use fixed timestep accumulator for consistent physics behavior
-        if !self.paused {
-            let fixed_dt = self.config.fixed_timestep;
-            let max_steps =
-                (self.max_physics_steps_per_frame as f32 * self.time_scale).ceil() as i32;
-
-            // Reset once per frame so the first `run_physics` step below clears the
-            // division-audio candidate buffer and later steps in this frame accumulate.
-            self.division_audio_cleared_this_frame = false;
-
-            // Pick the division-audio readback buffer once for the whole frame, not per
-            // step - see the comment in `run_physics` for why toggling per step silently
-            // dropped divisions on frames with 3+ catch-up steps. Scan the whole ring
-            // (not just 2 slots) starting from the round-robin cursor.
-            let buffer_count = self.division_audio_readback_buffers.len();
-            self.division_audio_frame_readback_index = (0..buffer_count)
-                .map(|offset| (self.division_audio_readback_write_index + offset) % buffer_count)
-                .find(|&idx| !self.division_audio_readback_busy[idx]);
-            if self.division_audio_frame_readback_index.is_none() {
-                log::warn!(
-                    "Division audio: all {buffer_count} readback buffers busy this frame - collection skipped"
-                );
-            }
-            self.division_audio_frame_readback_used = false;
-
-            while self.time_accumulator >= fixed_dt && physics_steps < max_steps {
-                self.run_physics(device, &mut encoder, queue, fixed_dt, world_diameter);
-
-                // Wrap current_time to prevent f32 precision loss in long runs.
-                // f32 loses sub-second precision above ~8M seconds. Wrapping at 65536s
-                // keeps full precision. birth_times are also written from current_time
-                // so cell_age = current_time - birth_time remains correct after the wrap
-                // as long as no cell lives longer than 65536 sim-seconds (they don't).
-                self.current_time = (self.current_time + fixed_dt) % 65536.0;
-                self.time_accumulator -= fixed_dt;
-                physics_steps += 1;
-            }
-            self.last_physics_steps = physics_steps as u32;
-
-            if self.division_audio_frame_readback_used {
-                if let Some(index) = self.division_audio_frame_readback_index {
-                    self.division_audio_readback_busy[index] = true;
-                    self.division_audio_readback_claimed_at[index] =
-                        Some(std::time::Instant::now());
-                    self.division_audio_readback_write_index =
-                        (index + 1) % self.division_audio_readback_buffers.len();
+                // Extract nutrient particles from fluid state (GPU compute)
+                if self.show_nutrient_particles && !self.headless_no_render {
+                    self.extract_nutrient_particles(&mut encoder, device, queue, frame_dt);
                 }
             }
 
-            // If we hit max steps, discard remaining accumulated time
-            if physics_steps >= max_steps {
-                self.time_accumulator = 0.0;
+            // Poll gamete merge events from the staging buffer and process crossovers
+            self.poll_gamete_merge_events(device, queue);
+
+            // Process any pending cell insertion from input handling
+            cell_inserted = self.process_pending_insertion(device, &mut encoder, queue);
+
+            // Execute any pending tool queries (spatial queries for inspect/drag/remove/boost)
+            self.execute_pending_tool_queries(device, &mut encoder, queue);
+
+            // Poll for cell extraction completion (inspect tool async readback)
+            // This needs to be called each frame to check for completed async readbacks
+            if let Some(ref mut inspector) = self.cell_inspector {
+                inspector.poll_extraction(Some(device));
+            }
+
+            // If a cell was inserted, copy buffers to instance builder before physics
+            if cell_inserted {
+                // Hi-Z won't include the new cell this frame, but the shader guards
+                // occlusion culling with `hiz_mip_count > 0`, so no mode override needed.
+                self.copy_buffers_to_instance_builder(&mut encoder);
+            }
+
+            // Compute light field BEFORE physics loop, throttled by light_field_update_interval.
+            // Needed for: (1) photocyte consumption inside each physics step, (2) volumetric fog rendering
+            let lf_interval = self.light_field_update_interval.max(1);
+            let frame_due = self.current_frame as u32 % lf_interval == 0;
+            let already_updated_this_frame =
+                self.last_light_field_update_frame == Some(self.current_frame);
+            if self.light_field_needs_update
+                || (!self.paused && frame_due && !already_updated_this_frame)
+            {
+                self.run_light_field(device, &mut encoder, queue);
+                self.last_light_field_update_frame = Some(self.current_frame);
+                self.light_field_needs_update = false;
+            }
+
+            // NOTE: Moss growth is dispatched AFTER the cave render pass (near queue.submit)
+            // to avoid a read-after-write pipeline stall on moss_density_buffer.
+            // The cave fragment shader reads moss_density; if growth runs before the render
+            // pass in the same encoder, the GPU serializes them - stalling the render pass
+            // until the 32K-workgroup compute finishes. Moving it after rendering means the
+            // write lands in the buffer that the NEXT frame's render pass will read, which
+            // is a 1-frame lag that is completely invisible for a slowly-changing moss field.
+
+            let is_dragging = self.dragged_cell_index != u32::MAX;
+
+            // Write dragged cell index to cell_count_buffer[2] so position_update shader can skip it.
+            // Only write when the value has changed - the buffer retains its last value between frames,
+            // so we only need to update it when dragging starts, the target changes, or dragging stops.
+            if self.dragged_cell_index != self.last_written_dragged_index {
+                queue.write_buffer(
+                    &self.gpu_triple_buffers.cell_count_buffer,
+                    8, // byte offset for slot [2]
+                    bytemuck::cast_slice(&[self.dragged_cell_index]),
+                );
+                self.last_written_dragged_index = self.dragged_cell_index;
+            }
+
+            // Execute drag position update BEFORE physics so adhesion springs see the
+            // correct dragged cell position and can pull connected cells toward it.
+            // update_position.wgsl writes to ALL THREE triple buffers, and
+            // position_update.wgsl preserves the dragged cell's position (copies in->out),
+            // so one dispatch before physics is sufficient.
+            let position_updated = if is_dragging {
+                self.execute_pending_position_updates(device, &mut encoder, queue)
+            } else {
+                false
+            };
+
+            // End of "Physics Setup", start of independently timed topology repair.
+            if self.gpu_timing_enabled {
+                if let Some(ref timer) = self.gpu_timer {
+                    timer.write_timestamp(&mut encoder, 1);
+                }
+            }
+
+            // Phase 4 topology work is encoded at this boundary. Keeping an empty
+            // segment visible is intentional: repair cost cannot hide in propagation.
+            if self.gpu_timing_enabled {
+                if let Some(ref timer) = self.gpu_timer {
+                    timer.write_timestamp(&mut encoder, 2);
+                }
+            }
+
+            // Fixed 15 Hz cached-backbone value ticks. All catch-up ticks stay in
+            // this command encoder and therefore add no queue submission.
+            let elapsed = std::mem::take(&mut self.signal_elapsed_pending);
+            let signal_ticks = if self.signal_backbone.has_static_forest() {
+                self.signal_clock.advance(elapsed)
+            } else {
+                0
+            };
+            let signal_cell_slots = self.total_cell_slots.max(if cell_inserted { 1 } else { 0 });
+            for tick_slot in 0..signal_ticks {
+                let tick = self.signal_clock.begin_tick();
+                self.signal_backbone
+                    .write_params(queue, tick_slot, signal_cell_slots, tick, 0xf);
+                self.signal_backbone
+                    .encode_sources(&mut encoder, tick_slot, signal_cell_slots);
+                self.signal_backbone
+                    .encode_propagation(&mut encoder, 0xf, tick_slot);
+                self.signal_backbone.encode_finalize_and_processors(
+                    &mut encoder,
+                    tick_slot,
+                    signal_cell_slots,
+                    true,
+                );
+            }
+
+            // End of "Signal Processing" segment, start of "Physics & Lifecycle".
+            if self.gpu_timing_enabled {
+                if let Some(ref timer) = self.gpu_timer {
+                    timer.write_timestamp(&mut encoder, 3);
+                }
+            }
+
+            // Snapshot death_flags BEFORE physics runs - needed by spawn_new to detect
+            // the alive->dead transition this frame.
+            if self.show_death_particles && !self.paused && !self.headless_no_render {
+                self.snapshot_death_flags_for_particles(&mut encoder);
+            }
+
+            let mut physics_steps = 0;
+
+            // Execute GPU physics pipeline if not paused and has cells
+            // Use fixed timestep accumulator for consistent physics behavior
+            if !self.paused {
+                let fixed_dt = self.config.fixed_timestep;
+                let max_steps =
+                    (self.max_physics_steps_per_frame as f32 * self.time_scale).ceil() as i32;
+
+                // Fluid ticks have already been encoded for this frame, and consumed
+                // nutrient voxels remain marked for the epoch. Re-running this 128^3 noise
+                // field for every catch-up step produced identical results. Populate
+                // once when this frame will actually encode at least one fixed step.
+                if max_steps > 0 && self.time_accumulator >= fixed_dt {
+                    self.populate_nutrients_for_physics_frame(
+                        device,
+                        &mut encoder,
+                        queue,
+                        fixed_dt,
+                    );
+                }
+
+                // Pick one division-audio readback buffer for the final encoded fixed
+                // step. Scan the whole ring from the round-robin cursor so a slow map
+                // on one staging buffer cannot starve the others.
+                let buffer_count = self.division_audio_readback_buffers.len();
+                self.division_audio_frame_readback_index = (0..buffer_count)
+                    .map(|offset| {
+                        (self.division_audio_readback_write_index + offset) % buffer_count
+                    })
+                    .find(|&idx| !self.division_audio_readback_busy[idx]);
+                if self.division_audio_frame_readback_index.is_none() {
+                    log::warn!(
+                    "Division audio: all {buffer_count} readback buffers busy this frame - collection skipped"
+                );
+                }
+                self.division_audio_frame_readback_used = false;
+
+                while self.time_accumulator >= fixed_dt && physics_steps < max_steps {
+                    let remaining_after_step = self.time_accumulator - fixed_dt;
+                    let final_encoded_step =
+                        remaining_after_step < fixed_dt || physics_steps + 1 >= max_steps;
+                    self.run_physics(
+                        device,
+                        &mut encoder,
+                        queue,
+                        fixed_dt,
+                        world_diameter,
+                        final_encoded_step,
+                    );
+
+                    // Wrap current_time to prevent f32 precision loss in long runs.
+                    // f32 loses sub-second precision above ~8M seconds. Wrapping at 65536s
+                    // keeps full precision. birth_times are also written from current_time
+                    // so cell_age = current_time - birth_time remains correct after the wrap
+                    // as long as no cell lives longer than 65536 sim-seconds (they don't).
+                    self.current_time = (self.current_time + fixed_dt) % 65536.0;
+                    self.time_accumulator -= fixed_dt;
+                    physics_steps += 1;
+                }
+                self.last_physics_steps = physics_steps as u32;
+
+                if self.division_audio_frame_readback_used {
+                    if let Some(index) = self.division_audio_frame_readback_index {
+                        self.division_audio_readback_busy[index] = true;
+                        self.division_audio_readback_claimed_at[index] =
+                            Some(std::time::Instant::now());
+                        self.division_audio_readback_write_index =
+                            (index + 1) % self.division_audio_readback_buffers.len();
+                    }
+                }
+
+                // If we hit max steps, discard remaining accumulated time
+                if physics_steps >= max_steps {
+                    self.time_accumulator = 0.0;
+                }
+            } else if is_dragging {
+                // Paused but dragging: run mechanics-only physics step so adhesion-connected
+                // cells follow via spring forces. Skips nutrient transport, mass accumulation,
+                // and lifecycle to preserve cell split timing and nutrient state.
+                let fixed_dt = self.config.fixed_timestep;
+                self.run_mechanics_only(device, &mut encoder, queue, fixed_dt, world_diameter);
+            }
+
+            // End of repeated fixed-step mechanics/lifecycle work; start work that
+            // runs once per rendered frame regardless of catch-up step count.
+            if self.gpu_timing_enabled {
+                if let Some(ref timer) = self.gpu_timer {
+                    timer.write_timestamp(&mut encoder, 4);
+                }
             }
 
             // Organism label pass: runs ONCE per render frame after all physics steps
-            // complete, not inside run_physics. Previously it ran every physics step
-            // (up to 4x/frame), making it 5-7 dispatches x 4 steps = 20-28 dispatches
-            // per render frame. Labels change slowly (bonds form/break over many frames)
-            // so one update per render frame is sufficient.
-            if let Some(label_system) = &mut self.organism_label_system {
-                label_system.encode_frame(
-                    &mut encoder,
-                    self.total_cell_slots,
-                    self.show_organism_skins,
-                );
+            // complete, not inside run_physics. Labels change slowly, and scaffold
+            // matching below consumes the resulting current-component labels.
+            if !self.paused {
+                if let Some(label_system) = &mut self.organism_label_system {
+                    label_system.encode_frame(
+                        &mut encoder,
+                        self.total_cell_slots,
+                        self.show_organism_skins,
+                    );
+                }
             }
-        } else if is_dragging {
-            // Paused but dragging: run mechanics-only physics step so adhesion-connected
-            // cells follow via spring forces. Skips nutrient transport, mass accumulation,
-            // and lifecycle to preserve cell split timing and nutrient state.
-            let fixed_dt = self.config.fixed_timestep;
-            self.run_mechanics_only(device, &mut encoder, queue, fixed_dt, world_diameter);
-        }
 
-        if physics_steps == 0 {
+            // Scaffold matching must run after the developmental-component label pass.
+            // Development addresses describe ancestry, while labels describe current
+            // normal-adhesion connectivity. Requiring both prevents detached fragments
+            // with shared ancestry from being pulled back together by a scaffold rule.
             self.dispatch_scaffold_rules(device, &mut encoder, queue);
-        }
 
-        // Execute non-drag pending position updates (e.g. from other tools)
-        let position_updated =
-            position_updated || self.execute_pending_position_updates(device, &mut encoder, queue);
+            // Execute non-drag pending position updates (e.g. from other tools)
+            let position_updated = position_updated
+                || self.execute_pending_position_updates(device, &mut encoder, queue);
 
-        // Update death particles AFTER physics - spawn_new reads death_flags written
-        // by lifecycle_unified.wgsl (death_scan) and positions from the current
-        // triple-buffer slot (last completed frame, not the one being written).
-        if self.show_death_particles && !self.paused && !self.headless_no_render {
-            let dt = 1.0 / 60.0;
-            self.update_death_particles(&mut encoder, device, queue, dt);
-        }
-
-        // Execute any pending cell removals (remove tool) AFTER physics
-        // This marks cells for death by setting their mass to 0
-        // The lifecycle pipeline will handle the actual removal on the next physics step
-        let cell_removed = self.execute_pending_cell_removals(device, &mut encoder, queue);
-
-        // Execute any pending cell boosts (boost tool) AFTER physics
-        // This sets cell mass to maximum to trigger division
-        let cell_boosted = self.execute_pending_cell_boosts(device, &mut encoder, queue);
-
-        // Execute any pending cell extractions (inspect tool) AFTER physics
-        // This extracts detailed cell data for the Cell Inspector panel
-        let _cell_extracted = self.execute_pending_cell_extraction(device, &mut encoder, queue);
-
-        // Copy buffers to instance builder after physics (always needed for division)
-        // Division creates new cells with updated cell_types that must be copied before rendering
-        // Also copy after position update, cell removal, or cell boost
-        // Skip entirely when there are no cells - the copies are full-capacity DMA transfers
-        // (positions, rotations, mode_indices, cell_ids, genome_ids, cell_types, mode_properties)
-        // and with 0 cells the instance builder will produce 0 visible instances regardless.
-        // IMPORTANT: also copy when cell_inserted is true - total_cell_slots lags 1-3 frames
-        // behind the async readback, so the first cell would be invisible without this override.
-        let has_cells = self.total_cell_slots > 0 || cell_inserted;
-
-        // Tick follow camera BEFORE copy_buffers_to_instance_builder so the orbit
-        // pivot and the rendered cell positions are derived from the same GPU buffer.
-        if self.follow_organism_id.is_some() {
-            self.tick_follow_camera(device, &mut encoder, 1.0 / 60.0);
-        }
-
-        if has_cells
-            && (!self.paused || position_updated || cell_removed || cell_boosted || cell_inserted)
-        {
-            self.copy_buffers_to_instance_builder(&mut encoder);
-        }
-
-        // End of "Physics & Lifecycle" segment.
-        if self.gpu_timing_enabled {
-            if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 4);
+            // Update death particles AFTER physics - spawn_new reads death_flags written
+            // by lifecycle_unified.wgsl (death_scan) and positions from the current
+            // triple-buffer slot (last completed frame, not the one being written).
+            if self.show_death_particles && !self.paused && !self.headless_no_render {
+                self.update_death_particles(&mut encoder, device, queue, frame_dt);
             }
-        }
+
+            // Execute any pending cell removals (remove tool) AFTER physics
+            // This marks cells for death by setting their mass to 0
+            // The lifecycle pipeline will handle the actual removal on the next physics step
+            let cell_removed = self.execute_pending_cell_removals(device, &mut encoder, queue);
+
+            // Execute any pending cell boosts (boost tool) AFTER physics
+            // This sets cell mass to maximum to trigger division
+            let cell_boosted = self.execute_pending_cell_boosts(device, &mut encoder, queue);
+
+            // Execute any pending cell extractions (inspect tool) AFTER physics
+            // This extracts detailed cell data for the Cell Inspector panel
+            let _cell_extracted = self.execute_pending_cell_extraction(device, &mut encoder, queue);
+
+            // Copy buffers to instance builder after physics (always needed for division)
+            // Division creates new cells with updated cell_types that must be copied before rendering
+            // Also copy after position update, cell removal, or cell boost
+            // Skip entirely when there are no cells - the copies are full-capacity DMA transfers
+            // (positions, rotations, mode_indices, cell_ids, genome_ids, cell_types, mode_properties)
+            // and with 0 cells the instance builder will produce 0 visible instances regardless.
+            // IMPORTANT: also copy when cell_inserted is true - total_cell_slots lags 1-3 frames
+            // behind the async readback, so the first cell would be invisible without this override.
+            let has_cells = self.total_cell_slots > 0 || cell_inserted;
+
+            // Tick follow camera BEFORE copy_buffers_to_instance_builder so the orbit
+            // pivot and the rendered cell positions are derived from the same GPU buffer.
+            if self.follow_organism_id.is_some() {
+                self.tick_follow_camera(device, &mut encoder, frame_dt);
+            }
+
+            if has_cells
+                && (!self.paused
+                    || position_updated
+                    || cell_removed
+                    || cell_boosted
+                    || cell_inserted)
+            {
+                self.copy_buffers_to_instance_builder(&mut encoder);
+            }
+
+            // End of once-per-frame physics maintenance.
+            if self.gpu_timing_enabled {
+                if let Some(ref timer) = self.gpu_timer {
+                    timer.write_timestamp(&mut encoder, 5);
+                }
+            }
+        } // World preparation runs only for the first view.
 
         if self.headless_no_render {
+            if !advance_world {
+                return;
+            }
             let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
-            let should_start_readback = !cell_count_read_pending;
+            let should_start_readback = advance_world && !cell_count_read_pending;
             if should_start_readback {
                 self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
             }
@@ -8704,7 +9159,7 @@ impl Scene for GpuScene {
             // then resolve before submitting.
             if self.gpu_timing_enabled {
                 if let Some(ref mut timer) = self.gpu_timer {
-                    for boundary in 5..=crate::scene::gpu_timer::SEGMENT_COUNT {
+                    for boundary in 6..=crate::scene::gpu_timer::SEGMENT_COUNT {
                         timer.write_timestamp(&mut encoder, boundary);
                     }
                     timer.resolve(&mut encoder);
@@ -8723,12 +9178,12 @@ impl Scene for GpuScene {
                 self.tick_follow_camera_post_submit();
             }
 
-            if !self.paused && self.show_moss {
+            if !self.paused && frame_times.simulation_seconds > 0.0 && self.show_moss {
                 let mut moss_encoder =
                     device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("Headless Moss Growth Encoder"),
                     });
-                let dt = self.config.fixed_timestep;
+                let dt = frame_times.simulation_seconds;
                 self.run_moss_growth(device, &mut moss_encoder, queue, dt);
                 queue.submit(std::iter::once(moss_encoder.finish()));
             }
@@ -8820,7 +9275,12 @@ impl Scene for GpuScene {
             self.current_time,
             // Use max(1) when a cell was just inserted so the instance builder
             // doesn't early-out before the async readback has caught up.
-            self.total_cell_slots.max(if cell_inserted { 1 } else { 0 }),
+            self.total_cell_slots
+                .max(if cell_inserted || !advance_world {
+                    1
+                } else {
+                    0
+                }),
             solid_mask_buf,
             &self.gpu_triple_buffers.cell_thermal_state,
             &self.gpu_triple_buffers.mode_properties_v14,
@@ -8831,7 +9291,7 @@ impl Scene for GpuScene {
         // End of "Instance Build & Culling" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 5);
+                timer.write_timestamp(&mut encoder, 6);
             }
         }
 
@@ -8974,14 +9434,16 @@ impl Scene for GpuScene {
                 &self.renderer.depth_view,
                 self.camera.position(),
                 camera_view_rotation,
-                self.camera.horizontal_fov_degrees,
+                self.camera.render_projection(),
             );
         }
 
         // Boulders also before cells for the same reason.
         if self.show_boulders {
             if let Some(ref mut bs) = self.boulder_system {
-                bs.update_bubbles(&mut encoder, queue, self.last_delta_time, self.gravity_mode);
+                if advance_world {
+                    bs.update_bubbles(&mut encoder, queue, frame_dt, self.gravity_mode);
+                }
                 bs.render(
                     &mut encoder,
                     queue,
@@ -8990,7 +9452,7 @@ impl Scene for GpuScene {
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
-                    self.camera.horizontal_fov_degrees,
+                    self.camera.render_projection(),
                 );
             }
         }
@@ -9016,7 +9478,7 @@ impl Scene for GpuScene {
             lod_threshold_medium,
             lod_threshold_high,
             outline_width,
-            self.camera.horizontal_fov_degrees,
+            self.camera.render_projection(),
         );
 
         // Render flagellocyte tails using GPU instance buffer
@@ -9035,7 +9497,7 @@ impl Scene for GpuScene {
                 self.camera.position(),
                 camera_view_rotation,
                 self.current_time,
-                self.camera.horizontal_fov_degrees,
+                self.camera.render_projection(),
                 self.renderer.width,
                 self.renderer.height,
                 self.instance_builder.capacity(),
@@ -9052,7 +9514,7 @@ impl Scene for GpuScene {
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
-                    self.camera.horizontal_fov_degrees,
+                    self.camera.render_projection(),
                     self.renderer.width,
                     self.renderer.height,
                     self.gravity,
@@ -9072,7 +9534,7 @@ impl Scene for GpuScene {
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
-                    self.camera.horizontal_fov_degrees,
+                    self.camera.render_projection(),
                     self.renderer.width,
                     self.renderer.height,
                 );
@@ -9091,8 +9553,8 @@ impl Scene for GpuScene {
                     self.camera.position(),
                     camera_view_rotation,
                     self.current_time,
-                    self.last_delta_time,
-                    self.camera.horizontal_fov_degrees,
+                    frame_dt,
+                    self.camera.render_projection(),
                     self.renderer.width,
                     self.renderer.height,
                 );
@@ -9138,14 +9600,14 @@ impl Scene for GpuScene {
                 &self.renderer.depth_view,
                 self.camera.position(),
                 camera_view_rotation,
-                self.camera.horizontal_fov_degrees,
+                self.camera.render_projection(),
             );
         }
 
         // End of "Opaque Render" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 6);
+                timer.write_timestamp(&mut encoder, 7);
             }
         }
 
@@ -9188,7 +9650,7 @@ impl Scene for GpuScene {
                     adhesion_data_bind_group,
                     self.camera.position(),
                     camera_view_rotation,
-                    self.camera.horizontal_fov_degrees,
+                    self.camera.render_projection(),
                 );
             }
         }
@@ -9205,7 +9667,7 @@ impl Scene for GpuScene {
                 &self.organism_skin_renderer,
                 &self.organism_skin_compute_bind_groups,
             ) {
-                if max_cells > 0 {
+                if advance_world && max_cells > 0 {
                     renderer.encode_shrinkwrap_frame(
                         &mut encoder,
                         &compute_bgs[output_idx],
@@ -9225,7 +9687,7 @@ impl Scene for GpuScene {
                         &self.renderer.depth_view,
                         self.camera.position(),
                         camera_view_rotation,
-                        self.camera.horizontal_fov_degrees,
+                        self.camera.render_projection(),
                     );
                 }
             }
@@ -9289,21 +9751,66 @@ impl Scene for GpuScene {
 
         // Extract and render GPU density mesh if enabled
         if self.show_gpu_density_mesh {
-            // Only re-extract the mesh when the fluid state has actually changed.
-            // When the simulation is paused and there are no cells (nothing can disturb
-            // the fluid), the density field is static - re-running extract_to_surface_nets,
-            // smooth_density, and extract_mesh every frame wastes ~100K workgroups for
-            // an identical result. We still render the last extracted mesh every frame.
-            let fluid_changed = !self.paused || self.current_cell_count > 0;
+            let static_water_world = self
+                .fluid_simulator
+                .as_ref()
+                .map(|sim| sim.is_static_water_world_enabled())
+                .unwrap_or(false);
+            let static_surface_changed = advance_world
+                && static_water_world
+                && self
+                    .fluid_simulator
+                    .as_ref()
+                    .map(|sim| sim.take_static_surface_mesh_changed())
+                    .unwrap_or(false);
 
-            if fluid_changed {
-                self.fluid_mesh_extract_counter = self.fluid_mesh_extract_counter.wrapping_add(1);
-                let rebuild_water_mesh = self.fluid_mesh_extract_counter % 2 == 1;
-                // % 8 == 1 so the very first frame extracts immediately.
-                let rebuild_ice_mesh = self.fluid_mesh_extract_counter % 8 == 1;
+            // Static water skips motion/weather, so an unpaused scene is not
+            // evidence that its density changed. The simulator raises a dirty
+            // signal for the initial fill and for confirmed water<->ice phase
+            // transitions. Run a few water-only follow-up rebuilds so temporal
+            // density smoothing converges, then leave the cached mesh alone.
+            if static_surface_changed {
+                self.static_water_smoothing_rebuilds_remaining = 3;
+            }
+
+            // Dynamic water keeps its existing decimated cadence. Paused water
+            // with no cells and settled static water both reuse the last mesh.
+            let fluid_changed = if static_water_world {
+                self.static_water_smoothing_rebuilds_remaining > 0
+            } else {
+                !self.paused || self.current_cell_count > 0
+            };
+
+            if advance_world && fluid_changed {
+                let (prepare_water_mesh, finalize_water_mesh, prepare_ice_mesh, finalize_ice_mesh) =
+                    if static_water_world {
+                        self.static_water_smoothing_rebuilds_remaining = self
+                            .static_water_smoothing_rebuilds_remaining
+                            .saturating_sub(1);
+                        // Ice smoothing has no temporal history, so it only needs
+                        // the first rebuild in each dirty burst.
+                        (true, true, static_surface_changed, static_surface_changed)
+                    } else {
+                        self.fluid_mesh_extract_counter =
+                            self.fluid_mesh_extract_counter.wrapping_add(1);
+                        let initial_mesh = self.fluid_mesh_extract_counter == 1;
+
+                        // Preserve the existing 30 Hz water / 7.5 Hz ice mesh
+                        // cadence, but put density preparation and surface-nets
+                        // extraction on adjacent frames. This flattens the GPU
+                        // workload without changing simulation resolution or the
+                        // rendered mesh. Build the first mesh immediately so water
+                        // never flashes missing when a scene starts or is reset.
+                        (
+                            initial_mesh || self.fluid_mesh_extract_counter % 2 == 0,
+                            initial_mesh || self.fluid_mesh_extract_counter % 2 == 1,
+                            initial_mesh || self.fluid_mesh_extract_counter % 8 == 0,
+                            initial_mesh || self.fluid_mesh_extract_counter % 8 == 1,
+                        )
+                    };
 
                 // First extract density from fluid simulator to surface nets buffers
-                if rebuild_water_mesh || rebuild_ice_mesh {
+                if prepare_water_mesh || prepare_ice_mesh {
                     if let (Some(ref fluid_sim), Some(ref gpu_surface_nets)) =
                         (&self.fluid_simulator, &self.gpu_surface_nets)
                     {
@@ -9319,10 +9826,12 @@ impl Scene for GpuScene {
                 }
 
                 if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
-                    if rebuild_water_mesh {
+                    if prepare_water_mesh {
                         // Smooth the raw density: spatial blur + temporal blend
                         gpu_surface_nets.smooth_density(&mut encoder);
+                    }
 
+                    if finalize_water_mesh {
                         // Run compute shaders to extract mesh from smoothed density buffer
                         gpu_surface_nets.extract_mesh(&mut encoder);
                     }
@@ -9332,13 +9841,15 @@ impl Scene for GpuScene {
                     // through slow freeze/melt events, so re-extracting every
                     // 8th frame (~130ms latency) is visually identical and
                     // skips a full second surface-nets extraction per frame.
-                    if rebuild_ice_mesh {
+                    if prepare_ice_mesh {
                         // Blur the binary ice density field before extraction
                         // so surface-nets can place vertices off the voxel
                         // grid, removing the staircase look on the base
                         // surface (crystal facets are layered on top in the
                         // ice shader).
                         gpu_surface_nets.smooth_ice_density(&mut encoder);
+                    }
+                    if finalize_ice_mesh {
                         gpu_surface_nets.extract_ice_mesh(&mut encoder);
                     }
                 }
@@ -9367,7 +9878,7 @@ impl Scene for GpuScene {
                     &self.renderer.depth_view,
                     self.camera.position(),
                     camera_view_rotation,
-                    self.camera.horizontal_fov_degrees,
+                    self.camera.render_projection(),
                 );
             }
         }
@@ -9378,7 +9889,7 @@ impl Scene for GpuScene {
         // old combined "Skins & Effects" segment is actually expensive.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 7);
+                timer.write_timestamp(&mut encoder, 8);
             }
         }
 
@@ -9526,7 +10037,7 @@ impl Scene for GpuScene {
                     view_proj,
                     cam_pos,
                     camera_view_rotation,
-                    self.camera.horizontal_fov_degrees,
+                    self.camera.render_projection(),
                     time,
                     lf_dir,
                     128, // GRID_RESOLUTION
@@ -9564,7 +10075,7 @@ impl Scene for GpuScene {
         // End of "Particles & Fog" segment.
         if self.gpu_timing_enabled {
             if let Some(ref timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 8);
+                timer.write_timestamp(&mut encoder, 9);
             }
         }
 
@@ -9600,6 +10111,7 @@ impl Scene for GpuScene {
                 self.world_boundary_proximity,
                 self.water_crossing_pulse,
                 self.world_boundary_crossing_pulse,
+                advance_world,
             );
         }
 
@@ -9607,7 +10119,7 @@ impl Scene for GpuScene {
         // 8-byte read stays enabled so UI status counts remain authoritative
         // even when heavier optional readbacks are disabled.
         let cell_count_read_pending = self.gpu_triple_buffers.is_cell_count_read_pending();
-        let should_start_readback = !cell_count_read_pending;
+        let should_start_readback = advance_world && !cell_count_read_pending;
         if should_start_readback {
             self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
         }
@@ -9615,13 +10127,17 @@ impl Scene for GpuScene {
         // End of "Post-Process" segment, and final resolve for this frame's queries.
         if self.gpu_timing_enabled {
             if let Some(ref mut timer) = self.gpu_timer {
-                timer.write_timestamp(&mut encoder, 9);
+                timer.write_timestamp(&mut encoder, 10);
                 timer.resolve(&mut encoder);
             }
         }
 
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
+
+        if !advance_world {
+            return;
+        }
 
         if self.gpu_timing_enabled {
             if let Some(ref mut timer) = self.gpu_timer {
@@ -9640,11 +10156,11 @@ impl Scene for GpuScene {
         // This prevents it from competing with rendering on the GPU timeline -
         // the driver can schedule it in background while the CPU prepares the next frame.
         // The 1-frame lag on moss_density is invisible for a slowly-changing field.
-        if !self.paused && self.show_moss {
+        if !self.paused && frame_times.simulation_seconds > 0.0 && self.show_moss {
             let mut moss_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Moss Growth Encoder"),
             });
-            let dt = self.config.fixed_timestep;
+            let dt = frame_times.simulation_seconds;
             self.run_moss_growth(device, &mut moss_encoder, queue, dt);
             queue.submit(std::iter::once(moss_encoder.finish()));
         }
@@ -9769,117 +10285,5 @@ impl Scene for GpuScene {
 
         // Mark that we now have Hi-Z data for next frame
         self.first_frame = false;
-    }
-
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.renderer.resize(device, width, height);
-        self.adhesion_renderer.resize(width, height);
-        self.world_sphere_renderer.resize(width, height);
-        self.tail_renderer.resize(width, height);
-        self.first_frame = true;
-
-        // Resize cave renderer if initialized
-        if let Some(ref mut cave_renderer) = self.cave_renderer {
-            cave_renderer.resize(width, height);
-        }
-
-        // Resize steam particle renderer if initialized
-        if let Some(ref mut steam_particle_renderer) = self.steam_particle_renderer {
-            steam_particle_renderer.resize(width, height);
-        }
-
-        // Resize sun renderer if initialized
-        if let Some(ref mut sun_renderer) = self.sun_renderer {
-            sun_renderer.resize(width, height);
-        }
-
-        // Resize volumetric fog renderer (recreates half-res texture)
-        if let Some(ref mut fog_renderer) = self.volumetric_fog_renderer {
-            fog_renderer.resize(device, width, height);
-        }
-
-        // Resize post-process renderer (recreates scene intermediate texture)
-        if let Some(ref mut pp) = self.post_process {
-            pp.resize(device, width, height);
-        }
-
-        // Resize depth of field renderer (recreates intermediate textures)
-        if let Some(ref mut dof_renderer) = self.dof_renderer {
-            dof_renderer.resize(device, width, height, self.surface_format);
-        }
-
-        // Resize GPU surface nets (recreates OIT textures)
-        if let Some(ref mut gpu_surface_nets) = self.gpu_surface_nets {
-            gpu_surface_nets.resize(device, width, height);
-        }
-    }
-
-    fn camera(&self) -> &CameraController {
-        &self.camera
-    }
-
-    fn camera_mut(&mut self) -> &mut CameraController {
-        &mut self.camera
-    }
-
-    fn is_paused(&self) -> bool {
-        self.paused
-    }
-
-    fn set_paused(&mut self, paused: bool) {
-        self.paused = paused;
-    }
-
-    fn current_time(&self) -> f32 {
-        self.current_time
-    }
-
-    fn cell_count(&self) -> usize {
-        self.current_cell_count as usize
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{effective_photocyte_mass_rate, photocyte_production_multiplier};
-
-    #[test]
-    fn photocyte_production_is_centered_on_brightness_2_5() {
-        assert_eq!(photocyte_production_multiplier(0.0), 0.0);
-        assert_eq!(photocyte_production_multiplier(1.25), 0.25);
-        assert_eq!(photocyte_production_multiplier(2.5), 1.0);
-        assert_eq!(photocyte_production_multiplier(3.75), 2.25);
-        assert_eq!(photocyte_production_multiplier(5.0), 4.0);
-
-        let configured_mass_rate = effective_photocyte_mass_rate(0.2);
-        assert_eq!(
-            configured_mass_rate * photocyte_production_multiplier(2.5) * 100.0,
-            20.0
-        );
-        assert_eq!(
-            configured_mass_rate * photocyte_production_multiplier(5.0) * 100.0,
-            80.0
-        );
-
-        let gain_at_brightness_one_full_light =
-            configured_mass_rate * photocyte_production_multiplier(1.0) * 100.0;
-        assert!((gain_at_brightness_one_full_light - 3.2).abs() < 1e-5);
-
-        let gain_at_extremely_low_brightness =
-            configured_mass_rate * photocyte_production_multiplier(0.1) * 100.0;
-        assert!((gain_at_extremely_low_brightness - 0.032).abs() < 1e-5);
-    }
-
-    #[test]
-    fn photocyte_production_stays_within_the_brightness_range() {
-        assert_eq!(photocyte_production_multiplier(-1.0), 0.0);
-        assert_eq!(photocyte_production_multiplier(6.0), 4.0);
-    }
-
-    #[test]
-    fn legacy_photocyte_rates_are_promoted_at_runtime() {
-        assert_eq!(effective_photocyte_mass_rate(0.012), 0.2);
-        assert_eq!(effective_photocyte_mass_rate(0.02), 0.2);
-        assert_eq!(effective_photocyte_mass_rate(0.25), 0.25);
     }
 }

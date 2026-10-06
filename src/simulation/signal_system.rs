@@ -21,18 +21,18 @@ pub const SIGNAL_TICK_HZ: f32 = 15.0;
 pub const SIGNAL_TICK_SECONDS: f32 = 1.0 / SIGNAL_TICK_HZ;
 pub const MAX_SIGNAL_CATCH_UP_TICKS: usize = 4;
 pub const REFERENCE_BASELINE_MAINTENANCE_PER_SECOND: f32 = 1.0;
-pub const BACKBONE_CONSTRUCTION_FRACTION: f32 = 0.05;
+pub const SIGNAL_BOND_CONSTRUCTION_FRACTION: f32 = 0.05;
 
 #[inline]
-pub fn backbone_construction_cost(next_division_requirement: f32) -> Option<f32> {
+pub fn signal_bond_construction_cost(next_division_requirement: f32) -> Option<f32> {
     (next_division_requirement.is_finite() && next_division_requirement >= 0.0)
-        .then_some(next_division_requirement * BACKBONE_CONSTRUCTION_FRACTION)
+        .then_some(next_division_requirement * SIGNAL_BOND_CONSTRUCTION_FRACTION)
 }
 
 /// Transactionally reserve backbone construction before a bond slot is
 /// allocated. `None` means the complete physical bond operation must be
 /// dropped; callers must not fall back to a mechanical-only bond.
-pub fn reserve_backbone_construction(
+pub fn reserve_signal_bond_construction(
     available_nutrients: f32,
     next_division_requirement: f32,
 ) -> Option<f32> {
@@ -43,7 +43,7 @@ pub fn reserve_backbone_construction(
     {
         return None;
     }
-    let cost = backbone_construction_cost(next_division_requirement)?;
+    let cost = signal_bond_construction_cost(next_division_requirement)?;
     (available_nutrients >= cost).then_some(available_nutrients - cost)
 }
 /// Evaluate a signal threshold consistently across preview and GPU paths.
@@ -220,39 +220,11 @@ fn sense_barrier_ray(pos: Vec3, forward: Vec3, ray_length: f32, boundary_radius:
     t > 0.0 && t <= ray_length
 }
 
-fn is_signal_transport_vascular(genome: &Genome, mode_idx: usize) -> bool {
+fn is_vasculocyte(genome: &Genome, mode_idx: usize) -> bool {
     genome
         .modes
         .get(mode_idx)
-        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE && mode.vascular_signal_transport)
-}
-
-fn is_signal_exchange_vascular(genome: &Genome, mode_idx: usize) -> bool {
-    genome
-        .modes
-        .get(mode_idx)
-        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE && mode.vascular_signal_exchange)
-}
-
-fn can_signal_cross(genome: &Genome, from_mode_idx: usize, to_mode_idx: usize) -> bool {
-    let from_vascular = genome
-        .modes
-        .get(from_mode_idx)
-        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE);
-    let to_vascular = genome
-        .modes
-        .get(to_mode_idx)
-        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE);
-
-    match (from_vascular, to_vascular) {
-        (true, true) => {
-            is_signal_transport_vascular(genome, from_mode_idx)
-                && is_signal_transport_vascular(genome, to_mode_idx)
-        }
-        (true, false) => is_signal_exchange_vascular(genome, from_mode_idx),
-        (false, true) => is_signal_exchange_vascular(genome, to_mode_idx),
-        (false, false) => true,
-    }
+        .is_some_and(|mode| mode.cell_type == VASCULOCYTE_TYPE)
 }
 
 /// Read a single signal channel value for a specific cell.
@@ -458,7 +430,7 @@ fn build_cpu_forest(
     genome: &Genome,
     sources: Vec<[f32; SIGNAL_CHANNELS]>,
 ) -> crate::simulation::signal_backbone_bench::SyntheticForest {
-    use crate::cell::adhesion::{BOND_FLAG_SIGNAL_ACTIVE, BOND_FLAG_SIGNAL_BACKBONE};
+    use crate::cell::adhesion::{BOND_FLAG_BARRIER_BALL, BOND_FLAG_SIGNAL_ACTIVE};
     use crate::simulation::signal_backbone_bench::{
         BondClass, Edge, EdgeClass, NodeRole, SyntheticForest,
     };
@@ -483,16 +455,13 @@ fn build_cpu_forest(
     let mut physical_edge_indices = Vec::new();
     for edge in 0..connections.active_count {
         if connections.is_active[edge] == 0
-            || connections.bond_flags[edge] & BOND_FLAG_SIGNAL_BACKBONE == 0
+            || connections.bond_flags[edge] & BOND_FLAG_BARRIER_BALL != 0
         {
             continue;
         }
         let a = connections.cell_a_index[edge];
         let b = connections.cell_b_index[edge];
         if a >= state.cell_count || b >= state.cell_count {
-            continue;
-        }
-        if !can_signal_cross(genome, state.mode_indices[a], state.mode_indices[b]) {
             continue;
         }
         let bond_class = match (forest.roles[a], forest.roles[b]) {
@@ -502,8 +471,8 @@ fn build_cpu_forest(
             }
             _ => BondClass::MechanicalOnly,
         };
-        let road = is_signal_transport_vascular(genome, state.mode_indices[a])
-            && is_signal_transport_vascular(genome, state.mode_indices[b]);
+        let road = is_vasculocyte(genome, state.mode_indices[a])
+            && is_vasculocyte(genome, state.mode_indices[b]);
         forest.edges.push(Edge {
             a: a as u32,
             b: b as u32,
@@ -521,7 +490,7 @@ fn build_cpu_forest(
     match forest.select_active_routes_with_ids(&stable_bond_ids) {
         Ok(routed) => {
             for edge in 0..state.adhesion_connections.active_count {
-                if state.adhesion_connections.bond_flags[edge] & BOND_FLAG_SIGNAL_BACKBONE != 0 {
+                if state.adhesion_connections.bond_flags[edge] & BOND_FLAG_BARRIER_BALL == 0 {
                     state.adhesion_connections.bond_flags[edge] &= !BOND_FLAG_SIGNAL_ACTIVE;
                 }
             }
@@ -779,23 +748,23 @@ pub fn emit_regulation_signals(state: &CanonicalState, genome: &Genome) -> Vec<S
 #[cfg(test)]
 mod signal_gate_tests {
     use super::*;
-    use crate::cell::adhesion::BOND_FLAG_SIGNAL_BACKBONE;
+    use crate::cell::adhesion::BOND_FLAG_BARRIER_BALL;
     use crate::genome::Genome;
     use glam::{Quat, Vec3};
 
     #[test]
     fn phase4_backbone_construction_is_transactional_and_never_degrades_to_mechanical() {
-        assert_eq!(reserve_backbone_construction(10.0, 100.0), Some(5.0));
-        assert_eq!(reserve_backbone_construction(5.0, 100.0), Some(0.0));
-        assert_eq!(reserve_backbone_construction(4.999, 100.0), None);
-        assert_eq!(reserve_backbone_construction(f32::NAN, 100.0), None);
+        assert_eq!(reserve_signal_bond_construction(10.0, 100.0), Some(5.0));
+        assert_eq!(reserve_signal_bond_construction(5.0, 100.0), Some(0.0));
+        assert_eq!(reserve_signal_bond_construction(4.999, 100.0), None);
+        assert_eq!(reserve_signal_bond_construction(f32::NAN, 100.0), None);
     }
 
     #[test]
     fn phase4_existing_backbone_has_no_continuous_nutrient_cost() {
         let genome = Genome::default();
         let mut state = state_with_cells(2);
-        backbone(&mut state, 0, 1);
+        signal_bond(&mut state, 0, 1);
         let before = state.nutrients.clone();
 
         for tick in 0..30 {
@@ -835,17 +804,10 @@ mod signal_gate_tests {
         state
     }
 
-    fn backbone(state: &mut CanonicalState, a: usize, b: usize) -> usize {
+    fn signal_bond(state: &mut CanonicalState, a: usize, b: usize) -> usize {
         state
             .adhesion_manager
-            .add_ball_joint(
-                &mut state.adhesion_connections,
-                a,
-                b,
-                0,
-                0.0,
-                BOND_FLAG_SIGNAL_BACKBONE,
-            )
+            .add_ball_joint(&mut state.adhesion_connections, a, b, 0, 0.0, 0)
             .unwrap()
     }
 
@@ -900,8 +862,8 @@ mod signal_gate_tests {
     fn phase2_fixed_clock_tree_and_economics_contract() {
         let genome = Genome::default();
         let mut state = state_with_cells(3);
-        backbone(&mut state, 0, 1);
-        backbone(&mut state, 1, 2);
+        signal_bond(&mut state, 0, 1);
+        signal_bond(&mut state, 1, 2);
         let source = [manual(0, 0, -1000.0)];
 
         run_signal_system(
@@ -941,7 +903,7 @@ mod signal_gate_tests {
         );
 
         let mut brownout = state_with_cells(2);
-        backbone(&mut brownout, 0, 1);
+        signal_bond(&mut brownout, 0, 1);
         let full_cost = emission_cost(1000.0);
         brownout.nutrients[0] = full_cost * 0.5;
         run_signal_system(
@@ -957,12 +919,19 @@ mod signal_gate_tests {
     }
 
     #[test]
-    fn phase2_signed_fan_in_vascular_and_explicit_backbone_contract() {
+    fn ordinary_bonds_signal_mechanical_joints_do_not_and_vasculocytes_are_preferred() {
         let mut genome = Genome::default();
         let mut state = state_with_cells(3);
         state
             .adhesion_manager
-            .add_ball_joint(&mut state.adhesion_connections, 0, 1, 0, 0.0, 0)
+            .add_ball_joint(
+                &mut state.adhesion_connections,
+                0,
+                1,
+                0,
+                0.0,
+                BOND_FLAG_BARRIER_BALL,
+            )
             .unwrap();
         run_signal_system(
             &mut state,
@@ -978,10 +947,10 @@ mod signal_gate_tests {
             "mechanical-only bond is ignored"
         );
 
-        // Repair is a newly created classified bond; the mechanical-only bond
-        // above is never promoted.
-        let repaired = backbone(&mut state, 0, 1);
-        backbone(&mut state, 2, 1);
+        // Repair requires a newly created ordinary bond; the mechanical-only
+        // joint above is never promoted.
+        let repaired = signal_bond(&mut state, 0, 1);
+        signal_bond(&mut state, 2, 1);
         run_signal_system(
             &mut state,
             &genome,
@@ -1010,10 +979,9 @@ mod signal_gate_tests {
             None,
             "break masks transport at the next tick"
         );
-        backbone(&mut state, 0, 1);
+        signal_bond(&mut state, 0, 1);
 
         genome.modes[0].cell_type = VASCULOCYTE_TYPE;
-        genome.modes[0].vascular_signal_transport = true;
         run_signal_system(
             &mut state,
             &genome,
@@ -1037,8 +1005,8 @@ mod signal_gate_tests {
 
         let mut state = state_with_cells(3);
         state.mode_indices[1] = 1;
-        backbone(&mut state, 0, 1);
-        backbone(&mut state, 1, 2);
+        signal_bond(&mut state, 0, 1);
+        signal_bond(&mut state, 1, 2);
         let inputs = [manual(0, 0, 100.0), manual(0, 1, 100.0)];
         run_signal_system(
             &mut state,
@@ -1150,9 +1118,9 @@ mod signal_gate_tests {
         state.mode_indices[1] = 1;
         state.mode_indices[2] = 2;
         state.organism_ids[3] = 99;
-        backbone(&mut state, 0, 1);
-        backbone(&mut state, 2, 0);
-        backbone(&mut state, 2, 3);
+        signal_bond(&mut state, 0, 1);
+        signal_bond(&mut state, 2, 0);
+        signal_bond(&mut state, 2, 3);
 
         run_signal_system(
             &mut state,

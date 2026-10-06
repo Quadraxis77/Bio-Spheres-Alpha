@@ -875,17 +875,14 @@ impl TailRenderer {
         camera_rotation: Quat,
         time: f32,
         partition_offset: u32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         gravity: f32,
         gravity_mode: u32,
     ) {
         let view = Mat4::from_rotation_translation(camera_rotation, camera_pos).inverse();
         let aspect = self.width as f32 / self.height as f32;
-        let proj = Mat4::perspective_rh(
-            crate::ui::camera::CameraController::vertical_fov_radians_for_horizontal(
-                horizontal_fov_degrees,
-                aspect,
-            ),
+        let proj = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(),
             aspect,
             0.1,
             5000.0,
@@ -1545,7 +1542,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         width: u32,
         height: u32,
     ) {
@@ -1651,7 +1648,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         width: u32,
         height: u32,
     ) {
@@ -1725,7 +1722,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         width: u32,
         height: u32,
     ) {
@@ -1803,7 +1800,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         width: u32,
         height: u32,
         cell_capacity: usize,
@@ -1921,7 +1918,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         width: u32,
         height: u32,
         gravity: f32,
@@ -2020,7 +2017,7 @@ impl TailRenderer {
         camera_pos: Vec3,
         camera_rotation: Quat,
         time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         width: u32,
         height: u32,
     ) {
@@ -2125,7 +2122,7 @@ impl TailRenderer {
         camera_rotation: Quat,
         time: f32,
         delta_time: f32,
-        horizontal_fov_degrees: f32,
+        horizontal_fov_degrees: impl Into<crate::rendering::CameraProjection> + Copy,
         width: u32,
         height: u32,
     ) {
@@ -2143,75 +2140,77 @@ impl TailRenderer {
             1,
         );
         self.update_lighting(queue);
-        self.siphon_jet_frame = self.siphon_jet_frame.wrapping_add(1);
+        if delta_time > 0.0 {
+            self.siphon_jet_frame = self.siphon_jet_frame.wrapping_add(1);
 
-        let params = SiphonJetParams {
-            delta_time: delta_time.clamp(0.0, 0.1),
-            current_time: time,
-            current_frame: self.siphon_jet_frame,
-            max_particles: Self::MAX_SIPHON_JET_PARTICLES,
-            cell_capacity: cell_capacity as u32,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
-            _pad3: [0.0; 4],
-            _pad4: [0.0; 4],
-        };
-        queue.write_buffer(
-            &self.siphon_jet_params_buffer,
-            0,
-            bytemuck::bytes_of(&params),
-        );
+            let params = SiphonJetParams {
+                delta_time: delta_time.clamp(0.0, 0.1),
+                current_time: time,
+                current_frame: self.siphon_jet_frame,
+                max_particles: Self::MAX_SIPHON_JET_PARTICLES,
+                cell_capacity: cell_capacity as u32,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+                _pad3: [0.0; 4],
+                _pad4: [0.0; 4],
+            };
+            queue.write_buffer(
+                &self.siphon_jet_params_buffer,
+                0,
+                bytemuck::bytes_of(&params),
+            );
 
-        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Siphonocyte Jet Compute Bind Group"),
-            layout: self.siphon_jet_compute_bind_group_layout.as_ref().unwrap(),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.siphon_jet_params_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: cell_instance_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: velocity_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.siphon_jet_particle_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.siphon_jet_counter_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: counters_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Siphonocyte Jet Spawn"),
-                timestamp_writes: None,
+            let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Siphonocyte Jet Compute Bind Group"),
+                layout: self.siphon_jet_compute_bind_group_layout.as_ref().unwrap(),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.siphon_jet_params_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: cell_instance_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: velocity_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.siphon_jet_particle_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.siphon_jet_counter_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: counters_buffer.as_entire_binding(),
+                    },
+                ],
             });
-            pass.set_pipeline(self.siphon_jet_spawn_pipeline.as_ref().unwrap());
-            pass.set_bind_group(0, &compute_bind_group, &[]);
-            let spawn_invocations = cell_capacity as u32 * Self::SIPHON_JET_EMISSION_LANES;
-            pass.dispatch_workgroups((spawn_invocations + 63) / 64, 1, 1);
-        }
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Siphonocyte Jet Age"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(self.siphon_jet_age_pipeline.as_ref().unwrap());
-            pass.set_bind_group(0, &compute_bind_group, &[]);
-            pass.dispatch_workgroups((Self::MAX_SIPHON_JET_PARTICLES + 255) / 256, 1, 1);
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Siphonocyte Jet Spawn"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(self.siphon_jet_spawn_pipeline.as_ref().unwrap());
+                pass.set_bind_group(0, &compute_bind_group, &[]);
+                let spawn_invocations = cell_capacity as u32 * Self::SIPHON_JET_EMISSION_LANES;
+                pass.dispatch_workgroups((spawn_invocations + 63) / 64, 1, 1);
+            }
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Siphonocyte Jet Age"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(self.siphon_jet_age_pipeline.as_ref().unwrap());
+                pass.set_bind_group(0, &compute_bind_group, &[]);
+                pass.dispatch_workgroups((Self::MAX_SIPHON_JET_PARTICLES + 255) / 256, 1, 1);
+            }
         }
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {

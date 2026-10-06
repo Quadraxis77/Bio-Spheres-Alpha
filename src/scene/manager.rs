@@ -184,6 +184,13 @@ impl SceneManager {
             }
         }
 
+        let new_world_radius = world_diameter * 0.5;
+        let world_radius_unchanged = self
+            .gpu_scene
+            .as_ref()
+            .map(|scene| (scene.config.sphere_radius - new_world_radius).abs() < 0.5)
+            .unwrap_or(false);
+
         log::info!("Recreating GPU scene with capacity: {}", capacity);
         let mut gpu_scene = GpuScene::with_capacity_and_radius(
             device,
@@ -203,7 +210,13 @@ impl SceneManager {
             .as_ref()
             .map(|s| s.fluid_simulator.is_some())
             .unwrap_or(false);
-        if had_fluid {
+        // Fluid grids, their solid-mask generator, and the surface extraction
+        // coordinates are all radius-dependent. Moving them into a differently
+        // sized world mixes the old grid with the new renderer and produces
+        // malformed normals/surfaces that appear unnaturally glossy. Preserve
+        // these resources only for a capacity-only recreation.
+        let can_transfer_fluid = had_fluid && world_radius_unchanged;
+        if can_transfer_fluid {
             // Move the fluid simulator and all visual renderers from the old scene.
             // Without this, light field / fog / DOF / sun / voxel systems remain None
             // on the new scene, causing them to disappear after a capacity/radius reset.
@@ -230,6 +243,15 @@ impl SceneManager {
                 gpu_scene.show_moss = old_scene.show_moss;
                 gpu_scene.show_sun = old_scene.show_sun;
                 gpu_scene.show_dof = old_scene.show_dof;
+
+                // Cell capacity does not affect the water surface renderer. Keep
+                // it (including its density history and reflection cubemap) when
+                // only capacity changed so Reset Everything cannot abruptly alter
+                // the water's appearance. A radius change still rebuilds it below.
+                if world_radius_unchanged {
+                    gpu_scene.transfer_water_surface_renderer_from(old_scene);
+                }
+
                 // Rebuild bind groups that reference fluid buffers in the new scene
                 if let Some(ref simulator) = gpu_scene.fluid_simulator {
                     gpu_scene.cached_bind_groups.update_water_buffers(
@@ -249,7 +271,8 @@ impl SceneManager {
                 }
             }
         } else {
-            // No prior fluid - initialize fresh
+            // No prior fluid, or the world radius changed: initialize a fluid
+            // grid and all radius-dependent rendering resources at the new size.
             let camera_bind_group_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("Voxel Camera Layout"),
@@ -433,6 +456,99 @@ impl SceneManager {
             lod_debug_colors,
             outline_width,
         );
+    }
+
+    /// Match shared depth and intermediate targets to the current presentation size.
+    #[cfg(feature = "vr")]
+    pub fn ensure_render_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let current = match self.current_mode {
+            SimulationMode::Preview => self
+                .preview_scene
+                .as_ref()
+                .map(|s| (s.renderer.width, s.renderer.height)),
+            SimulationMode::Gpu => self
+                .gpu_scene
+                .as_ref()
+                .map(|s| (s.renderer.width, s.renderer.height)),
+        };
+        if current != Some((width, height)) {
+            self.active_scene_mut().resize(device, width, height);
+        }
+    }
+
+    #[cfg(feature = "vr")]
+    pub fn render_stereo(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        eyes: Vec<(wgpu::TextureView, crate::rendering::RenderView)>,
+        visuals: &[crate::cell::types::CellTypeVisuals],
+        world_diameter: f32,
+        lod_scale: f32,
+        lod_low: f32,
+        lod_medium: f32,
+        lod_high: f32,
+        lod_debug: bool,
+        outline_width: f32,
+    ) -> bool {
+        if eyes.len() != 2 {
+            return false;
+        }
+        let dimensions = (eyes[0].1.width, eyes[0].1.height);
+        self.ensure_render_size(device, dimensions.0, dimensions.1);
+        // Hi-Z from another eye or the previous desktop view cannot safely occlude
+        // this view. Keep per-eye frustum culling, and remove depth-of-field in VR.
+        let previous_gpu = self.gpu_scene.as_mut().map(|scene| {
+            let previous = (
+                scene.culling_mode(),
+                scene.show_dof,
+                scene.headless_no_render,
+            );
+            scene.set_culling_mode(crate::rendering::CullingMode::FrustumOnly);
+            scene.show_dof = false;
+            scene.headless_no_render = false;
+            previous
+        });
+        for (index, (target, view)) in eyes.into_iter().enumerate() {
+            let scene = self.active_scene_mut();
+            let previous_view = scene.camera_mut().set_render_view(Some(view));
+            if index == 0 {
+                scene.render(
+                    device,
+                    queue,
+                    &target,
+                    Some(visuals),
+                    world_diameter,
+                    lod_scale,
+                    lod_low,
+                    lod_medium,
+                    lod_high,
+                    lod_debug,
+                    outline_width,
+                );
+            } else {
+                scene.render_view(
+                    device,
+                    queue,
+                    &target,
+                    Some(visuals),
+                    world_diameter,
+                    lod_scale,
+                    lod_low,
+                    lod_medium,
+                    lod_high,
+                    lod_debug,
+                    outline_width,
+                );
+            }
+            scene.camera_mut().set_render_view(previous_view);
+        }
+        if let (Some(scene), Some(previous)) = (&mut self.gpu_scene, previous_gpu) {
+            scene.set_culling_mode(previous.0);
+            scene.show_dof = previous.1;
+            scene.headless_no_render = previous.2;
+        }
+        true
     }
 
     /// Insert a cell from genome using GPU operations (GPU scene only).

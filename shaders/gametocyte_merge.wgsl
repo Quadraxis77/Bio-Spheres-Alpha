@@ -63,8 +63,12 @@ var<storage, read> cell_types: array<u32>;
 @group(1) @binding(1)
 var<storage, read_write> death_flags: array<u32>;
 
+// Persistent developmental identity: [organism_id, lineage_hash_lo,
+// lineage_hash_hi, depth_branch]. Unlike a connected-component label,
+// organism_id survives detachment, so gametes produced by the same organism
+// cannot self-fertilize after they become separate free cells.
 @group(1) @binding(2)
-var<storage, read> organism_labels: array<u32>;
+var<storage, read> development_addresses: array<vec4<u32>>;
 
 @group(1) @binding(3)
 var<storage, read> genome_ids: array<u32>;
@@ -140,7 +144,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pos_a = positions_in[cell_idx].xyz;
     let mode_idx = mode_indices[cell_idx];
     let merge_range = mode_properties_v13[mode_idx].x;
-    let org_a = organism_labels[cell_idx];
+    let reproductive_parent_a = development_addresses[cell_idx].x;
     let genome_a = genome_ids[cell_idx];
 
     // Query spatial grid neighbours
@@ -172,9 +176,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         continue;
                     }
 
-                    // Must be from a different organism
-                    let org_b = organism_labels[other_idx];
-                    if org_a == org_b {
+                    // The developmental organism ID remains fixed when a gamete
+                    // detaches. Reject same-parent fusion before either gamete is
+                    // consumed. A zero ID is invalid, so it cannot participate.
+                    let reproductive_parent_b = development_addresses[other_idx].x;
+                    if reproductive_parent_a == 0u
+                        || reproductive_parent_b == 0u
+                        || reproductive_parent_a == reproductive_parent_b {
                         continue;
                     }
 
