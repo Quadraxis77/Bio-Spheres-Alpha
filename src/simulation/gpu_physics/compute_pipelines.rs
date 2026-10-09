@@ -341,6 +341,7 @@ pub struct GpuPhysicsPipelines {
 
     // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
     // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
+    pub overcrowding_cull: wgpu::ComputePipeline,
     pub lifecycle_death_scan: wgpu::ComputePipeline,
     // Stage 2: Division scan - allocates slots from ring buffer for dividing cells
     pub lifecycle_division_scan: wgpu::ComputePipeline,
@@ -751,11 +752,20 @@ impl GpuPhysicsPipelines {
             "Division Audio Collect",
         );
 
-        let position_update_lifetime_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Drag lifetime flags"),
-            entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None }],
-        });
+        let position_update_lifetime_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Drag lifetime flags"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
 
         // Create position update pipeline
         // Uses cell_insertion_physics_layout to access all 3 triple-buffered position/velocity sets
@@ -839,6 +849,17 @@ impl GpuPhysicsPipelines {
         );
 
         // Lifecycle pipelines (3-stage with ring buffer for slot allocation)
+        let overcrowding_cull = Self::create_compute_pipeline(
+            device,
+            include_str!("../../../shaders/overcrowding_cull.wgsl"),
+            "main",
+            &[
+                &physics_layout,
+                &lifecycle_layout,
+                &position_update_spatial_grid_layout,
+            ],
+            "Extreme Overlap Cull",
+        );
         // Stage 1: Death scan - detects dead cells, pushes slots to ring buffer
         let lifecycle_death_scan = Self::create_compute_pipeline(
             device,
@@ -1404,6 +1425,7 @@ impl GpuPhysicsPipelines {
             nutrient_apply,
             adhesion_physics,
             adhesion_substep,
+            overcrowding_cull,
             lifecycle_death_scan,
             lifecycle_division_scan,
             lifecycle_division_execute,

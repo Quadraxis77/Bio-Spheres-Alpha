@@ -226,7 +226,7 @@ impl Controllers {
         eye: usize,
         projection: Mat4,
         input: &VrInput,
-        ray: Option<(Vec3, Vec3)>,
+        ray: Option<(Vec3, Vec3, bool)>,
     ) {
         for (index, hand) in self.hands.iter().enumerate() {
             // The asset coordinate frame is grip space, never the aim ray's frame.
@@ -240,14 +240,14 @@ impl Controllers {
             }
         }
         let mut beam = Vec::new();
-        if let Some((origin, end)) = ray {
+        if let Some((origin, end, show_endpoint)) = ray {
             let color = Vec3::new(0.0, 0.9, 0.75);
             beam.extend([
                 vertex(projection, origin, color),
                 vertex(projection, end, color),
             ]);
             let point = projection * end.extend(1.0);
-            if point.w > 0.0 {
+            if show_endpoint && point.w > 0.0 {
                 for axis in [
                     glam::Vec4::new(point.w * 0.003, 0.0, 0.0, 0.0),
                     glam::Vec4::new(0.0, point.w * 0.003, 0.0, 0.0),

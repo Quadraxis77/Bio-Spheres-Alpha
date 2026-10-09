@@ -8,13 +8,20 @@ pub struct Inspection {
     pub dead: bool,
     pub death_pending: bool,
     pub capture_attempted: bool,
+    open_pending: bool,
 }
 impl Inspection {
     pub fn select(&mut self, index: Option<usize>) {
         *self = Self {
             index,
+            open_pending: index.is_some(),
             ..Self::default()
         };
+    }
+    /// Open once when a new selection has usable readings. Live refreshes must
+    /// not reopen a panel the user closed; selecting the same cell again may.
+    pub fn take_open_request(&mut self) -> bool {
+        self.data.is_some() && std::mem::take(&mut self.open_pending)
     }
     pub fn observe(&mut self, data: InspectedCellData) {
         if self.dead {

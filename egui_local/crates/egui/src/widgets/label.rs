@@ -278,6 +278,7 @@ impl Widget for Label {
         let show_tooltip_when_elided = self.show_tooltip_when_elided;
 
         let (galley_pos, galley, mut response) = self.layout_in_ui(ui);
+        super::InteractionUsage::label(ui.ctx(), response.rect, galley.text());
         response
             .widget_info(|| WidgetInfo::labeled(WidgetType::Label, ui.is_enabled(), galley.text()));
 

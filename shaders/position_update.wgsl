@@ -253,12 +253,6 @@ fn is_ice_embedded(probe: IceProbe) -> bool {
 }
 
 fn ice_collision_normal_from_probe(previous_pos: vec3<f32>, probe_pos: vec3<f32>, probe: IceProbe) -> vec3<f32> {
-    let from_motion = previous_pos - probe_pos;
-    let motion_len = length(from_motion);
-    if (motion_len > 0.0001) {
-        return from_motion / motion_len;
-    }
-
     let sx0 = select(0.0, 1.0, probe.x_pos);
     let sx1 = select(0.0, 1.0, probe.x_neg);
     let sy0 = select(0.0, 1.0, probe.y_pos);
@@ -269,6 +263,12 @@ fn ice_collision_normal_from_probe(previous_pos: vec3<f32>, probe_pos: vec3<f32>
     let grad_len = length(grad);
     if (grad_len > 0.0001) {
         return -grad / grad_len;
+    }
+
+    let from_motion = previous_pos - probe_pos;
+    let motion_len = length(from_motion);
+    if (motion_len > 0.0001) {
+        return from_motion / motion_len;
     }
 
     return vec3<f32>(0.0, 1.0, 0.0);
@@ -551,18 +551,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         entombed_acceleration = vec3<f32>(0.0);
     } else {
         let final_ice_probe = sample_ice_probe(final_pos, radius);
-        if (is_ice_embedded(final_ice_probe)) {
-            let normal = ice_collision_normal_from_probe(pos, final_pos, final_ice_probe);
+        if (final_ice_probe.center) {
+            // Use the exposed face at the starting position when thawing out.
+            // A motion-derived normal wrongly treats tangent/outward travel as
+            // an impact and repeatedly pins the cell to the same position.
+            var contact_probe = final_ice_probe;
+            if (current_ice_probe.center) { contact_probe = current_ice_probe; }
+            let normal = ice_collision_normal_from_probe(pos, final_pos, contact_probe);
             accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
-            final_pos = pos;
-            let vel_normal = dot(final_vel, normal);
-            let vel_tangent = final_vel - vel_normal * normal;
-            let vel_normal_out = max(vel_normal, 0.0) * normal;
-            final_vel = vel_normal_out + vel_tangent * (1.0 - ICE_CONTACT_FRICTION);
-        } else if (final_ice_probe.center) {
-            let normal = ice_collision_normal_from_probe(pos, final_pos, final_ice_probe);
-            accumulate_ice_contact_torque(cell_idx, normal, radius, final_vel, 500.0);
-            final_pos = pos;
+            let displacement = final_pos - pos;
+            let sliding_pos = pos + displacement - min(dot(displacement, normal), 0.0) * normal;
+            let sliding_probe = sample_ice_probe(sliding_pos, radius);
+            // A partly exposed cell may move toward freedom while its center
+            // still occupies an ice voxel. Fully embedded cells stay locked above.
+            if (!sliding_probe.center || (current_ice_probe.center && !is_ice_embedded(sliding_probe))) {
+                final_pos = sliding_pos;
+            } else {
+                final_pos = pos;
+            }
             let vel_normal = dot(final_vel, normal);
             let vel_tangent = final_vel - vel_normal * normal;
             let vel_normal_out = max(vel_normal, 0.0) * normal;

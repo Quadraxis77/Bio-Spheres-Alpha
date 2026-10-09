@@ -126,6 +126,7 @@ pub struct LightFieldSystem {
     pub luminocyte_emission: super::luminocyte_emission::LuminocyteEmission,
     // Buffers
     light_field_buffer: wgpu::Buffer,
+    solar_transmittance_buffer: wgpu::Buffer,
     light_color_field_buffer: wgpu::Buffer,
     _light_field_texture: wgpu::Texture,
     _light_color_field_texture: wgpu::Texture,
@@ -228,6 +229,13 @@ impl LightFieldSystem {
         // Create light field buffer (f32 per voxel)
         let light_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Light Field Buffer"),
+            size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let solar_transmittance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Solar Transmittance Buffer"),
             size: (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -447,6 +455,17 @@ impl LightFieldSystem {
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Binding 9: raw sunlight transmittance for thermal input.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -1022,9 +1041,12 @@ impl LightFieldSystem {
 
         Self {
             luminocyte_emission: super::luminocyte_emission::LuminocyteEmission::new(
-                device, grid_origin, cell_size,
+                device,
+                grid_origin,
+                cell_size,
             ),
             light_field_buffer,
+            solar_transmittance_buffer,
             light_color_field_buffer,
             _light_field_texture: light_field_texture,
             _light_color_field_texture: light_color_field_texture,
@@ -1099,7 +1121,11 @@ impl LightFieldSystem {
 
     /// Merge current local emission into the shared radiative field before
     /// packing it for surfaces and volumetric scattering.
-    pub fn resolve_luminocyte_light(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
+    pub fn resolve_luminocyte_light(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
         self.luminocyte_emission.resolve(
             device,
             encoder,
@@ -1111,6 +1137,12 @@ impl LightFieldSystem {
     /// Get the light field buffer (for volumetric fog renderer to read)
     pub fn light_field_buffer(&self) -> &wgpu::Buffer {
         &self.light_field_buffer
+    }
+
+    /// Raw sunlight transmittance after ray occlusion, without local emitters
+    /// or the visual ambient-light floor.
+    pub fn solar_transmittance_buffer(&self) -> &wgpu::Buffer {
+        &self.solar_transmittance_buffer
     }
 
     pub fn light_color_field_buffer(&self) -> &wgpu::Buffer {
@@ -1634,6 +1666,10 @@ impl LightFieldSystem {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: geothermal_glow_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: self.solar_transmittance_buffer.as_entire_binding(),
                 },
             ],
         })

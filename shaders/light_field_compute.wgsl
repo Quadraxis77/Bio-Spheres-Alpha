@@ -86,6 +86,12 @@ var<storage, read> ice_density: array<f32>;
 @group(0) @binding(8)
 var<storage, read> geothermal_glow: array<vec4<f32>>;
 
+// Occlusion-aware solar exposure for the thermal solver. Optical scattering
+// can make water look dark without removing all heat from a sunlit pool.
+// This excludes local sources and the visual ambient floor.
+@group(0) @binding(9)
+var<storage, read_write> solar_transmittance: array<f32>;
+
 // Full sunlight is 1.0. Photocytes gain 20 nutrients/sec at that level.
 // A default photocyte needs 50 nutrients/sec to replace itself
 // (split_mass 1.5 over split_interval 1.0), so vents are capped at 1.5x
@@ -94,6 +100,15 @@ const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
 
 // Per-voxel absorption coefficient for ice (liquid water uses 0.055).
 const ICE_ABSORPTION: f32 = 0.12;
+
+// Effective heat penetration for the compressed biosphere climate. At the
+// brightness-3 anchor, ordinary pool depths remain temperate (60-90 F), while
+// terrain and cell occlusion still create genuinely cold shadows. Keep this
+// independent of the appearance-only water attenuation slider.
+const THERMAL_WATER_ATTENUATION: f32 = 0.003;
+const THERMAL_ICE_ATTENUATION: f32 = 0.006;
+const THERMAL_CLOUD_ATTENUATION: f32 = 0.00025;
+const THERMAL_CLOUD_FLOOR: f32 = 0.85;
 
 // Convert 3D grid coordinates to linear index
 fn grid_to_index(x: u32, y: u32, z: u32) -> u32 {
@@ -252,9 +267,8 @@ fn is_near_sphere_boundary(gx: f32, gy: f32, gz: f32) -> bool {
 }
 
 // Ray march from voxel toward light source, accumulating occlusion.
-// Returns vec2(transmittance, water_column) where water_column is the
-// total integrated water density along the ray — used for chromatic tinting.
-fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
+// Returns (optical transmittance, water column, thermal solar exposure).
+fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec3<f32> {
     // CPU-side LightFieldSystem::set_light_dir stores this normalized.
     let light_dir = vec3<f32>(params.light_dir_x, params.light_dir_y, params.light_dir_z);
 
@@ -263,6 +277,7 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
     let step = light_dir * params.step_size;
 
     var transmittance = 1.0;
+    var thermal_transmittance = 1.0;
     var water_column = 0.0; // integrated water density along the ray
     var humidity_column = 0.0; // integrated atmospheric humidity along the ray
     var consecutive_solid = 0u;
@@ -296,6 +311,7 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
             let boundary_shell_solid = is_near_sphere_boundary(pos.x, pos.y, pos.z);
             if (boundary_shell_solid) {
                 transmittance = 0.0;
+                thermal_transmittance = 0.0;
                 break;
             }
 
@@ -305,6 +321,7 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
                 // Fast exp approximation: exp(-x) ~= 1 / (1 + x + x^2/2)
                 let x = params.absorption_solid;
                 transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+                thermal_transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
             }
         } else {
             consecutive_solid = 0u;
@@ -316,6 +333,7 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
             // Fast exp approximation for multiple cells
             let x = params.absorption_cell * f32(cells);
             transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+            thermal_transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
         }
 
         let water_amount = clamp(water_density[sample_idx], 0.0, 1.0);
@@ -324,17 +342,20 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
             // continuously so caustics weaken instead of ending abruptly.
             let x = 0.115 * params.water_light_attenuation * water_amount * params.step_size;
             transmittance *= 1.0 / (1.0 + x + x * x * 0.5);
+            let heat_x = THERMAL_WATER_ATTENUATION * water_amount * params.step_size;
+            thermal_transmittance *= 1.0 / (1.0 + heat_x + heat_x * heat_x * 0.5);
             // Accumulate water column for downstream chromatic tinting
             water_column += water_amount * params.step_size;
         }
 
-        // Ice: translucent but a stronger scatterer than liquid water - an
-        // ice sheet dims the pool beneath it, which also slows melting from
-        // solar heating (the thermal model reads this light field).
+        // Ice scatters visible light strongly, but must not create a permanent
+        // freezing trap in a pool whose surface receives sunlight.
         let ice_amount = clamp(ice_density[sample_idx], 0.0, 1.0);
         if (ice_amount > 0.01) {
             let xi = ICE_ABSORPTION * ice_amount * params.step_size;
             transmittance *= 1.0 / (1.0 + xi + xi * xi * 0.5);
+            let heat_x = THERMAL_ICE_ATTENUATION * ice_amount * params.step_size;
+            thermal_transmittance *= 1.0 / (1.0 + heat_x + heat_x * heat_x * 0.5);
             // Ice tints downstream light like water does.
             water_column += ice_amount * params.step_size;
         }
@@ -346,17 +367,20 @@ fn compute_light_at_voxel(gx: u32, gy: u32, gz: u32) -> vec2<f32> {
         // Early exit if light is effectively blocked
         if (transmittance < 0.05) {
             transmittance = 0.0;
-            break;
+            if (thermal_transmittance < 0.005) {
+                thermal_transmittance = 0.0;
+                break;
+            }
         }
     }
 
     // Humidity gently dims light (fog), capped so it never fully blacks out a voxel on its own
     let humidity_atten = max(1.0 - humidity_column * HUMIDITY_LIGHT_ATTENUATION, HUMIDITY_ATTENUATION_FLOOR);
     transmittance *= humidity_atten;
+    thermal_transmittance *= max(1.0 - humidity_column * THERMAL_CLOUD_ATTENUATION, THERMAL_CLOUD_FLOOR);
 
-    // Apply ambient floor for visual consumers. Photocyte metabolism receives
-    // the same floor separately and subtracts it before calculating nutrient gain.
-    return vec2<f32>(max(transmittance, params.ambient_floor), water_column);
+    // Keep the thermal sunlight separate from the visual ambient floor.
+    return vec3<f32>(transmittance, water_column, thermal_transmittance);
 }
 
 @compute @workgroup_size(64)
@@ -375,35 +399,24 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let grid_pos_f = vec3<f32>(f32(grid_pos.x) + 0.5, f32(grid_pos.y) + 0.5, f32(grid_pos.z) + 0.5);
     if (!is_inside_sphere(grid_pos_f.x, grid_pos_f.y, grid_pos_f.z)) {
         light_field[idx] = 1.0;
+        solar_transmittance[idx] = 0.0;
         let geo = geothermal_glow[idx];
         light_color_field[idx] = vec4<f32>(vec3<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b) + geo.xyz, geo.w);
         return;
     }
     
-    // Solid voxels inside the sphere: check if part of actual wall
+    // Surface rock receives sunlight too. Only fully buried rock can skip
+    // the ray march; classifying every interior solid as dark prevented
+    // sunlit boulders and cave surfaces from absorbing solar heat.
     if (solid_mask[idx] != 0u) {
-        // Quick check: only do expensive neighbor check near sphere boundary
-        // Deep interior solids are cave walls and should be dark
-        if (is_near_sphere_boundary(grid_pos_f.x, grid_pos_f.y, grid_pos_f.z)) {
-            // Near boundary: check if isolated noise voxel
-            let gx = i32(grid_pos.x);
-            let gy = i32(grid_pos.y);
-            let gz = i32(grid_pos.z);
-            var solid_neighbors = 0u;
-            if (is_solid(gx + 1, gy, gz)) { solid_neighbors += 1u; }
-            if (is_solid(gx - 1, gy, gz)) { solid_neighbors += 1u; }
-            if (is_solid(gx, gy + 1, gz)) { solid_neighbors += 1u; }
-            if (is_solid(gx, gy - 1, gz)) { solid_neighbors += 1u; }
-            if (is_solid(gx, gy, gz + 1)) { solid_neighbors += 1u; }
-            if (is_solid(gx, gy, gz - 1)) { solid_neighbors += 1u; }
-            if (solid_neighbors >= 3u) {
-                light_field[idx] = 0.0;
-                light_color_field[idx] = geothermal_glow[idx];
-                return;
-            }
-        } else {
-            // Deep interior solid = actual wall, skip expensive neighbor check
+        let gx = i32(grid_pos.x);
+        let gy = i32(grid_pos.y);
+        let gz = i32(grid_pos.z);
+        if (is_solid(gx + 1, gy, gz) && is_solid(gx - 1, gy, gz)
+            && is_solid(gx, gy + 1, gz) && is_solid(gx, gy - 1, gz)
+            && is_solid(gx, gy, gz + 1) && is_solid(gx, gy, gz - 1)) {
             light_field[idx] = 0.0;
+            solar_transmittance[idx] = 0.0;
             light_color_field[idx] = geothermal_glow[idx];
             return;
         }
@@ -411,8 +424,10 @@ fn compute_light_field(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // Ray march toward light to compute intensity and accumulated water depth
     let result = compute_light_at_voxel(grid_pos.x, grid_pos.y, grid_pos.z);
-    let intensity = result.x;
+    let sunlight_intensity = result.x;
+    let intensity = max(sunlight_intensity, params.ambient_floor);
     let water_column = result.y;
+    solar_transmittance[idx] = result.z;
     light_field[idx] = intensity;
 
     let sun_color = vec3<f32>(params.sun_color_r, params.sun_color_g, params.sun_color_b);

@@ -219,7 +219,11 @@ pub fn execute_gpu_physics_step(
     // Dead cells can be at any index - they're not compacted to the end. Using the
     // live count would skip cells at higher indices, preventing their metabolism from
     // running, so they'd never lose nutrients and never die.
-    let cell_workgroups = bounded_cell_workgroups(_cell_count_hint, triple_buffers.capacity, WORKGROUP_SIZE_CELLS);
+    let cell_workgroups = bounded_cell_workgroups(
+        _cell_count_hint,
+        triple_buffers.capacity,
+        WORKGROUP_SIZE_CELLS,
+    );
 
     // Clear only buckets occupied by the preceding step. The occupied list was
     // built alongside that grid and cannot contain more entries than the cell
@@ -938,6 +942,20 @@ pub fn execute_lifecycle_pipeline(
     let cell_workgroups_lifecycle =
         (effective_slots + WORKGROUP_SIZE_LIFECYCLE - 1) / WORKGROUP_SIZE_LIFECYCLE;
 
+    // Mark only extreme physical overlaps. A separate dispatch completes all
+    // marks before death_scan recycles slots; ordinary clusters stay intact.
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Extreme Overlap Cull"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipelines.overcrowding_cull);
+        pass.set_bind_group(0, physics_bind_group, &[]);
+        pass.set_bind_group(1, lifecycle_bind_group, &[]);
+        pass.set_bind_group(2, &cached_bind_groups.position_update_spatial_grid, &[]);
+        pass.dispatch_workgroups(cell_workgroups_lifecycle, 1, 1);
+    }
+
     // Execute 3-stage lifecycle pipeline with ring buffer for slot recycling
     // Stage 1: Death scan - detects dead cells and pushes slots to ring buffer
     // Must complete BEFORE division scan so recycled slots are available
@@ -1161,10 +1179,10 @@ mod dispatch_bounds_tests {
     use super::bounded_cell_workgroups;
     #[test]
     fn invalid_counts_and_partial_groups_are_capacity_bounded_without_overflow() {
-        assert_eq!(bounded_cell_workgroups(u32::MAX,200_000,256),782);
-        assert_eq!(bounded_cell_workgroups(1,200_000,256),1);
-        assert_eq!(bounded_cell_workgroups(257,200_000,256),2);
-        assert_eq!(bounded_cell_workgroups(0,200_000,256),0);
-        assert_eq!(bounded_cell_workgroups(u32::MAX,0,256),0);
+        assert_eq!(bounded_cell_workgroups(u32::MAX, 200_000, 256), 782);
+        assert_eq!(bounded_cell_workgroups(1, 200_000, 256), 1);
+        assert_eq!(bounded_cell_workgroups(257, 200_000, 256), 2);
+        assert_eq!(bounded_cell_workgroups(0, 200_000, 256), 0);
+        assert_eq!(bounded_cell_workgroups(u32::MAX, 0, 256), 0);
     }
 }

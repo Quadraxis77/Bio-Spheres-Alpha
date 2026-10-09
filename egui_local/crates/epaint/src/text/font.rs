@@ -247,7 +247,18 @@ impl FontCell {
             Some(())
         })?;
 
-        let bounds = path.control_box().expand();
+        let stroke_width = atlas.options().glyph_stroke_width;
+        let stroke_width = if stroke_width.is_finite() && !path.is_empty() {
+            stroke_width.clamp(0.0, 2.0) * metrics.pixels_per_point
+        } else {
+            0.0
+        };
+        // Include the added outline in the atlas allocation so glyph edges
+        // cannot clip or bleed into neighboring glyphs at higher DPI.
+        let bounds = path
+            .control_box()
+            .inflate(f64::from(stroke_width) * 0.5, f64::from(stroke_width) * 0.5)
+            .expand();
         let width = bounds.width() as u16;
         let height = bounds.height() as u16;
 
@@ -255,6 +266,10 @@ impl FontCell {
         ctx.set_transform(kurbo::Affine::translate((-bounds.x0, -bounds.y0)));
         ctx.set_paint(color::OpaqueColor::<color::Srgb>::WHITE);
         ctx.fill_path(&path);
+        if stroke_width > 0.0 {
+            ctx.set_stroke(kurbo::Stroke::new(f64::from(stroke_width)).with_join(kurbo::Join::Round));
+            ctx.stroke_path(&path);
+        }
         let mut dest = vello_cpu::Pixmap::new(width, height);
         ctx.render_to_pixmap(&mut dest);
         let uv_rect = if width == 0 || height == 0 {

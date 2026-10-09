@@ -139,7 +139,9 @@ impl InspectedCellData {
 
 #[cfg(test)]
 mod tests {
-    use super::InspectedCellData;
+    use super::*;
+    use crate::simulation::gpu_physics::GpuPhysicsPipelines;
+    use wgpu::util::DeviceExt;
 
     #[test]
     fn decodes_signed_signal_payload() {
@@ -149,6 +151,110 @@ mod tests {
 
         assert_eq!(data.signal_value(8), -512);
         assert_eq!(data.signal_value(9), 42);
+    }
+
+    #[test]
+    fn inspection_readback_can_clear_idle_pending_and_completed_selections() {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::default();
+            let adapter = instance.request_adapter(&Default::default()).await.unwrap();
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_limits: adapter.limits(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let buffers = GpuTripleBufferSystem::with_mode_capacity(&device, 4, 32);
+            let adhesions = AdhesionBuffers::with_mode_capacity(&device, 4, 32);
+            let pipelines = GpuPhysicsPipelines::new(&device);
+            let labels = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Inspector test organism labels"),
+                contents: bytemuck::cast_slice(&[7u32, 8, u32::MAX, u32::MAX]),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            let mut extraction = GpuCellDataExtraction::new(
+                &device,
+                pipelines.cell_data_extraction.clone(),
+                &pipelines.physics_layout,
+                &pipelines.cell_extraction_params_layout,
+                &pipelines.cell_extraction_state_layout,
+                &pipelines.cell_extraction_output_layout,
+                &buffers,
+                &adhesions,
+                &labels,
+                0,
+            );
+            // This is the first-selection crash: no map has ever been started.
+            extraction.clear_cache();
+            extraction.clear_cache();
+            let mut params = [0u32; 16];
+            params[1] = 10.0f32.to_bits();
+            params[3] = 2;
+            params[12] = 4;
+            queue.write_buffer(&buffers.physics_params, 0, bytemuck::cast_slice(&params));
+            queue.write_buffer(
+                &buffers.cell_count_buffer,
+                0,
+                bytemuck::cast_slice(&[2u32, 2]),
+            );
+            queue.write_buffer(&buffers.cell_ids, 0, bytemuck::cast_slice(&[101u32, 202]));
+            queue.write_buffer(
+                &buffers.birth_times,
+                0,
+                bytemuck::cast_slice(&[1.0f32, 2.0]),
+            );
+            queue.write_buffer(
+                &buffers.position_and_mass[0],
+                0,
+                bytemuck::cast_slice(&[[1.0f32, 2.0, 3.0, 0.5]; 2]),
+            );
+
+            for slot in [0, 1, 0] {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                extraction.extract_cell_data(&mut encoder, &queue, slot, true);
+                queue.submit([encoder.finish()]);
+                let mut result = None;
+                for _ in 0..4 {
+                    result = extraction.poll_extraction(&device);
+                    if result.is_some() {
+                        break;
+                    }
+                    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                }
+                let data = result.expect("selected cell must finish reading back");
+                assert!(data.is_valid());
+                assert_eq!(data.cell_id, [101, 202][slot as usize]);
+                assert_eq!(data.age, [9.0, 8.0][slot as usize]);
+                extraction.clear_cache();
+                extraction.clear_cache();
+                assert!(extraction.get_cached_data().is_none());
+            }
+
+            // Changing selection may cancel a map before its callback is polled.
+            for abort_before_clear in [false, true] {
+                let (tx, rx) = std::sync::mpsc::channel();
+                extraction
+                    .readback_buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |r| {
+                        tx.send(r).ok();
+                    });
+                extraction.map_receiver = Some(rx);
+                if abort_before_clear {
+                    extraction.readback_buffer.unmap();
+                    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                }
+                extraction.clear_cache();
+                extraction.clear_cache();
+                // A new selection must be able to copy into the same staging
+                // buffer immediately after cancellation, without "still mapped".
+                let mut encoder = device.create_command_encoder(&Default::default());
+                extraction.extract_cell_data(&mut encoder, &queue, 1, true);
+                queue.submit([encoder.finish()]);
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            }
+        });
     }
 }
 
@@ -462,7 +568,7 @@ impl GpuCellDataExtraction {
             self.map_receiver = None;
 
             if result.is_err() {
-                self.readback_buffer.unmap();
+                // A failed/aborted mapping already leaves the buffer unmapped.
                 return None;
             }
 
@@ -499,7 +605,17 @@ impl GpuCellDataExtraction {
     /// Clear cached data
     pub fn clear_cache(&mut self) {
         self.cached_data = None;
-        self.map_receiver = None;
-        self.readback_buffer.unmap();
+        if let Some(receiver) = self.map_receiver.take() {
+            // The first selection (and every completed readback) has no map
+            // to cancel. Unmapping that idle buffer is a fatal wgpu validation
+            // error. Only cancel an outstanding or successfully completed map;
+            // an error callback means it is already unmapped.
+            match receiver.try_recv() {
+                Ok(Ok(())) | Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.readback_buffer.unmap();
+                }
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
     }
 }

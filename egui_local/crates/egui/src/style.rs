@@ -2275,11 +2275,13 @@ impl Visuals {
                 max_texture_side: _,
                 alpha_from_coverage,
                 font_hinting,
+                glyph_stroke_width,
             } = text_options;
 
             text_alpha_from_coverage_ui(ui, alpha_from_coverage);
 
             ui.checkbox(font_hinting, "Enable font hinting");
+            ui.add(Slider::new(glyph_stroke_width, 0.0..=2.0).text("Extra glyph weight"));
         });
 
         ui.collapsing("Text cursor", |ui| {

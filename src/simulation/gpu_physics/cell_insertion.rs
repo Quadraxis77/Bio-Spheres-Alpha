@@ -382,7 +382,11 @@ impl GpuCellInsertion {
             max_splits,
             cell_id: 0, // Let shader generate new cell ID
             cell_type,
-            initial_reserve: if cell_type == 10 || cell_type == 13 { 65535000 } else { 0 },
+            initial_reserve: if cell_type == 10 || cell_type == 13 {
+                65535000
+            } else {
+                0
+            },
             initial_nutrients: 0,
             _pad4: 0,
         };

@@ -52,6 +52,102 @@ pub struct Counters {
     pub index_count: u32,
 }
 
+#[cfg(test)]
+mod ice_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn water_extraction_cannot_replace_prepared_ice_with_raw_density() {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let mesh = GpuSurfaceNets::new(
+            &device,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Depth32Float,
+            64.0,
+            Vec3::ZERO,
+            32,
+            32,
+            None,
+        );
+        let mut ice = vec![0.0f32; TOTAL_VOXELS];
+        // Newly frozen single-voxel sheets must render immediately, too.
+        for z in 54..74 {
+            for y in 62..63 {
+                for x in 54..74 {
+                    ice[x + y * 128 + z * 128 * 128] = 1.0;
+                }
+            }
+        }
+        queue.write_buffer(&mesh.ice_density_buffer, 0, bytemuck::cast_slice(&ice));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        mesh.smooth_ice_density(&mut encoder);
+        mesh.extract_ice_mesh(&mut encoder);
+        queue.submit([encoder.finish()]);
+        let count = || {
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 8,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&mesh.ice_counter_buffer, 0, &staging, 0, 8);
+            queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            staging
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            rx.recv().unwrap().unwrap();
+            bytemuck::from_bytes::<Counters>(&staging.slice(..).get_mapped_range()).index_count
+        };
+        let prepared_count = count();
+        assert!(
+            prepared_count > 0,
+            "the prepared ice sheet must have a mesh"
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        mesh.smooth_ice_density(&mut encoder);
+        mesh.extract_ice_mesh(&mut encoder);
+        queue.submit([encoder.finish()]);
+        assert_eq!(
+            count(),
+            prepared_count,
+            "unchanged ice must not grow through temporal smoothing"
+        );
+        // This is the interleaving produced when a water prepare tick lands
+        // between ice preparation and finalization at variable frame rates.
+        queue.write_buffer(
+            &mesh.ice_density_buffer,
+            0,
+            bytemuck::cast_slice(&vec![0.0f32; TOTAL_VOXELS]),
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        mesh.extract_ice_mesh(&mut encoder);
+        queue.submit([encoder.finish()]);
+        assert_eq!(
+            count(),
+            prepared_count,
+            "raw fluid refresh must not change the prepared ice mesh"
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        mesh.smooth_ice_density(&mut encoder);
+        mesh.extract_ice_mesh(&mut encoder);
+        queue.submit([encoder.finish()]);
+        assert_eq!(
+            count(),
+            0,
+            "the next completed ice preparation must show the new state"
+        );
+    }
+}
+
 /// Ice appearance uniform (must match IceRenderParams in ice_mesh.wgsl)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -864,6 +960,19 @@ impl GpuSurfaceNets {
             mapped_at_creation: false,
         });
 
+        // Mesh input is a private prepared snapshot. Fluid extraction refreshes
+        // raw ice whenever WATER is prepared, including between ice's prepare
+        // and finalize ticks. Binding that raw buffer made the displayed ice
+        // alternate between blurred and binary densities as frame timing changed.
+        let ice_smoothed_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Ice Smoothed Density Buffer"),
+            size: density_buf_size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
         let ice_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Ice Surface Nets Vertex Buffer"),
             size: (ice_max_vertices as usize * std::mem::size_of::<GpuVertex>()) as u64,
@@ -930,7 +1039,7 @@ impl GpuSurfaceNets {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: ice_density_buffer.as_entire_binding(),
+                    resource: ice_smoothed_density_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -1193,15 +1302,6 @@ impl GpuSurfaceNets {
         });
 
         // === Ice density smoothing (reuses smooth_pipeline above) ===
-        let ice_smoothed_density_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Ice Smoothed Density Buffer"),
-            size: density_buf_size,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
         let ice_smooth_temp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Ice Smooth Temp Buffer"),
             size: density_buf_size,
@@ -1209,9 +1309,9 @@ impl GpuSurfaceNets {
             mapped_at_creation: false,
         });
 
-        // blend_factor = 1.0: ice only re-extracts every 8th frame, so each
-        // run should reflect the current blur instantly with no temporal lag
-        // (unlike water's continuous per-frame smoothing).
+        // blend_factor = 1.0 takes a current snapshot with no temporal lag.
+        // Surface nets already filters corners; another blur would erase
+        // newly frozen thin sheets before they can cross the isovalue.
         let ice_smooth_params = SmoothDensityParams {
             grid_resolution: GRID_RESOLUTION,
             blend_factor: 1.0,
@@ -1591,11 +1691,10 @@ impl GpuSurfaceNets {
         );
     }
 
-    /// Run ice density smoothing: 3x3x3 box blur (no temporal lag).
-    /// Call before extract_ice_mesh. Smoothed result is copied back to
-    /// ice_density_buffer so ice surface-nets extraction reads it - turns
-    /// the binary per-voxel ice field into a graded field near the surface
-    /// so the mesh isn't a voxel-aligned staircase.
+    /// Prepare stable ice density for the next mesh extraction.
+    /// Surface nets applies the spatial filter when generating the mesh.
+    /// Raw density remains untouched for fluid/light consumers and may be
+    /// refreshed independently without changing the prepared mesh input.
     pub fn smooth_ice_density(&self, encoder: &mut wgpu::CommandEncoder) {
         let workgroup_count = (GRID_RESOLUTION + 3) / 4;
         let buf_size = (TOTAL_VOXELS * std::mem::size_of::<f32>()) as u64;
@@ -1614,14 +1713,6 @@ impl GpuSurfaceNets {
             &self.ice_smooth_temp_buffer,
             0,
             &self.ice_smoothed_density_buffer,
-            0,
-            buf_size,
-        );
-
-        encoder.copy_buffer_to_buffer(
-            &self.ice_smoothed_density_buffer,
-            0,
-            &self.ice_density_buffer,
             0,
             buf_size,
         );
@@ -2012,7 +2103,12 @@ impl GpuSurfaceNets {
             camera_rotation * Vec3::Y,
         );
         let aspect = self.width as f32 / self.height as f32;
-        let proj = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
+        let proj = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let view_proj = proj * view;
 
         let camera_uniform = CameraUniform {

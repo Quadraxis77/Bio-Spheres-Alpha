@@ -280,7 +280,12 @@ impl AdhesionLineRenderer {
         let view_matrix = Mat4::look_at_rh(camera_pos, look_target, up);
 
         let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
+        let proj_matrix = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let view_proj = proj_matrix * view_matrix;
 
         let camera_uniform = CameraUniform {
@@ -331,10 +336,11 @@ impl AdhesionLineRenderer {
                 (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) != 0;
             let is_signal_capable =
                 (connections.bond_flags[i] & crate::cell::adhesion::BOND_FLAG_BARRIER_BALL) == 0;
-            let signal_active = is_signal_capable && (0..16).any(|channel| {
-                state.signal_channels[cell_a_idx * 16 + channel].unwrap_or(0.0) > 0.0
-                    && state.signal_channels[cell_b_idx * 16 + channel].unwrap_or(0.0) > 0.0
-            });
+            let signal_active = is_signal_capable
+                && (0..16).any(|channel| {
+                    state.signal_channels[cell_a_idx * 16 + channel].unwrap_or(0.0) > 0.0
+                        && state.signal_channels[cell_b_idx * 16 + channel].unwrap_or(0.0) > 0.0
+                });
             let route_color = if signal_active {
                 [1.0, 1.0, 0.0, 1.0]
             } else {

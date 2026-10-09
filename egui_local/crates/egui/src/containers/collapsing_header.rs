@@ -655,6 +655,7 @@ impl CollapsingHeader {
     ) -> CollapsingResponse<R> {
         // Make sure body is bellow header,
         // and make sure it is one unit (necessary for putting a [`CollapsingHeader`] in a grid).
+        let usage_label = self.text.text().to_owned();
         ui.vertical(|ui| {
             if !self.enabled {
                 ui.disable();
@@ -666,11 +667,17 @@ impl CollapsingHeader {
                 openness,
             } = self.begin(ui); // show the header
 
-            let ret_response = if indented {
-                state.show_body_indented(&header_response, ui, add_body)
-            } else {
-                state.show_body_unindented(ui, add_body)
-            };
+            if header_response.clicked() && state.is_open() {
+                crate::InteractionUsage::menu(ui.ctx(), header_response.id, &usage_label);
+            }
+            let usage_ctx = ui.ctx().clone();
+            let ret_response = crate::InteractionUsage::scoped(&usage_ctx, &usage_label, || {
+                if indented {
+                    state.show_body_indented(&header_response, ui, add_body)
+                } else {
+                    state.show_body_unindented(ui, add_body)
+                }
+            });
 
             if let Some(ret_response) = ret_response {
                 CollapsingResponse {

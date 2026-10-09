@@ -866,7 +866,12 @@ impl OrganismSkinRenderer {
             camera_rotation * Vec3::Y,
         );
         let aspect = self.width as f32 / self.height.max(1) as f32;
-        let proj = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
+        let proj = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let cam = CameraUniform {
             view_proj: (proj * view).to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),

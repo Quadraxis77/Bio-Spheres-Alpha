@@ -669,7 +669,10 @@ impl SceneManager {
                 scene.culling_mode(),
                 scene.show_dof,
                 scene.headless_no_render,
-                scene.post_process.as_ref().map(|pp| pp.water_distortion_enabled),
+                scene
+                    .post_process
+                    .as_ref()
+                    .map(|pp| pp.water_distortion_enabled),
             );
             scene.set_culling_mode(crate::rendering::CullingMode::FrustumOnly);
             scene.show_dof = false;

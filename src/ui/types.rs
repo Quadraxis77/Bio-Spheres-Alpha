@@ -550,11 +550,11 @@ pub struct ClimateSettings {
     #[serde(default = "default_snow_compact_rate")]
     pub snow_compact_rate: f32,
 
-    /// Water freezing threshold (internal 0-255 scale). Default: 65 (~1°C)
+    /// Water freezing threshold (internal 0-255 scale). Default: 61 (~-2°C)
     #[serde(default = "default_freeze_threshold")]
     pub freeze_threshold: u32,
 
-    /// Ice melting threshold (internal 0-255 scale). Default: 75 (~9°C)
+    /// Ice melting threshold (internal 0-255 scale). Default: 66 (~2°C)
     #[serde(default = "default_melt_threshold")]
     pub melt_threshold: u32,
 
@@ -614,11 +614,11 @@ fn default_snow_compact_rate() -> f32 {
 }
 
 fn default_freeze_threshold() -> u32 {
-    65 // 0°C / 32°F
+    61 // approximately -2°C / 28°F, including freeze hysteresis
 }
 
 fn default_melt_threshold() -> u32 {
-    75 // 5°C / 41°F
+    66 // approximately 2°C / 35°F, including melt hysteresis
 }
 
 fn default_snow_threshold() -> u32 {
@@ -953,7 +953,13 @@ pub struct VrScreenSettings {
     pub aspect: f32,
 }
 impl Default for VrScreenSettings {
-    fn default() -> Self { Self { curvature:0.0, distance:1.6, aspect:16.0/9.0 } }
+    fn default() -> Self {
+        Self {
+            curvature: 0.0,
+            distance: 1.6,
+            aspect: 16.0 / 9.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1440,13 +1446,18 @@ mod desktop_timing_tests {
 
     #[test]
     fn vr_screen_preferences_round_trip_and_legacy_files_keep_defaults() {
-        let legacy:GlobalUiState=ron::from_str(include_str!("../../default_ui_state.ron")).unwrap();
-        assert_eq!(legacy.vr_screen,VrScreenSettings::default());
-        let mut state=GlobalUiState::default();
-        state.vr_screen=VrScreenSettings {curvature:60.0,distance:2.5,aspect:21.0/9.0};
-        let saved=ron::to_string(&state).unwrap();
-        let loaded:GlobalUiState=ron::from_str(&saved).unwrap();
-        assert_eq!(loaded.vr_screen,state.vr_screen);
+        let legacy: GlobalUiState =
+            ron::from_str(include_str!("../../default_ui_state.ron")).unwrap();
+        assert_eq!(legacy.vr_screen, VrScreenSettings::default());
+        let mut state = GlobalUiState::default();
+        state.vr_screen = VrScreenSettings {
+            curvature: 60.0,
+            distance: 2.5,
+            aspect: 21.0 / 9.0,
+        };
+        let saved = ron::to_string(&state).unwrap();
+        let loaded: GlobalUiState = ron::from_str(&saved).unwrap();
+        assert_eq!(loaded.vr_screen, state.vr_screen);
     }
     #[test]
     fn desktop_limit_survives_save_and_load() {

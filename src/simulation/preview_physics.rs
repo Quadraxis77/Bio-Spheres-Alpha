@@ -1393,7 +1393,11 @@ pub fn transport_nutrients_through_adhesions(state: &mut CanonicalState, genome:
         // Priority scales reserve intake above and below the baseline:
         // gametes 10/sec, embryocytes 100/sec, at priority 1.
         let reserve_rate = |mode: &crate::genome::ModeSettings| {
-            let baseline = if mode.cell_type == 13 { 10.0 } else { TRANSPORT_RATE };
+            let baseline = if mode.cell_type == 13 {
+                10.0
+            } else {
+                TRANSPORT_RATE
+            };
             baseline * mode.nutrient_priority.max(0.0)
         };
         let embryo_rate_cap = if is_embryo_b_pass1 {

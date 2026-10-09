@@ -576,7 +576,11 @@ impl GpuTripleBufferSystem {
 
     /// Create a new triple buffer system
     pub fn new(device: &wgpu::Device, capacity: u32) -> Self {
-        Self::with_mode_capacity(device, capacity, super::mutation::initial_mode_pool_capacity())
+        Self::with_mode_capacity(
+            device,
+            capacity,
+            super::mutation::initial_mode_pool_capacity(),
+        )
     }
 
     pub(super) fn with_mode_capacity(device: &wgpu::Device, capacity: u32, max_modes: u64) -> Self {
@@ -854,8 +858,10 @@ impl GpuTripleBufferSystem {
             Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V14");
         let mode_properties_v15 =
             Self::create_storage_buffer(device, max_modes * 16, "Mode Properties V15");
-        let embryocyte_defaults_v9 = Self::create_storage_buffer(device, max_modes * 16, "Embryocyte Defaults V9");
-        let embryocyte_defaults_v10 = Self::create_storage_buffer(device, max_modes * 16, "Embryocyte Defaults V10");
+        let embryocyte_defaults_v9 =
+            Self::create_storage_buffer(device, max_modes * 16, "Embryocyte Defaults V9");
+        let embryocyte_defaults_v10 =
+            Self::create_storage_buffer(device, max_modes * 16, "Embryocyte Defaults V10");
 
         // Per-cell Embryocyte reserve buffer (one u32 per cell, zero-initialized)
         let embryocyte_reserve_buffer = Self::create_zero_initialized_storage_buffer(
@@ -1772,8 +1778,10 @@ impl GpuTripleBufferSystem {
         self.mode_properties_v13 = Self::create_storage_buffer(device, m16, "Mode Properties V13");
         self.mode_properties_v14 = Self::create_storage_buffer(device, m16, "Mode Properties V14");
         self.mode_properties_v15 = Self::create_storage_buffer(device, m16, "Mode Properties V15");
-        self.embryocyte_defaults_v9 = Self::create_storage_buffer(device, m16, "Embryocyte Defaults V9");
-        self.embryocyte_defaults_v10 = Self::create_storage_buffer(device, m16, "Embryocyte Defaults V10");
+        self.embryocyte_defaults_v9 =
+            Self::create_storage_buffer(device, m16, "Embryocyte Defaults V9");
+        self.embryocyte_defaults_v10 =
+            Self::create_storage_buffer(device, m16, "Embryocyte Defaults V10");
 
         self.mode_cell_types = Self::create_storage_buffer(device, m4, "Mode Cell Types");
         self.glueocyte_env_adhesion_flags =
@@ -2197,18 +2205,42 @@ impl GpuTripleBufferSystem {
         queue: &wgpu::Queue,
         genomes: &[crate::genome::Genome],
     ) {
-        let defaults_v9: Vec<[f32; 4]> = genomes.iter().flat_map(|g| g.modes.iter()).map(|mode| [
-            mode.embryocyte_use_timer as u32 as f32, mode.embryocyte_release_timer,
-            mode.embryocyte_use_threshold as u32 as f32, mode.embryocyte_threshold_value as f32,
-        ]).collect();
-        let defaults_v10: Vec<[f32; 4]> = genomes.iter().flat_map(|g| g.modes.iter()).map(|mode| [
-            mode.embryocyte_use_signal as u32 as f32, mode.embryocyte_signal_channel as f32,
-            mode.embryocyte_signal_value,
-            mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_EMBRYOCYTE) as i32 as f32,
-        ]).collect();
+        let defaults_v9: Vec<[f32; 4]> = genomes
+            .iter()
+            .flat_map(|g| g.modes.iter())
+            .map(|mode| {
+                [
+                    mode.embryocyte_use_timer as u32 as f32,
+                    mode.embryocyte_release_timer,
+                    mode.embryocyte_use_threshold as u32 as f32,
+                    mode.embryocyte_threshold_value as f32,
+                ]
+            })
+            .collect();
+        let defaults_v10: Vec<[f32; 4]> = genomes
+            .iter()
+            .flat_map(|g| g.modes.iter())
+            .map(|mode| {
+                [
+                    mode.embryocyte_use_signal as u32 as f32,
+                    mode.embryocyte_signal_channel as f32,
+                    mode.embryocyte_signal_value,
+                    mode.signal_response_mode(crate::genome::SIGNAL_LISTENER_EMBRYOCYTE) as i32
+                        as f32,
+                ]
+            })
+            .collect();
         if !defaults_v9.is_empty() {
-            queue.write_buffer(&self.embryocyte_defaults_v9, 0, bytemuck::cast_slice(&defaults_v9));
-            queue.write_buffer(&self.embryocyte_defaults_v10, 0, bytemuck::cast_slice(&defaults_v10));
+            queue.write_buffer(
+                &self.embryocyte_defaults_v9,
+                0,
+                bytemuck::cast_slice(&defaults_v9),
+            );
+            queue.write_buffer(
+                &self.embryocyte_defaults_v10,
+                0,
+                bytemuck::cast_slice(&defaults_v10),
+            );
         }
         let mut v9: Vec<[f32; 4]> = Vec::new();
         let mut v10: Vec<[f32; 4]> = Vec::new();

@@ -1,7 +1,8 @@
-pub mod inspection;
 pub mod camera;
+pub mod control_usage;
 pub mod dock;
 pub mod genome_browser;
+pub mod inspection;
 mod native_input;
 pub mod panel;
 pub mod panel_context;

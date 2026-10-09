@@ -21,7 +21,6 @@
 //!   `MAX_PARTICLES`, giving a ring-buffer effect with no CPU readback needed.
 //! - Draw arguments are generated from the current GPU counter without readback.
 
-
 use bytemuck::{Pod, Zeroable};
 
 /// Death particle instance data.
@@ -128,7 +127,8 @@ impl DeathParticleRenderer {
             mapped_at_creation: false,
         });
 
-        let draw = super::particle_draw::ParticleDraw::new(device, &counter_buffer, 6, max_particles);
+        let draw =
+            super::particle_draw::ParticleDraw::new(device, &counter_buffer, 6, max_particles);
 
         let prev_death_flags_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Death Particle Prev Death Flags"),
@@ -505,8 +505,6 @@ impl DeathParticleRenderer {
         self.draw.encode(encoder);
     }
 
-
-
     /// Render death particles.
     pub fn render(
         &self,
@@ -516,7 +514,6 @@ impl DeathParticleRenderer {
         camera_bind_group: &wgpu::BindGroup,
         render_bind_group: &wgpu::BindGroup,
     ) {
-
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Death Particle Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -551,6 +548,4 @@ impl DeathParticleRenderer {
     pub fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.camera_bind_group_layout
     }
-
-
 }

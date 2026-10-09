@@ -1296,7 +1296,7 @@ impl GenomeEditorState {
             fluid_water_mass: 0.0,
             fluid_lava_mass: 0.0,
             fluid_steam_mass: 0.0,
-            temp_display_fahrenheit: false,
+            temp_display_fahrenheit: true,
             fluid_water_percent: 25.0,
             fluid_lava_percent: 25.0,
             fluid_steam_percent: 25.0,
@@ -3138,7 +3138,7 @@ impl GenomeEditorState {
         f32,
         f32, // photocyte_mass, photocyte_threshold
         bool,
-        f32, // luminocyte_bloom_enabled, luminocyte_bloom_radius
+        f32,  // luminocyte_bloom_enabled, luminocyte_bloom_radius
         bool, // luminocyte_ray_tracing
         f32,
         f32,
@@ -4071,6 +4071,7 @@ mod tests {
         assert!(state.renaming_mode.is_none());
         assert!(state.rename_buffer.is_empty());
         assert!(!state.copy_into_dialog_open);
+        assert!(state.temp_display_fahrenheit);
         assert!(state.qball_snapping);
         assert!(state.enable_snapping);
         assert_eq!(state.qball1_locked_axis, -1);

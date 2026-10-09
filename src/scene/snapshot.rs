@@ -126,7 +126,6 @@ pub struct GpuSceneSnapshot {
     #[serde(default)]
     pub organism_cell_ids: Vec<u32>,
 
-
     /// Lightweight lineage/bestiary history for the ecosystem viewer.
     ///
     /// This is intentionally separate from `genomes_yaml`: most lineage nodes

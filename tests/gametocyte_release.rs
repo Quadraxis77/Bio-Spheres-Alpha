@@ -1,7 +1,7 @@
 use bio_spheres::genome::Genome;
 use bio_spheres::simulation::preview_physics::{
-    check_embryocyte_release_triggers, transport_nutrients_through_adhesions,
-    physics_step_with_genome, update_embryocyte_reserve_burn, update_nutrient_growth,
+    check_embryocyte_release_triggers, physics_step_with_genome,
+    transport_nutrients_through_adhesions, update_embryocyte_reserve_burn, update_nutrient_growth,
 };
 use bio_spheres::simulation::{CanonicalState, PhysicsConfig};
 use glam::{Quat, Vec3};
@@ -167,23 +167,48 @@ fn reserve_loading_preserves_parent_food_across_multiple_receivers() {
             state.nutrients[1] = parent_food;
             state.reserves[0] = 0;
             state.add_cell(
-                Vec3::Y, Vec3::ZERO, Quat::IDENTITY, Quat::IDENTITY,
-                Vec3::ZERO, 100.0, 0, 0, 0.0, 60.0, 100.0, 1.0,
+                Vec3::Y,
+                Vec3::ZERO,
+                Quat::IDENTITY,
+                Quat::IDENTITY,
+                Vec3::ZERO,
+                100.0,
+                0,
+                0,
+                0.0,
+                60.0,
+                100.0,
+                1.0,
             );
             state.reserves[2] = 0;
             // Opposite endpoint order from the first bond: both directions must
             // preserve the same parent's food budget.
-            state.adhesion_manager.add_adhesion_with_directions(
-                &mut state.adhesion_connections, 1, 2, 0,
-                Vec3::Y, -Vec3::Y, Vec3::X, Vec3::X,
-                Quat::IDENTITY, Quat::IDENTITY, 0.5, 0.5, 0.0,
-            ).unwrap();
+            state
+                .adhesion_manager
+                .add_adhesion_with_directions(
+                    &mut state.adhesion_connections,
+                    1,
+                    2,
+                    0,
+                    Vec3::Y,
+                    -Vec3::Y,
+                    Vec3::X,
+                    Vec3::X,
+                    Quat::IDENTITY,
+                    Quat::IDENTITY,
+                    0.5,
+                    0.5,
+                    0.0,
+                )
+                .unwrap();
             for _ in 0..100 {
                 transport_nutrients_through_adhesions(&mut state, &genome, 0.1);
                 assert!(state.nutrients[1] >= parent_food.min(10.0) - 0.001);
                 let stored = (state.reserves[0] + state.reserves[2]) as f32 / 1000.0;
-                assert!((state.nutrients[1] + stored - parent_food).abs() < 0.01,
-                    "multiple receivers must conserve their donor's food");
+                assert!(
+                    (state.nutrients[1] + stored - parent_food).abs() < 0.01,
+                    "multiple receivers must conserve their donor's food"
+                );
             }
             assert!((state.nutrients[1] - parent_food.min(10.0)).abs() < 0.001);
         }
@@ -217,7 +242,9 @@ fn gamete_burn_saturates_and_embryo_metabolism_is_unchanged() {
     state.reserves[0] = 20_000;
     update_embryocyte_reserve_burn(&mut state, &genome, 1.0);
     assert_eq!(state.reserves[0], 20_000);
-    state.adhesion_manager.remove_all_connections_for_cell(&mut state.adhesion_connections, 0);
+    state
+        .adhesion_manager
+        .remove_all_connections_for_cell(&mut state.adhesion_connections, 0);
     update_embryocyte_reserve_burn(&mut state, &genome, 1.0);
     assert_eq!(state.reserves[0], 10_000);
 }
@@ -248,5 +275,7 @@ fn lifecycle_shader_validates_after_gamete_metabolism_change() {
     wgpu::naga::valid::Validator::new(
         wgpu::naga::valid::ValidationFlags::all(),
         wgpu::naga::valid::Capabilities::all(),
-    ).validate(&module).expect("lifecycle shader must validate");
+    )
+    .validate(&module)
+    .expect("lifecycle shader must validate");
 }

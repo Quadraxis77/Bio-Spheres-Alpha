@@ -2035,8 +2035,12 @@ impl InstanceBuilder {
     /// Encode a bounded-rate telemetry sample before submission.
     fn encode_stats_readback(&mut self, encoder: &mut wgpu::CommandEncoder) {
         // Sample optional telemetry once per second, not every rendered frame.
-        if self.stats_readback_enabled && !self.stats_map_pending && !self.stats_copy_ready
-            && self.stats_last_copy.is_none_or(|t| t.elapsed().as_secs_f32() >= 1.0)
+        if self.stats_readback_enabled
+            && !self.stats_map_pending
+            && !self.stats_copy_ready
+            && self
+                .stats_last_copy
+                .is_none_or(|t| t.elapsed().as_secs_f32() >= 1.0)
         {
             let counter_count = 4 + CellType::MAX_TYPES;
             encoder.copy_buffer_to_buffer(
@@ -2049,7 +2053,6 @@ impl InstanceBuilder {
             self.stats_copy_ready = true;
             self.stats_last_copy = Some(std::time::Instant::now());
         }
-
     }
 
     pub fn set_stats_readback_enabled(&mut self, enabled: bool) {
@@ -2279,11 +2282,19 @@ mod readback_tests {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(&Default::default());
             let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
-                required_limits: adapter.limits(), ..Default::default()
-            }).await.unwrap();
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_limits: adapter.limits(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
             let mut builder = InstanceBuilder::new(&device, 32);
-            queue.write_buffer(&builder.counters_buffer, 0, bytemuck::cast_slice(&[12u32, 20, 5, 3]));
+            queue.write_buffer(
+                &builder.counters_buffer,
+                0,
+                bytemuck::cast_slice(&[12u32, 20, 5, 3]),
+            );
             let mut encoder = device.create_command_encoder(&Default::default());
             builder.encode_stats_readback(&mut encoder);
             builder.start_culling_stats_read();
@@ -2298,7 +2309,12 @@ mod readback_tests {
             builder.encode_stats_readback(&mut encoder);
             assert!(!builder.stats_copy_ready);
             queue.submit([encoder.finish()]);
-            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             assert!(builder.poll_culling_stats(&device));
             assert_eq!(builder.last_culling_stats().visible_cells, 12);
             assert_eq!(builder.last_culling_stats().total_cells, 20);
@@ -2309,12 +2325,18 @@ mod readback_tests {
             let mut encoder = device.create_command_encoder(&Default::default());
             builder.encode_stats_readback(&mut encoder);
             assert!(!builder.stats_copy_ready);
-            builder.stats_last_copy = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+            builder.stats_last_copy =
+                Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
             builder.encode_stats_readback(&mut encoder);
             assert!(builder.stats_copy_ready);
             queue.submit([encoder.finish()]);
             builder.start_culling_stats_read();
-            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             assert!(builder.poll_culling_stats(&device));
         });
     }

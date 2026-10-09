@@ -9,18 +9,19 @@ use crate::{Response, Ui, epaint};
 mod button;
 mod checkbox;
 pub mod color_picker;
+mod controller_number_pad;
+mod controller_slider;
 pub(crate) mod drag_value;
 mod hyperlink;
 mod image;
 mod image_button;
+mod interaction_usage;
 mod label;
 mod progress_bar;
 mod radio_button;
 mod selected_label;
 mod separator;
 mod slider;
-mod controller_slider;
-mod controller_number_pad;
 mod spinner;
 pub mod text_edit;
 
@@ -30,6 +31,8 @@ pub use self::selected_label::SelectableLabel;
 pub use self::{
     button::Button,
     checkbox::Checkbox,
+    controller_number_pad::ControllerNumberPad,
+    controller_slider::{ControllerSlider, ControllerSliderSelection},
     drag_value::DragValue,
     hyperlink::{Hyperlink, Link},
     image::{
@@ -37,13 +40,12 @@ pub use self::{
         decode_animated_image_uri, has_gif_magic_header, has_webp_header, paint_texture_at,
     },
     image_button::ImageButton,
+    interaction_usage::{InteractionUsage, UsageEvent},
     label::Label,
     progress_bar::ProgressBar,
     radio_button::RadioButton,
     separator::Separator,
     slider::{Slider, SliderClamping, SliderOrientation},
-    controller_slider::{ControllerSlider, ControllerSliderSelection},
-    controller_number_pad::ControllerNumberPad,
     spinner::Spinner,
     text_edit::{TextBuffer, TextEdit},
 };

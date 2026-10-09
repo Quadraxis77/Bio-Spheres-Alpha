@@ -96,8 +96,7 @@ pub struct GpuFluidParams {
     // Gravity mode: 0=X axis, 1=Y axis, 2=Z axis, 3=radial (toward origin)
     pub gravity_mode: u32,
     pub surface_pressure: f32, // Tangential smoothing strength for radial mode (0.0-1.0)
-    // Overall sun brightness driving the thermal model's baseline air temperature
-    // (0 = dark, 3 = comfortable max, >3 = extreme heat). Mirrors editor_state.sun_intensity.
+    // Solar source strength (0 = dark, 3 = temperate reference). Mirrors editor_state.sun_intensity.
     pub sun_brightness: f32,
     // Thermal inertia (0.0-5.0 scale): controls heat flow and phase-change resistance
     pub thermal_inertia: f32,
@@ -240,7 +239,7 @@ pub struct GpuFluidSimulator {
 
     // Surface pressure: tangential smoothing strength for radial mode (0.0-1.0)
     surface_pressure: std::cell::Cell<f32>,
-    /// Overall sun brightness driving the thermal model's baseline air temperature.
+    /// Solar source strength (0 = dark, 3 = temperate reference).
     sun_brightness: std::cell::Cell<f32>,
 
     // ---- Climate tunables (defaults set in `new()`, adjustable via setters) ----
@@ -265,6 +264,7 @@ pub struct GpuFluidSimulator {
     #[cfg(test)]
     update_temperature_pipeline: wgpu::ComputePipeline,
     update_temperature_slice_pipeline: wgpu::ComputePipeline,
+    apply_temperature_pipeline: wgpu::ComputePipeline,
     /// Vapor fog density pass (repurposed humidity diffusion). Massless but
     /// climate-active: the light field attenuates sunlight through it.
     diffuse_humidity_pipeline: wgpu::ComputePipeline,
@@ -287,7 +287,7 @@ pub struct GpuFluidSimulator {
 
     // Light field (read-only, 128^3 f32 per voxel, owned by LightFieldSystem;
     // cloned here so per-call bind groups can include it alongside the cached one).
-    light_field_buffer: wgpu::Buffer,
+    solar_transmittance_buffer: wgpu::Buffer,
     luminocyte_emission_buffer: wgpu::Buffer,
 
     // Atmospheric humidity field (128^3 atomic u32 per voxel, fixed-point *256, ~8MB).
@@ -299,6 +299,7 @@ pub struct GpuFluidSimulator {
     // storage - each invocation only reads/writes its own voxel's debt.
     phase_debt_buffer: wgpu::Buffer,
     temp_field_buffer: wgpu::Buffer,
+    thermal_snapshot_buffer: wgpu::Buffer,
     geothermal_heat_buffer: wgpu::Buffer,
     geothermal_glow_buffer: wgpu::Buffer,
     /// Tick counter gating the every-Nth-tick climate passes.
@@ -390,7 +391,6 @@ pub struct GpuFluidSimulator {
     temp_stats_buffer: wgpu::Buffer,
     temp_stats_staging_buffer: wgpu::Buffer,
     temp_stats_copy_pending: std::cell::Cell<bool>,
-    telemetry_enabled: std::cell::Cell<bool>,
     audio_readbacks_enabled: std::cell::Cell<bool>,
     listener_readbacks_enabled: std::cell::Cell<bool>,
     last_climate_readback: std::cell::Cell<Option<std::time::Instant>>,
@@ -402,10 +402,9 @@ pub struct GpuFluidSimulator {
     /// occupancy. The renderer consumes this to avoid rebuilding surface nets
     /// continuously for an otherwise motionless static-water world.
     static_surface_mesh_changed: std::cell::Cell<bool>,
-    /// Exponential moving average of water temperature, in Celsius.
-    avg_water_temp_c: std::cell::Cell<f32>,
-    /// Exponential moving average of air (empty-voxel) temperature, in Celsius.
-    avg_air_temp_c: std::cell::Cell<f32>,
+    /// Exponential moving averages, unavailable until a populated sample is read back.
+    avg_water_temp_c: std::cell::Cell<Option<f32>>,
+    avg_air_temp_c: std::cell::Cell<Option<f32>>,
     /// Exponential moving average of atmospheric humidity, normalized 0.0..1.0.
     avg_humidity: std::cell::Cell<f32>,
 }
@@ -416,7 +415,7 @@ impl GpuFluidSimulator {
         world_radius: f32,
         world_center: Vec3,
         solid_mask_buffer: wgpu::Buffer,
-        light_field_buffer: &wgpu::Buffer,
+        solar_transmittance_buffer: &wgpu::Buffer,
         luminocyte_emission_buffer: &wgpu::Buffer,
     ) -> Self {
         let world_diameter = world_radius * 2.0;
@@ -458,8 +457,8 @@ impl GpuFluidSimulator {
             surface_pressure: 0.5,
             sun_brightness: 3.0,
             thermal_inertia: 4.0,
-            freeze_threshold: 65,
-            melt_threshold: 75,
+            freeze_threshold: 61,
+            melt_threshold: 66,
             snow_threshold: 60,
             evaporation_threshold: 120,
             optimal_cell_temp: 105,
@@ -668,6 +667,15 @@ impl GpuFluidSimulator {
         let temp_field_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Fluid Temperature Field Buffer"),
             size: buffer_size, // TOTAL_VOXELS * sizeof(u32)
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let thermal_snapshot_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Thermal Snapshot Buffer"),
+            size: buffer_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -809,6 +817,16 @@ impl GpuFluidSimulator {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -844,6 +862,16 @@ impl GpuFluidSimulator {
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some("update_temperature"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let apply_temperature_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Apply Temperature Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("apply_temperature"),
                 compilation_options: Default::default(),
                 cache: None,
             });
@@ -1293,7 +1321,7 @@ impl GpuFluidSimulator {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: light_field_buffer.as_entire_binding(),
+                    resource: solar_transmittance_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -1314,6 +1342,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: luminocyte_emission_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: thermal_snapshot_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -1363,11 +1395,12 @@ impl GpuFluidSimulator {
         Self {
             state_buffer,
             solid_mask_buffer,
-            light_field_buffer: light_field_buffer.clone(),
+            solar_transmittance_buffer: solar_transmittance_buffer.clone(),
             luminocyte_emission_buffer: luminocyte_emission_buffer.clone(),
             humidity_buffer,
             phase_debt_buffer,
             temp_field_buffer,
+            thermal_snapshot_buffer,
             geothermal_heat_buffer,
             geothermal_glow_buffer,
             climate_tick_counter: std::cell::Cell::new(0),
@@ -1382,6 +1415,7 @@ impl GpuFluidSimulator {
             #[cfg(test)]
             update_temperature_pipeline,
             update_temperature_slice_pipeline,
+            apply_temperature_pipeline,
             diffuse_humidity_pipeline,
             condense_humidity_pipeline,
             init_sphere_pipeline,
@@ -1436,8 +1470,8 @@ impl GpuFluidSimulator {
             surface_pressure: std::cell::Cell::new(0.5),
             sun_brightness: std::cell::Cell::new(3.0),
             thermal_inertia: std::cell::Cell::new(4.0),
-            freeze_threshold: std::cell::Cell::new(65),
-            melt_threshold: std::cell::Cell::new(75),
+            freeze_threshold: std::cell::Cell::new(61),
+            melt_threshold: std::cell::Cell::new(66),
             snow_threshold: std::cell::Cell::new(60),
             evaporation_threshold: std::cell::Cell::new(120),
             optimal_cell_temp: std::cell::Cell::new(105),
@@ -1450,7 +1484,6 @@ impl GpuFluidSimulator {
             temp_stats_buffer,
             temp_stats_staging_buffer,
             temp_stats_copy_pending: std::cell::Cell::new(false),
-            telemetry_enabled: std::cell::Cell::new(true),
             audio_readbacks_enabled: std::cell::Cell::new(true),
             listener_readbacks_enabled: std::cell::Cell::new(true),
             last_climate_readback: std::cell::Cell::new(None),
@@ -1458,8 +1491,8 @@ impl GpuFluidSimulator {
             last_listener_readback: std::cell::Cell::new(None),
             temp_stats_map_receiver: std::cell::RefCell::new(None),
             static_surface_mesh_changed: std::cell::Cell::new(false),
-            avg_water_temp_c: std::cell::Cell::new(0.0),
-            avg_air_temp_c: std::cell::Cell::new(0.0),
+            avg_water_temp_c: std::cell::Cell::new(None),
+            avg_air_temp_c: std::cell::Cell::new(None),
             avg_humidity: std::cell::Cell::new(0.0),
         }
     }
@@ -1492,7 +1525,7 @@ impl GpuFluidSimulator {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: self.light_field_buffer.as_entire_binding(),
+                    resource: self.solar_transmittance_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
@@ -1513,6 +1546,10 @@ impl GpuFluidSimulator {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: self.luminocyte_emission_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: self.thermal_snapshot_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -1781,19 +1818,17 @@ impl GpuFluidSimulator {
     /// outside the simulated grid (e.g. camera outside the world sphere)
     /// can't be underwater by definition, so this resolves that case
     /// immediately without waiting on a readback.
-    pub fn configure_readbacks(&self, telemetry: bool, audio: bool, listener: bool) {
-        self.telemetry_enabled.set(telemetry);
+    pub fn configure_readbacks(&self, audio: bool, listener: bool) {
         self.audio_readbacks_enabled.set(audio);
         self.listener_readbacks_enabled.set(listener);
     }
 
     fn climate_readback_due(&self) -> bool {
-        // Static-water phase changes also invalidate the cached surface mesh.
-        (self.telemetry_enabled.get() || self.static_water_world_enabled.get())
-            && self
-                .last_climate_readback
-                .get()
-                .is_none_or(|t| t.elapsed().as_millis() >= 250)
+        // Climate averages drive the always-visible temperature readout and
+        // are independent of optional telemetry and static-water rendering.
+        self.last_climate_readback
+            .get()
+            .is_none_or(|t| t.elapsed().as_millis() >= 250)
     }
 
     pub fn set_listener_position(&self, position: Vec3) {
@@ -1941,8 +1976,7 @@ impl GpuFluidSimulator {
         self.surface_pressure.set(pressure);
     }
 
-    /// Set the overall sun brightness (drives the thermal model's baseline air
-    /// temperature: 0 = dark, 3 = comfortable max, >3 = extreme heat).
+    /// Set the solar source strength (0 = dark, 3 = temperate reference).
     pub fn set_sun_brightness(&self, brightness: f32) {
         self.sun_brightness.set(brightness);
     }
@@ -1952,12 +1986,13 @@ impl GpuFluidSimulator {
         self.thermal_inertia.set(inertia);
     }
 
-    /// Set water freezing threshold (internal 0-255 scale, default 65 ≈ 1°C)
+    /// Set water freezing threshold (internal 0-255 scale, default 61 ≈ -2°C)
     pub fn set_freeze_threshold(&self, threshold: u32) {
         self.freeze_threshold.set(threshold);
     }
 
-    /// Set ice melting threshold (internal 0-255 scale, default 75 ≈ 9°C)
+    /// Set ice melting threshold (internal 0-255 scale, default 66 ≈ 2°C).
+    /// The shader caps legacy thresholds at the freezing-point hysteresis.
     pub fn set_melt_threshold(&self, threshold: u32) {
         self.melt_threshold.set(threshold);
     }
@@ -2010,6 +2045,30 @@ impl GpuFluidSimulator {
     /// Set the simulation time (used when restoring from a snapshot).
     pub fn set_time(&self, t: f32) {
         self.time.set(t);
+    }
+
+    fn capture_thermal_snapshot(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.copy_buffer_to_buffer(
+            &self.temp_field_buffer,
+            0,
+            &self.thermal_snapshot_buffer,
+            0,
+            self.temp_field_buffer.size(),
+        );
+        // The thermal pass adds signed deltas; application restores absolute
+        // temperatures before weather, motion, rendering, or the next tick.
+        encoder.clear_buffer(&self.temp_field_buffer, 0, None);
+    }
+
+    fn apply_temperature(&self, encoder: &mut wgpu::CommandEncoder, resolution: u32) {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Apply Fluid Temperature"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.apply_temperature_pipeline);
+        pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+        let groups = resolution.div_ceil(4);
+        pass.dispatch_workgroups(groups, groups, groups);
     }
 
     /// Step the simulation - 100% GPU with zero CPU logic
@@ -2116,6 +2175,7 @@ impl GpuFluidSimulator {
                 if climate_phase == 0 {
                     encoder.clear_buffer(&self.temp_stats_buffer, 0, Some(ROLLING_STATS_SIZE));
                 }
+                self.capture_thermal_snapshot(encoder);
                 {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("Static Water Temperature Slice Pass"),
@@ -2129,6 +2189,7 @@ impl GpuFluidSimulator {
                         workgroup_count.div_ceil(4),
                     );
                 }
+                self.apply_temperature(encoder, GRID_RESOLUTION);
                 if climate_phase == CLIMATE_TICK_INTERVAL - 1 {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("Static Water Ice Melt Phase Pass"),
@@ -2182,6 +2243,7 @@ impl GpuFluidSimulator {
         if climate_phase == 0 {
             encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
         }
+        self.capture_thermal_snapshot(encoder);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Fluid Temperature Slice Pass"),
@@ -2195,6 +2257,7 @@ impl GpuFluidSimulator {
                 workgroup_count.div_ceil(4),
             );
         }
+        self.apply_temperature(encoder, GRID_RESOLUTION);
         if climate_phase == CLIMATE_TICK_INTERVAL - 1
             && climate_tick >= CLIMATE_TICK_INTERVAL * 2 - 1
             && self.climate_readback_due()
@@ -2745,13 +2808,23 @@ impl GpuFluidSimulator {
 
                         if stats[1] > 0 {
                             let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;
-                            let prev = self.avg_water_temp_c.get();
-                            self.avg_water_temp_c.set(prev + (avg_c - prev) * rate);
+                            let average = self
+                                .avg_water_temp_c
+                                .get()
+                                .map_or(avg_c, |previous| previous + (avg_c - previous) * rate);
+                            self.avg_water_temp_c.set(Some(average));
+                        } else {
+                            self.avg_water_temp_c.set(None);
                         }
                         if stats[3] > 0 {
                             let avg_c = (stats[2] as f32 / stats[3] as f32) - 50.0;
-                            let prev = self.avg_air_temp_c.get();
-                            self.avg_air_temp_c.set(prev + (avg_c - prev) * rate);
+                            let average = self
+                                .avg_air_temp_c
+                                .get()
+                                .map_or(avg_c, |previous| previous + (avg_c - previous) * rate);
+                            self.avg_air_temp_c.set(Some(average));
+                        } else {
+                            self.avg_air_temp_c.set(None);
                         }
                         if stats.len() >= 6 && stats[5] > 0 {
                             let avg = (stats[4] as f32 / stats[5] as f32) / 255.0;
@@ -2787,12 +2860,12 @@ impl GpuFluidSimulator {
     }
 
     /// Rolling average water temperature, in Celsius.
-    pub fn avg_water_temp_c(&self) -> f32 {
+    pub fn avg_water_temp_c(&self) -> Option<f32> {
         self.avg_water_temp_c.get()
     }
 
     /// Rolling average air (empty-voxel) temperature, in Celsius.
-    pub fn avg_air_temp_c(&self) -> f32 {
+    pub fn avg_air_temp_c(&self) -> Option<f32> {
         self.avg_air_temp_c.get()
     }
 
@@ -3148,7 +3221,7 @@ mod frame_timing_tests {
             let mut expected = [0u32; 7];
             for i in 0..count {
                 let phase = states[i];
-                if matches!(phase, 1 | 2 | 4) {
+                if solids[i] == 0 && matches!(phase, 1 | 2 | 4) {
                     expected[0] += 40;
                     expected[1] += 1;
                 } else if phase == 0 && solids[i] == 0 {
@@ -3178,16 +3251,19 @@ mod frame_timing_tests {
             );
             let mut params = simulator.make_params(3, 0, 0.0, 9.8, [false, true, false], [1.0; 4]);
             params.grid_resolution = res;
+            params.world_radius = 100.0;
             params.sun_brightness = 0.0;
             queue.write_buffer(&simulator.params_buffer, 0, bytemuck::bytes_of(&params));
             let mut encoder = device.create_command_encoder(&Default::default());
             encoder.clear_buffer(&simulator.temp_stats_buffer, 0, None);
+            simulator.capture_thermal_snapshot(&mut encoder);
             {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 pass.set_pipeline(&simulator.update_temperature_pipeline);
                 pass.set_bind_group(0, &simulator.cached_sim_bind_group, &[]);
                 pass.dispatch_workgroups(res.div_ceil(4), res.div_ceil(4), res.div_ceil(4));
             }
+            simulator.apply_temperature(&mut encoder, res);
             encoder.copy_buffer_to_buffer(&simulator.temp_stats_buffer, 0, &readback, 0, 28);
             queue.submit([encoder.finish()]);
             let (tx, rx) = std::sync::mpsc::channel();
@@ -3231,10 +3307,13 @@ mod frame_timing_tests {
                     0,
                     params_bytes,
                 );
+                simulator.capture_thermal_snapshot(&mut encoder);
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 pass.set_pipeline(&simulator.update_temperature_slice_pipeline);
                 pass.set_bind_group(0, &simulator.cached_sim_bind_group, &[]);
                 pass.dispatch_workgroups(res.div_ceil(4), res.div_ceil(4), res.div_ceil(16));
+                drop(pass);
+                simulator.apply_temperature(&mut encoder, res);
             }
             encoder.copy_buffer_to_buffer(&simulator.temp_stats_buffer, 0, &readback, 0, 28);
             queue.submit([encoder.finish()]);

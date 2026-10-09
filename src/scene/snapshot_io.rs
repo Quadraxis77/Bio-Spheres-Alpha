@@ -1410,16 +1410,43 @@ impl GpuScene {
 
         let gpu_genomes = if let Some(mutation) = self.mutation_system.as_ref() {
             crate::simulation::gpu_physics::genome_snapshot::capture(
-                device, queue, &self.gpu_triple_buffers, &self.adhesion_buffers, mutation,
-                self.instance_builder.mode_colors_buffer(), self.instance_builder.mode_emissive_buffer(),
-                genome_ids.iter().zip(&death_flags).filter_map(|(&id, &dead)| (dead == 0).then_some(id)),
+                device,
+                queue,
+                &self.gpu_triple_buffers,
+                &self.adhesion_buffers,
+                mutation,
+                self.instance_builder.mode_colors_buffer(),
+                self.instance_builder.mode_emissive_buffer(),
+                genome_ids
+                    .iter()
+                    .zip(&death_flags)
+                    .filter_map(|(&id, &dead)| (dead == 0).then_some(id)),
                 self.genomes.len(),
-            ).map_err(SnapshotError::GpuReadback)?
-        } else { Vec::new() };
-        let development_addresses = readback_typed(device, queue, &self.gpu_triple_buffers.development_addresses, slots)?;
-        let parent_lineage_hashes = readback_typed(device, queue, &self.gpu_triple_buffers.parent_lineage_hashes, slots)?;
-        let organism_cell_ids = readback_typed(device, queue, &self.gpu_triple_buffers.organism_cell_ids, slots)?;
-        let gpu_next_id: Vec<u32> = readback_typed(device, queue, &self.gpu_triple_buffers.next_cell_id, 1)?;
+            )
+            .map_err(SnapshotError::GpuReadback)?
+        } else {
+            Vec::new()
+        };
+        let development_addresses = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.development_addresses,
+            slots,
+        )?;
+        let parent_lineage_hashes = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.parent_lineage_hashes,
+            slots,
+        )?;
+        let organism_cell_ids = readback_typed(
+            device,
+            queue,
+            &self.gpu_triple_buffers.organism_cell_ids,
+            slots,
+        )?;
+        let gpu_next_id: Vec<u32> =
+            readback_typed(device, queue, &self.gpu_triple_buffers.next_cell_id, 1)?;
 
         // -- Cave parameters ---------------------------------------------------
         let cave_active = self.cave_renderer.is_some();
@@ -1659,7 +1686,11 @@ impl GpuScene {
                 canonical.positions[i] = glam::Vec3::new(pm[0], pm[1], pm[2]);
                 // Dead slots are already placed in the restored free ring.
                 // Clear their mass so death_scan cannot enqueue them twice.
-                canonical.masses[i] = if snapshot.death_flags[i] == 0 { pm[3] } else { 0.0 };
+                canonical.masses[i] = if snapshot.death_flags[i] == 0 {
+                    pm[3]
+                } else {
+                    0.0
+                };
                 canonical.radii[i] = pm[3].clamp(0.5, 2.0);
 
                 let v = snapshot.velocities[i];
@@ -1755,35 +1786,83 @@ impl GpuScene {
         self.sync_dirty_genomes(device, queue);
         if let Some(mutation) = self.mutation_system.as_mut() {
             crate::simulation::gpu_physics::genome_snapshot::restore(
-                queue, &self.gpu_triple_buffers, &self.adhesion_buffers, mutation,
-                self.instance_builder.mode_colors_buffer(), self.instance_builder.mode_emissive_buffer(),
-                &snapshot.gpu_genomes, self.genomes.len(),
+                queue,
+                &self.gpu_triple_buffers,
+                &self.adhesion_buffers,
+                mutation,
+                self.instance_builder.mode_colors_buffer(),
+                self.instance_builder.mode_emissive_buffer(),
+                &snapshot.gpu_genomes,
+                self.genomes.len(),
                 self.genomes.iter().map(|g| g.modes.len() as u32).sum(),
-            ).map_err(SnapshotError::GpuReadback)?;
+            )
+            .map_err(SnapshotError::GpuReadback)?;
         }
         if slots > 0 {
             // CanonicalState uses local mode indices; snapshots store absolute GPU
             // indices. Preserve them exactly for both authored and GPU-born genomes.
-            queue.write_buffer(&self.gpu_triple_buffers.mode_indices, 0, bytemuck::cast_slice(&snapshot.mode_indices));
-            queue.write_buffer(&self.gpu_triple_buffers.death_flags, 0, bytemuck::cast_slice(&snapshot.death_flags));
-            let free: Vec<u32> = snapshot.death_flags.iter().enumerate().filter_map(|(i, &d)| (d != 0).then_some(i as u32)).collect();
+            queue.write_buffer(
+                &self.gpu_triple_buffers.mode_indices,
+                0,
+                bytemuck::cast_slice(&snapshot.mode_indices),
+            );
+            queue.write_buffer(
+                &self.gpu_triple_buffers.death_flags,
+                0,
+                bytemuck::cast_slice(&snapshot.death_flags),
+            );
+            let free: Vec<u32> = snapshot
+                .death_flags
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &d)| (d != 0).then_some(i as u32))
+                .collect();
             let live = slots as u32 - free.len() as u32;
-            queue.write_buffer(&self.gpu_triple_buffers.cell_count_buffer, 0, bytemuck::cast_slice(&[slots as u32, live]));
-            queue.write_buffer(&self.gpu_triple_buffers.ring_state, 0, bytemuck::cast_slice(&[0u32, free.len() as u32, slots as u32, 0]));
+            queue.write_buffer(
+                &self.gpu_triple_buffers.cell_count_buffer,
+                0,
+                bytemuck::cast_slice(&[slots as u32, live]),
+            );
+            queue.write_buffer(
+                &self.gpu_triple_buffers.ring_state,
+                0,
+                bytemuck::cast_slice(&[0u32, free.len() as u32, slots as u32, 0]),
+            );
             if !free.is_empty() {
-                queue.write_buffer(&self.gpu_triple_buffers.free_slot_ring, 0, bytemuck::cast_slice(&free));
+                queue.write_buffer(
+                    &self.gpu_triple_buffers.free_slot_ring,
+                    0,
+                    bytemuck::cast_slice(&free),
+                );
             }
             if snapshot.development_addresses.len() == slots {
-                queue.write_buffer(&self.gpu_triple_buffers.development_addresses, 0, bytemuck::cast_slice(&snapshot.development_addresses));
+                queue.write_buffer(
+                    &self.gpu_triple_buffers.development_addresses,
+                    0,
+                    bytemuck::cast_slice(&snapshot.development_addresses),
+                );
             }
             if snapshot.parent_lineage_hashes.len() == slots {
-                queue.write_buffer(&self.gpu_triple_buffers.parent_lineage_hashes, 0, bytemuck::cast_slice(&snapshot.parent_lineage_hashes));
+                queue.write_buffer(
+                    &self.gpu_triple_buffers.parent_lineage_hashes,
+                    0,
+                    bytemuck::cast_slice(&snapshot.parent_lineage_hashes),
+                );
             }
             if snapshot.organism_cell_ids.len() == slots {
-                queue.write_buffer(&self.gpu_triple_buffers.organism_cell_ids, 0, bytemuck::cast_slice(&snapshot.organism_cell_ids));
+                queue.write_buffer(
+                    &self.gpu_triple_buffers.organism_cell_ids,
+                    0,
+                    bytemuck::cast_slice(&snapshot.organism_cell_ids),
+                );
             }
             self.current_cell_count = live;
-            crate::simulation::gpu_physics::genome_snapshot::restore_cell_properties(device, queue, &self.gpu_triple_buffers, slots as u32);
+            crate::simulation::gpu_physics::genome_snapshot::restore_cell_properties(
+                device,
+                queue,
+                &self.gpu_triple_buffers,
+                slots as u32,
+            );
         }
 
         // -- Restore cave parameters -------------------------------------------

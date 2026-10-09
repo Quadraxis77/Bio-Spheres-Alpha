@@ -669,7 +669,10 @@ impl Slider<'_> {
             .unwrap_or_else(|| ui.style().visuals.handle_shape);
         let position_range = self.position_range(rect, &handle_shape);
 
-        if let Some(pointer_position_2d) = response.interact_pointer_pos().filter(|_| !super::ControllerSlider::pointer_editing_blocked(ui.ctx())) {
+        if let Some(pointer_position_2d) = response
+            .interact_pointer_pos()
+            .filter(|_| !super::ControllerSlider::pointer_editing_blocked(ui.ctx()))
+        {
             let position = self.pointer_position(pointer_position_2d);
             let new_value = if self.smart_aim {
                 let aim_radius = ui.input(|i| i.aim_radius());
@@ -964,13 +967,41 @@ impl Slider<'_> {
             .text_style_height(&TextStyle::Body)
             .at_least(ui.spacing().interact_size.y);
         let mut response = self.allocate_slider_space(ui, thickness);
+        let usage_label = super::InteractionUsage::slider_label(ui.ctx(), response.rect, self.text.text());
         let normalized = normalized_from_value(old_value, self.range(), &self.spec);
-        let pending = super::ControllerSlider::interact(ui, &response, self.text.text(),
-            format!("{}{:.*}{}", self.prefix, self.max_decimals.unwrap_or(3), old_value, self.suffix), normalized,
-            format!("{}", self.range.start()), format!("{}", self.range.end()),
-            super::ControllerSlider::significant_values(*self.range.start(), *self.range.end(), self.spec.logarithmic)
-                .into_iter().map(|value| (normalized_from_value(value, self.range(), &self.spec),
-                    format!("{}{}{}", self.prefix, super::ControllerSlider::stop_label(value), self.suffix))).collect());
+        let pending = super::ControllerSlider::interact(
+            ui,
+            &response,
+            self.text.text(),
+            format!(
+                "{}{:.*}{}",
+                self.prefix,
+                self.max_decimals.unwrap_or(3),
+                old_value,
+                self.suffix
+            ),
+            normalized,
+            format!("{}", self.range.start()),
+            format!("{}", self.range.end()),
+            super::ControllerSlider::significant_values(
+                *self.range.start(),
+                *self.range.end(),
+                self.spec.logarithmic,
+            )
+            .into_iter()
+            .map(|value| {
+                (
+                    normalized_from_value(value, self.range(), &self.spec),
+                    format!(
+                        "{}{}{}",
+                        self.prefix,
+                        super::ControllerSlider::stop_label(value),
+                        self.suffix
+                    ),
+                )
+            })
+            .collect(),
+        );
         if let Some(normalized) = pending {
             self.set_value(value_from_normalized(normalized, self.range(), &self.spec));
         }
@@ -1043,13 +1074,27 @@ impl Slider<'_> {
             }
         }
 
-        let value=self.get_value();
-        super::ControllerSlider::refresh(ui.ctx(),slider_id,
-            normalized_from_value(value,self.range(),&self.spec),
-            format!("{}{:.*}{}",self.prefix,self.max_decimals.unwrap_or(3),value,self.suffix));
-        if super::ControllerSlider::selected(ui.ctx(),slider_id) {
-            ui.painter().rect_stroke(slider_rect.expand(3.0),3.0,
-                crate::Stroke::new(2.0,Color32::from_rgb(90,171,255)),crate::StrokeKind::Outside);
+        let value = self.get_value();
+        super::ControllerSlider::refresh(
+            ui.ctx(),
+            slider_id,
+            normalized_from_value(value, self.range(), &self.spec),
+            format!(
+                "{}{:.*}{}",
+                self.prefix,
+                self.max_decimals.unwrap_or(3),
+                value,
+                self.suffix
+            ),
+        );
+        super::InteractionUsage::slider(&response, slider_id, &usage_label);
+        if super::ControllerSlider::selected(ui.ctx(), slider_id) {
+            ui.painter().rect_stroke(
+                slider_rect.expand(3.0),
+                3.0,
+                crate::Stroke::new(2.0, Color32::from_rgb(90, 171, 255)),
+                crate::StrokeKind::Outside,
+            );
         }
         response
     }

@@ -226,6 +226,7 @@ impl UiSystem {
     ) -> Self {
         // Create egui context
         let ctx = egui::Context::default();
+        crate::ui::control_usage::install(&ctx);
 
         // Install fallback fonts so every Unicode symbol, arrow, and emoji renders.
         //
@@ -327,6 +328,10 @@ impl UiSystem {
             field_report_director: crate::field_report::FieldReportDirector::default(),
             last_report_scan_frame: None,
         }
+    }
+
+    pub fn collect_control_usage(&self, scene: &str) {
+        crate::ui::control_usage::collect(&self.ctx, scene, self.native_input.active);
     }
 
     pub fn show_camera_mode_notification(&mut self, mode: crate::ui::camera::CameraMode) {
@@ -499,8 +504,12 @@ impl UiSystem {
             }
         }
         self.last_pointer_pos = self.native_input.merge(&mut raw_input);
-        egui::ControllerSlider::set_input(&self.ctx, self.native_input.active, self.native_input.controller_pointing());
-        egui::ControllerSlider::set_cancelled(&self.ctx,self.native_input.controller_cancelled());
+        egui::ControllerSlider::set_input(
+            &self.ctx,
+            self.native_input.active,
+            self.native_input.controller_pointing(),
+        );
+        egui::ControllerSlider::set_cancelled(&self.ctx, self.native_input.controller_cancelled());
         egui::ControllerNumberPad::set_enabled(
             &self.ctx,
             self.native_input.active
@@ -1573,7 +1582,7 @@ impl UiSystem {
                                     sim.avg_humidity(),
                                 )
                             })
-                            .unwrap_or((0.0, 0.0, 0.0));
+                            .unwrap_or((None, None, 0.0));
 
                     let group_size = egui::vec2(322.0, bar_rect.height());
                     let group_rect = egui::Rect::from_center_size(
@@ -1589,12 +1598,21 @@ impl UiSystem {
 
                                 let fahrenheit = editor_state.temp_display_fahrenheit;
                                 let unit_label = if fahrenheit { "°F" } else { "°C" };
-                                let format_temp = |celsius: f32| -> String {
-                                    if fahrenheit {
-                                        format!("{:.0}{}", celsius * 9.0 / 5.0 + 32.0, unit_label)
-                                    } else {
-                                        format!("{:.0}{}", celsius, unit_label)
-                                    }
+                                let format_temp = |celsius: Option<f32>| -> String {
+                                    celsius.map_or_else(
+                                        || "N/A".to_owned(),
+                                        |celsius| {
+                                            if fahrenheit {
+                                                format!(
+                                                    "{:.0}{}",
+                                                    celsius * 9.0 / 5.0 + 32.0,
+                                                    unit_label
+                                                )
+                                            } else {
+                                                format!("{:.0}{}", celsius, unit_label)
+                                            }
+                                        },
+                                    )
                                 };
 
                                 // Fixed-width containers with label AND value each
@@ -2874,7 +2892,7 @@ impl UiSystem {
             plugin.lock().clear_selection();
         }
 
-        egui::ControllerNumberPad::show(&self.ctx);
+        crate::ui::control_usage::collect(&self.ctx, dock_manager.current_mode().display_name(), self.native_input.active);
         self.ctx.end_pass()
     }
 

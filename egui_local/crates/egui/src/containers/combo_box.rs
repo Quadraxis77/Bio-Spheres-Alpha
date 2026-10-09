@@ -253,6 +253,10 @@ impl ComboBox {
                 info.current_text_value = Some(selected_text.text().to_owned());
                 info
             });
+            if ir.response.clicked() && ir.inner.is_some() {
+                crate::InteractionUsage::menu(ui.ctx(), button_id,
+                    label.as_ref().map_or("Options", |label| label.text()));
+            }
             if let Some(label) = label {
                 let label_response = ui.label(label);
                 ir.response = ir.response.labelled_by(label_response.id);

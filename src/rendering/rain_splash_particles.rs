@@ -14,7 +14,6 @@
 //! 3. `render` - draws all `min(counter, MAX_PARTICLES)` instances as flat,
 //!    surface-oriented (not camera-facing) quads.
 
-
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
@@ -140,7 +139,8 @@ impl RainSplashParticleRenderer {
             mapped_at_creation: false,
         });
 
-        let draw = super::particle_draw::ParticleDraw::new(device, &counter_buffer, 6, max_particles);
+        let draw =
+            super::particle_draw::ParticleDraw::new(device, &counter_buffer, 6, max_particles);
 
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Rain Splash Extract Params"),
@@ -472,8 +472,6 @@ impl RainSplashParticleRenderer {
         self.draw.encode(encoder);
     }
 
-
-
     /// Render splash rings.
     pub fn render(
         &self,
@@ -483,7 +481,6 @@ impl RainSplashParticleRenderer {
         camera_bind_group: &wgpu::BindGroup,
         render_bind_group: &wgpu::BindGroup,
     ) {
-
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Rain Splash Particle Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -517,6 +514,4 @@ impl RainSplashParticleRenderer {
     pub fn camera_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.camera_bind_group_layout
     }
-
-
 }

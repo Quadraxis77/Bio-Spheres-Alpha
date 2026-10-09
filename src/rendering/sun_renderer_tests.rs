@@ -49,7 +49,12 @@ fn sun_is_a_stereo_world_sphere_with_roll_stable_detail_and_real_occlusion() {
     sun.orbit_world_radius = 20.0;
     sun.sun_angular_radius = 0.18;
     sun.sun_color = [1.0, 0.65, 0.25];
-    let mut render = |eye: Vec3, rotation: Quat, projection: Mat4, depth_value: f32, tint: [f32; 3], intensity: f32| {
+    let mut render = |eye: Vec3,
+                      rotation: Quat,
+                      projection: Mat4,
+                      depth_value: f32,
+                      tint: [f32; 3],
+                      intensity: f32| {
         sun.sun_color = tint;
         let vp = projection * Mat4::from_rotation_translation(rotation, eye).inverse();
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -126,12 +131,21 @@ fn sun_is_a_stereo_world_sphere_with_roll_stable_detail_and_real_occlusion() {
         output.unmap();
         pixels
     };
-    let base = render(Vec3::ZERO, Quat::IDENTITY, projection, 1.0, [1.0, 0.65, 0.25], 0.4);
+    let base = render(
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        projection,
+        1.0,
+        [1.0, 0.65, 0.25],
+        0.4,
+    );
     let rolled = render(
         Vec3::ZERO,
         Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
         projection,
-        1.0, [1.0, 0.65, 0.25], 0.4,
+        1.0,
+        [1.0, 0.65, 0.25],
+        0.4,
     );
     let pixel = |image: &[u8], x: usize, y: usize| -> [u8; 4] {
         image[(y * SIZE as usize + x) * 4..][..4]
@@ -184,8 +198,22 @@ fn sun_is_a_stereo_world_sphere_with_roll_stable_detail_and_real_occlusion() {
         assert!(count > 1000.0);
         sum / count
     };
-    let left = render(Vec3::new(-1.2, 0.0, 0.0), Quat::IDENTITY, projection, 1.0, [1.0, 0.65, 0.25], 0.4);
-    let right = render(Vec3::new(1.2, 0.0, 0.0), Quat::IDENTITY, projection, 1.0, [1.0, 0.65, 0.25], 0.4);
+    let left = render(
+        Vec3::new(-1.2, 0.0, 0.0),
+        Quat::IDENTITY,
+        projection,
+        1.0,
+        [1.0, 0.65, 0.25],
+        0.4,
+    );
+    let right = render(
+        Vec3::new(1.2, 0.0, 0.0),
+        Quat::IDENTITY,
+        projection,
+        1.0,
+        [1.0, 0.65, 0.25],
+        0.4,
+    );
     assert!(
         centroid(&left) - centroid(&right) > 4.0,
         "finite sun must have binocular disparity"
@@ -206,24 +234,65 @@ fn sun_is_a_stereo_world_sphere_with_roll_stable_detail_and_real_occlusion() {
         let p = projection * Vec3::new(0.0, 0.0, z).extend(1.0);
         p.z / p.w
     };
-    let occluded = render(Vec3::ZERO, Quat::IDENTITY, projection, depth_at(-40.0), [1.0, 0.65, 0.25], 0.4);
+    let occluded = render(
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        projection,
+        depth_at(-40.0),
+        [1.0, 0.65, 0.25],
+        0.4,
+    );
     assert!(
         occluded.iter().all(|v| *v == 0),
         "foreground geometry hides the globe and its corona"
     );
-    let behind = render(Vec3::ZERO, Quat::IDENTITY, projection, depth_at(-300.0), [1.0, 0.65, 0.25], 0.4);
+    let behind = render(
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        projection,
+        depth_at(-300.0),
+        [1.0, 0.65, 0.25],
+        0.4,
+    );
     assert_eq!(base, behind, "geometry beyond the sun must not eclipse it");
     // Change uniforms on the same renderer to exercise cached uploads.
     for (tint, intensity) in [([1.0, 0.65, 0.25], 0.0), ([0.0; 3], 3.0)] {
         let dark = render(Vec3::ZERO, Quat::IDENTITY, projection, 1.0, tint, intensity);
-        assert!(dark.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]), "black sun must emit no surface or corona light");
+        assert!(
+            dark.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]),
+            "black sun must emit no surface or corona light"
+        );
     }
-    let blue = render(Vec3::ZERO, Quat::IDENTITY, projection, 1.0, [0.0, 0.0, 1.0], 3.0);
+    let blue = render(
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        projection,
+        1.0,
+        [0.0, 0.0, 1.0],
+        3.0,
+    );
     assert!(blue.chunks_exact(4).all(|p| p[0] == 0 && p[1] == 0));
     assert!(blue.chunks_exact(4).any(|p| p[2] > 100));
-    let dim = render(Vec3::ZERO, Quat::IDENTITY, projection, 1.0, [1.0, 0.65, 0.25], 0.04);
+    let dim = render(
+        Vec3::ZERO,
+        Quat::IDENTITY,
+        projection,
+        1.0,
+        [1.0, 0.65, 0.25],
+        0.04,
+    );
     assert!(pixel(&dim, 192, 192)[0] < pixel(&base, 192, 192)[0]);
-    assert_eq!(render(Vec3::ZERO, Quat::IDENTITY, projection, 1.0, [1.0, 0.65, 0.25], 0.4), base);
+    assert_eq!(
+        render(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            projection,
+            1.0,
+            [1.0, 0.65, 0.25],
+            0.4
+        ),
+        base
+    );
     std::fs::create_dir_all("target/vr-visual-checks").unwrap();
     for (name, pixels) in [
         ("sun-world-sphere", base),

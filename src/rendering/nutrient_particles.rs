@@ -112,7 +112,8 @@ impl NutrientParticleRenderer {
             mapped_at_creation: false,
         });
 
-        let draw = super::particle_draw::ParticleDraw::new(device, &counter_buffer, 3, max_particles);
+        let draw =
+            super::particle_draw::ParticleDraw::new(device, &counter_buffer, 3, max_particles);
 
         // Create params buffer
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -474,10 +475,6 @@ impl NutrientParticleRenderer {
         self.draw.encode(encoder);
     }
 
-
-
-
-
     /// Resize for new screen dimensions
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
@@ -493,7 +490,6 @@ impl NutrientParticleRenderer {
         camera_bind_group: &wgpu::BindGroup,
         render_bind_group: &wgpu::BindGroup,
     ) {
-
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Nutrient Particle Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -523,8 +519,6 @@ impl NutrientParticleRenderer {
         render_pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
         render_pass.draw_indirect(&self.draw.args, 0);
     }
-
-
 
     /// Get max particles
     pub fn max_particles(&self) -> u32 {

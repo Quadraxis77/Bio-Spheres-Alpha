@@ -105,10 +105,18 @@ pub struct AdhesionBuffers {
 impl AdhesionBuffers {
     /// Create new adhesion buffer system
     pub fn new(device: &wgpu::Device, cell_capacity: u32) -> Self {
-        Self::with_mode_capacity(device, cell_capacity, super::mutation::initial_mode_pool_capacity())
+        Self::with_mode_capacity(
+            device,
+            cell_capacity,
+            super::mutation::initial_mode_pool_capacity(),
+        )
     }
 
-    pub(super) fn with_mode_capacity(device: &wgpu::Device, cell_capacity: u32, initial_mode_pool_size: u64) -> Self {
+    pub(super) fn with_mode_capacity(
+        device: &wgpu::Device,
+        cell_capacity: u32,
+        initial_mode_pool_size: u64,
+    ) -> Self {
         // Each connection is shared by 2 cells, so theoretical max = cells * max_per_cell / 2
         let max_connections = cell_capacity * (MAX_ADHESIONS_PER_CELL as u32) / 2;
 

@@ -90,7 +90,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             }
             return;
         }
-        match tab {
+        let usage_ctx = ui.ctx().clone();
+        let usage_name = tab.display_name();
+        let usage_id = Id::new(format!("usage_{:?}_{:?}", self.context.current_mode, tab));
+        if ui.rect_contains_pointer(ui.max_rect()) && ui.input(|i| i.pointer.primary_pressed()) {
+            crate::ui::control_usage::panel_input(&usage_ctx, usage_id, usage_name);
+        }
+        egui::InteractionUsage::scoped(&usage_ctx, usage_name, || match tab {
             Panel::Viewport => {
                 let is_gpu_mode =
                     self.context.current_mode == crate::ui::types::SimulationMode::Gpu;
@@ -136,6 +142,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::TimeSlider => render_time_slider(ui, self.context),
             Panel::ModeGraph => render_mode_graph(ui, self.context),
             Panel::Help => render_help(ui, self.context, self.state),
+        });
+    }
+
+    fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
+        if response.clicked() {
+            crate::ui::control_usage::panel_input(&response.ctx,
+                Id::new(format!("usage_{:?}_{:?}", self.context.current_mode, tab)), tab.display_name());
         }
     }
 
@@ -414,26 +427,40 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if let Some(cell_idx) = inspected_cell {
         // Extract data from GPU scene
         let retained = &context.editor_state.radial_menu.inspection;
-        let gpu_extraction_data = if let Some(mut data) = retained.data.filter(|_|retained.index==Some(cell_idx)) {
-            if retained.dead { data.is_dead=1; }
-            Some((false,Some(crate::simulation::gpu_physics::ReadbackResult {cell_index:cell_idx as u32,data}),Some(true)))
-        } else if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
-            let is_extracting = gpu_scene.is_extracting_cell_data();
-            if let Some(extraction_result) = gpu_scene.get_latest_cell_extraction() {
-                if extraction_result.cell_index == cell_idx as u32 {
-                    let data_valid = extraction_result.data.is_valid();
-                    Some((is_extracting, Some(extraction_result.clone()), Some(data_valid)))
+        let gpu_extraction_data =
+            if let Some(mut data) = retained.data.filter(|_| retained.index == Some(cell_idx)) {
+                if retained.dead {
+                    data.is_dead = 1;
+                }
+                Some((
+                    false,
+                    Some(crate::simulation::gpu_physics::ReadbackResult {
+                        cell_index: cell_idx as u32,
+                        data,
+                    }),
+                    Some(true),
+                ))
+            } else if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
+                let is_extracting = gpu_scene.is_extracting_cell_data();
+                if let Some(extraction_result) = gpu_scene.get_latest_cell_extraction() {
+                    if extraction_result.cell_index == cell_idx as u32 {
+                        let data_valid = extraction_result.data.is_valid();
+                        Some((
+                            is_extracting,
+                            Some(extraction_result.clone()),
+                            Some(data_valid),
+                        ))
+                    } else {
+                        // Have a result but for a different cell - show spinner until ours arrives
+                        Some((true, None, None))
+                    }
                 } else {
-                    // Have a result but for a different cell - show spinner until ours arrives
+                    // No result yet at all - show spinner
                     Some((true, None, None))
                 }
             } else {
-                // No result yet at all - show spinner
-                Some((true, None, None))
-            }
-        } else {
-            None
-        };
+                None
+            };
 
         // Now use the extracted data without borrowing context
         if let Some((_is_extracting, extraction_result, data_valid)) = gpu_extraction_data {
@@ -6849,7 +6876,7 @@ fn render_light_settings_organized(
                     .step_by(0.1)
                     .fixed_decimals(1),
                 )
-                .on_hover_text("Controls heat flow and water/ice phase inertia: 0=arcade (fast), 3=stable, 4=very stable (recommended), 5=planetary (slow)")
+                .on_hover_text("Controls heat storage and freeze/melt delay. At 4, air responds in about 4 seconds, water 18 seconds, ice 23 seconds, and exposed rock 33 seconds. Calibrated for a 1°/s sun orbit: brief shadows retain warmth, sustained shade can freeze, and sunlight melts. Lower values react faster; 5 stores heat longer.")
                 .changed()
             {
                 changed = true;
@@ -14270,4 +14297,6 @@ fn render_help(ui: &mut Ui, _context: &mut PanelContext, _state: &mut GlobalUiSt
     ui.heading("Help");
     ui.add_space(8.0);
     ui.label("Select a panel to see context-specific controls and shortcuts.");
+    ui.separator();
+    crate::ui::control_usage::show(ui);
 }

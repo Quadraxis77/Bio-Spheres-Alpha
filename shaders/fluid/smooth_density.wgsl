@@ -28,6 +28,14 @@ fn smooth_density(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let idx = grid_index(gid.x, gid.y, gid.z);
 
+    // Ice needs a stable snapshot, without water's temporal lag or a second
+    // spatial blur. Surface nets already filters corners; blurring here too
+    // erases newly frozen one-voxel sheets below the mesh's isovalue.
+    if params.blend_factor >= 1.0 {
+        output[idx] = raw_density[idx];
+        return;
+    }
+
     // Early-out: skip the expensive 27-sample blur for voxels that are empty now
     // and have no recent history. These dominate the grid at high resolutions.
     let raw_center = raw_density[idx];

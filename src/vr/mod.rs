@@ -5,19 +5,20 @@ use glam::{Quat, Vec3};
 use openxr as xr;
 use std::sync::{Arc, Mutex};
 mod controllers;
-mod runtime;
 pub mod controls;
 pub mod dial;
-mod inspector;
-pub mod population;
-mod theme;
-mod locomotion;
-mod frame_wait;
 mod fade;
+mod frame_wait;
 pub mod input;
+mod inspector;
+mod locomotion;
 mod mirror;
 mod panel;
+pub mod population;
+mod runtime;
 mod surface;
+mod theme;
+pub(crate) mod ui_readability;
 pub use panel::PanelSettings;
 
 pub type VrResult<T> = Result<T, String>;
@@ -33,8 +34,8 @@ fn supersampled_dimensions(width: u32, height: u32, max_dimension: u32) -> (u32,
         .min(max_dimension as f32 / height as f32);
     let scaled_width = ((width as f32 * scale).round() as u32).clamp(1, max_dimension);
     let scaled_height = ((height as f32 * scale).round() as u32).clamp(1, max_dimension);
-    let actual_scale = (scaled_width as f32 / width as f32)
-        .min(scaled_height as f32 / height as f32);
+    let actual_scale =
+        (scaled_width as f32 / width as f32).min(scaled_height as f32 / height as f32);
     (scaled_width, scaled_height, actual_scale)
 }
 const MINIMUM_VULKAN_API_VERSION: u32 = vk::API_VERSION_1_2;
@@ -623,17 +624,8 @@ impl VrState {
             ui_height,
             graphics.device.limits().max_texture_dimension_2d,
         );
-        log::info!(
-            "OpenXR UI resolution: {ui_width} x {ui_height} ({ui_pixel_scale:.2}x)"
-        );
-        let ui = RuntimeSwapchain::new(
-            &session,
-            &graphics.device,
-            format,
-            ui_width,
-            ui_height,
-            2,
-        )?;
+        log::info!("OpenXR UI resolution: {ui_width} x {ui_height} ({ui_pixel_scale:.2}x)");
+        let ui = RuntimeSwapchain::new(&session, &graphics.device, format, ui_width, ui_height, 2)?;
         let (wheel_width, wheel_height, wheel_pixel_scale) = supersampled_dimensions(
             controls::WHEEL_PIXELS,
             controls::WHEEL_PIXELS,
@@ -826,11 +818,8 @@ impl VrState {
         if self.frame_active() {
             return Err("Cannot resize an OpenXR swapchain during a frame".into());
         }
-        let (width, height, pixel_scale) = supersampled_dimensions(
-            width,
-            height,
-            self.device.limits().max_texture_dimension_2d,
-        );
+        let (width, height, pixel_scale) =
+            supersampled_dimensions(width, height, self.device.limits().max_texture_dimension_2d);
         if (self.ui.width, self.ui.height) == (width, height) {
             self.ui_pixel_scale = pixel_scale;
             return Ok(());
@@ -841,14 +830,8 @@ impl VrState {
                 timeout: None,
             })
             .map_err(|e| e.to_string())?;
-        self.ui = RuntimeSwapchain::new(
-            &self.session,
-            &self.device,
-            self.format,
-            width,
-            height,
-            2,
-        )?;
+        self.ui =
+            RuntimeSwapchain::new(&self.session, &self.device, self.format, width, height, 2)?;
         self.ui_pixel_scale = pixel_scale;
         Ok(())
     }
@@ -1118,7 +1101,9 @@ impl VrState {
         ))
     }
     pub fn fade_world(&self, opacity: f32) {
-        if !self.immersive || !self.eyes_drawn { return; }
+        if !self.immersive || !self.eyes_drawn {
+            return;
+        }
         let targets: Vec<_> = (0..2).filter_map(|eye| self.eyes.view(eye)).collect();
         self.fade.draw(&self.device, &self.queue, &targets, opacity);
     }
@@ -1130,17 +1115,41 @@ impl VrState {
     }
     pub fn mark_ui_drawn(&mut self) {
         self.ui_drawn = true;
-        let Some(panel) = self.ui_anchor.pose() else { return; };
+        let Some(panel) = self.ui_anchor.pose() else {
+            return;
+        };
         let clear = !self.eyes_drawn;
         let mut drawn = 0;
         for (index, eye) in self.views.iter().enumerate() {
-            let (Some(source), Some(target)) = (self.ui.view(index as u32), self.eyes.view(index as u32)) else { continue; };
+            let (Some(source), Some(target)) =
+                (self.ui.view(index as u32), self.eyes.view(index as u32))
+            else {
+                continue;
+            };
             let projection = crate::rendering::CameraProjection::from_fov(
-                eye.fov.angle_left, eye.fov.angle_right, eye.fov.angle_down, eye.fov.angle_up, 0.005, 250.0,
-            ).matrix(1.0, 0.005, 250.0);
-            let view = glam::Mat4::from_rotation_translation(input::rotation(eye.pose), input::position(eye.pose)).inverse();
-            self.screen_surface.draw(&self.device, &self.queue, &target, &source,
-                panel, self.ui_anchor.settings, projection * view, clear);
+                eye.fov.angle_left,
+                eye.fov.angle_right,
+                eye.fov.angle_down,
+                eye.fov.angle_up,
+                0.005,
+                250.0,
+            )
+            .matrix(1.0, 0.005, 250.0);
+            let view = glam::Mat4::from_rotation_translation(
+                input::rotation(eye.pose),
+                input::position(eye.pose),
+            )
+            .inverse();
+            self.screen_surface.draw(
+                &self.device,
+                &self.queue,
+                &target,
+                &source,
+                panel,
+                self.ui_anchor.settings,
+                projection * view,
+                clear,
+            );
             drawn += 1;
         }
         self.ui_projected = drawn == 2;
@@ -1374,23 +1383,40 @@ impl VrState {
             let origin = rig.0 + rig.1 * tracking_origin * self.world_units_per_meter;
             let direction = rig.1 * tracking_direction;
 
-            let panel_hit = controls.wheel_pose
+            let wrist_menu_hit = controls.wheel_pose.is_some_and(|pose| {
+                controls::wheel_hit(pose, tracking_origin, tracking_direction).is_some()
+            });
+            let panel_hit = controls
+                .wheel_pose
                 .or(controls.menu_pose.filter(|pose| {
                     controls::wheel_hit(*pose, tracking_origin, tracking_direction)
                         .is_some_and(|p| (p - glam::Vec2::splat(360.0)).length() <= 60.0)
                 }))
-                .filter(|pose| controls::wheel_hit(*pose, tracking_origin, tracking_direction).is_some())
+                .filter(|pose| {
+                    controls::wheel_hit(*pose, tracking_origin, tracking_direction).is_some()
+                })
                 .and_then(|pose| {
                     let normal = input::rotation(pose) * Vec3::Z;
                     let denominator = normal.dot(tracking_direction);
-                    if denominator >= -0.001 { return None; }
+                    if denominator >= -0.001 {
+                        return None;
+                    }
                     let t = normal.dot(input::position(pose) - tracking_origin) / denominator;
                     (t > 0.0).then_some(t)
                 })
                 .or_else(|| {
-                    if self.immersive && !controls.full_ui { return None; }
-                    panel::ray_hit_with_settings(self.ui_anchor.pose()?, self.ui_anchor.settings,
-                        tracking_origin, tracking_direction, self.ui.width, self.ui.height).map(|hit| hit.1)
+                    if self.immersive && !controls.full_ui {
+                        return None;
+                    }
+                    panel::ray_hit_with_settings(
+                        self.ui_anchor.pose()?,
+                        self.ui_anchor.settings,
+                        tracking_origin,
+                        tracking_direction,
+                        self.ui.width,
+                        self.ui.height,
+                    )
+                    .map(|hit| hit.1)
                 })
                 .map(|distance| distance * self.world_units_per_meter);
             let b = origin.dot(direction);
@@ -1414,6 +1440,7 @@ impl VrState {
             (
                 tracking_origin,
                 tracking_origin + tracking_direction * (distance / self.world_units_per_meter),
+                !wrist_menu_hit,
             )
         });
         for (eye, view) in self.views.iter().enumerate() {
@@ -1451,11 +1478,13 @@ impl VrState {
         &mut self,
         controls: &controls::Controls,
         tool: crate::ui::radial_menu::RadialTool,
+        value_ctx: &egui::Context,
     ) {
         self.wheel_pose = None;
-        let Some(pose) = controls.wheel_pose.or(controls.menu_pose) else {
+        let pose = controls.wheel_pose.or(controls.menu_pose);
+        if pose.is_none() && !(controls.number_pad_active && controls.wheel_pointer_released) {
             return;
-        };
+        }
         if !self.presenting() {
             return;
         }
@@ -1474,11 +1503,44 @@ impl VrState {
             )),
             ..Default::default()
         };
+        if controls.number_pad_active {
+            if let Some(pointer) = controls.pointer {
+                let pos = egui::pos2(pointer.x, pointer.y);
+                input.events.push(egui::Event::PointerMoved(pos));
+                if controls.wheel_pointer_pressed {
+                    input.events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+            }
+            if controls.wheel_pointer_released {
+                let pos = controls
+                    .pointer
+                    .map(|pointer| egui::pos2(pointer.x, pointer.y))
+                    .unwrap_or(egui::pos2(-1_000_000.0, -1_000_000.0));
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
         if let Some(viewport) = input.viewports.get_mut(&input.viewport_id) {
             viewport.native_pixels_per_point = Some(self.wheel_pixel_scale);
         }
         self.wheel_ctx.begin_pass(input);
-        controls.draw(&self.wheel_ctx, tool);
+        if controls.number_pad_active {
+            let pointer = controls
+                .pointer
+                .map(|pointer| egui::pos2(pointer.x, pointer.y));
+            egui::ControllerNumberPad::show_on_controller(&self.wheel_ctx, value_ctx, pointer);
+        } else {
+            controls.draw(&self.wheel_ctx, tool);
+        }
         let output = self.wheel_ctx.end_pass();
         let jobs = self
             .wheel_ctx
@@ -1521,7 +1583,7 @@ impl VrState {
         for id in output.textures_delta.free {
             self.wheel_renderer.free_texture(&id);
         }
-        self.wheel_pose = Some(pose);
+        self.wheel_pose = pose;
     }
 }
 
@@ -1553,7 +1615,11 @@ fn runtime_info_current() -> VrResult<String> {
             .system_properties(system)
             .map(|p| p.system_name)
             .map_err(|e| e.to_string())?,
-        Err(error) => return Err(format!("Headset unavailable ({error}); connect the headset and start PCVR")),
+        Err(error) => {
+            return Err(format!(
+                "Headset unavailable ({error}); connect the headset and start PCVR"
+            ))
+        }
     };
     Ok(format!("Runtime: {} {}\nHeadset: {headset}\nVulkan enable2: true\nDisplay refresh control: {refresh}", properties.runtime_name, properties.runtime_version))
 }
@@ -1621,10 +1687,7 @@ mod tests {
 
     #[test]
     fn ui_supersampling_doubles_dimensions_when_device_limits_allow() {
-        assert_eq!(
-            supersampled_dimensions(1920, 1080, 4096),
-            (3840, 2160, 2.0)
-        );
+        assert_eq!(supersampled_dimensions(1920, 1080, 4096), (3840, 2160, 2.0));
     }
 
     #[test]
@@ -1656,14 +1719,12 @@ mod tests {
             .unwrap(),
             vk::API_VERSION_1_2,
         );
-        assert!(
-            select_vulkan_api_version(
-                xr::Version::new(1, 0, 0),
-                xr::Version::new(1, 1, 0),
-                vk::API_VERSION_1_3,
-            )
-            .is_err()
-        );
+        assert!(select_vulkan_api_version(
+            xr::Version::new(1, 0, 0),
+            xr::Version::new(1, 1, 0),
+            vk::API_VERSION_1_3,
+        )
+        .is_err());
     }
 
     /// Exercise the core function that failed on the headset GPU without needing

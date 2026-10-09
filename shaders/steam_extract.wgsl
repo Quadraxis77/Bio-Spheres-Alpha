@@ -229,8 +229,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         particle.color = vec4<f32>(vec3<f32>(1.0, 1.0, 1.0) * light, 0.9);
     } else {
         particle.size = params.cell_size * 1.5;  // Slightly larger than voxel
-        // Steam color: white/grey, wispy
-        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * light, 0.01);
+        // Sparse temperate evaporation must be visible without requiring a
+        // dense boiling cloud. The old 1% opacity erased isolated wisps in VR.
+        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * light, 0.08);
 
         // Gentle per-particle drift, independent of the underlying voxel's
         // own timing. Regular steam is re-extracted fresh from live voxel

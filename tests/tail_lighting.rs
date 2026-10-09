@@ -157,9 +157,9 @@ fn test_light() {
             .collect();
         for (visibility, direction, enabled, expected) in [
             (255, -1f32, 1, [1., 0., 0., 1.]), // local red light, normalized normal
-            (0, -1., 1, [0., 0., 0., 1.]),   // no artificial ambient in shadow
-            (255, 1., 1, [0., 0., 0., 1.]),  // moving sun reverses lit side
-            (0, -1., 0, [1., 1., 1., 1.]),   // disabled field uses uniform light
+            (0, -1., 1, [0., 0., 0., 1.]),     // no artificial ambient in shadow
+            (255, 1., 1, [0., 0., 0., 1.]),    // moving sun reverses lit side
+            (0, -1., 0, [1., 1., 1., 1.]),     // disabled field uses uniform light
         ] {
             upload(&shadow, [visibility, 0, 0, 255]);
             upload(&color, [255, 0, 0, 255]);

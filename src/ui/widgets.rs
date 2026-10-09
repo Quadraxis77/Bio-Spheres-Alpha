@@ -251,19 +251,36 @@ pub fn circular_slider_float(
     // Convert value to angle (match reference implementation)
     let handle_angle = -PI / 2.0 + (clamped_value / 180.0) * PI;
 
-    if let Some(normalized) = egui::ControllerSlider::interact(ui, &response, "Rotation angle",
-        format!("{:.1} deg", clamped_value), ((clamped_value-v_min)/(v_max-v_min)) as f64,
-        format!("{v_min} deg"), format!("{v_max} deg"),
-        egui::ControllerSlider::significant_values(v_min as f64, v_max as f64, false).into_iter()
-            .map(|v| ((v-v_min as f64)/(v_max-v_min) as f64, format!("{}°", egui::ControllerSlider::stop_label(v)))).collect()) {
-        new_value = v_min + (v_max-v_min) * normalized as f32;
-        if enable_snapping { new_value = (new_value / 15.0).round() * 15.0; }
-        new_value = new_value.clamp(v_min,v_max);
+    if let Some(normalized) = egui::ControllerSlider::interact(
+        ui,
+        &response,
+        "Rotation angle",
+        format!("{:.1} deg", clamped_value),
+        ((clamped_value - v_min) / (v_max - v_min)) as f64,
+        format!("{v_min} deg"),
+        format!("{v_max} deg"),
+        egui::ControllerSlider::significant_values(v_min as f64, v_max as f64, false)
+            .into_iter()
+            .map(|v| {
+                (
+                    (v - v_min as f64) / (v_max - v_min) as f64,
+                    format!("{}°", egui::ControllerSlider::stop_label(v)),
+                )
+            })
+            .collect(),
+    ) {
+        new_value = v_min + (v_max - v_min) * normalized as f32;
+        if enable_snapping {
+            new_value = (new_value / 15.0).round() * 15.0;
+        }
+        new_value = new_value.clamp(v_min, v_max);
         value_changed = new_value != clamped_value;
     }
 
     // Handle mouse interaction
-    if !egui::ControllerSlider::pointer_editing_blocked(ui.ctx()) && (response.dragged() || response.clicked()) {
+    if !egui::ControllerSlider::pointer_editing_blocked(ui.ctx())
+        && (response.dragged() || response.clicked())
+    {
         if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
             let mouse_rel = mouse_pos - center;
             let distance = mouse_rel.length();
@@ -359,7 +376,13 @@ pub fn circular_slider_float(
         response.mark_changed();
     }
 
-    egui::ControllerSlider::refresh(ui.ctx(),response.id,((*value-v_min)/(v_max-v_min)) as f64,format!("{:.1} deg",*value));
+    egui::ControllerSlider::refresh(
+        ui.ctx(),
+        response.id,
+        ((*value - v_min) / (v_max - v_min)) as f64,
+        format!("{:.1} deg", *value),
+    );
+    egui::InteractionUsage::slider(&response, response.id, "Rotation angle");
 
     // Hover feedback for grab zone
     if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {

@@ -37,6 +37,12 @@ pub struct TextOptions {
     ///
     /// Default is `true`.
     pub font_hinting: bool,
+
+    /// Extra outline width in logical points, applied while rasterizing glyphs.
+    /// This increases weight without changing advances, wrapping, or line height.
+    /// Zero retains the font's original appearance.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub glyph_stroke_width: f32,
 }
 
 impl Default for TextOptions {
@@ -45,6 +51,7 @@ impl Default for TextOptions {
             max_texture_side: 2048, // Small but portable
             alpha_from_coverage: crate::AlphaFromCoverage::default(),
             font_hinting: true,
+            glyph_stroke_width: 0.0,
         }
     }
 }

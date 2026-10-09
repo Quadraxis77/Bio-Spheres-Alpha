@@ -605,10 +605,18 @@ mod tests {
         p.sync_modes(&device, &queue, &[genome.clone()]);
         b.sync_signal_settings(&queue, &[genome.clone()]);
         b.sync_regulation_params(&queue, &[genome.clone()]);
-        queue.write_buffer(&b.cell_count_buffer, 0, bytemuck::cast_slice(&[2u32, 2, 0, 0]));
+        queue.write_buffer(
+            &b.cell_count_buffer,
+            0,
+            bytemuck::cast_slice(&[2u32, 2, 0, 0]),
+        );
         queue.write_buffer(&b.cell_ids, 0, bytemuck::cast_slice(&[1u32, 2]));
         queue.write_buffer(&b.cell_types, 0, bytemuck::cast_slice(&[1u32; 4]));
-        queue.write_buffer(&b.nutrients_buffer, 0, bytemuck::cast_slice(&[100000i32; 4]));
+        queue.write_buffer(
+            &b.nutrients_buffer,
+            0,
+            bytemuck::cast_slice(&[100000i32; 4]),
+        );
         let mut previous = 0.0;
         for tick in 0..5 {
             if tick == 2 || tick == 3 {
@@ -617,17 +625,34 @@ mod tests {
                 b.sync_regulation_params(&queue, &[genome.clone()]);
             }
             let mut encoder = device.create_command_encoder(&Default::default());
-            p.encode_tick(&device, &queue, &mut encoder, 0, params(2, p.settings),
-                &b, &a, None, None, None, [200.0, 6.25, 64.0, 16.0]);
+            p.encode_tick(
+                &device,
+                &queue,
+                &mut encoder,
+                0,
+                params(2, p.settings),
+                &b,
+                &a,
+                None,
+                None,
+                None,
+                [200.0, 6.25, 64.0, 16.0],
+            );
             queue.submit([encoder.finish()]);
             let field = read(&device, &queue, p.current_field(), 2);
             if tick < 2 {
                 assert!(field.iter().flatten().all(|v| *v == 0.0));
             } else if tick == 2 {
-                assert!(field[0][8] > 0.0, "new sources must wake transport immediately");
+                assert!(
+                    field[0][8] > 0.0,
+                    "new sources must wake transport immediately"
+                );
             } else {
                 let expected = previous * params(2, p.settings).retention;
-                assert!((field[0][8] - expected).abs() < 0.0001, "silent sources must retain decaying signals");
+                assert!(
+                    (field[0][8] - expected).abs() < 0.0001,
+                    "silent sources must retain decaying signals"
+                );
             }
             previous = field[0][8];
         }

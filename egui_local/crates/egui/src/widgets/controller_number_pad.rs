@@ -97,10 +97,107 @@ impl ControllerNumberPad {
         });
     }
 
-    /// Render the overlay. Call once per frame before `Context::end_pass`.
-    pub fn show(ctx: &Context) {
+    /// Whether a numeric input is currently being edited.
+    pub fn is_active(ctx: &Context) -> bool {
+        Self::selection(ctx).is_some()
+    }
+
+    /// Render the keypad on a controller-owned surface while applying edits to
+    /// the context that owns the focused numeric input.
+    pub fn show_on_controller(
+        controller_ctx: &Context,
+        value_ctx: &Context,
+        pointer: Option<crate::Pos2>,
+    ) {
+        let Some(selection) = Self::selection(value_ctx) else {
+            return;
+        };
+
+        let mut clicked_key = None;
+        Area::new(Id::new("controller_number_pad_surface"))
+            .order(Order::Foreground)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(controller_ctx, |ui| {
+                ui.set_width(300.0);
+                ui.group(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label("Editing numeric input");
+                        ui.add(
+                            crate::Label::new(
+                                crate::RichText::new(format!(
+                                    "{}{}{}",
+                                    selection.prefix, selection.value, selection.suffix
+                                ))
+                                .monospace(),
+                            )
+                            .wrap_mode(crate::TextWrapMode::Extend),
+                        );
+                    });
+                    ui.add_space(5.0);
+
+                    for row in [["7", "8", "9"], ["4", "5", "6"], ["1", "2", "3"]] {
+                        ui.horizontal(|ui| {
+                            for digit in row {
+                                if ui.add_sized([88.0, 44.0], Button::new(digit)).clicked() {
+                                    clicked_key = digit.chars().next().map(Key::Digit);
+                                }
+                            }
+                        });
+                    }
+
+                    ui.horizontal(|ui| {
+                        if ui.add_sized([88.0, 44.0], Button::new("+/-")).clicked() {
+                            clicked_key = Some(Key::Sign);
+                        }
+                        if ui.add_sized([88.0, 44.0], Button::new("0")).clicked() {
+                            clicked_key = Some(Key::Digit('0'));
+                        }
+                        if ui
+                            .add_enabled_ui(selection.allow_decimal, |ui| {
+                                ui.add_sized([88.0, 44.0], Button::new("."))
+                            })
+                            .inner
+                            .clicked()
+                        {
+                            clicked_key = Some(Key::Decimal);
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.add_sized([88.0, 44.0], Button::new("Del")).clicked() {
+                            clicked_key = Some(Key::Backspace);
+                        }
+                        if ui.add_sized([88.0, 44.0], Button::new("Clear")).clicked() {
+                            clicked_key = Some(Key::Clear);
+                        }
+                        if ui.add_sized([88.0, 44.0], Button::new("Done")).clicked() {
+                            clicked_key = Some(Key::Done);
+                        }
+                    });
+                });
+            });
+
+        if let Some(key) = clicked_key {
+            Self::apply_key(value_ctx, &selection, key);
+        }
+
+        if let Some(pointer) = pointer {
+            let painter = controller_ctx.layer_painter(crate::LayerId::new(
+                Order::Tooltip,
+                Id::new("controller_number_pad_pointer"),
+            ));
+            painter.circle_filled(pointer, 8.0, crate::Color32::from_rgb(0, 200, 160));
+            painter.circle_stroke(
+                pointer,
+                10.0,
+                crate::Stroke::new(2.0, crate::Color32::WHITE),
+            );
+        }
+    }
+
+    fn selection(ctx: &Context) -> Option<Selection> {
         let pass = ctx.cumulative_pass_nr();
-        let selection = ctx.data_mut(|data| {
+        ctx.data_mut(|data| {
             let state = data.get_temp_mut_or_default::<State>(Self::key());
             if !state.enabled {
                 return None;
@@ -113,76 +210,7 @@ impl ControllerNumberPad {
                 state.selected = None;
             }
             state.selected.clone()
-        });
-        let Some(selection) = selection else {
-            return;
-        };
-
-        let mut clicked_key = None;
-        Area::new(Self::key())
-            .order(Order::Foreground)
-            .anchor(Align2::RIGHT_BOTTOM, Vec2::new(-16.0, -16.0))
-            .show(ctx, |ui| {
-                ui.set_width(206.0);
-                ui.group(|ui| {
-                    ui.label("Editing numeric input");
-                    ui.add(
-                        crate::Label::new(
-                            crate::RichText::new(format!(
-                                "{}{}{}",
-                                selection.prefix, selection.value, selection.suffix
-                            ))
-                            .monospace(),
-                        )
-                        .wrap_mode(crate::TextWrapMode::Extend),
-                    );
-                    ui.add_space(4.0);
-
-                    for row in [["7", "8", "9"], ["4", "5", "6"], ["1", "2", "3"]] {
-                        ui.horizontal(|ui| {
-                            for digit in row {
-                                if ui.add_sized([60.0, 36.0], Button::new(digit)).clicked() {
-                                    clicked_key = digit.chars().next().map(Key::Digit);
-                                }
-                            }
-                        });
-                    }
-
-                    ui.horizontal(|ui| {
-                        if ui.add_sized([60.0, 36.0], Button::new("+/-")).clicked() {
-                            clicked_key = Some(Key::Sign);
-                        }
-                        if ui.add_sized([60.0, 36.0], Button::new("0")).clicked() {
-                            clicked_key = Some(Key::Digit('0'));
-                        }
-                        if ui
-                            .add_enabled_ui(selection.allow_decimal, |ui| {
-                                ui.add_sized([60.0, 36.0], Button::new("."))
-                            })
-                            .inner
-                            .clicked()
-                        {
-                            clicked_key = Some(Key::Decimal);
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        if ui.add_sized([60.0, 36.0], Button::new("Del")).clicked() {
-                            clicked_key = Some(Key::Backspace);
-                        }
-                        if ui.add_sized([60.0, 36.0], Button::new("Clear")).clicked() {
-                            clicked_key = Some(Key::Clear);
-                        }
-                        if ui.add_sized([60.0, 36.0], Button::new("Done")).clicked() {
-                            clicked_key = Some(Key::Done);
-                        }
-                    });
-                });
-            });
-
-        if let Some(key) = clicked_key {
-            Self::apply_key(ctx, &selection, key);
-        }
+        })
     }
 
     fn apply_key(ctx: &Context, selection: &Selection, key: Key) {

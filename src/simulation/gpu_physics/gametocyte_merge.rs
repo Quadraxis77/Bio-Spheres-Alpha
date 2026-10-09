@@ -23,7 +23,6 @@ pub struct GametocyteMergeSystem {
     /// GPU-side merge events buffer (1 counter u32 + events).
     /// Cleared to zero at the start of each frame before dispatch.
     pub merge_events_buffer: wgpu::Buffer,
-
 }
 
 impl GametocyteMergeSystem {
@@ -463,7 +462,6 @@ impl GametocyteMergeSystem {
         pass.set_bind_group(2, spatial_bg, &[]);
         pass.dispatch_workgroups(workgroups, 1, 1);
     }
-
 }
 
 #[cfg(test)]

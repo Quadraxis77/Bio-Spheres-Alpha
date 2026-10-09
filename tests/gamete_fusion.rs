@@ -1,7 +1,5 @@
 use bio_spheres::genome::Genome;
-use bio_spheres::simulation::gpu_physics::gametocyte_merge::{
-    GametocyteMergeSystem,
-};
+use bio_spheres::simulation::gpu_physics::gametocyte_merge::GametocyteMergeSystem;
 use wgpu::util::DeviceExt;
 
 #[test]
@@ -101,7 +99,16 @@ fn gpu_fusion_checks_compatibility_and_claims_each_parent_once() {
                 &device, &params, &positions, &positions, &positions, &positions, &count,
             );
             let data = system.create_cell_data_bind_group(
-                &device, &types, &flags, &parents, &ids, &modes, &props, &reserves, &metadata, &mode_types,
+                &device,
+                &types,
+                &flags,
+                &parents,
+                &ids,
+                &modes,
+                &props,
+                &reserves,
+                &metadata,
+                &mode_types,
             );
             let spatial = system.create_spatial_bind_group(&device, &counts, &cells, &modes);
             let readback = device.create_buffer(&wgpu::BufferDescriptor {

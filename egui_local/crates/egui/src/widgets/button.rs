@@ -41,6 +41,10 @@ pub struct Button<'a> {
 }
 
 impl<'a> Button<'a> {
+    pub(crate) fn text_contents(&self) -> String {
+        self.layout.atoms.text().map(|s| s.into_owned()).unwrap_or_default()
+    }
+
     pub fn new(atoms: impl IntoAtoms<'a>) -> Self {
         Self {
             layout: AtomLayout::new(atoms.into_atoms())

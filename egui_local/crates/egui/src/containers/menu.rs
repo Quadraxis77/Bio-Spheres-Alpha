@@ -322,6 +322,7 @@ impl<'a> MenuButton<'a> {
         ui: &mut Ui,
         content: impl FnOnce(&mut Ui) -> R,
     ) -> (Response, Option<InnerResponse<R>>) {
+        let usage_label = self.button.text_contents();
         let response = self.button.ui(ui);
         let mut config = self.config.unwrap_or_else(|| MenuConfig::find(ui));
         config.bar = false;
@@ -331,7 +332,13 @@ impl<'a> MenuButton<'a> {
             .info(
                 UiStackInfo::new(UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config),
             )
-            .show(content);
+            .show(|ui| {
+                let ctx = ui.ctx().clone();
+                crate::InteractionUsage::scoped(&ctx, &usage_label, || content(ui))
+            });
+        if response.clicked() && inner.is_some() {
+            crate::InteractionUsage::menu(ui.ctx(), response.id, &usage_label);
+        }
         (response, inner)
     }
 }
@@ -376,6 +383,7 @@ impl<'a> SubMenuButton<'a> {
         ui: &mut Ui,
         content: impl FnOnce(&mut Ui) -> R,
     ) -> (Response, Option<InnerResponse<R>>) {
+        let usage_label = self.button.text_contents();
         let my_id = ui.next_auto_id();
         let open = MenuState::from_ui(ui, |state, _| {
             state.open_item == Some(SubMenu::id_from_widget_id(my_id))
@@ -388,7 +396,13 @@ impl<'a> SubMenuButton<'a> {
         let response = self.button.ui(ui);
         ui.style_mut().visuals.widgets.inactive = inactive;
 
-        let popup_response = self.sub_menu.show(ui, &response, content);
+        let popup_response = self.sub_menu.show(ui, &response, |ui| {
+            let ctx = ui.ctx().clone();
+            crate::InteractionUsage::scoped(&ctx, &usage_label, || content(ui))
+        });
+        if !open && popup_response.is_some() {
+            crate::InteractionUsage::menu(ui.ctx(), response.id, &usage_label);
+        }
 
         (response, popup_response)
     }

@@ -35,7 +35,9 @@ fn try_candidates<T>(
                 return Ok(value);
             }
             Err(error) => {
-                log::debug!("SteamVR headset unavailable; checking default OpenXR runtime: {error}");
+                log::debug!(
+                    "SteamVR headset unavailable; checking default OpenXR runtime: {error}"
+                );
             }
         }
     }
@@ -73,10 +75,13 @@ fn running_steamvr_manifest() -> Option<std::path::PathBuf> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut system = System::new();
     system.refresh_processes_specifics(
-        ProcessesToUpdate::All, true,
+        ProcessesToUpdate::All,
+        true,
         ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet),
     );
-    let servers: Vec<_> = system.processes().values()
+    let servers: Vec<_> = system
+        .processes()
+        .values()
         .filter(|process| process.name().eq_ignore_ascii_case("vrserver.exe"))
         .collect();
     if servers.is_empty() {
@@ -85,7 +90,11 @@ fn running_steamvr_manifest() -> Option<std::path::PathBuf> {
     // vrserver lives in <SteamVR>/bin/win64, including custom Steam libraries.
     for server in servers {
         if let Some(exe) = server.exe() {
-            if let Some(root) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+            if let Some(root) = exe
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+            {
                 let manifest = root.join("steamxr_win64.json");
                 if manifest.is_file() {
                     return Some(manifest);
@@ -95,9 +104,13 @@ fn running_steamvr_manifest() -> Option<std::path::PathBuf> {
     }
     // Some installations deny executable-path access; OpenVR records the root.
     let paths = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
-        .join("openvr").join("openvrpaths.vrpath");
+        .join("openvr")
+        .join("openvrpaths.vrpath");
     let json: serde_json::Value = serde_json::from_slice(&std::fs::read(paths).ok()?).ok()?;
-    json.get("runtime")?.as_array()?.iter().filter_map(|v| v.as_str())
+    json.get("runtime")?
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str())
         .map(|root| std::path::Path::new(root).join("steamxr_win64.json"))
         .find(|path| path.is_file())
 }
@@ -121,15 +134,20 @@ mod tests {
         let mut seen = Vec::new();
         let result = try_candidates(Some(std::path::Path::new("steam.json")), |path| {
             seen.push(path.is_some());
-            if path.is_some() { Err("No headset".into()) } else { Ok("VDXR") }
+            if path.is_some() {
+                Err("No headset".into())
+            } else {
+                Ok("VDXR")
+            }
         });
         assert_eq!(result.unwrap(), "VDXR");
-        assert_eq!(seen, vec![true,false]);
+        assert_eq!(seen, vec![true, false]);
     }
     #[test]
     fn no_running_steamvr_keeps_default_runtime() {
         let result = try_candidates(None, |path| {
-            assert!(path.is_none()); Ok("default")
+            assert!(path.is_none());
+            Ok("default")
         });
         assert_eq!(result.unwrap(), "default");
     }

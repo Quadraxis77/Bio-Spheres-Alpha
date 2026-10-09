@@ -597,7 +597,12 @@ impl CellRenderer {
 
         // Calculate projection matrix (perspective)
         let aspect = self.width as f32 / self.height as f32;
-        let proj = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
+        let proj = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(),
+            aspect,
+            0.1,
+            5000.0,
+        );
 
         let view_proj = proj * view;
 

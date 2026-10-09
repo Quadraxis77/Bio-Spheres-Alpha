@@ -268,9 +268,9 @@ pub struct GpuScene {
     /// to converge after a genuine change; this short burst replaces the old
     /// perpetual every-other-frame work.
     static_water_smoothing_rebuilds_remaining: u8,
-    /// Water freezing threshold (internal 0-255 scale, default 65 ≈ 1°C)
+    /// Water freezing threshold (internal 0-255 scale, default 61 ≈ -2°C)
     pub freeze_threshold: u32,
-    /// Ice melting threshold (internal 0-255 scale, default 75 ≈ 9°C)
+    /// Ice melting threshold (internal 0-255 scale, default 66 ≈ 2°C)
     pub melt_threshold: u32,
     /// Snow formation threshold (internal 0-255 scale, default 60 ≈ -3°C)
     pub snow_threshold: u32,
@@ -949,8 +949,8 @@ impl GpuScene {
             thermal_inertia: 4.0,
             fluid_mesh_clock: Default::default(),
             static_water_smoothing_rebuilds_remaining: 0,
-            freeze_threshold: 65,
-            melt_threshold: 75,
+            freeze_threshold: 61,
+            melt_threshold: 66,
             snow_threshold: 60,
             evaporation_threshold: 120,
             optimal_cell_temp: 105,
@@ -3908,7 +3908,8 @@ impl GpuScene {
     fn cancel_dead_drag_from_readback(&mut self) {
         if self.drag_readback_target != u32::MAX
             && self.drag_readback_target == self.dragged_cell_index
-            && self.gpu_triple_buffers.last_dragged_cell_index != self.dragged_cell_index {
+            && self.gpu_triple_buffers.last_dragged_cell_index != self.dragged_cell_index
+        {
             self.clear_dragged_cell();
         }
     }
@@ -4108,10 +4109,15 @@ impl GpuScene {
             radial_menu.inspection.select(radial_menu.inspected_cell);
         }
         if let Some(cell_idx) = radial_menu.inspected_cell {
-            if let Some(result) = self.get_latest_cell_extraction().filter(|r| r.cell_index == cell_idx as u32) {
+            if let Some(result) = self
+                .get_latest_cell_extraction()
+                .filter(|r| r.cell_index == cell_idx as u32)
+            {
                 radial_menu.inspection.observe(result.data);
             }
-            if radial_menu.inspection.dead { return; }
+            if radial_menu.inspection.dead {
+                return;
+            }
             let inspector_idle = self
                 .cell_inspector
                 .as_ref()
@@ -4410,7 +4416,12 @@ impl GpuScene {
 
         // Execute GPU position update
         if let Some(ref mut tool_ops) = self.tool_operations {
-            tool_ops.update_cell_position(encoder, cell_index, new_position, self.dragged_cell_index == cell_index);
+            tool_ops.update_cell_position(
+                encoder,
+                cell_index,
+                new_position,
+                self.dragged_cell_index == cell_index,
+            );
             return true;
         }
 
@@ -5821,19 +5832,15 @@ impl GpuScene {
             return;
         };
 
-        let light_field_buffer = self
-            .light_field_system
-            .as_ref()
-            .expect("light field system must be initialized before fluid simulator")
-            .light_field_buffer()
-            .clone();
-
         let simulator = GpuFluidSimulator::new(
             device,
             self.config.sphere_radius,
             glam::Vec3::ZERO,
             solid_mask_buffer,
-            &light_field_buffer,
+            self.light_field_system
+                .as_ref()
+                .expect("light field system must be initialized before fluid simulator")
+                .solar_transmittance_buffer(),
             &self
                 .light_field_system
                 .as_ref()
@@ -6582,13 +6589,11 @@ impl GpuScene {
             simulator.set_snow_threshold(self.snow_threshold);
             simulator.set_evaporation_threshold(self.evaporation_threshold);
             simulator.set_optimal_cell_temp(self.optimal_cell_temp);
-            // The thermal model's sun_brightness is on a 0-5 scale
-            // (0 = dark, 3 = comfortable/recommended, 5 = extreme heat).
-            // sun_intensity is now also 0-5 to match directly.
+            // The thermal model's sun_brightness is on a 0-5 scale;
+            // brightness 3 is calibrated for temperate conditions in clear sun.
             simulator.set_sun_brightness(self.sun_intensity);
             simulator.set_water_drag_strength(queue, self.water_viscosity);
             simulator.configure_readbacks(
-                self.readbacks_enabled,
                 self.audio_readbacks_enabled && !self.headless_no_render,
                 !self.headless_no_render,
             );
@@ -9564,14 +9569,12 @@ impl GpuScene {
                         gpu_surface_nets.extract_mesh(&mut encoder);
                     }
 
-                    // Ice gets its own mesh: raw ice density, no smoothing,
-                    // no waves - a rigid faceted surface. Ice only changes
-                    // through slow freeze/melt events, so re-extracting every
-                    // 8th frame (~130ms latency) is visually identical and
-                    // skips a full second surface-nets extraction per frame.
+                    // Ice uses a prepared density snapshot and no animated
+                    // waves. Rebuild every eight fluid ticks (~130ms), keeping
+                    // the completed mesh stable between freeze/melt updates.
                     if prepare_ice_mesh {
-                        // Blur the binary ice density field before extraction
-                        // so surface-nets can place vertices off the voxel
+                        // Snapshot ice before extraction so water updates cannot
+                        // replace its mesh input. Surface nets filters the voxel
                         // grid, removing the staircase look on the base
                         // surface (crystal facets are layered on top in the
                         // ice shader).
@@ -9851,7 +9854,7 @@ impl GpuScene {
             advance_world && self.cell_count_readback_dirty && !cell_count_read_pending;
         if should_start_readback {
             self.drag_readback_target = self.dragged_cell_index;
-                self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
+            self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
             self.cell_count_readback_dirty = false;
         }
 

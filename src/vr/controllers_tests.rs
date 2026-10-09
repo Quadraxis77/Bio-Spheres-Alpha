@@ -51,7 +51,11 @@ fn tracked_models_render_stereo_with_transparent_background() {
             eye,
             projection,
             &input,
-            Some((Vec3::new(0.16, -0.16, -0.5), Vec3::new(0.0, 0.0, -1.6))),
+            Some((
+                Vec3::new(0.16, -0.16, -0.5),
+                Vec3::new(0.0, 0.0, -1.6),
+                true,
+            )),
         );
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,

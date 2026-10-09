@@ -238,7 +238,7 @@ impl Choice {
         .position(|choice| *choice == self)
     }
 
-    fn opens_submenu(self) -> bool {
+    pub fn opens_submenu(self) -> bool {
         matches!(
             self,
             Self::CellDetails
@@ -285,14 +285,21 @@ pub struct Controls {
     wheel_introduced: bool,
     pub full_ui: bool,
     pub wheel_open: bool,
+    pub number_pad_active: bool,
     pub orbit: bool,
     pub wheel_pose: Option<xr::Posef>,
     pub pointer: Option<Vec2>,
+    pub wheel_pointer_pressed: bool,
+    pub wheel_pointer_released: bool,
     pub hovered: Option<Choice>,
     pub adjustment: Option<Choice>,
     pub value_label: String,
     pub dial: Option<Dial>,
     pub population: super::population::Population,
+    pub avg_air_temp_c: Option<f32>,
+    pub avg_water_temp_c: Option<f32>,
+    pub temp_display_fahrenheit: bool,
+    temp_unit_hovered: bool,
     pub cell_info: super::inspector::View,
     pub cell_death_notice: f32,
     cell_tab: Choice,
@@ -349,14 +356,21 @@ impl Default for Controls {
             wheel_introduced: false,
             full_ui: false,
             wheel_open: false,
+            number_pad_active: false,
             orbit: false,
             wheel_pose: None,
             pointer: None,
+            wheel_pointer_pressed: false,
+            wheel_pointer_released: false,
             hovered: None,
             adjustment: None,
             value_label: String::new(),
             dial: None,
             population: Default::default(),
+            avg_air_temp_c: None,
+            avg_water_temp_c: None,
+            temp_display_fahrenheit: true,
+            temp_unit_hovered: false,
             cell_info: Default::default(),
             cell_death_notice: 0.0,
             cell_tab: Choice::CellOverview,
@@ -381,6 +395,64 @@ impl Default for Controls {
     }
 }
 impl Controls {
+    /// A successful cell pick opens the inspector on the existing left-hand
+    /// surface. Refresh its readings without reopening it every frame.
+    pub fn sync_cell_inspection(&mut self, inspected: &mut crate::ui::inspection::Inspection) -> bool {
+        self.cell_info.data = inspected.data;
+        self.cell_info.dead = inspected.dead;
+        self.cell_info.loadable = inspected.genome.is_some();
+        self.cell_info.genome_name = inspected
+            .genome
+            .as_ref()
+            .map(|g| g.name.clone())
+            .unwrap_or_default();
+        self.cell_info.modes = inspected.genome.as_ref().map_or(0, |g| g.modes.len());
+        if !inspected.take_open_request() {
+            return false;
+        }
+        self.page = Page::CellDetails;
+        self.cell_tab = Choice::CellOverview;
+        self.wheel_open = true;
+        self.wheel_introduced = true;
+        self.full_ui = false;
+        self.dial = None;
+        self.adjustment = None;
+        self.sensitivity_adjustment = false;
+        self.hovered = None;
+        self.pressed_button = None;
+        self.press_flash = 0.0;
+        self.trigger_consumed = true;
+        true
+    }
+
+    /// The wrist surface takes the ray on hover as well as during a drag.
+    /// Use the same owner for background input and reticle visibility.
+    pub fn wrist_owns_pointer(&self) -> bool {
+        self.wheel_button_hovered
+            || ((self.wheel_open || self.number_pad_active)
+                && (self.pointer.is_some() || self.dial.as_ref().is_some_and(Dial::grabbing)))
+    }
+
+    pub fn usage_page(&self) -> String {
+        format!("{:?}", self.page)
+    }
+
+    pub fn usage_scene(&self) -> &'static str {
+        match self.context {
+            WheelContext::MainMenu => "Main menu",
+            WheelContext::Preview => "Genome Editor",
+            WheelContext::Gpu => "GPU Simulation",
+        }
+    }
+
+    pub fn set_number_pad_active(&mut self, active: bool) {
+        if active {
+            self.wheel_open = true;
+            self.adjustment = None;
+        }
+        self.number_pad_active = active;
+    }
+
     pub fn set_entry_radius(&mut self, radius: f32) {
         self.entry_radius = Some(radius);
     }
@@ -640,10 +712,13 @@ impl Controls {
         (text, choice.category_with_palette(palette).1)
     }
     fn footer_rect() -> egui::Rect {
-        egui::Rect::from_center_size(egui::pos2(360.0, 426.0), egui::vec2(124.0, 26.0))
+        egui::Rect::from_center_size(egui::pos2(360.0, 455.0), egui::vec2(124.0, 26.0))
     }
     fn close_rect() -> egui::Rect {
-        egui::Rect::from_center_size(egui::pos2(360.0, 470.0), egui::vec2(124.0, 26.0))
+        egui::Rect::from_center_size(egui::pos2(360.0, 500.0), egui::vec2(124.0, 26.0))
+    }
+    fn temperature_unit_rect() -> egui::Rect {
+        egui::Rect::from_center_size(egui::pos2(360.0, 421.0), egui::vec2(72.0, 22.0))
     }
     fn rings(&self) -> Vec<(Vec<Choice>, f32, f32)> {
         if self.page == Page::Help {
@@ -686,13 +761,23 @@ impl Controls {
         };
         if self.page == Page::Home && self.context == WheelContext::Gpu {
             // All scene tools are directly selectable without opening a submenu.
-            vec![(choices, 100.0, 205.0), (TOOLS.map(Choice::Tool).to_vec(), 215.0, 275.0)]
+            vec![
+                (choices, 100.0, 205.0),
+                (TOOLS.map(Choice::Tool).to_vec(), 215.0, 275.0),
+            ]
         } else {
             vec![(choices, 100.0, 275.0)]
         }
     }
     fn choice_at(&self, pixel: Vec2) -> Option<Choice> {
         let offset = pixel - Vec2::splat(360.0);
+        if self.context == WheelContext::Gpu
+            && self.page != Page::Help
+            && self.page != Page::Reset
+            && Self::temperature_unit_rect().contains(egui::pos2(pixel.x, pixel.y))
+        {
+            return None;
+        }
         if self.dial.is_some() {
             let p = egui::pos2(pixel.x, pixel.y);
             return if Self::footer_rect().contains(p) {
@@ -736,6 +821,9 @@ impl Controls {
         self.menu_pose = None;
         self.pointer = None;
         self.hovered = None;
+        self.temp_unit_hovered = false;
+        self.wheel_pointer_pressed = false;
+        self.wheel_pointer_released = false;
         self.menus = [false; 2];
         self.trigger = false;
         self.pressed_button = None;
@@ -757,6 +845,7 @@ impl Controls {
     ) -> Option<Choice> {
         self.cell_death_notice = (self.cell_death_notice - dt).max(0.0);
         let pressed = input.triggers[1] && !self.trigger;
+        let released = !input.triggers[1] && self.trigger;
         if !input.triggers[1] {
             self.press_flash = (self.press_flash - dt / 0.18).max(0.0);
         }
@@ -785,7 +874,8 @@ impl Controls {
             && menu_pointer.is_some_and(|pixel| (pixel - Vec2::splat(360.0)).length() <= 60.0);
         let left_button = input.menus[0] || input.wheel_button || input.stick_clicks[0];
         let opening_click = !self.wheel_open && pressed && self.wheel_button_hovered;
-        let toggle_wheel = (left_button && !self.menus[0]) || opening_click;
+        let toggle_wheel =
+            !self.number_pad_active && ((left_button && !self.menus[0]) || opening_click);
         if toggle_wheel {
             let selected_ui = !self.wheel_open
                 && self
@@ -810,22 +900,34 @@ impl Controls {
         let introducing_wheel = !self.wheel_introduced && self.menu_pose.is_some();
         if introducing_wheel {
             self.wheel_introduced = true;
-            if !toggle_wheel && !self.full_ui {
+            if !toggle_wheel && !self.full_ui && !self.number_pad_active {
                 self.wheel_open = true;
                 self.page = Page::Home;
             }
         }
-        if input.menus[1] && !self.menus[1] {
+        if !self.number_pad_active && input.menus[1] && !self.menus[1] {
             self.back();
         }
         self.menus = [left_button, input.menus[1]];
-        self.wheel_pose = self.wheel_open.then_some(self.menu_pose).flatten();
+        self.wheel_pose = (self.wheel_open || self.number_pad_active)
+            .then_some(self.menu_pose)
+            .flatten();
         let captured = self.dial.as_ref().is_some_and(Dial::grabbing);
-        self.pointer = self.wheel_pose.and(if captured {
+        let keypad_pointer_captured = self.number_pad_active && (input.triggers[1] || self.trigger);
+        self.pointer = self.wheel_pose.and(if captured || keypad_pointer_captured {
             projected_pointer
         } else {
             menu_pointer
         });
+        self.temp_unit_hovered = self.wheel_open
+            && self.context == WheelContext::Gpu
+            && self.dial.is_none()
+            && !self.number_pad_active
+            && self.page != Page::Help
+            && self.page != Page::Reset
+            && self
+                .pointer
+                .is_some_and(|p| Self::temperature_unit_rect().contains(egui::pos2(p.x, p.y)));
         if let Some(dial) = &mut self.dial {
             dial.update(self.pointer, input.triggers[1], pressed);
             if input.ui_pointer && matches!(dial.target, Target::Ui(_)) {
@@ -835,11 +937,13 @@ impl Controls {
             }
         }
         let captured = self.dial.as_ref().is_some_and(Dial::grabbing);
-        self.hovered = if captured {
+        self.hovered = if captured || self.number_pad_active {
             None
         } else {
             self.pointer.and_then(|p| self.choice_at(p))
         };
+        self.wheel_pointer_pressed = self.number_pad_active && pressed && self.pointer.is_some();
+        self.wheel_pointer_released = self.number_pad_active && released;
         if !input.triggers[1] {
             self.trigger_consumed = false;
         }
@@ -850,15 +954,19 @@ impl Controls {
                 .is_some_and(|p| (p - Vec2::splat(360.0)).length() <= 352.0))
             || opening_click
             || captured
+            || (self.number_pad_active && input.triggers[1] && self.pointer.is_some())
         {
             self.trigger_consumed = true;
         }
         self.trigger = input.triggers[1];
-        let choice = if pressed && !toggle_wheel && !introducing_wheel {
+        let choice = if !self.number_pad_active && pressed && !toggle_wheel && !introducing_wheel {
             self.hovered
         } else {
             None
         };
+        if self.temp_unit_hovered && pressed && !toggle_wheel && !introducing_wheel {
+            self.temp_display_fahrenheit = !self.temp_display_fahrenheit;
+        }
         if let Some(choice) = choice {
             self.pressed_button = Some((self.page, choice));
             self.press_flash = 1.0;
@@ -961,21 +1069,22 @@ impl Controls {
             self.navigation_blocked = true;
             return choice;
         }
-        if self.wheel_open || self.full_ui {
-            // Left-stick travel remains available while pointing at a menu.
-            // Right-stick input belongs to menu scrolling or the wheel dial.
-            // Gripping controllers must not pan/rotate/scale the world here.
+        let menu_open = self.wheel_open || self.full_ui;
+        if self.dial.is_some() || self.adjustment.is_some() {
+            // Only a focused slider owns horizontal right-stick input. Keep
+            // left-stick travel available, and require neutral after editing
+            // so releasing slider focus cannot turn on an already-held stick.
             self.grab = None;
             self.turning = None;
             self.scene_fade = 0.0;
-            self.turn_armed = input.turn.abs() < 0.25;
+            self.turn_armed = false;
             self.move_along_gravity(input, camera, *scale, dt);
             return choice;
         }
-        if self.orbit && input.squeeze[1] && input.grips[1].is_some() {
+        if !menu_open && self.orbit && input.squeeze[1] && input.grips[1].is_some() {
             self.sensitivity_adjustment = false;
         }
-        if self.sensitivity_adjustment {
+        if !menu_open && self.sensitivity_adjustment {
             self.trigger_consumed |= input.triggers[1];
             let stick = deadzone(input.movement);
             let dt = dt.clamp(0.0, 0.1);
@@ -987,7 +1096,12 @@ impl Controls {
             self.grab = None;
             return choice;
         }
-        let travel_input = deadzone(Vec2::new(0.0, input.lift)).y;
+        // Vertical right-stick input remains available for menu scrolling.
+        let travel_input = if menu_open {
+            0.0
+        } else {
+            deadzone(Vec2::new(0.0, input.lift)).y
+        };
         let dt = dt.clamp(0.0, 0.1);
         self.speed = (self.speed * 2.0_f32.powf(travel_input * 2.0 * dt)).clamp(0.075, 150.0);
         let deflection = Vec2::new(input.turn, input.lift);
@@ -1000,7 +1114,7 @@ impl Controls {
         }
         if !self.navigation_blocked
             && self.turn_armed
-            && !(self.orbit && input.squeeze[1] && input.grips[1].is_some())
+            && (menu_open || !(self.orbit && input.squeeze[1] && input.grips[1].is_some()))
             && deflection.x.abs() > (0.65 / self.turn_sensitivity).clamp(0.35, 0.9)
         {
             self.turning = Some(Turn {
@@ -1011,6 +1125,13 @@ impl Controls {
             self.turn_armed = false;
             self.motion = Vec2::ZERO;
             self.grab = None;
+            return choice;
+        }
+        if menu_open {
+            // Menus allow travel and snap turns, but controller grips must
+            // not pan, rotate, or scale the world while using their controls.
+            self.grab = None;
+            self.move_along_gravity(input, camera, *scale, dt);
             return choice;
         }
         let hands = if self.orbit && input.squeeze[1] {
@@ -1374,7 +1495,11 @@ impl Controls {
             let points = (0..=60)
                 .map(|i| {
                     let a = start + span * i as f32 / 60.0;
-                    let radius = if self.context == WheelContext::Gpu { 207.0 } else { 277.0 };
+                    let radius = if self.context == WheelContext::Gpu {
+                        207.0
+                    } else {
+                        277.0
+                    };
                     center + egui::vec2(a.cos(), a.sin()) * radius
                 })
                 .collect();
@@ -1487,7 +1612,15 @@ impl Controls {
         }
         if self.page == Page::Home {
             painter.text(
-                center + egui::vec2(0.0, if self.context == WheelContext::Gpu { -190.0 } else { -252.0 }),
+                center
+                    + egui::vec2(
+                        0.0,
+                        if self.context == WheelContext::Gpu {
+                            -190.0
+                        } else {
+                            -252.0
+                        },
+                    ),
                 egui::Align2::CENTER_CENTER,
                 "SIMULATION",
                 egui::FontId::proportional(10.5),
@@ -1562,6 +1695,43 @@ impl Controls {
                 self.population.count_text(),
                 egui::FontId::proportional(if self.dial.is_some() { 21.0 } else { 32.0 }),
                 palette.text_primary,
+            );
+            let format_temp = |temperature_c: Option<f32>| {
+                temperature_c.map_or_else(
+                    || "--.-".to_owned(),
+                    |temperature_c| {
+                        let (temperature, unit) = if self.temp_display_fahrenheit {
+                            (temperature_c * 9.0 / 5.0 + 32.0, "°F")
+                        } else {
+                            (temperature_c, "°C")
+                        };
+                        format!("{temperature:.1}{unit}")
+                    },
+                )
+            };
+            let temperature_y = badge_y + 35.0;
+            for (index, (label, temperature)) in [
+                ("AIR", self.avg_air_temp_c),
+                ("WATER", self.avg_water_temp_c),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                painter.text(
+                    center + egui::vec2(0.0, temperature_y + index as f32 * 16.0),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{label}  {}", format_temp(temperature)),
+                    egui::FontId::proportional(11.0),
+                    palette.text_secondary,
+                );
+            }
+            super::theme::footer(
+                &painter,
+                Self::temperature_unit_rect(),
+                "°F / °C",
+                self.temp_unit_hovered,
+                false,
+                palette,
             );
         }
         if self.page != Page::Help {
@@ -1767,6 +1937,43 @@ mod tests {
             (controls.dial.as_ref().unwrap().normalized - 0.5).abs() < 0.001,
             "1x must be centered in the logarithmic speed slider"
         );
+    }
+    #[test]
+    fn temperature_unit_toggle_is_visible_and_clickable_in_the_wrist_menu() {
+        let mut controls = Controls {
+            wheel_open: true,
+            wheel_introduced: true,
+            ..Default::default()
+        };
+        assert!(controls.temp_display_fahrenheit);
+        let mut camera = CameraController::new();
+        let mut input = VrInput {
+            head_position: Some(Vec3::ZERO),
+            grips: [
+                Some(pose(Vec3::new(-0.2, -0.2, -0.5), Quat::IDENTITY)),
+                None,
+            ],
+            ..Default::default()
+        };
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        let panel = controls.wheel_pose.unwrap();
+        let unit_pixel = Controls::temperature_unit_rect().center();
+        aim_at_wheel(&mut input, panel, Vec2::new(unit_pixel.x, unit_pixel.y));
+
+        input.triggers[1] = true;
+        assert_eq!(
+            controls.update(&input, &mut camera, &mut 20.0, 0.01),
+            None,
+            "the unit button must not select a wheel item"
+        );
+        assert!(controls.temp_unit_hovered);
+        assert!(!controls.temp_display_fahrenheit);
+
+        input.triggers[1] = false;
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        input.triggers[1] = true;
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        assert!(controls.temp_display_fahrenheit);
     }
     #[test]
     fn active_slider_captures_off_panel_drag_and_stick_without_moving_camera() {
@@ -2169,6 +2376,45 @@ mod tests {
         input.triggers[1] = true;
         assert_eq!(controls.update(&input, &mut camera, &mut 20.0, 0.01), None);
         assert!(controls.pointer.is_none() && !controls.trigger_consumed);
+        assert!(!controls.wrist_owns_pointer());
+    }
+
+    #[test]
+    fn wrist_hover_owns_the_pointer_before_pressing_in_menu_and_preview() {
+        for context in [WheelContext::MainMenu, WheelContext::Preview] {
+            let mut controls = Controls::default();
+            controls.set_context(context);
+            let mut camera = CameraController::new();
+            let mut input = VrInput {
+                head_position: Some(Vec3::ZERO),
+                grips: [
+                    Some(pose(Vec3::new(-0.3, -0.2, -0.5), Quat::IDENTITY)),
+                    None,
+                ],
+                pointer: Some(Vec2::new(500.0, 300.0)), // screen behind the wrist
+                ..Default::default()
+            };
+            controls.update(&input, &mut camera, &mut 20.0, 0.01);
+            let panel = controls.wheel_pose.unwrap();
+            aim_at_wheel(&mut input, panel, Vec2::splat(360.0));
+            controls.update(&input, &mut camera, &mut 20.0, 0.01);
+            assert!(!input.triggers[1]);
+            assert!(
+                controls.wrist_owns_pointer(),
+                "hovering the wrist must hide the background reticle before any click"
+            );
+
+            // Moving the ray outside the wrist quad restores screen input.
+            aim_at_wheel(&mut input, panel, Vec2::new(900.0, 360.0));
+            controls.update(&input, &mut camera, &mut 20.0, 0.01);
+            assert!(!controls.wrist_owns_pointer());
+
+            // The collapsed menu button also stops the ray at the wrist.
+            controls.wheel_open = false;
+            aim_at_wheel(&mut input, panel, Vec2::splat(360.0));
+            controls.update(&input, &mut camera, &mut 20.0, 0.01);
+            assert!(controls.wheel_button_hovered && controls.wrist_owns_pointer());
+        }
     }
     #[test]
     fn back_returns_to_home_then_closes_and_settings_returns_to_home() {
@@ -2368,7 +2614,7 @@ mod tests {
     }
 
     #[test]
-    fn menus_allow_travel_and_lift_without_grabs_or_unintended_turns() {
+    fn focused_sliders_allow_travel_and_lift_without_grabs_or_unintended_turns() {
         for full_ui in [false, true] {
             let mut controls = Controls {
                 full_ui,
@@ -2377,6 +2623,8 @@ mod tests {
                 orbit: true,
                 ..Default::default()
             };
+            controls.open_choice_slider(Choice::Gravity, 0.0, -100.0, 100.0);
+            controls.wheel_open = !full_ui;
             let mut camera = CameraController::new();
             camera.set_vr_rig(Vec3::new(0.0, 10.0, 600.0), Quat::IDENTITY);
             let mut input = VrInput {
@@ -2412,6 +2660,7 @@ mod tests {
 
             // Leaving a menu while holding the slider stick must not trigger
             // a turn. Left-stick travel continues without needing to re-center.
+            controls.back();
             controls.full_ui = false;
             controls.wheel_open = false;
             input.squeeze = [false, false];
@@ -2432,6 +2681,75 @@ mod tests {
         }
     }
     #[test]
+    fn menus_allow_left_and_right_snap_turns_without_a_focused_slider() {
+        for full_ui in [false, true] {
+            for direction in [-1.0, 1.0] {
+                let mut controls = Controls {
+                    full_ui,
+                    wheel_open: !full_ui,
+                    wheel_introduced: true,
+                    orbit: true,
+                    ..Default::default()
+                };
+                let mut camera = CameraController::new();
+                camera.set_vr_rig(Vec3::new(0.0, 10.0, 600.0), Quat::IDENTITY);
+                let head = Vec3::new(0.2, 1.5, -0.1);
+                let mut input = VrInput {
+                    turn: direction,
+                    lift: 1.0,
+                    ui_pointer: true,
+                    head_position: Some(head),
+                    grips: [
+                        Some(pose(Vec3::new(-0.2, 1.0, -0.5), Quat::IDENTITY)),
+                        Some(pose(Vec3::new(0.2, 1.0, -0.5), Quat::IDENTITY)),
+                    ],
+                    squeeze: [true, true],
+                    ..Default::default()
+                };
+                let seat = camera.position() + head * 20.0;
+                let speed = controls.speed;
+                for _ in 0..100 {
+                    controls.update(&input, &mut camera, &mut 20.0, 0.01);
+                }
+                let expected = Quat::from_rotation_y(-direction * std::f32::consts::FRAC_PI_4);
+                assert!(
+                    camera.view_rotation().angle_between(expected) < 0.001,
+                    "an open menu must allow exactly one turn per stick deflection"
+                );
+                assert!(
+                    (camera.position() + camera.view_rotation() * head * 20.0 - seat).length()
+                        < 0.001
+                );
+                assert!(controls.grab.is_none() && controls.turning.is_none());
+                assert_eq!(controls.scene_fade, 0.0);
+                assert_eq!(
+                    controls.speed, speed,
+                    "scrolling a menu must not change travel speed"
+                );
+                assert!(controls.wheel_open || controls.full_ui);
+
+                controls.open_choice_slider(Choice::Gravity, 0.0, -100.0, 100.0);
+                controls.update(&input, &mut camera, &mut 20.0, 0.01);
+                controls.back();
+                controls.update(&input, &mut camera, &mut 20.0, 0.01);
+                assert!(
+                    controls.turning.is_none(),
+                    "held slider input must not leak into turning"
+                );
+                input.turn = 0.0;
+                controls.update(&input, &mut camera, &mut 20.0, 0.01);
+                input.turn = -direction;
+                for _ in 0..50 {
+                    controls.update(&input, &mut camera, &mut 20.0, 0.01);
+                }
+                assert!(
+                    camera.view_rotation().angle_between(Quat::IDENTITY) < 0.001,
+                    "turning resumes in the still-open menu after centering the stick"
+                );
+            }
+        }
+    }
+    #[test]
     fn focused_slider_exposes_only_back_close_and_labeled_stops() {
         let mut c = Controls {
             wheel_open: true,
@@ -2446,8 +2764,13 @@ mod tests {
             .iter()
             .any(|(_, l)| l == "16:9"));
         assert_eq!(c.choice_at(Vec2::new(360.0, 180.0)), None);
-        assert_eq!(c.choice_at(Vec2::new(360.0, 426.0)), Some(Choice::Back));
-        assert_eq!(c.choice_at(Vec2::new(360.0, 470.0)), Some(Choice::Close));
+        let back = Controls::footer_rect().center();
+        let close = Controls::close_rect().center();
+        assert_eq!(c.choice_at(Vec2::new(back.x, back.y)), Some(Choice::Back));
+        assert_eq!(
+            c.choice_at(Vec2::new(close.x, close.y)),
+            Some(Choice::Close)
+        );
         c.back();
         assert!(c.wheel_open && c.dial.is_none());
     }
@@ -2563,6 +2886,74 @@ mod tests {
         assert!(
             (forward - vertical).abs() < 0.01,
             "the same adjusted speed applies to forward and left-grip vertical travel"
+        );
+    }
+
+    #[test]
+    fn successful_inspection_opens_on_left_hand_once_per_selection() {
+        let mut controls = Controls::default();
+        let mut inspection = crate::ui::inspection::Inspection::default();
+        let data = crate::simulation::gpu_physics::InspectedCellData {
+            is_valid: 1,
+            cell_id: 101,
+            ..Default::default()
+        };
+        inspection.select(Some(3));
+        assert!(!controls.sync_cell_inspection(&mut inspection));
+        assert!(!controls.wheel_open, "wait for a successful cell readback");
+        inspection.observe(data);
+        assert!(controls.sync_cell_inspection(&mut inspection));
+        assert_eq!(controls.page, Page::CellDetails);
+        assert_eq!(controls.cell_tab, Choice::CellOverview);
+        assert!(controls.wheel_open && !controls.full_ui);
+        assert_eq!(controls.cell_info.data.unwrap().cell_id, 101);
+
+        // The trigger that selected the cell must not click the appearing panel.
+        controls.trigger = true;
+        let mut camera = CameraController::new();
+        let mut input = VrInput {
+            head_position: Some(Vec3::ZERO),
+            grips: [
+                Some(pose(Vec3::new(-0.2, -0.2, -0.5), Quat::IDENTITY)),
+                None,
+            ],
+            triggers: [false, true],
+            ..Default::default()
+        };
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        let first_pose = controls.wheel_pose.unwrap();
+        input.grips[0] = Some(pose(Vec3::new(-0.3, -0.2, -0.5), Quat::IDENTITY));
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        assert!(
+            (position(controls.wheel_pose.unwrap()) - position(first_pose)
+                - Vec3::new(-0.1, 0.0, 0.0))
+                .length()
+                < 0.001
+        );
+        aim_at_wheel(
+            &mut input,
+            controls.wheel_pose.unwrap(),
+            Vec2::new(428.0, 600.0),
+        );
+        assert_eq!(controls.update(&input, &mut camera, &mut 20.0, 0.01), None);
+        assert!(controls.wheel_open);
+        input.triggers[1] = false;
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        input.triggers[1] = true;
+        assert_eq!(
+            controls.update(&input, &mut camera, &mut 20.0, 0.01),
+            Some(Choice::Close)
+        );
+        assert!(!controls.wheel_open);
+        inspection.observe(data);
+        assert!(!controls.sync_cell_inspection(&mut inspection));
+        assert!(!controls.wheel_open, "live readings must respect Close");
+        inspection.select(Some(3));
+        inspection.observe(data);
+        assert!(controls.sync_cell_inspection(&mut inspection));
+        assert!(
+            controls.wheel_open,
+            "reselecting the same cell reopens inspection"
         );
     }
 
@@ -2843,8 +3234,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(controls.choice_at(Vec2::splat(360.0)), None);
+        let back = Controls::footer_rect().center();
         assert_eq!(
-            controls.choice_at(Vec2::new(360.0, 426.0)),
+            controls.choice_at(Vec2::new(back.x, back.y)),
             Some(Choice::Back)
         );
         assert_eq!(
@@ -3070,7 +3462,8 @@ mod tests {
                 .round(),
             Vec2::splat(360.0)
         );
-        let angle = controls.start_angle(TOOLS.len()) + 2.5 * std::f32::consts::TAU / TOOLS.len() as f32;
+        let angle =
+            controls.start_angle(TOOLS.len()) + 2.5 * std::f32::consts::TAU / TOOLS.len() as f32;
         let pixel = Vec2::splat(360.0) + Vec2::new(angle.cos(), angle.sin()) * 245.0;
         let target = position(panel)
             + rotation(panel)
@@ -3212,5 +3605,37 @@ mod tests {
             assert_eq!(controls.update(&input, &mut camera, &mut 20.0, 0.01), None);
             assert!(controls.wheel_open && controls.trigger_consumed);
         }
+    }
+
+    #[test]
+    fn numeric_keypad_uses_wrist_pointer_without_selecting_wheel_choices() {
+        let mut controls = Controls::default();
+        controls.set_number_pad_active(true);
+        let mut camera = CameraController::new();
+        let mut input = VrInput {
+            head_position: Some(Vec3::ZERO),
+            grips: [
+                Some(pose(Vec3::new(-0.2, -0.2, -0.5), Quat::IDENTITY)),
+                None,
+            ],
+            ..Default::default()
+        };
+
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        let panel = controls.menu_pose.unwrap();
+        aim_at_wheel(&mut input, panel, Vec2::splat(360.0));
+        input.triggers[1] = true;
+
+        assert_eq!(controls.update(&input, &mut camera, &mut 20.0, 0.01), None);
+        assert!(controls.wheel_open && controls.number_pad_active);
+        assert!(controls
+            .pointer
+            .is_some_and(|pointer| (pointer - Vec2::splat(360.0)).length() < 0.001));
+        assert!(controls.wheel_pointer_pressed && controls.trigger_consumed);
+        assert!(controls.hovered.is_none());
+
+        input.triggers[1] = false;
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        assert!(controls.wheel_pointer_released);
     }
 }

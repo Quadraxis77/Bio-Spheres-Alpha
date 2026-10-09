@@ -91,6 +91,15 @@ returning from the GPU simulation places it in front of the current head positio
 VR menus and the wrist wheel are rendered at up to twice their display resolution
 to sharpen text and interface edges; the scale is reduced automatically when
 needed to respect the GPU's maximum texture size.
+The ordinary VR panels also use heavier glyph outlines, stronger lines, and
+higher contrast for subdued labels. This does not change the wrist-wheel style.
+
+Menu and slider usage is saved locally in the app's configuration directory as
+`control_usage.json`. **Help → Control usage** ranks controls for the last seven
+days and all time, with separate desktop, VR screen, and wrist-wheel counts.
+Rapid repeats within two seconds count as one use; a held adjustment stays one
+use even when you pause during the drag. Switching controls starts a new use.
+The history stores aggregate counts, not setting values or raw input events.
 
 The main GPU simulation fills the headset view, with no desktop screen border.
 The headset receives tracked stereo views at its recommended eye resolution.
@@ -200,9 +209,10 @@ The immersive GPU scene starts with desktop panels hidden. Quest 3 controls:
   **F1** toggles this panel in the simulation. Controller pointing, desktop mouse
   clicks, and keyboard UI navigation work while VR is active. Mouse activity
   temporarily takes pointer priority; a trigger press resumes controller pointing.
-  Focusing a numeric input opens a VR number pad showing its current value.
-  Use the number, sign, and decimal keys to edit it, **Del** to remove the last
-  character, **Clear** to reset it to zero, and **Done** to finish.
+  Focusing a numeric input replaces the left-controller wrist menu with a number
+  pad showing its current value. Point at it with the right controller and use
+  the number, sign, and decimal keys to edit; **Del** removes the last character,
+  **Clear** resets it to zero, and **Done** returns to the wrist menu.
   With the wheel closed, use the right trigger to drag a regular slider, or
   select it and use the right thumbstick. Tap **X** to expand the selected slider
   into the circular view while keeping its settings panel visible. Logarithmic

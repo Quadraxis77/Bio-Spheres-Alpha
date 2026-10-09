@@ -141,10 +141,15 @@ impl GpuToolOperations {
                 }],
             });
 
-        let position_update_lifetime_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Drag lifetime flags"), layout: &pipelines.position_update_lifetime_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffers.death_flags.as_entire_binding() }],
-        });
+        let position_update_lifetime_bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Drag lifetime flags"),
+                layout: &pipelines.position_update_lifetime_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.death_flags.as_entire_binding(),
+                }],
+            });
 
         // Create physics bind group for position update (all 3 buffer sets)
         // Uses cell_insertion_physics_layout which has all 3 position and velocity buffers

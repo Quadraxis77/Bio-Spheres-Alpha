@@ -272,7 +272,12 @@ impl GpuAdhesionLineRenderer {
 
         let view_matrix = Mat4::look_at_rh(camera_pos, look_target, up);
         let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
+        let proj_matrix = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let view_proj = proj_matrix * view_matrix;
 
         let camera_uniform = CameraUniform {

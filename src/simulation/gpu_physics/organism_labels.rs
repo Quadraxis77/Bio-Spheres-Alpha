@@ -292,8 +292,6 @@ impl OrganismLabelSystem {
             ],
         });
 
-
-
         Self {
             label_buffer,
             organism_size_buffer,
@@ -312,7 +310,7 @@ impl OrganismLabelSystem {
             stable_id_map_buffer,
             stable_id_counter_buffer,
             cell_workgroups,
-                    debug_frame: 0,
+            debug_frame: 0,
         }
     }
 
@@ -419,8 +417,6 @@ impl OrganismLabelSystem {
             stable_pass.set_pipeline(&self.broadcast_stable_ids_pipeline);
             stable_pass.dispatch_workgroups(active_workgroups, 1, 1);
         }
-
-
     }
 
     /// Write the run_init flag into the label state buffer.

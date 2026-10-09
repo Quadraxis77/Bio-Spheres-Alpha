@@ -148,8 +148,6 @@ const FRICTION_COEFF: f32 = 0.3;
 const BOUNDARY_REDIRECT_FORCE: f32 = 15.0;
 const BOUNDARY_MAX_REDIRECT_FORCE: f32 = 250.0;
 const BOUNDARY_ALIGNMENT_TORQUE: f32 = 50.0;
-const OVERFLOW_DENSE_THRESHOLD: u32 = 16384u;
-const OVERFLOW_EXTREME_THRESHOLD: u32 = 65536u;
 const MEDIUM_BUCKET_THRESHOLD: u32 = 8u;
 const DENSE_BUCKET_THRESHOLD: u32 = 12u;
 const EXTREME_BUCKET_THRESHOLD: u32 = 32u;
@@ -258,19 +256,34 @@ fn live_cell(cell_idx: u32) -> bool {
     return cell_idx < cell_count_buffer[0] && death_flags[cell_idx] == 0u && positions_in[cell_idx].w >= 0.5;
 }
 
-fn should_collide(a_idx: u32, b_idx: u32) -> bool {
+fn collision_distance(a_idx: u32, b_idx: u32, radius_sum: f32) -> f32 {
     let a_organism_id = organism_id(a_idx);
     let b_organism_id = organism_id(b_idx);
-    return !(a_organism_id != INVALID_ORGANISM_LABEL &&
-             b_organism_id != INVALID_ORGANISM_LABEL &&
-             a_organism_id == b_organism_id);
+    let same_organism = a_organism_id != INVALID_ORGANISM_LABEL &&
+        b_organism_id != INVALID_ORGANISM_LABEL && a_organism_id == b_organism_id;
+    // Bonds may intentionally overlap membranes. Keep that freedom, but never
+    // exempt an organism's cells from separating collapsed, interpenetrating cores.
+    return select(radius_sum, radius_sum * 0.5, same_organism);
+}
+
+fn coincident_pair_normal(a_idx: u32, b_idx: u32) -> vec3<f32> {
+    // Stable, antisymmetric directions in 3D prevent coincident cells from
+    // being squeezed into a single line or receiving identical corrections.
+    var hash = min(a_idx, b_idx) * 747796405u + max(a_idx, b_idx) * 2891336453u + 277803737u;
+    hash = (hash ^ (hash >> 16u)) * 2246822519u;
+    let direction = normalize(vec3<f32>(
+        f32(hash & 1023u) - 511.5,
+        f32((hash >> 10u) & 1023u) - 511.5,
+        f32((hash >> 20u) & 1023u) - 511.5
+    ));
+    return select(-direction, direction, a_idx > b_idx);
 }
 
 fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
     // Both endpoints came from the live-only spatial grid built immediately
     // before this pass; repeating death, mass, and cell-count loads per pair is
     // redundant and particularly expensive in dense neighborhoods.
-    if (a_idx == b_idx || !should_collide(a_idx, b_idx)) {
+    if (a_idx == b_idx) {
         return;
     }
 
@@ -282,7 +295,7 @@ fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
     let radius_b = calculate_radius_from_mass(mass_b);
     let delta = pos_a - pos_b;
     let dist_sq = dot(delta, delta);
-    let min_dist = radius_a + radius_b;
+    let min_dist = collision_distance(a_idx, b_idx, radius_a + radius_b);
 
     if (dist_sq >= min_dist * min_dist) {
         return;
@@ -294,7 +307,7 @@ fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
     if (dist > 0.0001) {
         normal = delta / dist;
     } else {
-        normal = select(vec3<f32>(-1.0, 0.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), a_idx > b_idx);
+        normal = coincident_pair_normal(a_idx, b_idx);
     }
 
     let stiffness_a = stiffnesses[a_idx];
@@ -304,7 +317,7 @@ fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
     let vel_b = velocities_in[b_idx].xyz;
     let relative_vel = vel_a - vel_b;
     let normal_damping = dot(relative_vel, normal) * 0.5;
-    let normal_force_mag = penetration * combined_stiffness - normal_damping;
+    let normal_force_mag = max(penetration * combined_stiffness - normal_damping, 0.0);
     let normal_force = normal * normal_force_mag;
 
     var force_a = normal_force;
@@ -347,7 +360,7 @@ fn resolve_cell_pair(a_idx: u32, b_idx: u32) {
 // of the real contacts. Keep the normal separation force so piles still breathe,
 // but skip angular friction for sampled high-density contacts.
 fn resolve_cell_pair_dense(a_idx: u32, b_idx: u32) {
-    if (a_idx == b_idx || !should_collide(a_idx, b_idx)) {
+    if (a_idx == b_idx) {
         return;
     }
 
@@ -359,7 +372,7 @@ fn resolve_cell_pair_dense(a_idx: u32, b_idx: u32) {
     let radius_b = calculate_radius_from_mass(mass_b);
     let delta = pos_a - pos_b;
     let dist_sq = dot(delta, delta);
-    let min_dist = radius_a + radius_b;
+    let min_dist = collision_distance(a_idx, b_idx, radius_a + radius_b);
 
     if (dist_sq >= min_dist * min_dist) {
         return;
@@ -372,7 +385,7 @@ fn resolve_cell_pair_dense(a_idx: u32, b_idx: u32) {
         normal = delta * inv_dist;
         dist = dist_sq * inv_dist;
     } else {
-        normal = select(vec3<f32>(-1.0, 0.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), a_idx > b_idx);
+        normal = coincident_pair_normal(a_idx, b_idx);
         dist = 0.0;
     }
 
@@ -380,7 +393,7 @@ fn resolve_cell_pair_dense(a_idx: u32, b_idx: u32) {
     let combined_stiffness = (stiffnesses[a_idx] + stiffnesses[b_idx]) * 0.5;
     let relative_vel = velocities_in[a_idx].xyz - velocities_in[b_idx].xyz;
     let normal_damping = dot(relative_vel, normal) * 0.5;
-    let normal_force_mag = penetration * combined_stiffness - normal_damping;
+    let normal_force_mag = max(penetration * combined_stiffness - normal_damping, 0.0);
     let normal_force = normal * normal_force_mag;
 
     add_force(a_idx, normal_force);
@@ -631,20 +644,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // -------------------------------------------------------------------------
-    // Pass D: overflow list — unchanged from original.
+    // Pass D: every overflow cell remains active on every physics step. Never
+    // suspend separation because the global overflow list became crowded.
     // -------------------------------------------------------------------------
     let overflow_idx = dispatch_idx;
     let overflow_count = atomicLoad(&spatial_grid_overflow_count[0]);
     let capped_overflow_count = min(overflow_count, params.cell_capacity);
-    let dense_stride = select(1u, 2u, overflow_count > OVERFLOW_DENSE_THRESHOLD);
-    let overflow_stride = select(dense_stride, 4u, overflow_count > OVERFLOW_EXTREME_THRESHOLD);
-    let overflow_phase = (overflow_idx + u32(params.current_frame)) & (overflow_stride - 1u);
     if (overflow_idx < capped_overflow_count) {
         let overflow_cell     = spatial_grid_overflow_cells[overflow_idx];
         let overflow_grid_idx = spatial_grid_overflow_grid_indices[overflow_idx];
-        if (overflow_phase != 0u) {
-            return;
-        }
         process_overflow_cell(overflow_idx, overflow_cell, overflow_grid_idx);
         process_overflow_local_pairs(overflow_idx, overflow_cell, overflow_grid_idx, capped_overflow_count);
     }
