@@ -179,6 +179,8 @@ const EXTREME_HEAT_SLOPE_C: f32 = 15.0;    // °C added per unit of brightness a
 const EVAPORATION_CURVE_POWER: f32 = 2.5;  // shapes the floor->brisk evaporation ramp (gentle at the low end)
 const FREEZE_POINT_C: f32 = 0.0;
 const FREEZE_HYSTERESIS_C: f32 = 2.0;      // water freezes below (FREEZE_POINT - this); ice melts above (FREEZE_POINT + this) - prevents flicker at the boundary
+// Snow melts just above freezing; ice retains its wider configured melt threshold.
+const SNOW_MELT_THRESHOLD_C: f32 = FREEZE_POINT_C + FREEZE_HYSTERESIS_C;
 const PHASE_DEBT_THRESHOLD: f32 = 100.0;   // accumulated freeze/melt debt required to flip water<->ice
 const PHASE_DEBT_DECAY: f32 = 0.90;        // per-tick decay applied to phase debt while not past the threshold
 const DEEP_FREEZE_MARGIN_C: f32 = 10.0;    // low-inertia surface water this far below freezing can ice over immediately
@@ -1705,10 +1707,9 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Only landed snow accumulates debt - flakes in flight fall first.
         if params.sub_step == 0u && snow_resting {
             var snow_debt = phase_debt[idx];
-            let melt_threshold = temperature_from_0_255_u32(params.melt_threshold);
             let freeze_threshold = temperature_from_0_255_u32(params.freeze_threshold);
-            if temp_c_snow > melt_threshold {
-                snow_debt += (temp_c_snow - melt_threshold) * params.snow_melt_rate;
+            if temp_c_snow > SNOW_MELT_THRESHOLD_C {
+                snow_debt += (temp_c_snow - SNOW_MELT_THRESHOLD_C) * params.snow_melt_rate;
             } else if temp_c_snow < freeze_threshold {
                 snow_debt -= (freeze_threshold - temp_c_snow) * params.snow_compact_rate;
             } else {

@@ -157,8 +157,10 @@ The immersive GPU scene starts with desktop panels hidden. Quest 3 controls:
   Release the grip to return immediately to ground-plane travel.
 - **Right stick left/right** turns around the local gravity up axis in
   **45-degree** steps, fading to black before the turn and back in afterward.
-  Center the stick between steps. Right-stick up/down does not pitch the camera;
-  you look up/down naturally with the headset. Hands and the wheel stay visible.
+  Center the stick between steps. When pointing at a menu, right-stick
+  left/right edits a focused slider and up/down scrolls the menu; up/down does
+  not pitch the camera. You look up/down naturally with the headset. Hands and
+  the wheel stay visible.
 - **Right thumbstick click** takes a screenshot while in-game VR, including with
   the wheel or settings panel open.
 - For **radial gravity**, walking follows the sphere around the simulation's

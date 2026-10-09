@@ -834,7 +834,11 @@ impl App {
                 0.0
             },
             self.window.scale_factor() as f32
-                * self.vr.as_ref().map_or(1.0, |vr| vr.ui_pixel_scale()),
+                * self
+                    .vr
+                    .as_ref()
+                    .filter(|vr| vr.presenting())
+                    .map_or(1.0, |vr| vr.ui_pixel_scale()),
         );
         // Preview tools still need a scene-space pointer. UI input goes directly
         // to egui, so it never changes egui-winit's physical mouse state.

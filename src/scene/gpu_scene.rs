@@ -268,13 +268,13 @@ pub struct GpuScene {
     /// to converge after a genuine change; this short burst replaces the old
     /// perpetual every-other-frame work.
     static_water_smoothing_rebuilds_remaining: u8,
-    /// Water freezing threshold (internal 0-255 scale, default 65 = 0°C)
+    /// Water freezing threshold (internal 0-255 scale, default 65 ≈ 1°C)
     pub freeze_threshold: u32,
-    /// Ice melting threshold (internal 0-255 scale, default 75 = 5°C)
+    /// Ice melting threshold (internal 0-255 scale, default 75 ≈ 9°C)
     pub melt_threshold: u32,
-    /// Snow formation threshold (internal 0-255 scale, default 60 = -2°C)
+    /// Snow formation threshold (internal 0-255 scale, default 60 ≈ -3°C)
     pub snow_threshold: u32,
-    /// Evaporation begins threshold (internal 0-255 scale, default 120 = 28°C)
+    /// Evaporation begins threshold (internal 0-255 scale, default 120 ≈ 44°C)
     pub evaporation_threshold: u32,
     /// Optimal cell temperature (internal 0-255 scale, default 105 = 20°C)
     pub optimal_cell_temp: u32,

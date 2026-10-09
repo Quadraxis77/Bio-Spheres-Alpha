@@ -623,6 +623,9 @@ impl VrState {
             ui_height,
             graphics.device.limits().max_texture_dimension_2d,
         );
+        log::info!(
+            "OpenXR UI resolution: {ui_width} x {ui_height} ({ui_pixel_scale:.2}x)"
+        );
         let ui = RuntimeSwapchain::new(
             &session,
             &graphics.device,

@@ -828,7 +828,9 @@ impl Controls {
         });
         if let Some(dial) = &mut self.dial {
             dial.update(self.pointer, input.triggers[1], pressed);
-            if !input.ui_pointer {
+            if input.ui_pointer && matches!(dial.target, Target::Ui(_)) {
+                dial.adjust_stick(Vec2::new(input.turn, 0.0), dt);
+            } else if !input.ui_pointer {
                 dial.adjust_stick(Vec2::new(input.turn, input.lift), dt);
             }
         }
@@ -2450,7 +2452,7 @@ mod tests {
         assert!(c.wheel_open && c.dial.is_none());
     }
     #[test]
-    fn flat_ui_slider_selection_keeps_the_wheel_closed_and_right_stick_does_not_edit_it() {
+    fn flat_ui_slider_allows_horizontal_edits_but_keeps_vertical_scroll_separate() {
         let mut c = Controls {
             context: WheelContext::Preview,
             wheel_introduced: true,
@@ -2473,6 +2475,20 @@ mod tests {
         c.update(
             &VrInput {
                 turn: 1.0,
+                lift: 0.0,
+                ui_pointer: true,
+                ..Default::default()
+            },
+            &mut camera,
+            &mut 20.0,
+            0.1,
+        );
+        let horizontal_value = c.dial.as_ref().unwrap().normalized;
+        assert!(horizontal_value > 0.5);
+        assert!(c.dial.as_ref().unwrap().pending.is_some());
+        c.dial.as_mut().unwrap().pending = None;
+        c.update(
+            &VrInput {
                 lift: 1.0,
                 ui_pointer: true,
                 ..Default::default()
@@ -2482,7 +2498,7 @@ mod tests {
             0.1,
         );
         assert!(c.dial.as_ref().unwrap().pending.is_none());
-        assert!((c.dial.as_ref().unwrap().normalized - 0.5).abs() < 0.001);
+        assert!((c.dial.as_ref().unwrap().normalized - horizontal_value).abs() < 0.001);
         assert_eq!(camera.view_rotation(), q);
         c.full_ui = true;
         c.update(

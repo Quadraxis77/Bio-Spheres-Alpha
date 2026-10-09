@@ -478,8 +478,25 @@ impl UiSystem {
     pub fn begin_frame(&mut self, window: &Window) {
         let mut raw_input = self.winit_state.take_egui_input(window);
         #[cfg(feature = "vr")]
-        if let Some(viewport) = raw_input.viewports.get_mut(&raw_input.viewport_id) {
-            viewport.native_pixels_per_point = Some(self.native_pixels_per_point);
+        {
+            let native_pixels_per_point = self.native_pixels_per_point;
+            if let Some(viewport) = raw_input.viewports.get_mut(&raw_input.viewport_id) {
+                viewport.native_pixels_per_point = Some(native_pixels_per_point);
+            }
+            if let Some(screen_rect) = &mut raw_input.screen_rect {
+                let physical_size = window.inner_size();
+                let desktop_pixels_per_point =
+                    window.scale_factor() as f32 * self.ctx.zoom_factor();
+                if physical_size.width > 0 && physical_size.height > 0 {
+                    *screen_rect = egui::Rect::from_min_size(
+                        screen_rect.min,
+                        egui::vec2(
+                            physical_size.width as f32 / desktop_pixels_per_point,
+                            physical_size.height as f32 / desktop_pixels_per_point,
+                        ),
+                    );
+                }
+            }
         }
         self.last_pointer_pos = self.native_input.merge(&mut raw_input);
         egui::ControllerSlider::set_input(&self.ctx, self.native_input.active, self.native_input.controller_pointing());

@@ -405,6 +405,7 @@ fn run_emission_test(hardware: bool) {
         };
         let thermal = pipeline("update_temperature");
         let phase = pipeline("fluid_static_water_phase");
+        let swap = pipeline("fluid_swap");
         let mut params = GpuFluidParams::zeroed();
         params.grid_resolution = 4;
         params.cell_size = 1.;
@@ -471,5 +472,84 @@ fn run_emission_test(hardware: bool) {
                 assert!(temps[21] > 40 * 256, "water/ice must accumulate heat");
             }
         }
+        // At saved/default brightness, a shaded voxel targets ~4.4 C: above
+        // snow's melt point but below the higher ice-melt threshold.
+        params.sun_brightness = 1.8;
+        params.snow_melt_rate = 3.0;
+        params.freeze_threshold = 65;
+        params.melt_threshold = 75;
+        params.gravity_mode = 1;
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let buffers: Vec<_> = (1..11)
+            .map(|binding| {
+                let data = match binding {
+                    1 => {
+                        let mut voxels = vec![0u32; 64];
+                        voxels[17] = 0xffff0002;
+                        voxels[21] = 0xffff0004;
+                        voxels
+                    }
+                    _ => vec![0u32; 64],
+                };
+                buffer(&device, bytemuck::cast_slice(&data))
+            })
+            .collect();
+        let entries: Vec<_> = std::iter::once(wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniform.as_entire_binding(),
+        })
+        .chain(
+            buffers
+                .iter()
+                .enumerate()
+                .map(|(i, b)| wgpu::BindGroupEntry {
+                    binding: i as u32 + 1,
+                    resource: b.as_entire_binding(),
+                }),
+        )
+        .collect();
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &entries,
+        });
+        let mut thermal_encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = thermal_encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&thermal);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        queue.submit([thermal_encoder.finish()]);
+        let temperatures = read(&device, &queue, &buffers[7], 21 * 4, 4);
+        assert!(
+            temperatures[0] > 52 * 256,
+            "1.8 brightness should initialize snow above 2 C, got {} C",
+            -50.0 + temperatures[0] as f32 / 256.0
+        );
+
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for _ in 0..16 {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&swap);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        queue.submit([encoder.finish()]);
+        let states = read(&device, &queue, &buffers[0], 0, 256);
+        assert_eq!(
+            states[21] & 7,
+            1,
+            "snow should melt into water at the default 1.8 sun brightness"
+        );
+        assert_eq!(
+            states[17] & 7,
+            2,
+            "shaded ice should remain frozen below the ice-melt threshold"
+        );
     });
 }

@@ -550,19 +550,19 @@ pub struct ClimateSettings {
     #[serde(default = "default_snow_compact_rate")]
     pub snow_compact_rate: f32,
 
-    /// Water freezing threshold (internal 0-255 scale). Default: 65 (0°C/32°F)
+    /// Water freezing threshold (internal 0-255 scale). Default: 65 (~1°C)
     #[serde(default = "default_freeze_threshold")]
     pub freeze_threshold: u32,
 
-    /// Ice melting threshold (internal 0-255 scale). Default: 75 (5°C/41°F)
+    /// Ice melting threshold (internal 0-255 scale). Default: 75 (~9°C)
     #[serde(default = "default_melt_threshold")]
     pub melt_threshold: u32,
 
-    /// Snow formation threshold (internal 0-255 scale). Default: 60 (-2°C/28°F)
+    /// Snow formation threshold (internal 0-255 scale). Default: 60 (~-3°C)
     #[serde(default = "default_snow_threshold")]
     pub snow_threshold: u32,
 
-    /// Evaporation begins threshold (internal 0-255 scale). Default: 120 (28°C/82°F)
+    /// Evaporation begins threshold (internal 0-255 scale). Default: 120 (~44°C)
     #[serde(default = "default_evaporation_threshold")]
     pub evaporation_threshold: u32,
 

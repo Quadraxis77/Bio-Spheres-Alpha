@@ -18,6 +18,7 @@ struct State {
     pointing: bool,
     circular: bool,
     cancelled: bool,
+    pointer_press_blocked: bool,
     selected: Option<ControllerSliderSelection>,
     pending: Option<(Id, f64)>,
 }
@@ -27,10 +28,14 @@ impl ControllerSlider {
         Id::new("controller_slider_input")
     }
     pub fn set_input(ctx: &Context, enabled: bool, pointing: bool) {
+        let primary_down = ctx.input(|input| input.pointer.button_down(PointerButton::Primary));
         ctx.data_mut(|data| {
             let state = data.get_temp_mut_or_default::<State>(Self::key());
             state.enabled = enabled;
             state.pointing = pointing;
+            if !primary_down {
+                state.pointer_press_blocked = false;
+            }
             if !enabled {
                 state.selected = None;
                 state.pending = None;
@@ -48,7 +53,7 @@ impl ControllerSlider {
     pub fn pointer_editing_blocked(ctx: &Context) -> bool {
         ctx.data(|data| {
             data.get_temp::<State>(Self::key())
-                .is_some_and(|s| s.cancelled || (s.pointing && s.circular))
+                .is_some_and(|s| s.cancelled || s.pointer_press_blocked)
         })
     }
     /// Readable detents in value space; callers map them through their own slider scale.
@@ -177,6 +182,10 @@ impl ControllerSlider {
                 return None;
             }
             if enabled && (state.pointing || !state.circular) && press {
+                state.pointer_press_blocked = !state
+                    .selected
+                    .as_ref()
+                    .is_some_and(|selected| selected.id == response.id);
                 state.selected = Some(ControllerSliderSelection {
                     id: response.id,
                     label: if label.is_empty() {
@@ -219,5 +228,25 @@ impl ControllerSlider {
                 None
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_edit_block_is_released_after_focus_press() {
+        let ctx = Context::default();
+        ControllerSlider::set_input(&ctx, true, true);
+        ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<State>(ControllerSlider::key())
+                .pointer_press_blocked = true;
+        });
+
+        assert!(ControllerSlider::pointer_editing_blocked(&ctx));
+
+        ControllerSlider::set_input(&ctx, true, true);
+        assert!(!ControllerSlider::pointer_editing_blocked(&ctx));
     }
 }

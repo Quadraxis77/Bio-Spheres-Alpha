@@ -1952,22 +1952,22 @@ impl GpuFluidSimulator {
         self.thermal_inertia.set(inertia);
     }
 
-    /// Set water freezing threshold (internal 0-255 scale, default 65 = 0°C)
+    /// Set water freezing threshold (internal 0-255 scale, default 65 ≈ 1°C)
     pub fn set_freeze_threshold(&self, threshold: u32) {
         self.freeze_threshold.set(threshold);
     }
 
-    /// Set ice melting threshold (internal 0-255 scale, default 75 = 5°C)
+    /// Set ice melting threshold (internal 0-255 scale, default 75 ≈ 9°C)
     pub fn set_melt_threshold(&self, threshold: u32) {
         self.melt_threshold.set(threshold);
     }
 
-    /// Set snow formation threshold (internal 0-255 scale, default 60 = -2°C)
+    /// Set snow formation threshold (internal 0-255 scale, default 60 ≈ -3°C)
     pub fn set_snow_threshold(&self, threshold: u32) {
         self.snow_threshold.set(threshold);
     }
 
-    /// Set evaporation begins threshold (internal 0-255 scale, default 120 = 28°C)
+    /// Set evaporation begins threshold (internal 0-255 scale, default 120 ≈ 44°C)
     pub fn set_evaporation_threshold(&self, threshold: u32) {
         self.evaporation_threshold.set(threshold);
     }
