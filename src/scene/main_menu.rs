@@ -61,6 +61,21 @@ pub struct MainMenuScene {
 }
 
 impl MainMenuScene {
+    fn hide_preview_overlays(preview: &mut crate::scene::PreviewScene) {
+        preview
+            .gizmo_renderer
+            .update_config(&crate::rendering::orientation_gizmo::GizmoConfig {
+                visible: false,
+                ..Default::default()
+            });
+        preview.split_ring_renderer.update_config(
+            &crate::rendering::split_rings::SplitRingConfig {
+                visible: false,
+                ..Default::default()
+            },
+        );
+    }
+
     #[cfg(feature = "vr")]
     pub(crate) fn recreate_on_device(
         &self,
@@ -83,13 +98,17 @@ impl MainMenuScene {
         };
         let left_tex_id = register(renderer, &left_color_tex);
         let right_tex_id = register(renderer, &right_color_tex);
+        let mut left_preview = self
+            .left_preview
+            .recreate_on_device(device, queue, &panel_config);
+        let mut right_preview = self
+            .right_preview
+            .recreate_on_device(device, queue, &panel_config);
+        Self::hide_preview_overlays(&mut left_preview);
+        Self::hide_preview_overlays(&mut right_preview);
         Self {
-            left_preview: self
-                .left_preview
-                .recreate_on_device(device, queue, &panel_config),
-            right_preview: self
-                .right_preview
-                .recreate_on_device(device, queue, &panel_config),
+            left_preview,
+            right_preview,
             left_genome_name: self.left_genome_name.clone(),
             right_genome_name: self.right_genome_name.clone(),
             left_color_tex,
@@ -143,19 +162,7 @@ impl MainMenuScene {
         left_preview.camera.distance = ORBIT_DISTANCE;
         left_preview.camera.target_distance = ORBIT_DISTANCE;
         left_preview.update_genome(&left_genome);
-        // Disable gizmos and split rings - not appropriate for the menu backdrop
-        left_preview.gizmo_renderer.update_config(
-            &crate::rendering::orientation_gizmo::GizmoConfig {
-                visible: false,
-                ..Default::default()
-            },
-        );
-        left_preview.split_ring_renderer.update_config(
-            &crate::rendering::split_rings::SplitRingConfig {
-                visible: false,
-                ..Default::default()
-            },
-        );
+        Self::hide_preview_overlays(&mut left_preview);
 
         // Right preview - load a different saved genome (counter+1 ensures a different pick)
         let right_genome = Genome::load_from_genomes_dir_at(counter + 1)
@@ -168,19 +175,7 @@ impl MainMenuScene {
         right_preview.camera.distance = ORBIT_DISTANCE;
         right_preview.camera.target_distance = ORBIT_DISTANCE;
         right_preview.update_genome(&right_genome);
-        // Disable gizmos and split rings - not appropriate for the menu backdrop
-        right_preview.gizmo_renderer.update_config(
-            &crate::rendering::orientation_gizmo::GizmoConfig {
-                visible: false,
-                ..Default::default()
-            },
-        );
-        right_preview.split_ring_renderer.update_config(
-            &crate::rendering::split_rings::SplitRingConfig {
-                visible: false,
-                ..Default::default()
-            },
-        );
+        Self::hide_preview_overlays(&mut right_preview);
 
         // Off-screen render targets
         let (left_color_tex, right_color_tex) =
