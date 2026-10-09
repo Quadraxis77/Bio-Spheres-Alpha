@@ -3,6 +3,41 @@
 pub(super) const FLUID_TIMESTEP: f64 = 1.0 / 60.0;
 
 #[derive(Default)]
+pub(super) struct FluidMeshClock {
+    tick: u64,
+    initialized: bool,
+}
+
+#[derive(Default)]
+pub(super) struct MeshUpdates {
+    pub prepare_water: bool,
+    pub finalize_water: bool,
+    pub prepare_ice: bool,
+    pub finalize_ice: bool,
+}
+
+impl FluidMeshClock {
+    pub fn take(&mut self, fluid_steps: u32) -> MeshUpdates {
+        let initial = !self.initialized;
+        self.initialized = true;
+        let start = self.tick;
+        self.tick += u64::from(fluid_steps);
+        // Coalesce catch-up ticks into one rebuild using the newest density.
+        let due = |period: u64, phase: u64| {
+            let first = start + 1;
+            let offset = (phase + period - first % period) % period;
+            first + offset <= self.tick
+        };
+        MeshUpdates {
+            prepare_water: initial || due(2, 0),
+            finalize_water: initial || due(2, 1),
+            prepare_ice: initial || due(8, 0),
+            finalize_ice: initial || due(8, 1),
+        }
+    }
+}
+
+#[derive(Default)]
 pub(super) struct SceneFrameClock {
     wall_elapsed: f64,
     simulation_elapsed: f64,
@@ -55,6 +90,35 @@ impl SceneFrameClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn water_and_ice_mesh_work_does_not_scale_with_render_frequency() {
+        for fps in [30, 60, 90, 120, 144] {
+            let mut frame_clock = SceneFrameClock::default();
+            let mut mesh_clock = FluidMeshClock::default();
+            let mut water = 0;
+            let mut ice = 0;
+            for _ in 0..fps * 8 {
+                frame_clock.record(1.0 / fps as f32, false, 1.0);
+                let mesh = mesh_clock.take(frame_clock.take(true).fluid_steps);
+                water += u32::from(mesh.finalize_water);
+                ice += u32::from(mesh.finalize_ice);
+                // A second eye or an idle render must reuse the prepared mesh.
+                let idle = mesh_clock.take(0);
+                assert!(
+                    !idle.prepare_water
+                        && !idle.finalize_water
+                        && !idle.prepare_ice
+                        && !idle.finalize_ice
+                );
+            }
+            assert!(
+                (240..=241).contains(&water),
+                "water rebuilds at {fps} FPS: {water}"
+            );
+            assert!((60..=61).contains(&ice), "ice rebuilds at {fps} FPS: {ice}");
+        }
+    }
 
     #[test]
     fn clocks_advance_equally_at_different_render_rates() {

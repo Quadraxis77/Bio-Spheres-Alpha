@@ -559,7 +559,9 @@ fn sample_local_irradiance(world_pos: vec3<f32>) -> vec3<f32> {
 fn sample_light_color_field(world_pos: vec3<f32>) -> vec3<f32> {
     let fallback = vec3<f32>(shadow_params.sun_color_r, shadow_params.sun_color_g, shadow_params.sun_color_b);
     if (shadow_params.shadow_enabled == 0u) {
-        return vec3<f32>(1.0, 1.0, 1.0);
+        // Disabling occlusion must not replace the configured sun with white light.
+        // This also handles the preview's dummy shadow-field uniforms.
+        return lighting.light_color;
     }
     let uvw = world_to_light_uvw(world_pos);
     if (!light_uvw_in_bounds(uvw)) {

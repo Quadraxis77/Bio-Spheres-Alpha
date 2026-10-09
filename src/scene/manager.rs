@@ -15,7 +15,170 @@ pub struct SceneManager {
     gpu_scene: Option<GpuScene>,
 }
 
+#[cfg(all(test, feature = "vr"))]
+mod vr_tests {
+    use super::*;
+
+    #[test]
+    fn headset_device_change_retains_gpu_cells_preview_checkpoints_and_cameras() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..Default::default()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let new_device = || {
+            pollster::block_on(
+                adapter.request_device(&wgpu::DeviceDescriptor {
+                    required_limits: wgpu::Limits {
+                        max_storage_buffers_per_shader_stage: 64,
+                        max_storage_buffer_binding_size: adapter
+                            .limits()
+                            .max_storage_buffer_binding_size
+                            .min(512 * 1024 * 1024),
+                        max_buffer_size: adapter.limits().max_buffer_size.min(512 * 1024 * 1024),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            )
+            .unwrap()
+        };
+        let (old_device, old_queue) = new_device();
+        let (device, queue) = new_device();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            width: 64,
+            height: 64,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        let mut old = SceneManager::new(&old_device, &old_queue, &config);
+        let preview = old.preview_scene.as_mut().unwrap();
+        preview.camera.center = glam::vec3(1.0, 2.0, 3.0);
+        preview.state.display_time = 3.0;
+        preview
+            .state
+            .checkpoints
+            .push((2.0, preview.state.display_state.clone()));
+        preview.paused = true;
+        let mut gpu =
+            GpuScene::with_capacity_and_radius(&old_device, &old_queue, &config, 64, 50.0);
+        gpu.camera.center = glam::vec3(4.0, 5.0, 6.0);
+        gpu.queue_cell_insertion(glam::Vec3::ZERO, crate::genome::Genome::default());
+        let target = old_device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("VR device migration regression"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: config.usage,
+            view_formats: &[],
+        });
+        gpu.render(
+            &old_device,
+            &old_queue,
+            &target.create_view(&Default::default()),
+            None,
+            100.0,
+            500.0,
+            10.0,
+            25.0,
+            50.0,
+            false,
+            0.1,
+        );
+        gpu.set_paused(true);
+        let before = gpu.save_snapshot(&old_device, &old_queue).unwrap();
+        assert!(before.live_cell_count > 0);
+        old.gpu_scene = Some(gpu);
+        old.current_mode = SimulationMode::Gpu;
+        let new = old
+            .recreate_on_device(
+                &old_device,
+                &old_queue,
+                &device,
+                &queue,
+                &config,
+                &Default::default(),
+            )
+            .unwrap();
+        let after = new
+            .gpu_scene
+            .as_ref()
+            .unwrap()
+            .save_snapshot(&device, &queue)
+            .unwrap();
+        assert_eq!(before.live_cell_count, after.live_cell_count);
+        assert_eq!(before.positions_and_mass, after.positions_and_mass);
+        assert_eq!(before.genomes_yaml, after.genomes_yaml);
+        assert_eq!(before.current_time, after.current_time);
+        assert!(new.gpu_scene.as_ref().unwrap().is_paused());
+        assert_eq!(
+            new.gpu_scene.as_ref().unwrap().camera.center,
+            glam::vec3(4.0, 5.0, 6.0)
+        );
+        let preview = new.preview_scene.as_ref().unwrap();
+        assert_eq!(preview.state.display_time, 3.0);
+        assert_eq!(preview.state.checkpoints[0].0, 2.0);
+        assert_eq!(preview.camera.center, glam::vec3(1.0, 2.0, 3.0));
+        assert!(preview.paused);
+        assert_eq!(new.current_mode, SimulationMode::Gpu);
+    }
+}
+
 impl SceneManager {
+    /// Rebuild graphics once when a headset connects to a desktop-started game.
+    /// Wearing/removing an already connected headset never rebuilds the world.
+    #[cfg(feature = "vr")]
+    pub(crate) fn recreate_on_device(
+        &self,
+        old_device: &wgpu::Device,
+        old_queue: &wgpu::Queue,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &wgpu::SurfaceConfiguration,
+        editor: &crate::ui::panel_context::GenomeEditorState,
+    ) -> Result<Self, String> {
+        let snapshot = self
+            .gpu_scene
+            .as_ref()
+            .map(|scene| scene.save_snapshot(old_device, old_queue))
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        let mut manager = Self::new(device, queue, config);
+        manager.preview_scene = self
+            .preview_scene
+            .as_ref()
+            .map(|scene| scene.recreate_on_device(device, queue, config));
+        if let (Some(snapshot), Some(old)) = (snapshot, &self.gpu_scene) {
+            manager.switch_mode_with_capacity(
+                SimulationMode::Gpu,
+                device,
+                queue,
+                config,
+                snapshot.world_radius * 2.0,
+                snapshot.capacity,
+                editor,
+            );
+            let scene = manager.gpu_scene.as_mut().unwrap();
+            scene
+                .restore_from_snapshot(device, queue, &snapshot)
+                .map_err(|e| e.to_string())?;
+            scene.camera = old.camera.clone();
+            scene.camera.interaction_ray = None;
+            scene.set_paused(old.is_paused());
+        }
+        manager.current_mode = self.current_mode;
+        Ok(manager)
+    }
     /// Create a new scene manager with the preview scene active.
     pub fn new(
         device: &wgpu::Device,
@@ -499,13 +662,20 @@ impl SceneManager {
         // Hi-Z from another eye or the previous desktop view cannot safely occlude
         // this view. Keep per-eye frustum culling, and remove depth-of-field in VR.
         let previous_gpu = self.gpu_scene.as_mut().map(|scene| {
+            if let Some(timer) = &mut scene.gpu_timer {
+                timer.set_view_count(2);
+            }
             let previous = (
                 scene.culling_mode(),
                 scene.show_dof,
                 scene.headless_no_render,
+                scene.post_process.as_ref().map(|pp| pp.water_distortion_enabled),
             );
             scene.set_culling_mode(crate::rendering::CullingMode::FrustumOnly);
             scene.show_dof = false;
+            if let Some(pp) = &mut scene.post_process {
+                pp.water_distortion_enabled = false;
+            }
             scene.headless_no_render = false;
             previous
         });
@@ -544,9 +714,15 @@ impl SceneManager {
             scene.camera_mut().set_render_view(previous_view);
         }
         if let (Some(scene), Some(previous)) = (&mut self.gpu_scene, previous_gpu) {
+            if let Some(timer) = &mut scene.gpu_timer {
+                timer.set_view_count(1);
+            }
             scene.set_culling_mode(previous.0);
             scene.show_dof = previous.1;
             scene.headless_no_render = previous.2;
+            if let (Some(pp), Some(enabled)) = (&mut scene.post_process, previous.3) {
+                pp.water_distortion_enabled = enabled;
+            }
         }
         true
     }

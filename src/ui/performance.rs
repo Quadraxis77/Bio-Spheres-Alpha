@@ -6,6 +6,13 @@
 use std::collections::VecDeque;
 use sysinfo::{Pid, System};
 
+struct SystemSample {
+    system: System,
+    cpu_usage: Vec<f32>,
+    memory_used: u64,
+    memory_total: u64,
+}
+
 /// Number of frame time samples to keep for averaging.
 const FRAME_TIME_SAMPLES: usize = 120;
 
@@ -45,7 +52,8 @@ pub struct PerformanceMetrics {
     /// Recent frame times for averaging (in seconds).
     frame_times: VecDeque<f32>,
     /// System info for CPU metrics.
-    system: System,
+    system: Option<System>,
+    system_sample: Option<std::sync::mpsc::Receiver<SystemSample>>,
     /// Time since last system refresh.
     time_since_refresh: f32,
     /// Time since last culling stats refresh.
@@ -65,6 +73,7 @@ pub struct PerformanceMetrics {
     /// Per-segment GPU frame times (ms), from timestamp queries. Empty if
     /// the device doesn't support `wgpu::Features::TIMESTAMP_QUERY`.
     gpu_segment_times_ms: Vec<f32>,
+    vr_refresh_hz: Option<f32>,
     /// Frame counter for periodic operations.
     frame_count: u64,
     /// Performance spike detection
@@ -82,7 +91,8 @@ impl PerformanceMetrics {
 
         let mut metrics = Self {
             frame_times: VecDeque::with_capacity(FRAME_TIME_SAMPLES),
-            system,
+            system: Some(system),
+            system_sample: None,
             time_since_refresh: 0.0,
             time_since_culling_refresh: 0.0,
             cpu_core_count,
@@ -92,6 +102,7 @@ impl PerformanceMetrics {
             memory_total: 0,
             culling_stats: (0, 0, 0, 0),
             gpu_segment_times_ms: Vec::new(),
+            vr_refresh_hz: None,
             frame_count: 0,
             spike_detector: PerformanceSpikeDetector::new(),
         };
@@ -101,6 +112,16 @@ impl PerformanceMetrics {
 
     /// Update metrics with a new frame time.
     pub fn update(&mut self, dt: f32) {
+        if let Some(Ok(sample)) = self.system_sample.as_ref().map(|rx| rx.try_recv()) {
+            self.system_sample = None;
+            self.cpu_core_count = sample.cpu_usage.len();
+            self.cpu_usage_total =
+                sample.cpu_usage.iter().sum::<f32>() / self.cpu_core_count.max(1) as f32;
+            self.cpu_usage_per_core = sample.cpu_usage;
+            self.memory_used = sample.memory_used;
+            self.memory_total = sample.memory_total;
+            self.system = Some(sample.system);
+        }
         // Track frame time
         if self.frame_times.len() >= FRAME_TIME_SAMPLES {
             self.frame_times.pop_front();
@@ -136,31 +157,32 @@ impl PerformanceMetrics {
 
     /// Refresh CPU and memory usage from system.
     fn refresh_system_info(&mut self) {
-        self.system.refresh_cpu_all();
-        self.system.refresh_memory();
-
-        let cpus = self.system.cpus();
-        self.cpu_usage_per_core.clear();
-
-        let mut total = 0.0;
-        for cpu in cpus {
-            let usage = cpu.cpu_usage();
-            self.cpu_usage_per_core.push(usage);
-            total += usage;
-        }
-
-        if !cpus.is_empty() {
-            self.cpu_usage_total = total / cpus.len() as f32;
-        }
-
-        // Update memory usage - read this process's resident memory, not total system usage
-        let pid = Pid::from(std::process::id() as usize);
-        self.system
-            .refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
-        if let Some(process) = self.system.process(pid) {
-            self.memory_used = process.memory();
-            self.memory_total = process.virtual_memory();
-        }
+        let Some(mut system) = self.system.take() else {
+            return;
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.system_sample = Some(receiver);
+        // Windows process/CPU queries took ~12 ms once per second in the frame
+        // logs. Collect them off the render thread and keep the previous sample.
+        std::thread::Builder::new()
+            .name("Performance metrics".into())
+            .spawn(move || {
+                system.refresh_cpu_all();
+                system.refresh_memory();
+                let pid = Pid::from(std::process::id() as usize);
+                system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+                let (memory_used, memory_total) = system.process(pid).map_or((0, 0), |process| {
+                    (process.memory(), process.virtual_memory())
+                });
+                let cpu_usage = system.cpus().iter().map(|cpu| cpu.cpu_usage()).collect();
+                let _ = sender.send(SystemSample {
+                    system,
+                    cpu_usage,
+                    memory_used,
+                    memory_total,
+                });
+            })
+            .expect("Performance metrics worker");
     }
 
     /// Get current FPS (frames per second).
@@ -269,6 +291,12 @@ impl PerformanceMetrics {
     /// Get per-segment GPU frame times (ms). Empty if GPU timing is unavailable.
     pub fn gpu_segment_times_ms(&self) -> &[f32] {
         &self.gpu_segment_times_ms
+    }
+    pub fn set_vr_refresh_hz(&mut self, rate: Option<f32>) {
+        self.vr_refresh_hz = rate;
+    }
+    pub fn vr_refresh_hz(&self) -> Option<f32> {
+        self.vr_refresh_hz
     }
 
     /// Get the current frame count.

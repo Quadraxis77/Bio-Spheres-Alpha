@@ -464,6 +464,7 @@ pub struct GpuTripleBufferSystem {
 
     /// Last known cell count from GPU readback
     last_cell_count: u32,
+    pub last_dragged_cell_index: u32,
 
     /// Behavior flags per cell type for parameterized shader logic
     pub behavior_flags: wgpu::Buffer,
@@ -757,7 +758,7 @@ impl GpuTripleBufferSystem {
         // Cell count readback buffer for async GPU-to-CPU transfer
         let cell_count_readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cell Count Readback Buffer"),
-            size: 8, // 2 x u32
+            size: 16, // counts + drag cancellation
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -1132,6 +1133,7 @@ impl GpuTripleBufferSystem {
             cell_count_map_pending: false,
             cell_count_receiver: None,
             last_cell_count: 0,
+            last_dragged_cell_index: u32::MAX,
         }
     }
 
@@ -3388,7 +3390,7 @@ impl GpuTripleBufferSystem {
             0,
             &self.cell_count_readback_buffer,
             0,
-            8, // 2 x u32
+            16, // counts + drag cancellation
         );
     }
 
@@ -3432,8 +3434,9 @@ impl GpuTripleBufferSystem {
                     let counts: &[u32] = bytemuck::cast_slice(&data);
 
                     // counts[0] = total cells (high water mark), counts[1] = live cells
-                    let total = counts[0];
-                    let live = counts[1];
+                    let total = counts[0].min(self.capacity);
+                    let live = counts[1].min(total);
+                    self.last_dragged_cell_index = counts[2];
 
                     // Use live cells count for display
                     self.last_cell_count = live;

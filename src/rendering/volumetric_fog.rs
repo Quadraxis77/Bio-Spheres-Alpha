@@ -6,6 +6,127 @@
 
 use bytemuck::{Pod, Zeroable};
 
+#[cfg(test)]
+mod stereo_tests {
+    use super::*;
+    use wgpu::util::DeviceExt;
+    #[test]
+    fn fog_shader_rays_align_with_asymmetric_eye_geometry() {
+        // Run the production WGSL ray function on the GPU, rather than a
+        // separate CPU implementation that could accidentally repeat the bug.
+        let source = include_str!("../../shaders/volumetric_fog.wgsl").replace("\r\n", "\n");
+        let uniform = &source[source.find("struct CameraUniforms {").unwrap()
+            ..source.find("struct FogParams {").unwrap()];
+        let start = source.find("fn view_ray_dir(").unwrap();
+        let ray_function = &source[start..start + source[start..].find("\n}\n").unwrap() + 3];
+        let compute = format!("{uniform}\n@group(0) @binding(0) var<uniform> camera: CameraUniforms;\n\
+            @group(0) @binding(1) var<storage, read_write> rays: array<vec4<f32>>;\n{ray_function}\n\
+            @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
+            let samples = array(vec2(0.5,0.5),vec2(0.0,0.0),vec2(1.0,0.0),vec2(0.0,1.0),vec2(1.0,1.0));\n\
+            rays[id.x] = vec4(view_ray_dir(samples[id.x]), 0.0); }}");
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Fog stereo ray regression"),
+            source: wgpu::ShaderSource::Wgsl(compute.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        for (left, right, down, up) in [
+            (-0.95, 0.55, -0.8, 0.65),
+            (-0.55, 0.95, -0.8, 0.65),
+            (-0.75, 0.75, -0.75, 0.75),
+        ] {
+            let projection =
+                crate::rendering::CameraProjection::from_fov(left, right, down, up, 0.1, 5000.0)
+                    .matrix(1.0, 0.1, 5000.0);
+            let rotation = glam::Quat::from_rotation_y(0.4) * glam::Quat::from_rotation_x(-0.3);
+            let position = glam::Vec3::new(0.3, 1.2, 5.0);
+            let view = glam::Mat4::from_rotation_translation(rotation, position).inverse();
+            let camera =
+                FogCameraUniforms::for_view(projection * view, position, rotation, projection, 0.0);
+            let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&camera),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let output = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 80,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 80,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: input.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: output.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(5, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&output, 0, &staging, 0, 80);
+            queue.submit([encoder.finish()]);
+            let (send, receive) = std::sync::mpsc::channel();
+            staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                send.send(r).unwrap();
+            });
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                })
+                .unwrap();
+            receive.recv().unwrap().unwrap();
+            let pixels = staging.slice(..).get_mapped_range();
+            let rays: &[[f32; 4]] = bytemuck::cast_slice(&pixels);
+            for (ray, (x, y)) in rays.iter().zip([
+                (0.0, 0.0),
+                (-1.0, 1.0),
+                (1.0, 1.0),
+                (-1.0, -1.0),
+                (1.0, -1.0),
+            ]) {
+                let expected = rotation
+                    * projection
+                        .inverse()
+                        .project_point3(glam::Vec3::new(x, y, 0.5))
+                        .normalize();
+                assert!(
+                    (glam::Vec3::new(ray[0], ray[1], ray[2]) - expected).length() < 0.0001,
+                    "fog ray disagrees with per-eye geometry at ({x},{y})"
+                );
+            }
+        }
+    }
+}
+
 /// Camera uniforms for volumetric fog (must match shader struct)
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -20,6 +141,39 @@ pub struct FogCameraUniforms {
     pub tan_half_vertical_fov: f32,
     pub camera_forward: [f32; 3],
     pub _pad0: f32,
+}
+
+impl FogCameraUniforms {
+    fn for_view(
+        view_proj: glam::Mat4,
+        camera_pos: glam::Vec3,
+        camera_rotation: glam::Quat,
+        projection: glam::Mat4,
+        time: f32,
+    ) -> Self {
+        let tan_half_horizontal_fov = 1.0 / projection.x_axis.x;
+        let tan_half_vertical_fov = 1.0 / projection.y_axis.y;
+        // An OpenXR eye frustum is off-center. This is the unnormalized ray
+        // through NDC (0,0), including its optical-center offsets. Normalizing
+        // here would change the lengths relative to the right/up ray basis.
+        let center_ray = glam::Vec3::new(
+            projection.z_axis.x * tan_half_horizontal_fov,
+            projection.z_axis.y * tan_half_vertical_fov,
+            -1.0,
+        );
+        Self {
+            view_proj: view_proj.to_cols_array_2d(),
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+            camera_pos: camera_pos.to_array(),
+            time,
+            camera_right: (camera_rotation * glam::Vec3::X).to_array(),
+            tan_half_horizontal_fov,
+            camera_up: (camera_rotation * glam::Vec3::Y).to_array(),
+            tan_half_vertical_fov,
+            camera_forward: (camera_rotation * center_ray).to_array(),
+            _pad0: 0.0,
+        }
+    }
 }
 
 /// Fog parameters (must match shader struct)
@@ -610,25 +764,15 @@ impl VolumetricFogRenderer {
         world_radius: f32,
     ) {
         // Update camera uniforms
-        let inv_view_proj = view_proj.inverse();
         let aspect = (self.fog_width as f32 / self.fog_height.max(1) as f32).max(0.001);
         let projection = crate::rendering::CameraProjection::matrix(
-            horizontal_fov_degrees.into(), aspect, 0.1, 5000.0,
+            horizontal_fov_degrees.into(),
+            aspect,
+            0.1,
+            5000.0,
         );
-        let tan_half_horizontal_fov = 1.0 / projection.x_axis.x;
-        let tan_half_vertical_fov = 1.0 / projection.y_axis.y;
-        let camera_uniform = FogCameraUniforms {
-            view_proj: view_proj.to_cols_array_2d(),
-            inv_view_proj: inv_view_proj.to_cols_array_2d(),
-            camera_pos: camera_pos.to_array(),
-            time,
-            camera_right: (camera_rotation * glam::Vec3::X).to_array(),
-            tan_half_horizontal_fov,
-            camera_up: (camera_rotation * glam::Vec3::Y).to_array(),
-            tan_half_vertical_fov,
-            camera_forward: (camera_rotation * glam::Vec3::NEG_Z).to_array(),
-            _pad0: 0.0,
-        };
+        let camera_uniform =
+            FogCameraUniforms::for_view(view_proj, camera_pos, camera_rotation, projection, time);
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
         // Update fog parameters

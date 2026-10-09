@@ -16,7 +16,7 @@ struct Params {
     boundary_fraction: f32,   // 0-1 continuous - proximity to / pressure against the world sphere
     water_crossing_pulse: f32,    // 0-1, decays from 1.0 on an actual water-surface crossing
     boundary_crossing_pulse: f32, // 0-1, decays from 1.0 on an actual world-sphere crossing
-    _pad0: u32,
+    water_distortion_enabled: u32, // 0 in VR: no water-induced screen warping
     _pad1: u32,
 }
 
@@ -86,7 +86,10 @@ fn fs_tonemap(in: VOut) -> @location(0) vec4<f32> {
     let boundary_warp = params.boundary_fraction * sin(dist * 18.0 + params.time * 1.5) * 0.0015;
     let boundary_ripple =
         params.boundary_crossing_pulse * sin(dist * 40.0 - params.time * 14.0) * 0.006;
-    let water_ripple = params.water_crossing_pulse * sin(dist * 34.0 - params.time * 16.0) * 0.008;
+    var water_ripple = 0.0;
+    if params.water_distortion_enabled != 0u {
+        water_ripple = params.water_crossing_pulse * sin(dist * 34.0 - params.time * 16.0) * 0.008;
+    }
 
     uv += radial * (boundary_warp + boundary_ripple + water_ripple);
 
@@ -99,12 +102,14 @@ fn fs_tonemap(in: VOut) -> @location(0) vec4<f32> {
     // frequencies and opposing/differing time directions breaks that
     // lockstep - it drifts and wanders instead of visibly repeating, while
     // still being cheap trig with no extra textures or noise functions.
-    let drift_x = sin(uv.y * 9.0 + params.time * 0.55) * 0.65
-        + sin(uv.y * 3.3 - params.time * 0.9 + 2.1) * 0.35;
-    let drift_y = sin(uv.x * 7.1 - params.time * 0.4 + 1.7) * 0.65
-        + sin(uv.x * 2.6 + params.time * 0.7 + 4.2) * 0.35;
-    let water_wobble = vec2<f32>(drift_x, drift_y) * params.underwater_fraction * 0.0055;
-    uv += water_wobble;
+    if params.water_distortion_enabled != 0u {
+        let drift_x = sin(uv.y * 9.0 + params.time * 0.55) * 0.65
+            + sin(uv.y * 3.3 - params.time * 0.9 + 2.1) * 0.35;
+        let drift_y = sin(uv.x * 7.1 - params.time * 0.4 + 1.7) * 0.65
+            + sin(uv.x * 2.6 + params.time * 0.7 + 4.2) * 0.35;
+        let water_wobble = vec2<f32>(drift_x, drift_y) * params.underwater_fraction * 0.0055;
+        uv += water_wobble;
+    }
 
     // Very subtle chromatic aberration - reads as "glass" near the world
     // sphere boundary, strongest right at the moment of crossing it.

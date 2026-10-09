@@ -79,6 +79,7 @@ pub struct RadialMenuState {
     pub drag_start_time: Option<std::time::Instant>,
     /// Cell index being inspected (for Inspect tool)
     pub inspected_cell: Option<usize>,
+    pub inspection: crate::ui::inspection::Inspection,
 }
 
 impl RadialMenuState {

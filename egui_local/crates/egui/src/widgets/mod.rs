@@ -19,6 +19,8 @@ mod radio_button;
 mod selected_label;
 mod separator;
 mod slider;
+mod controller_slider;
+mod controller_number_pad;
 mod spinner;
 pub mod text_edit;
 
@@ -40,6 +42,8 @@ pub use self::{
     radio_button::RadioButton,
     separator::Separator,
     slider::{Slider, SliderClamping, SliderOrientation},
+    controller_slider::{ControllerSlider, ControllerSliderSelection},
+    controller_number_pad::ControllerNumberPad,
     spinner::Spinner,
     text_edit::{TextBuffer, TextEdit},
 };

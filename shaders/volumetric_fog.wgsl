@@ -228,6 +228,8 @@ fn fog_density_at(world_pos: vec3<f32>) -> f32 {
 }
 
 fn view_ray_dir(uv: vec2<f32>) -> vec3<f32> {
+    // camera_forward includes the optical-center offsets of this eye's
+    // asymmetric frustum. Its length must stay relative to right/up below.
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     return normalize(
         camera.camera_forward

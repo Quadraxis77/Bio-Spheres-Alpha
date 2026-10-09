@@ -22,7 +22,7 @@ struct PostProcessParams {
     // 0-1 decaying pulses, set to 1.0 the instant a genuine crossing happens.
     water_crossing_pulse: f32,
     boundary_crossing_pulse: f32,
-    _pad0: u32,
+    water_distortion_enabled: u32,
     _pad1: u32,
 }
 
@@ -48,6 +48,8 @@ pub struct PostProcessRenderer {
 
     // Public settings.
     pub contrast: f32,
+    /// Animated water lens warps; disabled temporarily while rendering VR eyes.
+    pub water_distortion_enabled: bool,
     pub adapt_enabled: bool,
     pub adapt_speed: f32,
     pub adapt_min: f32,
@@ -210,6 +212,7 @@ impl PostProcessRenderer {
             adapt_pipeline,
             tonemap_pipeline,
             contrast: 1.0,
+            water_distortion_enabled: true,
             adapt_enabled: false,
             adapt_speed: 0.05,
             adapt_min: 0.1,
@@ -321,7 +324,7 @@ impl PostProcessRenderer {
             boundary_fraction,
             water_crossing_pulse,
             boundary_crossing_pulse,
-            _pad0: 0,
+            water_distortion_enabled: u32::from(self.water_distortion_enabled),
             _pad1: 0,
         };
         queue.write_buffer(&self.params_buf, 0, bytemuck::bytes_of(&p));

@@ -1,12 +1,10 @@
 //! Procedural Sun Renderer
 //!
-//! Full-screen post-process that renders a procedural sun at infinite distance
-//! along the light direction vector. Features:
-//!   - Animated sun disk with sunspots and solar flares
-//!   - Corona glow with animated tendrils
-//!   - Volumetric sun rays
-//!   - Lens flare effects (ghosts, halo, starburst)
-//!   - Eclipse support: depth buffer occlusion fades all effects
+//! Full-screen pass intersecting a finite world-space sphere. Both eyes see the
+//! same globe and world-anchored surface/corona detail. Features:
+//!   - Spherical photosphere with granulation, sunspots, and limb darkening
+//!   - Finite corona with world-anchored animated density
+//!   - Stereo parallax and per-ray scene-depth occlusion
 
 use bytemuck::{Pod, Zeroable};
 
@@ -15,7 +13,7 @@ use bytemuck::{Pod, Zeroable};
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct SunCameraUniforms {
     pub view_proj: [[f32; 4]; 4],
-    pub inv_view_proj: [[f32; 4]; 4],
+    pub inv_view_rot_proj: [[f32; 4]; 4],
     pub camera_pos: [f32; 3],
     pub time: f32,
 }
@@ -74,7 +72,8 @@ pub struct SunParams {
     pub orbit_axis_z: f32,
     pub orbit_ring_opacity: f32,
     pub orbit_world_radius: f32,
-    pub _pad0: f32,
+    /// Finite distance from the world origin, shared by both eyes.
+    pub sun_distance: f32,
     pub _pad1: f32,
     pub _pad2: f32,
 }
@@ -120,7 +119,7 @@ impl Default for SunParams {
             orbit_axis_z: 0.0,
             orbit_ring_opacity: 0.0,
             orbit_world_radius: 200.0,
-            _pad0: 0.0,
+            sun_distance: 1600.0,
             _pad1: 0.0,
             _pad2: 0.0,
         }
@@ -355,10 +354,10 @@ impl SunRenderer {
         sun_intensity: f32,
     ) {
         // Update camera uniforms
-        let inv_view_proj = view_proj.inverse();
+        let inv_view_rot_proj = (view_proj * glam::Mat4::from_translation(camera_pos)).inverse();
         let camera_uniform = SunCameraUniforms {
             view_proj: view_proj.to_cols_array_2d(),
-            inv_view_proj: inv_view_proj.to_cols_array_2d(),
+            inv_view_rot_proj: inv_view_rot_proj.to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             time,
         };
@@ -372,7 +371,7 @@ impl SunRenderer {
             light_dir_x: light_dir[0],
             light_dir_y: light_dir[1],
             light_dir_z: light_dir[2],
-            sun_angular_radius: self.sun_angular_radius,
+            sun_angular_radius: self.sun_angular_radius.clamp(0.001, 1.0),
             sun_color_r: self.sun_color[0],
             sun_color_g: self.sun_color[1],
             sun_color_b: self.sun_color[2],
@@ -407,7 +406,7 @@ impl SunRenderer {
             orbit_axis_z: self.orbit_axis[2],
             orbit_ring_opacity: self.orbit_ring_opacity,
             orbit_world_radius: self.orbit_world_radius,
-            _pad0: 0.0,
+            sun_distance: self.orbit_world_radius.abs().max(1.0) * 8.0,
             _pad1: 0.0,
             _pad2: 0.0,
         };
@@ -466,3 +465,7 @@ impl SunRenderer {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sun_renderer_tests.rs"]
+mod tests;

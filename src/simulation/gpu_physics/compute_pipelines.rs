@@ -418,6 +418,7 @@ pub struct GpuPhysicsPipelines {
 
     // Position update bind group layouts
     pub position_update_params_layout: wgpu::BindGroupLayout,
+    pub position_update_lifetime_layout: wgpu::BindGroupLayout,
 
     // Cell removal bind group layouts
     pub cell_removal_params_layout: wgpu::BindGroupLayout,
@@ -750,6 +751,12 @@ impl GpuPhysicsPipelines {
             "Division Audio Collect",
         );
 
+        let position_update_lifetime_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Drag lifetime flags"),
+            entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None }],
+        });
+
         // Create position update pipeline
         // Uses cell_insertion_physics_layout to access all 3 triple-buffered position/velocity sets
         let position_update_tool = Self::create_compute_pipeline(
@@ -759,6 +766,7 @@ impl GpuPhysicsPipelines {
             &[
                 &cell_insertion_physics_layout,
                 &position_update_params_layout,
+                &position_update_lifetime_layout,
             ],
             "Position Update Tool",
         );
@@ -1429,6 +1437,7 @@ impl GpuPhysicsPipelines {
             spatial_query_result_layout,
             division_audio_layout,
             position_update_params_layout,
+            position_update_lifetime_layout,
             cell_removal_params_layout,
             cell_boost_params_layout,
             adhesion_layout,

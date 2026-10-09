@@ -15,16 +15,16 @@ use crate::scene::Scene;
 use crate::simulation::fluid_simulation::{
     FluidBuffers, GpuFluidSimulator, SolidMaskGenerator, WaterGridParams,
 };
+use crate::simulation::gpu_physics::signal_diffusion::{DiffusionParams, SignalDiffusionPipeline};
 use crate::simulation::gpu_physics::{
     execute_gpu_mechanics_step, execute_gpu_physics_step, execute_lifecycle_pipeline,
     AdhesionBuffers, AsyncReadbackManager, BoulderSystem, CachedBindGroups,
     DevorocyteConsumptionSystem, DivisionAudioCandidate, DivisionAudioCollectDispatch,
-    DivisionAudioParams, GametocyteMergeSystem, GenomeBufferManager,
-    GpuCellInsertion, GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
+    DivisionAudioParams, GametocyteMergeSystem, GenomeBufferManager, GpuCellInsertion,
+    GpuCellInspector, GpuPhysicsPipelines, GpuScaffoldSystem, GpuToolOperations,
     GpuTripleBufferSystem, LightFieldSystem, MossSystem, PhagocyteConsumptionSystem,
     PhysicsFeatureFlags, SignalTickClock,
 };
-use crate::simulation::gpu_physics::signal_diffusion::{DiffusionParams, SignalDiffusionPipeline};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 use bytemuck::{Pod, Zeroable};
@@ -261,9 +261,8 @@ pub struct GpuScene {
     pub snow_compact_rate: f32,
     /// Thermal inertia (0-5 scale): controls how fast climate changes
     pub thermal_inertia: f32,
-    /// Frame counter throttling water mesh extraction. The voxel simulation
-    /// still runs every frame; this only decimates render-mesh rebuilds.
-    fluid_mesh_extract_counter: u32,
+    /// Fixed-step clock keeping water/ice mesh rebuilds independent of display FPS.
+    fluid_mesh_clock: super::frame_timing::FluidMeshClock,
     /// Extra water-only rebuilds after a static fill/phase transition. Water
     /// density smoothing has temporal history, so one rebuild is not enough
     /// to converge after a genuine change; this short burst replaces the old
@@ -581,6 +580,7 @@ pub struct GpuScene {
     /// Last value written to cell_count_buffer[2] for drag tracking.
     /// Used to avoid redundant write_buffer calls every frame when not dragging.
     last_written_dragged_index: u32,
+    drag_readback_target: u32,
     /// Cached shared camera buffer for environment renderers (voxel, particles)
     /// Updated once per frame via queue.write_buffer instead of creating new buffers
     env_camera_buffer: Option<wgpu::Buffer>,
@@ -615,7 +615,6 @@ pub struct GpuScene {
     /// Smoothed orbit pivot - lerps toward follow_target every frame.
     follow_center: glam::Vec3,
     follow_reduction: Option<crate::simulation::gpu_physics::organism_follow::OrganismFollow>,
-
 }
 
 impl GpuScene {
@@ -948,7 +947,7 @@ impl GpuScene {
             snow_melt_rate: 3.0,
             snow_compact_rate: 1.0,
             thermal_inertia: 4.0,
-            fluid_mesh_extract_counter: 0,
+            fluid_mesh_clock: Default::default(),
             static_water_smoothing_rebuilds_remaining: 0,
             freeze_threshold: 65,
             melt_threshold: 75,
@@ -1108,6 +1107,7 @@ impl GpuScene {
             // writes u32::MAX to cell_count_buffer[2]. Without this, the GPU buffer starts
             // at 0 and the position_update shader freezes cell index 0 (the first placed cell).
             last_written_dragged_index: 0,
+            drag_readback_target: u32::MAX,
             env_camera_buffer: None,
             env_camera_bind_group_voxel: None,
             env_camera_bind_group_steam: None,
@@ -1168,7 +1168,7 @@ impl GpuScene {
         self.division_audio_frame_readback_index = None;
         self.division_audio_frame_readback_used = false;
         self.pending_audio_events.clear();
-        self.fluid_mesh_extract_counter = 0;
+        self.fluid_mesh_clock = Default::default();
         self.static_water_smoothing_rebuilds_remaining = 0;
         self.paused = false;
         self.first_frame = true;
@@ -2060,7 +2060,8 @@ impl GpuScene {
     /// Disabling this can improve performance by avoiding CPU-GPU sync overhead.
     pub fn set_readbacks_enabled(&mut self, enabled: bool) {
         self.readbacks_enabled = enabled;
-        self.instance_builder.set_stats_readback_enabled(enabled && !self.headless_no_render);
+        self.instance_builder
+            .set_stats_readback_enabled(enabled && !self.headless_no_render);
     }
 
     /// Set whether GPU timestamp timing is enabled.
@@ -2916,7 +2917,8 @@ impl GpuScene {
 
         // GPU-born genomes occupy a separate ID/mode partition. Never overwrite
         // them when the user inserts another authored genome during a running world.
-        if self.genomes.len() >= crate::simulation::gpu_physics::mutation::AUTHORED_GENOME_RESERVE as usize
+        if self.genomes.len()
+            >= crate::simulation::gpu_physics::mutation::AUTHORED_GENOME_RESERVE as usize
             || self.genomes.iter().map(|g| g.modes.len()).sum::<usize>() + genome.modes.len()
                 > crate::simulation::gpu_physics::mutation::AUTHORED_MODE_RESERVE as usize
         {
@@ -3549,7 +3551,8 @@ impl GpuScene {
     pub(super) fn sync_dirty_genomes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         // Sync adhesion settings to GPU only when genomes are added or modified
         if self.genomes_dirty {
-            self.signal_diffusion.sync_modes(device, queue, &self.genomes);
+            self.signal_diffusion
+                .sync_modes(device, queue, &self.genomes);
             self.sync_adhesion_settings(device, queue);
             // Sync mutation system genome metadata when genomes change
             if let Some(mutation_system) = &mut self.mutation_system {
@@ -3744,11 +3747,21 @@ impl GpuScene {
         queue: &wgpu::Queue,
     ) -> bool {
         if let Some(pending) = self.pending_cell_insertion.take() {
-            let inserted = self.insert_cell_from_genome(
-                device, encoder, queue, pending.world_position, &pending.genome,
-                pending.initial_reserve, pending.initial_nutrients, pending.lineage_origin.clone(),
-            ).is_some();
-            if !inserted { self.pending_cell_insertion = Some(pending); }
+            let inserted = self
+                .insert_cell_from_genome(
+                    device,
+                    encoder,
+                    queue,
+                    pending.world_position,
+                    &pending.genome,
+                    pending.initial_reserve,
+                    pending.initial_nutrients,
+                    pending.lineage_origin.clone(),
+                )
+                .is_some();
+            if !inserted {
+                self.pending_cell_insertion = Some(pending);
+            }
             inserted
         } else {
             false
@@ -3860,7 +3873,7 @@ impl GpuScene {
                 genome_id as u32,           // genome_id
                 mode_idx as u32,            // mode_index (local to this genome)
                 self.current_time,          // birth_time
-                0,                         // Allocate a unique ID on GPU, including after fusion
+                0,                          // Allocate a unique ID on GPU, including after fusion
                 &self.genomes,
                 if is_fusion || initial_reserve != 0 {
                     Some(initial_reserve)
@@ -3892,9 +3905,18 @@ impl GpuScene {
         self.dragged_cell_index = cell_index;
     }
 
+    fn cancel_dead_drag_from_readback(&mut self) {
+        if self.drag_readback_target != u32::MAX
+            && self.drag_readback_target == self.dragged_cell_index
+            && self.gpu_triple_buffers.last_dragged_cell_index != self.dragged_cell_index {
+            self.clear_dragged_cell();
+        }
+    }
+
     /// Clear the dragged cell so physics resumes for all cells.
     pub fn clear_dragged_cell(&mut self) {
         self.dragged_cell_index = u32::MAX;
+        self.pending_position_update = None;
     }
 
     /// Update a cell's position using GPU operations
@@ -4074,13 +4096,22 @@ impl GpuScene {
         // Check for pending result from GPU spatial query (new cell selected)
         if let Some(cell_idx) = self.pending_inspect_result.take() {
             radial_menu.inspected_cell = Some(cell_idx);
+            radial_menu.inspection.select(Some(cell_idx));
+            self.clear_cell_extraction_cache();
             self.pending_cell_extraction = Some(cell_idx as u32);
             log::info!("Inspecting cell {}", cell_idx);
         }
 
         // Re-queue extraction every frame while a cell is selected and no extraction
         // is already in flight - this gives live-updating data in the inspector panel.
+        if radial_menu.inspection.index != radial_menu.inspected_cell {
+            radial_menu.inspection.select(radial_menu.inspected_cell);
+        }
         if let Some(cell_idx) = radial_menu.inspected_cell {
+            if let Some(result) = self.get_latest_cell_extraction().filter(|r| r.cell_index == cell_idx as u32) {
+                radial_menu.inspection.observe(result.data);
+            }
+            if radial_menu.inspection.dead { return; }
             let inspector_idle = self
                 .cell_inspector
                 .as_ref()
@@ -4149,19 +4180,34 @@ impl GpuScene {
     }
 
     /// Reduce the followed organism on GPU and consume only its final centroid.
-    pub fn tick_follow_camera(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, dt: f32) {
-        let Some(mut cell) = self.follow_organism_id else { return; };
+    pub fn tick_follow_camera(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        dt: f32,
+    ) {
+        let Some(mut cell) = self.follow_organism_id else {
+            return;
+        };
         if self.follow_reduction.is_none() {
-            let Some(labels) = self.organism_label_system.as_ref() else { return; };
-            self.follow_reduction = Some(crate::simulation::gpu_physics::organism_follow::OrganismFollow::new(
-                device, &self.gpu_triple_buffers, &labels.label_buffer));
+            let Some(labels) = self.organism_label_system.as_ref() else {
+                return;
+            };
+            self.follow_reduction = Some(
+                crate::simulation::gpu_physics::organism_follow::OrganismFollow::new(
+                    device,
+                    &self.gpu_triple_buffers,
+                    &labels.label_buffer,
+                ),
+            );
         }
         if let Some(result) = self.follow_reduction.as_mut().unwrap().poll(device) {
             if result.count == 0 {
                 self.clear_organism_follow();
                 return;
             }
-            self.follow_target = glam::Vec3::from_array([result.center[0], result.center[1], result.center[2]]);
+            self.follow_target =
+                glam::Vec3::from_array([result.center[0], result.center[1], result.center[2]]);
             cell = result.root;
             self.follow_organism_id = Some(cell);
         }
@@ -4169,14 +4215,24 @@ impl GpuScene {
         self.follow_center = self.follow_center.lerp(self.follow_target, alpha);
         self.camera.center = self.follow_center;
         // Reset-frame labels are transient; do not sample them.
-        if !self.organism_label_system.as_ref().is_some_and(|s| s.is_reset_frame()) {
-            self.follow_reduction.as_mut().unwrap().encode(device, encoder,
-                self.gpu_triple_buffers.output_buffer_index(), cell);
+        if !self
+            .organism_label_system
+            .as_ref()
+            .is_some_and(|s| s.is_reset_frame())
+        {
+            self.follow_reduction.as_mut().unwrap().encode(
+                device,
+                encoder,
+                self.gpu_triple_buffers.output_buffer_index(),
+                cell,
+            );
         }
     }
 
     pub fn tick_follow_camera_post_submit(&mut self) {
-        if let Some(reduction) = self.follow_reduction.as_mut() { reduction.after_submit(); }
+        if let Some(reduction) = self.follow_reduction.as_mut() {
+            reduction.after_submit();
+        }
     }
 
     /// Execute pending tool queries using GPU spatial query system
@@ -4216,7 +4272,13 @@ impl GpuScene {
                 physics_bind_group,
                 ray_origin,
                 ray_direction,
-                5000.0, // max_distance - raycast up to 5000 units
+                if self.camera.interaction_ray.is_some() {
+                    // Controller rays must still reach a world shrunk with a
+                    // two-hand gesture, while its physical distance stays fixed.
+                    (ray_origin.length() + self.config.sphere_radius * 2.0).max(5000.0)
+                } else {
+                    5000.0
+                },
                 dispatch_count,
             );
 
@@ -4348,7 +4410,7 @@ impl GpuScene {
 
         // Execute GPU position update
         if let Some(ref mut tool_ops) = self.tool_operations {
-            tool_ops.update_cell_position(encoder, cell_index, new_position);
+            tool_ops.update_cell_position(encoder, cell_index, new_position, self.dragged_cell_index == cell_index);
             return true;
         }
 
@@ -5035,7 +5097,6 @@ impl GpuScene {
         self.fluid_buffers = Some(fluid_buffers);
         self.voxel_renderer = Some(voxel_renderer);
         self.show_fluid_voxels = true;
-
 
         // Create solid mask generator
         let solid_mask_generator = SolidMaskGenerator::new(
@@ -5773,14 +5834,20 @@ impl GpuScene {
             glam::Vec3::ZERO,
             solid_mask_buffer,
             &light_field_buffer,
-            &self.light_field_system.as_ref().unwrap().luminocyte_emission.buffer,
+            &self
+                .light_field_system
+                .as_ref()
+                .unwrap()
+                .luminocyte_emission
+                .buffer,
         );
         if let (Some(ref solid_mask_generator), Some(ref cave_renderer)) =
             (&self.solid_mask_generator, &self.cave_renderer)
         {
             let (solid_mask, geothermal_fields) = solid_mask_generator
                 .generate_solid_mask_and_geothermal_fields_with_culled_fragments(
-                    cave_renderer.params(), cave_renderer.culled_fragment_regions(),
+                    cave_renderer.params(),
+                    cave_renderer.culled_fragment_regions(),
                 );
             if let Some(light) = &self.light_field_system {
                 light.luminocyte_emission.set_solid_mask(&solid_mask);
@@ -5930,7 +5997,7 @@ impl GpuScene {
 
         self.show_gpu_density_mesh = true;
         self.water_shadow_bind_group_set = false;
-        self.fluid_mesh_extract_counter = 0;
+        self.fluid_mesh_clock = Default::default();
         self.static_water_smoothing_rebuilds_remaining = 0;
     }
 
@@ -6078,12 +6145,19 @@ impl GpuScene {
         }
         self.initialize_gpu_systems(device, queue);
         let system = self.gametocyte_merge_system.as_ref().unwrap();
-        let Some(mutation) = self.mutation_system.as_ref() else { return; };
+        let Some(mutation) = self.mutation_system.as_ref() else {
+            return;
+        };
         if self.gpu_fusion.is_none() {
             self.gpu_fusion = Some(crate::simulation::gpu_physics::gpu_fusion::GpuFusion::new(
-                device, &self.gpu_triple_buffers, &self.adhesion_buffers, mutation,
-                &self.gpu_physics_pipelines, &system.merge_events_buffer,
-                self.instance_builder.mode_colors_buffer(), self.instance_builder.mode_emissive_buffer(),
+                device,
+                &self.gpu_triple_buffers,
+                &self.adhesion_buffers,
+                mutation,
+                &self.gpu_physics_pipelines,
+                &system.merge_events_buffer,
+                self.instance_builder.mode_colors_buffer(),
+                self.instance_builder.mode_emissive_buffer(),
             ));
         }
         system.clear_events(encoder);
@@ -6157,14 +6231,21 @@ impl GpuScene {
             &self.gametocyte_spatial_bind_group,
         ) {
             system.run(
-                encoder, &physics_bgs[output_idx], cell_bg, spatial_bg,
+                encoder,
+                &physics_bgs[output_idx],
+                cell_bg,
+                spatial_bg,
                 self.conservative_cell_dispatch_slots() as usize,
             );
             let fusion = self.gpu_fusion.as_ref().unwrap();
             fusion.encode(
-                encoder, self.cell_insertion.as_ref().unwrap(), &self.gpu_physics_pipelines,
-                &self.cached_bind_groups, output_idx,
-                self.conservative_cell_dispatch_slots().saturating_mul(10)
+                encoder,
+                self.cell_insertion.as_ref().unwrap(),
+                &self.gpu_physics_pipelines,
+                &self.cached_bind_groups,
+                output_idx,
+                self.conservative_cell_dispatch_slots()
+                    .saturating_mul(10)
                     .min(self.adhesion_buffers.max_connections),
             );
         }
@@ -6506,8 +6587,11 @@ impl GpuScene {
             // sun_intensity is now also 0-5 to match directly.
             simulator.set_sun_brightness(self.sun_intensity);
             simulator.set_water_drag_strength(queue, self.water_viscosity);
-            simulator.configure_readbacks(self.readbacks_enabled,
-                self.audio_readbacks_enabled && !self.headless_no_render, !self.headless_no_render);
+            simulator.configure_readbacks(
+                self.readbacks_enabled,
+                self.audio_readbacks_enabled && !self.headless_no_render,
+                !self.headless_no_render,
+            );
             simulator.set_listener_position(self.camera.position());
             simulator.step(
                 device,
@@ -6799,8 +6883,6 @@ impl GpuScene {
         }
     }
 
-
-
     /// Create or update nutrient particle renderer when fluid simulator is available
     fn ensure_nutrient_particle_renderer(
         &mut self,
@@ -6959,7 +7041,6 @@ impl GpuScene {
         }
     }
 
-
     fn ensure_steam_extract_bind_group(&mut self, device: &wgpu::Device) {
         if self.steam_extract_bind_group.is_some() {
             return;
@@ -7026,8 +7107,6 @@ impl GpuScene {
         }
     }
 
-
-
     /// Create or update nutrient extract bind group when fluid simulator is available
     fn ensure_nutrient_extract_bind_group(&mut self, device: &wgpu::Device) {
         if self.nutrient_extract_bind_group.is_some() {
@@ -7090,8 +7169,6 @@ impl GpuScene {
             );
         }
     }
-
-
 
     /// Create or update water extract bind group when fluid simulator is available
     fn ensure_water_extract_bind_group(&mut self, device: &wgpu::Device) {
@@ -7160,8 +7237,6 @@ impl GpuScene {
         }
     }
 
-
-
     /// Set water particle prominence factor (0.0 = barely visible, 1.0 = very prominent)
     pub fn set_water_particle_prominence(&mut self, prominence: f32) {
         self.water_particle_prominence = prominence.clamp(0.0, 1.0);
@@ -7229,9 +7304,9 @@ impl GpuScene {
             );
             light_field.set_geothermal_mass_per_second(base_photocyte_mass_rate);
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
-            light_field.luminocyte_emission.set_hardware_ray_tracing_enabled(
-                editor_state.luminocyte_ray_tracing,
-            );
+            light_field
+                .luminocyte_emission
+                .set_hardware_ray_tracing_enabled(editor_state.luminocyte_ray_tracing);
             light_field.set_shadow_enabled(editor_state.shadow_enabled);
             light_field.set_shadow_strength(editor_state.shadow_strength);
             light_field.set_shadow_quality(editor_state.shadow_quality);
@@ -7856,7 +7931,7 @@ impl GpuScene {
             // Render cave with correct cubemap projection
             cave_renderer.render_to_cubemap_face(
                 &mut encoder,
-                queue,
+                device,
                 &face_view,
                 &depth_view,
                 view_proj,
@@ -8026,8 +8101,7 @@ impl Scene for GpuScene {
         _lod_debug_colors: bool,
         outline_width: f32,
     ) {
-        let timing = self.gpu_timing_enabled;
-        self.gpu_timing_enabled = false;
+        // The stereo timer owns separate query ranges for both eyes.
         self.render_frame(
             device,
             queue,
@@ -8042,7 +8116,6 @@ impl Scene for GpuScene {
             outline_width,
             false,
         );
-        self.gpu_timing_enabled = timing;
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -8127,8 +8200,11 @@ mod tests {
         });
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
             .expect("GPU adapter for stereo regression");
+        let timing_features =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         let (device, queue) = pollster::block_on(
             adapter.request_device(&wgpu::DeviceDescriptor {
+                required_features: adapter.features() & timing_features,
                 required_limits: wgpu::Limits {
                     max_storage_buffers_per_shader_stage: 64,
                     max_storage_buffer_binding_size: adapter
@@ -8153,6 +8229,10 @@ mod tests {
             desired_maximum_frame_latency: 2,
         };
         let mut scene = GpuScene::with_capacity_and_radius(&device, &queue, &config, 64, 50.0);
+        scene.set_gpu_timing_enabled(true);
+        if let Some(timer) = &mut scene.gpu_timer {
+            timer.set_view_count(2);
+        }
         scene.paused = false;
         scene.queue_cell_insertion(glam::Vec3::ZERO, crate::genome::Genome::default());
         let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -8299,6 +8379,17 @@ mod tests {
             })
             .unwrap();
         receiver.recv().unwrap().unwrap();
+        if let Some(timer) = &mut scene.gpu_timer {
+            timer.after_submit(&device);
+            assert!(
+                timer.sample_age_ms().is_some(),
+                "Both scene eyes must finish the GPU timing sample"
+            );
+            assert!(timer
+                .segment_times_ms()
+                .iter()
+                .all(|ms| ms.is_finite() && *ms >= 0.0));
+        }
         let pixels = staging.slice(..).get_mapped_range();
         assert_ne!(
             &pixels[..16384],
@@ -8409,8 +8500,16 @@ impl GpuScene {
         });
 
         if self.gpu_timing_enabled {
-            if let Some(ref timer) = self.gpu_timer {
+            if let Some(ref mut timer) = self.gpu_timer {
+                timer.begin_view(advance_world);
                 timer.write_timestamp(&mut encoder, 0);
+                if !advance_world {
+                    // The second eye shares prepared physics. Its timestamps
+                    // start at culling and contribute only its rendering cost.
+                    for boundary in 1..=5 {
+                        timer.write_timestamp(&mut encoder, boundary);
+                    }
+                }
             }
         }
 
@@ -8571,12 +8670,15 @@ impl GpuScene {
                     let dt = crate::simulation::signal_system::SIGNAL_TICK_SECONDS;
                     let settings = self.signal_diffusion.settings;
                     let radius = self.config.sphere_radius;
-                    let origin = self.light_field_system.as_ref()
+                    let origin = self
+                        .light_field_system
+                        .as_ref()
                         .map_or([-radius; 3], |light| light.grid_origin());
                     let params = DiffusionParams {
                         count: signal_cell_slots,
                         tick: tick as u32,
-                        degree: crate::simulation::gpu_physics::adhesion::MAX_ADHESIONS_PER_CELL as u32,
+                        degree: crate::simulation::gpu_physics::adhesion::MAX_ADHESIONS_PER_CELL
+                            as u32,
                         resolution: 128,
                         dt,
                         conductance: settings.conductance,
@@ -8584,16 +8686,25 @@ impl GpuScene {
                         production_scale: settings.production_scale,
                         time: (tick + 1) as f32 * dt,
                         radius,
-                        grid_cell: self.light_field_system.as_ref()
+                        grid_cell: self
+                            .light_field_system
+                            .as_ref()
                             .map_or(radius * 2.0 / 128.0, |light| light.cell_size()),
                         padding: 0.0,
                         grid_origin: [origin[0], origin[1], origin[2], 0.0],
                     };
                     self.signal_diffusion.encode_tick(
-                        device, queue, &mut encoder, tick_slot as usize, params,
-                        &self.gpu_triple_buffers, &self.adhesion_buffers,
-                        self.light_field_system.as_ref(), self.fluid_simulator.as_ref(),
-                        self.moss_system.as_ref(), [radius, radius * 2.0 / 64.0, 64.0, 16.0],
+                        device,
+                        queue,
+                        &mut encoder,
+                        tick_slot as usize,
+                        params,
+                        &self.gpu_triple_buffers,
+                        &self.adhesion_buffers,
+                        self.light_field_system.as_ref(),
+                        self.fluid_simulator.as_ref(),
+                        self.moss_system.as_ref(),
+                        [radius, radius * 2.0 / 64.0, 64.0, 16.0],
                     );
                 }
             }
@@ -8628,8 +8739,15 @@ impl GpuScene {
                     .map(|offset| {
                         (self.division_audio_readback_write_index + offset) % buffer_count
                     })
-                    .find(|&idx| self.audio_readbacks_enabled && !self.headless_no_render && !self.division_audio_readback_busy[idx]);
-                if self.audio_readbacks_enabled && !self.headless_no_render && self.division_audio_frame_readback_index.is_none() {
+                    .find(|&idx| {
+                        self.audio_readbacks_enabled
+                            && !self.headless_no_render
+                            && !self.division_audio_readback_busy[idx]
+                    });
+                if self.audio_readbacks_enabled
+                    && !self.headless_no_render
+                    && self.division_audio_frame_readback_index.is_none()
+                {
                     log::warn!(
                     "Division audio: all {buffer_count} readback buffers busy this frame - collection skipped"
                 );
@@ -8777,6 +8895,7 @@ impl GpuScene {
             let should_start_readback =
                 advance_world && self.cell_count_readback_dirty && !cell_count_read_pending;
             if should_start_readback {
+                self.drag_readback_target = self.dragged_cell_index;
                 self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
                 self.cell_count_readback_dirty = false;
             }
@@ -8805,7 +8924,6 @@ impl GpuScene {
                 self.tick_follow_camera_post_submit();
             }
 
-
             if let Some(ref simulator) = self.fluid_simulator {
                 simulator.poll_temperature_stats(device);
             }
@@ -8819,6 +8937,7 @@ impl GpuScene {
                 if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
                     self.current_cell_count = live;
                     self.total_cell_slots = total;
+                    self.cancel_dead_drag_from_readback();
 
                     if live == 0 && total > 0 {
                         log::info!(
@@ -9406,21 +9525,15 @@ impl GpuScene {
                         // the first rebuild in each dirty burst.
                         (true, true, static_surface_changed, static_surface_changed)
                     } else {
-                        self.fluid_mesh_extract_counter =
-                            self.fluid_mesh_extract_counter.wrapping_add(1);
-                        let initial_mesh = self.fluid_mesh_extract_counter == 1;
-
-                        // Preserve the existing 30 Hz water / 7.5 Hz ice mesh
-                        // cadence, but put density preparation and surface-nets
-                        // extraction on adjacent frames. This flattens the GPU
-                        // workload without changing simulation resolution or the
-                        // rendered mesh. Build the first mesh immediately so water
-                        // never flashes missing when a scene starts or is reset.
+                        // Drive mesh work from the 60 Hz fluid clock. Counting
+                        // rendered frames doubled this cost at 120 FPS and made
+                        // stereo/desktop pacing change the intended cadence.
+                        let mesh = self.fluid_mesh_clock.take(frame_times.fluid_steps);
                         (
-                            initial_mesh || self.fluid_mesh_extract_counter % 2 == 0,
-                            initial_mesh || self.fluid_mesh_extract_counter % 2 == 1,
-                            initial_mesh || self.fluid_mesh_extract_counter % 8 == 0,
-                            initial_mesh || self.fluid_mesh_extract_counter % 8 == 1,
+                            mesh.prepare_water,
+                            mesh.finalize_water,
+                            mesh.prepare_ice,
+                            mesh.finalize_ice,
                         )
                     };
 
@@ -9737,7 +9850,8 @@ impl GpuScene {
         let should_start_readback =
             advance_world && self.cell_count_readback_dirty && !cell_count_read_pending;
         if should_start_readback {
-            self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
+            self.drag_readback_target = self.dragged_cell_index;
+                self.gpu_triple_buffers.start_cell_count_read(&mut encoder);
             self.cell_count_readback_dirty = false;
         }
 
@@ -9752,14 +9866,14 @@ impl GpuScene {
         // Single submit for all GPU work
         queue.submit(std::iter::once(encoder.finish()));
 
-        if !advance_world {
-            return;
-        }
-
         if self.gpu_timing_enabled {
             if let Some(ref mut timer) = self.gpu_timer {
                 timer.after_submit(device);
             }
+        }
+
+        if !advance_world {
+            return;
         }
 
         // Call map_async on follow camera staging buffers NOW - after submit.
@@ -9768,7 +9882,6 @@ impl GpuScene {
         if self.follow_organism_id.is_some() {
             self.tick_follow_camera_post_submit();
         }
-
 
         if let Some(ref simulator) = self.fluid_simulator {
             simulator.poll_temperature_stats(device);
@@ -9785,6 +9898,7 @@ impl GpuScene {
             if let Some((total, live)) = self.gpu_triple_buffers.poll_cell_count(device) {
                 self.current_cell_count = live;
                 self.total_cell_slots = total;
+                self.cancel_dead_drag_from_readback();
 
                 // CRITICAL FIX: Reset high water mark when all cells are dead.
                 // cell_count_buffer[0] is a high water mark that never decreases when cells die.

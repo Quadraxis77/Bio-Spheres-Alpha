@@ -413,12 +413,16 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     if let Some(cell_idx) = inspected_cell {
         // Extract data from GPU scene
-        let gpu_extraction_data = if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
+        let retained = &context.editor_state.radial_menu.inspection;
+        let gpu_extraction_data = if let Some(mut data) = retained.data.filter(|_|retained.index==Some(cell_idx)) {
+            if retained.dead { data.is_dead=1; }
+            Some((false,Some(crate::simulation::gpu_physics::ReadbackResult {cell_index:cell_idx as u32,data}),Some(true)))
+        } else if let Some(gpu_scene) = context.scene_manager.gpu_scene() {
             let is_extracting = gpu_scene.is_extracting_cell_data();
             if let Some(extraction_result) = gpu_scene.get_latest_cell_extraction() {
                 if extraction_result.cell_index == cell_idx as u32 {
                     let data_valid = extraction_result.data.is_valid();
-                    Some((is_extracting, Some(extraction_result), Some(data_valid)))
+                    Some((is_extracting, Some(extraction_result.clone()), Some(data_valid)))
                 } else {
                     // Have a result but for a different cell - show spinner until ours arrives
                     Some((true, None, None))
@@ -463,6 +467,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                         .clicked()
                     {
                         context.editor_state.radial_menu.inspected_cell = None;
+                        context.editor_state.radial_menu.inspection.select(None);
                     }
                     return;
                 }
@@ -538,7 +543,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
                 // -- Action buttons -------------------------------------------
                 ui.horizontal(|ui| {
-                    if ui.add(
+                    if ui.add_enabled(context.editor_state.radial_menu.inspection.genome.is_some(),
                         egui::Button::new(
                             egui::RichText::new("📋 Load Genome").size(11.0).color(palette().text_primary),
                         )
@@ -546,10 +551,7 @@ fn render_cell_inspector(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
                         .stroke(egui::Stroke::new(1.0, palette().border_normal)),
                     ).clicked() {
                         *context.scene_request =
-                            crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpuCell {
-                                genome_id: data.genome_id,
-                                mode_index: data.mode_index,
-                            };
+                            crate::ui::panel_context::SceneModeRequest::LoadInspectedGenome;
                         log::info!(
                             "Requested genome readback for inspected cell: genome_id={} mode_index={}",
                             data.genome_id,
@@ -3461,6 +3463,16 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
 /// Render the PerformanceMonitor panel.
 fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     let perf = context.performance;
+    if let Some(hz) = perf.vr_refresh_hz() {
+        ui.label(format!(
+            "Headset: {hz:.0} Hz · frame budget: {:.2} ms",
+            1000.0 / hz
+        ));
+        if hz < 119.0 {
+            ui.label("For 120 FPS, select 120 Hz in your PCVR streaming settings.");
+        }
+        ui.add_space(4.0);
+    }
 
     // GPU Readbacks toggle at the top
     ui.horizontal(|ui| {
@@ -6617,7 +6629,6 @@ fn apply_light_panel_changes(context: &mut PanelContext, sun_changed: bool) {
     if sun_changed {
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.show_sun = context.editor_state.show_sun;
-            gpu_scene.sun_intensity = context.editor_state.sun_intensity;
             if let Some(ref mut sun) = gpu_scene.sun_renderer {
                 sun.sun_color = context.editor_state.sun_color;
                 sun.sun_angular_radius = context.editor_state.sun_angular_radius;
@@ -6691,11 +6702,6 @@ fn render_light_settings_organized(
                 )
                 .on_hover_text("Sun brightness controls baseline air temperature: 0=dark, 3=temperate (recommended), 5=extreme heat. Affects photocyte energy and thermal model.")
                 .changed();
-            if changed {
-                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                    gpu_scene.sun_intensity = context.editor_state.sun_intensity;
-                }
-            }
 
             ui.horizontal(|ui| {
                 ui.label("Tint");
@@ -7554,9 +7560,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         .changed();
     if brightness_changed {
         changed = true;
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.sun_intensity = context.editor_state.sun_intensity;
-        }
     }
 
     changed |= ui
@@ -8026,7 +8029,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
         changed = true;
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
             gpu_scene.show_sun = context.editor_state.show_sun;
-            gpu_scene.sun_intensity = context.editor_state.sun_intensity;
             if let Some(ref mut sun) = gpu_scene.sun_renderer {
                 sun.sun_color = context.editor_state.sun_color;
                 sun.sun_angular_radius = context.editor_state.sun_angular_radius;

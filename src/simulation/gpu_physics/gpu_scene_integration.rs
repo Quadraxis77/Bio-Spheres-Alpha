@@ -219,8 +219,7 @@ pub fn execute_gpu_physics_step(
     // Dead cells can be at any index - they're not compacted to the end. Using the
     // live count would skip cells at higher indices, preventing their metabolism from
     // running, so they'd never lose nutrients and never die.
-    let effective_cell_count = (_cell_count_hint + 255) / 256 * 256; // Round up to workgroup boundary
-    let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
+    let cell_workgroups = bounded_cell_workgroups(_cell_count_hint, triple_buffers.capacity, WORKGROUP_SIZE_CELLS);
 
     // Clear only buckets occupied by the preceding step. The occupied list was
     // built alongside that grid and cannot contain more entries than the cell
@@ -690,7 +689,7 @@ pub fn execute_gpu_mechanics_step(
         &cached_bind_groups.position_update_rotations[current_index];
 
     // PERFORMANCE: Dispatch based on actual cell count, not full capacity
-    let effective_cell_count = (_cell_count_hint.max(1) + 255) / 256 * 256;
+    let effective_cell_count = _cell_count_hint.min(triple_buffers.capacity).max(1);
     let cell_workgroups = (effective_cell_count + WORKGROUP_SIZE_CELLS - 1) / WORKGROUP_SIZE_CELLS;
 
     // DMA zero-fill spatial grid + force/torque buffers before compute pass
@@ -1150,5 +1149,22 @@ pub fn rebuild_spatial_grid_after_lifecycle(
         compute_pass.set_bind_group(0, physics_bind_group, &[]);
         compute_pass.set_bind_group(1, spatial_grid_bind_group, &[]);
         compute_pass.dispatch_workgroups(cell_workgroups, 1, 1);
+    }
+}
+
+fn bounded_cell_workgroups(hint: u32, capacity: u32, workgroup_size: u32) -> u32 {
+    hint.min(capacity).div_ceil(workgroup_size)
+}
+
+#[cfg(test)]
+mod dispatch_bounds_tests {
+    use super::bounded_cell_workgroups;
+    #[test]
+    fn invalid_counts_and_partial_groups_are_capacity_bounded_without_overflow() {
+        assert_eq!(bounded_cell_workgroups(u32::MAX,200_000,256),782);
+        assert_eq!(bounded_cell_workgroups(1,200_000,256),1);
+        assert_eq!(bounded_cell_workgroups(257,200_000,256),2);
+        assert_eq!(bounded_cell_workgroups(0,200_000,256),0);
+        assert_eq!(bounded_cell_workgroups(u32::MAX,0,256),0);
     }
 }

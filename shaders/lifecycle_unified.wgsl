@@ -409,6 +409,9 @@ fn death_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Newly dead cell - push slot to ring buffer for recycling
         // Preserve fusion removal (2): recycle the slot without a death burst.
         if (!was_dead) { death_flags[cell_idx] = 1u; }
+        if (atomicLoad(&cell_count_buffer[2]) == cell_idx) {
+            atomicStore(&cell_count_buffer[2], 0xFFFFFFFFu);
+        }
         push_free_slot(cell_idx);
 
         // Decrement live cell count
@@ -525,6 +528,9 @@ fn division_scan(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (outcome < -1.5) {
                 death_flags[cell_idx] = 1u;
                 division_flags[cell_idx] = 0u;
+                if (atomicLoad(&cell_count_buffer[2]) == cell_idx) {
+                    atomicStore(&cell_count_buffer[2], 0xFFFFFFFFu);
+                }
                 push_free_slot(cell_idx);
                 atomicSub(&cell_count_buffer[1], 1u);
                 let pos = positions_out[cell_idx].xyz;

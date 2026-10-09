@@ -1,6 +1,8 @@
+pub mod inspection;
 pub mod camera;
 pub mod dock;
 pub mod genome_browser;
+mod native_input;
 pub mod panel;
 pub mod panel_context;
 pub mod performance;

@@ -160,13 +160,21 @@ pub struct UiSystem {
     pub winit_state: egui_winit::State,
     /// egui-wgpu renderer
     pub renderer: egui_wgpu::Renderer,
+    #[cfg(feature = "vr")]
+    texture_images: std::collections::HashMap<egui::TextureId, egui::epaint::ImageDelta>,
     /// Global UI state
     pub state: GlobalUiState,
     /// Viewport rectangle for mouse filtering (set during rendering)
     pub viewport_rect: Option<egui::Rect>,
+    /// Transient headset presentation state; never saved with desktop preferences.
+    pub native_ui_hidden: bool,
+    pub native_panel_visible: bool,
+    #[cfg(feature = "vr")]
+    native_pixels_per_point: f32,
     /// Last raw pointer position converted to egui points. Used when egui has
     /// no hover position but winit is still reporting cursor events.
     last_pointer_pos: Option<egui::Pos2>,
+    native_input: super::native_input::NativeInput,
     /// Last applied UI scale for change detection
     last_scale: f32,
     /// Original style values for scaling
@@ -291,8 +299,15 @@ impl UiSystem {
             ctx,
             winit_state,
             renderer,
+            #[cfg(feature = "vr")]
+            texture_images: Default::default(),
             state,
             viewport_rect: None,
+            native_ui_hidden: false,
+            native_panel_visible: false,
+            #[cfg(feature = "vr")]
+            native_pixels_per_point: 1.0,
+            native_input: Default::default(),
             last_pointer_pos: None,
             last_scale: 1.0,
             original_spacing: None,
@@ -416,7 +431,7 @@ impl UiSystem {
     /// or if egui is actively using the pointer (e.g., dragging a slider).
     pub fn wants_pointer_input(&self) -> bool {
         // When UI is hidden, all pointer input passes straight to the scene.
-        if self.state.hide_ui {
+        if (self.state.hide_ui && !self.native_panel_visible) || self.native_ui_hidden {
             return false;
         }
 
@@ -461,13 +476,45 @@ impl UiSystem {
     ///
     /// Call this at the start of each frame before rendering UI.
     pub fn begin_frame(&mut self, window: &Window) {
-        let raw_input = self.winit_state.take_egui_input(window);
+        let mut raw_input = self.winit_state.take_egui_input(window);
+        #[cfg(feature = "vr")]
+        if let Some(viewport) = raw_input.viewports.get_mut(&raw_input.viewport_id) {
+            viewport.native_pixels_per_point = Some(self.native_pixels_per_point);
+        }
+        self.last_pointer_pos = self.native_input.merge(&mut raw_input);
+        egui::ControllerSlider::set_input(&self.ctx, self.native_input.active, self.native_input.controller_pointing());
+        egui::ControllerSlider::set_cancelled(&self.ctx,self.native_input.controller_cancelled());
+        egui::ControllerNumberPad::set_enabled(
+            &self.ctx,
+            self.native_input.active
+                && !self.native_ui_hidden
+                && (!self.state.hide_ui || self.native_panel_visible),
+        );
         self.ctx.begin_pass(raw_input);
 
         // Clear the viewport rect every frame so it only ever holds the
         // rect from the current frame's Viewport tab render. This prevents
         // a stale rect from a different scene mode being used for brackets.
         self.viewport_rect = None;
+    }
+
+    #[cfg(feature = "vr")]
+    pub fn set_native_input(
+        &mut self,
+        focused: bool,
+        pointer: Option<glam::Vec2>,
+        pressed: bool,
+        scroll_y: f32,
+        native_pixels_per_point: f32,
+    ) {
+        self.native_input.active = focused;
+        self.native_pixels_per_point = native_pixels_per_point;
+        self.native_input.pointer = pointer.map(|pos| {
+            let scale = native_pixels_per_point * self.ctx.zoom_factor();
+            egui::pos2(pos.x / scale, pos.y / scale)
+        });
+        self.native_input.pressed = pressed;
+        self.native_input.scroll_y = scroll_y;
     }
 
     /// Apply UI scale to the egui context style.
@@ -1059,6 +1106,11 @@ impl UiSystem {
 
         // Show branded top bar
         let mut ui_state_copy = self.state.clone();
+        let desktop_hide_ui = ui_state_copy.hide_ui;
+        ui_state_copy.hide_ui |= self.native_ui_hidden;
+        if self.native_panel_visible {
+            ui_state_copy.hide_ui = false;
+        }
 
         // Pending mutations from inside egui closures (can't borrow self inside them).
         let mut pending_toasts: Vec<crate::ui::toast::Toast> = Vec::new();
@@ -2778,6 +2830,9 @@ impl UiSystem {
         );
 
         // Apply any changes back to the original state
+        if self.native_ui_hidden || self.native_panel_visible {
+            ui_state_copy.hide_ui = desktop_hide_ui;
+        }
         let state_changed = self.state != ui_state_copy;
         self.state = ui_state_copy;
 
@@ -2802,6 +2857,7 @@ impl UiSystem {
             plugin.lock().clear_selection();
         }
 
+        egui::ControllerNumberPad::show(&self.ctx);
         self.ctx.end_pass()
     }
 
@@ -2824,6 +2880,23 @@ impl UiSystem {
 
         // Process texture updates
         for (id, image_delta) in &output.textures_delta.set {
+            #[cfg(feature = "vr")]
+            if let Some([x, y]) = image_delta.pos {
+                if let Some(full) = self.texture_images.get_mut(id) {
+                    let egui::ImageData::Color(image) = &mut full.image;
+                    let egui::ImageData::Color(patch) = &image_delta.image;
+                    let image = std::sync::Arc::make_mut(image);
+                    for row in 0..patch.height() {
+                        let offset = (y + row) * image.width() + x;
+                        image.pixels[offset..offset + patch.width()].copy_from_slice(
+                            &patch.pixels[row * patch.width()..(row + 1) * patch.width()],
+                        );
+                    }
+                    full.options = image_delta.options;
+                }
+            } else {
+                self.texture_images.insert(*id, image_delta.clone());
+            }
             self.renderer
                 .update_texture(device, queue, *id, image_delta);
         }
@@ -2864,8 +2937,24 @@ impl UiSystem {
 
         // Free textures that are no longer needed
         for id in &output.textures_delta.free {
+            #[cfg(feature = "vr")]
+            self.texture_images.remove(id);
             self.renderer.free_texture(id);
         }
+    }
+
+    #[cfg(feature = "vr")]
+    pub(crate) fn renderer_on_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> egui_wgpu::Renderer {
+        let mut renderer = egui_wgpu::Renderer::new(device, format, Default::default());
+        for (id, image) in &self.texture_images {
+            renderer.update_texture(device, queue, *id, image);
+        }
+        renderer
     }
 
     /// Get the egui context for rendering UI.
@@ -2972,7 +3061,9 @@ fn show_windows_menu(
 
     ui.add_space(6.0);
     ui.add(egui::Slider::new(&mut state.desktop_render_fps, 30..=120).text("Frame rate limit"))
-        .on_hover_text("Desktop rendering limit in FPS. Physics and fluid keep their own simulation rates.");
+        .on_hover_text(
+            "Desktop rendering limit in FPS. Physics and fluid keep their own simulation rates.",
+        );
 
     ui.add_space(6.0);
     ui.label("Horizontal FOV:")
@@ -3022,7 +3113,10 @@ fn show_windows_menu(
         state.camera_alternate_speed_multiplier = 1.0;
     }
     if alternate_response.changed() || alternate_response.double_clicked() {
-        scene_manager.active_scene_mut().camera_mut().alternate_speed_multiplier = state.camera_alternate_speed_multiplier;
+        scene_manager
+            .active_scene_mut()
+            .camera_mut()
+            .alternate_speed_multiplier = state.camera_alternate_speed_multiplier;
     }
     ui.add_space(6.0);
     ui.label("Scroll Sensitivity:")

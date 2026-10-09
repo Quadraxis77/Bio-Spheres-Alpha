@@ -34,7 +34,7 @@ struct PhysicsParams {
 /// Layout must match Rust PositionUpdateParams struct (32 bytes total)
 struct PositionUpdateParams {
     cell_index: u32,            // 4 bytes at offset 0
-    _pad0: u32,                 // 4 bytes at offset 4 (padding for vec3 alignment)
+    _pad0: u32,                 // 4 bytes at offset 4 (1 = held-cell drag)
     _pad1: u32,                 // 4 bytes at offset 8
     _pad2: u32,                 // 4 bytes at offset 12
     new_position: vec3<f32>,    // 12 bytes at offset 16
@@ -71,6 +71,9 @@ var<storage, read_write> cell_count_buffer: array<u32>;
 @group(1) @binding(0)
 var<uniform> update_params: PositionUpdateParams;
 
+@group(2) @binding(0)
+var<storage, read> death_flags: array<u32>;
+
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Single workgroup dispatch as required by 10.4
@@ -88,6 +91,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
+    // A dead or released drag target must never be resurrected from an older buffer.
+    if (death_flags[cell_index] != 0u) {
+        if (cell_count_buffer[2] == cell_index) { cell_count_buffer[2] = 0xFFFFFFFFu; }
+        return;
+    }
+    if (update_params._pad0 != 0u && cell_count_buffer[2] != cell_index) { return; }
+
     // Read current cell mass from all buffers
     // Division cells might only have data in one buffer, so we need to find the valid one
     // A valid mass is > 0 (cells always have positive mass)

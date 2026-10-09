@@ -1093,7 +1093,12 @@ impl CaveSystemRenderer {
             camera_rotation * Vec3::Y,
         );
         let aspect = self.width as f32 / self.height as f32;
-        let proj_matrix = crate::rendering::CameraProjection::matrix(horizontal_fov_degrees.into(), aspect, 0.1, 5000.0);
+        let proj_matrix = crate::rendering::CameraProjection::matrix(
+            horizontal_fov_degrees.into(),
+            aspect,
+            0.1,
+            5000.0,
+        );
         let view_proj = proj_matrix * view_matrix;
 
         // Update camera uniform
@@ -1177,7 +1182,7 @@ impl CaveSystemRenderer {
     pub fn render_to_cubemap_face(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
+        device: &wgpu::Device,
         color_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
         view_proj: glam::Mat4,
@@ -1188,11 +1193,22 @@ impl CaveSystemRenderer {
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
         };
-        queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(&[camera_uniform]),
-        );
+        // Each face is encoded before a single submit. Shared queue writes
+        // would make all six faces use the last matrix and overwrite the
+        // player-camera uniform for the already-encoded main view.
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cubemap face camera"),
+            contents: bytemuck::bytes_of(&camera_uniform),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let camera = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cubemap face camera"),
+            layout: &self.pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
 
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Cave Cubemap Face Pass"),
@@ -1218,7 +1234,7 @@ impl CaveSystemRenderer {
         });
 
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_bind_group(0, &camera, &[]);
         render_pass.set_bind_group(1, &self.params_bind_group, &[]);
         if let Some(ref shadow_bg) = self.shadow_bind_group {
             render_pass.set_bind_group(2, shadow_bg, &[]);
@@ -2062,12 +2078,20 @@ impl CaveSystemRenderer {
                     let culled = culled_fragment_regions.iter().any(|fragment| {
                         pos.cmpge(fragment.min).all() && pos.cmple(fragment.max).all()
                     });
-                    collision_density[x + y * grid_size + z * grid_size * grid_size] =
-                        if culled { params.threshold - 0.5 } else { density_grid[x][y][z] };
+                    collision_density[x + y * grid_size + z * grid_size * grid_size] = if culled {
+                        params.threshold - 0.5
+                    } else {
+                        density_grid[x][y][z]
+                    };
                 }
             }
         }
-        (vertices, indices, culled_fragment_regions, collision_density)
+        (
+            vertices,
+            indices,
+            culled_fragment_regions,
+            collision_density,
+        )
     }
 
     /// Seal tiny closed boundary loops left by ambiguous marching-cubes cases.
@@ -3513,7 +3537,10 @@ mod vent_collision_tests {
                 }
             }
         }
-        assert!(added_walls > 0, "vent walls must collide even where procedural terrain is empty");
+        assert!(
+            added_walls > 0,
+            "vent walls must collide even where procedural terrain is empty"
+        );
     }
 
     #[test]

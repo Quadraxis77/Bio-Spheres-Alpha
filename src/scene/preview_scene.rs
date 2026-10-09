@@ -73,6 +73,33 @@ pub struct PreviewScene {
 }
 
 impl PreviewScene {
+    #[cfg(feature = "vr")]
+    pub(crate) fn recreate_on_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &wgpu::SurfaceConfiguration,
+    ) -> Self {
+        let mut scene = Self::new(device, queue, config);
+        scene.state = self.state.clone();
+        scene.genome = self.genome.clone();
+        scene.config = self.config.clone();
+        scene.camera = self.camera.clone();
+        scene.camera.interaction_ray = None;
+        scene.paused = self.paused;
+        scene.last_ui_time_value = self.last_ui_time_value;
+        scene.scrub_tick_remainder = self.scrub_tick_remainder;
+        scene.pending_audio_events = self.pending_audio_events.clone();
+        scene.show_adhesion_lines = self.show_adhesion_lines;
+        scene.selected_mode_indices = self.selected_mode_indices.clone();
+        scene.context_menu_cell = self.context_menu_cell;
+        scene.context_menu_screen_pos = self.context_menu_screen_pos;
+        scene.context_menu_open_time = self.context_menu_open_time;
+        scene.test_signals = self.test_signals.clone();
+        scene.show_skybox = self.show_skybox;
+        scene.clear_color = self.clear_color;
+        scene
+    }
     /// Create a new preview scene.
     pub fn new(
         device: &wgpu::Device,

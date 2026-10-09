@@ -262,7 +262,9 @@ pub struct GpuFluidSimulator {
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
+    #[cfg(test)]
     update_temperature_pipeline: wgpu::ComputePipeline,
+    update_temperature_slice_pipeline: wgpu::ComputePipeline,
     /// Vapor fog density pass (repurposed humidity diffusion). Massless but
     /// climate-active: the light field attenuates sunlight through it.
     diffuse_humidity_pipeline: wgpu::ComputePipeline,
@@ -835,12 +837,23 @@ impl GpuFluidSimulator {
             cache: None,
         });
 
+        #[cfg(test)]
         let update_temperature_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Fluid Update Temperature Pipeline"),
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some("update_temperature"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        let update_temperature_slice_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Fluid Temperature Slice Pipeline"),
+                layout: Some(&pipeline_layout),
+                module: &shader,
+                entry_point: Some("update_temperature_slice"),
                 compilation_options: Default::default(),
                 cache: None,
             });
@@ -1366,7 +1379,9 @@ impl GpuFluidSimulator {
             static_water_world_enabled: std::cell::Cell::new(false),
             static_water_world_needs_fill: std::cell::Cell::new(false),
             swap_pipeline,
+            #[cfg(test)]
             update_temperature_pipeline,
+            update_temperature_slice_pipeline,
             diffuse_humidity_pipeline,
             condense_humidity_pipeline,
             init_sphere_pipeline,
@@ -1775,7 +1790,10 @@ impl GpuFluidSimulator {
     fn climate_readback_due(&self) -> bool {
         // Static-water phase changes also invalidate the cached surface mesh.
         (self.telemetry_enabled.get() || self.static_water_world_enabled.get())
-            && self.last_climate_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 250)
+            && self
+                .last_climate_readback
+                .get()
+                .is_none_or(|t| t.elapsed().as_millis() >= 250)
     }
 
     pub fn set_listener_position(&self, position: Vec3) {
@@ -1897,7 +1915,10 @@ impl GpuFluidSimulator {
             return;
         };
         if self.listener_readbacks_enabled.get()
-            && self.last_listener_readback.get().is_none_or(|t| t.elapsed().as_millis() >= 33)
+            && self
+                .last_listener_readback
+                .get()
+                .is_none_or(|t| t.elapsed().as_millis() >= 33)
             && !self.listener_water_copy_pending.get()
             && self.listener_water_readback_receiver.borrow().is_none()
         {
@@ -1910,7 +1931,8 @@ impl GpuFluidSimulator {
                 std::mem::size_of::<u32>() as u64,
             );
             self.listener_water_copy_pending.set(true);
-            self.last_listener_readback.set(Some(std::time::Instant::now()));
+            self.last_listener_readback
+                .set(Some(std::time::Instant::now()));
         }
     }
 
@@ -2022,7 +2044,6 @@ impl GpuFluidSimulator {
         let climate_tick = self.climate_tick_counter.get().wrapping_add(1);
         self.climate_tick_counter.set(climate_tick);
         let climate_phase = climate_tick % CLIMATE_TICK_INTERVAL;
-        let run_temperature = climate_phase == 0;
 
         // Update parameters for GPU (required for shader logic) - sub_step starts at 0
         let params = self.make_params(
@@ -2086,23 +2107,29 @@ impl GpuFluidSimulator {
                 pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
             }
 
-            if run_temperature {
+            {
                 // Clear the six rolling-stat slots, but leave the phase-change
                 // counter intact until it has been copied. If a prior async map
                 // is still busy, changes accumulate instead of being lost.
                 const ROLLING_STATS_SIZE: u64 = 6 * std::mem::size_of::<u32>() as u64;
                 const PHASE_CHANGE_OFFSET: u64 = ROLLING_STATS_SIZE;
-                encoder.clear_buffer(&self.temp_stats_buffer, 0, Some(ROLLING_STATS_SIZE));
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Static Water Update Temperature Pass"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&self.update_temperature_pipeline);
-                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
-                    pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+                if climate_phase == 0 {
+                    encoder.clear_buffer(&self.temp_stats_buffer, 0, Some(ROLLING_STATS_SIZE));
                 }
                 {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Static Water Temperature Slice Pass"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&self.update_temperature_slice_pipeline);
+                    pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+                    pass.dispatch_workgroups(
+                        workgroup_count,
+                        workgroup_count,
+                        workgroup_count.div_ceil(4),
+                    );
+                }
+                if climate_phase == CLIMATE_TICK_INTERVAL - 1 {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("Static Water Ice Melt Phase Pass"),
                         timestamp_writes: None,
@@ -2115,7 +2142,10 @@ impl GpuFluidSimulator {
                 // Copy after the phase pass so slot 6 includes this tick's
                 // successful water<->ice transitions. Reset only after a copy
                 // is queued; otherwise the counter survives readback pressure.
-                if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
+                if climate_phase == CLIMATE_TICK_INTERVAL - 1
+                    && climate_tick >= CLIMATE_TICK_INTERVAL * 2 - 1
+                    && self.climate_readback_due()
+                    && !self.temp_stats_copy_pending.get()
                     && self.temp_stats_map_receiver.borrow().is_none()
                 {
                     encoder.copy_buffer_to_buffer(
@@ -2131,7 +2161,8 @@ impl GpuFluidSimulator {
                         Some(std::mem::size_of::<u32>() as u64),
                     );
                     self.temp_stats_copy_pending.set(true);
-                self.last_climate_readback.set(Some(std::time::Instant::now()));
+                    self.last_climate_readback
+                        .set(Some(std::time::Instant::now()));
                 }
             }
             return;
@@ -2145,38 +2176,42 @@ impl GpuFluidSimulator {
         let run_vapor_fog = climate_phase == CLIMATE_TICK_INTERVAL / 2;
         let run_weather_condensation = climate_phase == CLIMATE_TICK_INTERVAL - 1;
 
-        if run_temperature {
-            // Thermal pass: conduction over the temperature field + solar
-            // forcing. Runs as its own pass so it never contends with the
-            // swap CAS loops below. The stats accumulator is cleared
-            // immediately before so each pass produces a fresh sum/count
-            // snapshot, then copied out for async readback (the rolling
-            // average itself is an EMA on the CPU side in poll_temperature_stats).
+        // Sweep one quarter of the temperature volume each tick. Each voxel
+        // retains its 15 Hz update and the shader's four-tick rate compensation.
+        // Accumulate statistics over a complete sweep before reading them back.
+        if climate_phase == 0 {
             encoder.clear_buffer(&self.temp_stats_buffer, 0, None);
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Fluid Update Temperature Pass"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&self.update_temperature_pipeline);
-                pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
-                pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
-            }
-            if self.climate_readback_due() && !self.temp_stats_copy_pending.get()
-                && self.temp_stats_map_receiver.borrow().is_none()
-            {
-                encoder.copy_buffer_to_buffer(
-                    &self.temp_stats_buffer,
-                    0,
-                    &self.temp_stats_staging_buffer,
-                    0,
-                    self.temp_stats_buffer.size(),
-                );
-                self.temp_stats_copy_pending.set(true);
-                self.last_climate_readback.set(Some(std::time::Instant::now()));
-            }
         }
-
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Fluid Temperature Slice Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.update_temperature_slice_pipeline);
+            pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+            pass.dispatch_workgroups(
+                workgroup_count,
+                workgroup_count,
+                workgroup_count.div_ceil(4),
+            );
+        }
+        if climate_phase == CLIMATE_TICK_INTERVAL - 1
+            && climate_tick >= CLIMATE_TICK_INTERVAL * 2 - 1
+            && self.climate_readback_due()
+            && !self.temp_stats_copy_pending.get()
+            && self.temp_stats_map_receiver.borrow().is_none()
+        {
+            encoder.copy_buffer_to_buffer(
+                &self.temp_stats_buffer,
+                0,
+                &self.temp_stats_staging_buffer,
+                0,
+                self.temp_stats_buffer.size(),
+            );
+            self.temp_stats_copy_pending.set(true);
+            self.last_climate_readback
+                .set(Some(std::time::Instant::now()));
+        }
         if run_vapor_fog {
             // Vapor fog pass: derives the fog density field from the steam
             // present in the scene (steam saturates, fog diffuses and
@@ -2263,7 +2298,9 @@ impl GpuFluidSimulator {
     }
 
     fn update_water_audio_summary(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
-        if !self.audio_readbacks_enabled.get() { return; }
+        if !self.audio_readbacks_enabled.get() {
+            return;
+        }
         // Skip while the previous sample is still being consumed. Dynamic
         // callers already schedule this at 15 Hz; static mode may call more
         // often briefly while old flow/rain sources decay toward silence.
@@ -2699,26 +2736,27 @@ impl GpuFluidSimulator {
                         // water readout lag so far behind it was misleading).
                         // Preserve responsiveness independently of sample rate.
                         let now = std::time::Instant::now();
-                        let rate = self.last_climate_update.replace(Some(now))
-                            .map_or(1.0, |previous| 1.0 - (-now.duration_since(previous).as_secs_f32() / 0.3).exp());
+                        let rate =
+                            self.last_climate_update
+                                .replace(Some(now))
+                                .map_or(1.0, |previous| {
+                                    1.0 - (-now.duration_since(previous).as_secs_f32() / 0.3).exp()
+                                });
 
                         if stats[1] > 0 {
                             let avg_c = (stats[0] as f32 / stats[1] as f32) - 50.0;
                             let prev = self.avg_water_temp_c.get();
-                            self.avg_water_temp_c
-                                .set(prev + (avg_c - prev) * rate);
+                            self.avg_water_temp_c.set(prev + (avg_c - prev) * rate);
                         }
                         if stats[3] > 0 {
                             let avg_c = (stats[2] as f32 / stats[3] as f32) - 50.0;
                             let prev = self.avg_air_temp_c.get();
-                            self.avg_air_temp_c
-                                .set(prev + (avg_c - prev) * rate);
+                            self.avg_air_temp_c.set(prev + (avg_c - prev) * rate);
                         }
                         if stats.len() >= 6 && stats[5] > 0 {
                             let avg = (stats[4] as f32 / stats[5] as f32) / 255.0;
                             let prev = self.avg_humidity.get();
-                            self.avg_humidity
-                                .set(prev + (avg - prev) * rate);
+                            self.avg_humidity.set(prev + (avg - prev) * rate);
                         }
                         if stats.len() >= 7 && stats[6] > 0 {
                             self.static_surface_mesh_changed.set(true);
@@ -3023,7 +3061,7 @@ mod frame_timing_tests {
             let solid_mask = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Fluid Timing Solid Mask"),
                 size: voxel_bytes,
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             let light_field = device.create_buffer(&wgpu::BufferDescriptor {
@@ -3076,9 +3114,11 @@ mod frame_timing_tests {
             }
             queue.submit([encoder.finish()]);
             let (tx, rx) = std::sync::mpsc::channel();
-            readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-                tx.send(result).unwrap();
-            });
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    tx.send(result).unwrap();
+                });
             device
                 .poll(wgpu::PollType::Wait {
                     submission_index: None,
@@ -3096,6 +3136,128 @@ mod frame_timing_tests {
             }
             drop(mapped);
             readback.unmap();
+
+            // Validate exact workgroup-reduced totals across mixed phases and
+            // solids, including partially occupied workgroups at the grid edge.
+            let res = 7u32;
+            let count = (res * res * res) as usize;
+            let states: Vec<u32> = (0..count).map(|i| i as u32 % 5).collect();
+            let solids: Vec<u32> = (0..count).map(|i| u32::from(i % 11 == 0)).collect();
+            let humidity: Vec<u32> = (0..count).map(|i| (i as u32 % 256) * 256).collect();
+            let temperatures = vec![40u32 * 256; count]; // -10 C, the dark ambient
+            let mut expected = [0u32; 7];
+            for i in 0..count {
+                let phase = states[i];
+                if matches!(phase, 1 | 2 | 4) {
+                    expected[0] += 40;
+                    expected[1] += 1;
+                } else if phase == 0 && solids[i] == 0 {
+                    expected[2] += 40;
+                    expected[3] += 1;
+                }
+                if solids[i] == 0 && matches!(phase, 0 | 1 | 3 | 4) {
+                    expected[4] += if phase == 0 { i as u32 % 256 } else { 255 };
+                    expected[5] += 1;
+                }
+            }
+            queue.write_buffer(&simulator.state_buffer, 0, bytemuck::cast_slice(&states));
+            queue.write_buffer(
+                &simulator.solid_mask_buffer,
+                0,
+                bytemuck::cast_slice(&solids),
+            );
+            queue.write_buffer(
+                &simulator.humidity_buffer,
+                0,
+                bytemuck::cast_slice(&humidity),
+            );
+            queue.write_buffer(
+                &simulator.temp_field_buffer,
+                0,
+                bytemuck::cast_slice(&temperatures),
+            );
+            let mut params = simulator.make_params(3, 0, 0.0, 9.8, [false, true, false], [1.0; 4]);
+            params.grid_resolution = res;
+            params.sun_brightness = 0.0;
+            queue.write_buffer(&simulator.params_buffer, 0, bytemuck::bytes_of(&params));
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.clear_buffer(&simulator.temp_stats_buffer, 0, None);
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&simulator.update_temperature_pipeline);
+                pass.set_bind_group(0, &simulator.cached_sim_bind_group, &[]);
+                pass.dispatch_workgroups(res.div_ceil(4), res.div_ceil(4), res.div_ceil(4));
+            }
+            encoder.copy_buffer_to_buffer(&simulator.temp_stats_buffer, 0, &readback, 0, 28);
+            queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    tx.send(result).unwrap();
+                });
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(30)),
+                })
+                .unwrap();
+            rx.recv().unwrap().unwrap();
+            let mapped = readback.slice(..).get_mapped_range();
+            let stats: &[u32] = bytemuck::cast_slice(&mapped);
+            assert_eq!(
+                &stats[..7],
+                &expected,
+                "Climate averages must retain exact sums and counts"
+            );
+            drop(mapped);
+            readback.unmap();
+
+            // A four-tick sliced sweep must visit the same voxels exactly once,
+            // even when the volume isn't divisible by the workgroup dimensions.
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.clear_buffer(&simulator.temp_stats_buffer, 0, None);
+            for phase in 0..4 {
+                params.climate_phase = phase;
+                let staging = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Climate Slice Test Parameters"),
+                    contents: bytemuck::bytes_of(&params),
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                });
+                encoder.copy_buffer_to_buffer(
+                    &staging,
+                    0,
+                    &simulator.params_buffer,
+                    0,
+                    params_bytes,
+                );
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&simulator.update_temperature_slice_pipeline);
+                pass.set_bind_group(0, &simulator.cached_sim_bind_group, &[]);
+                pass.dispatch_workgroups(res.div_ceil(4), res.div_ceil(4), res.div_ceil(16));
+            }
+            encoder.copy_buffer_to_buffer(&simulator.temp_stats_buffer, 0, &readback, 0, 28);
+            queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::channel();
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    tx.send(result).unwrap();
+                });
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(30)),
+                })
+                .unwrap();
+            rx.recv().unwrap().unwrap();
+            let mapped = readback.slice(..).get_mapped_range();
+            let stats: &[u32] = bytemuck::cast_slice(&mapped);
+            assert_eq!(
+                &stats[..7],
+                &expected,
+                "Sliced climate sweeps must retain full-volume sums and counts"
+            );
         });
     }
 }

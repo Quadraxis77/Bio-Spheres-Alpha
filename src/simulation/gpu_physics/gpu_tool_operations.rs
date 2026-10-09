@@ -38,6 +38,7 @@ pub struct GpuToolOperations {
     position_update_pipeline: wgpu::ComputePipeline,
     position_update_params_buffer: wgpu::Buffer,
     position_update_params_bind_group: wgpu::BindGroup,
+    position_update_lifetime_bind_group: wgpu::BindGroup,
     position_update_physics_bind_group: wgpu::BindGroup, // All 3 buffer sets
 
     // Cell removal pipeline and resources
@@ -139,6 +140,11 @@ impl GpuToolOperations {
                     resource: position_update_params_buffer.as_entire_binding(),
                 }],
             });
+
+        let position_update_lifetime_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Drag lifetime flags"), layout: &pipelines.position_update_lifetime_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffers.death_flags.as_entire_binding() }],
+        });
 
         // Create physics bind group for position update (all 3 buffer sets)
         // Uses cell_insertion_physics_layout which has all 3 position and velocity buffers
@@ -320,6 +326,7 @@ impl GpuToolOperations {
             position_update_pipeline: pipelines.position_update_tool.clone(),
             position_update_params_buffer,
             position_update_params_bind_group,
+            position_update_lifetime_bind_group,
             position_update_physics_bind_group,
             cell_removal_pipeline: pipelines.cell_removal.clone(),
             cell_removal_params_buffer,
@@ -509,11 +516,12 @@ impl GpuToolOperations {
         encoder: &mut wgpu::CommandEncoder,
         cell_index: u32,
         new_pos: Vec3,
+        dragging: bool,
     ) {
         // Update position update parameters (requirement 10.5)
         let update_params = PositionUpdateParams {
             cell_index,
-            _pad0: 0,
+            _pad0: u32::from(dragging),
             _pad1: 0,
             _pad2: 0,
             new_position: [new_pos.x, new_pos.y, new_pos.z],
@@ -537,6 +545,7 @@ impl GpuToolOperations {
             compute_pass.set_pipeline(&self.position_update_pipeline);
             compute_pass.set_bind_group(0, &self.position_update_physics_bind_group, &[]);
             compute_pass.set_bind_group(1, &self.position_update_params_bind_group, &[]);
+            compute_pass.set_bind_group(2, &self.position_update_lifetime_bind_group, &[]);
 
             // Single workgroup dispatch as required by 10.4
             compute_pass.dispatch_workgroups(1, 1, 1);

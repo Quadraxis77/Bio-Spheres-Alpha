@@ -51,6 +51,8 @@ pub enum SceneModeRequest {
     /// `genome_id` is stale, the app can resolve the real GPU genome from the
     /// absolute mode range before loading it into the editor.
     LoadGenomeFromGpuCell { genome_id: u32, mode_index: u32 },
+    /// Load the retained inspected genome even after the specimen dies.
+    LoadInspectedGenome,
     /// Request to save a GPU scene snapshot (path chosen by file dialog)
     SaveSnapshot,
     /// Request to restore a GPU scene snapshot from the given path

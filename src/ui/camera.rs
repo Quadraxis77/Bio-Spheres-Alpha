@@ -43,6 +43,7 @@ pub enum SceneType {
 }
 
 /// Camera controller - Space Engineers style 6DOF camera (matches BioSpheres-Q)
+#[derive(Clone)]
 pub struct CameraController {
     /// Native controller pointing ray, independent of either eye's projection.
     pub interaction_ray: Option<(Vec3, Vec3)>,
@@ -109,7 +110,7 @@ pub struct CameraController {
     keys_pressed: KeyState,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct KeyState {
     w: bool,
     s: bool,
@@ -385,32 +386,14 @@ impl CameraController {
         })
     }
 
-    /// Move the navigation rig; headset pose is applied separately without springs.
+    /// Set the navigation rig; headset pose is applied separately without springs.
     #[cfg(feature = "vr")]
-    pub fn move_vr_rig(
-        &mut self,
-        movement: glam::Vec2,
-        yaw: f32,
-        head_rotation: Quat,
-        distance: f32,
-    ) {
-        if movement.length_squared() < 0.04 && yaw == 0.0 {
-            return;
-        }
-        let anchor = self.position();
-        let heading = self.view_rotation() * head_rotation * Vec3::NEG_Z;
-        let forward = Vec3::new(heading.x, 0.0, heading.z).normalize_or_zero();
-        let right = forward.cross(Vec3::Y).normalize_or_zero();
-        let motion = if movement.length_squared() >= 0.04 {
-            movement.clamp_length_max(1.0)
-        } else {
-            glam::Vec2::ZERO
-        };
-        self.center = anchor + (right * motion.x + forward * motion.y) * distance;
+    pub fn set_vr_rig(&mut self, position: Vec3, rotation: Quat) {
+        self.center = position;
         self.distance = 0.0;
         self.target_distance = 0.0;
         self.mode = CameraMode::FreeFly;
-        self.rotation = (Quat::from_rotation_y(yaw) * self.view_rotation()).normalize();
+        self.rotation = rotation.normalize();
         self.target_rotation = self.rotation;
         self.look_offset = Quat::IDENTITY;
     }
@@ -947,17 +930,14 @@ mod tests {
 
     #[cfg(feature = "vr")]
     #[test]
-    fn vr_snap_turn_preserves_rig_position_without_spring_delay() {
+    fn vr_rig_update_preserves_the_requested_pose_without_spring_delay() {
         let mut camera = CameraController::new_for_gpu_scene();
         let position = camera.position();
-        camera.move_vr_rig(
-            glam::Vec2::ZERO,
-            std::f32::consts::FRAC_PI_6,
-            Quat::IDENTITY,
-            1.0,
-        );
+        let orientation = Quat::from_rotation_y(0.2);
+        camera.set_vr_rig(position, orientation);
         assert!((camera.position() - position).length() < 1e-5);
         assert_eq!(camera.rotation, camera.target_rotation);
+        assert_eq!(camera.rotation, orientation.normalize());
         assert_eq!(camera.mode, CameraMode::FreeFly);
     }
 

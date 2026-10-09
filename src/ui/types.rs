@@ -944,9 +944,23 @@ fn default_desktop_render_fps() -> u32 {
     120
 }
 
-/// Global UI state shared across all UI components.
+/// Persisted geometry of the VR menu and preview screen.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VrScreenSettings {
+    pub curvature: f32,
+    pub distance: f32,
+    pub aspect: f32,
+}
+impl Default for VrScreenSettings {
+    fn default() -> Self { Self { curvature:0.0, distance:1.6, aspect:16.0/9.0 } }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GlobalUiState {
+    /// VR screen geometry is shared by menu and preview, independent of window resolution.
+    #[serde(default)]
+    pub vr_screen: VrScreenSettings,
     /// Current simulation mode/scene.
     pub current_mode: SimulationMode,
 
@@ -1179,6 +1193,7 @@ impl Default for GlobalUiState {
 
         Self {
             current_mode: SimulationMode::Preview,
+            vr_screen: VrScreenSettings::default(),
             ui_scale: 1.0,
             windows_locked: false,
             lock_tab_bar: false,
@@ -1423,6 +1438,16 @@ mod desktop_timing_tests {
         assert!((state.desktop_frame_interval().as_secs_f64() - 1.0 / 120.0).abs() < 1e-9);
     }
 
+    #[test]
+    fn vr_screen_preferences_round_trip_and_legacy_files_keep_defaults() {
+        let legacy:GlobalUiState=ron::from_str(include_str!("../../default_ui_state.ron")).unwrap();
+        assert_eq!(legacy.vr_screen,VrScreenSettings::default());
+        let mut state=GlobalUiState::default();
+        state.vr_screen=VrScreenSettings {curvature:60.0,distance:2.5,aspect:21.0/9.0};
+        let saved=ron::to_string(&state).unwrap();
+        let loaded:GlobalUiState=ron::from_str(&saved).unwrap();
+        assert_eq!(loaded.vr_screen,state.vr_screen);
+    }
     #[test]
     fn desktop_limit_survives_save_and_load() {
         let state = GlobalUiState {

@@ -12,6 +12,7 @@ pub const SEGMENT_COUNT: usize = 10;
 
 /// Number of timestamp writes per frame (one per segment boundary).
 const TIMESTAMP_COUNT: usize = SEGMENT_COUNT + 1;
+const MAX_VIEWS: usize = 2;
 
 /// Frames of readback latency, so mapping a buffer never stalls the GPU.
 const FRAMES_IN_FLIGHT: usize = 3;
@@ -40,6 +41,7 @@ pub const SEGMENT_LABELS: [&str; SEGMENT_COUNT] = [
 struct ReadbackSlot {
     buffer: wgpu::Buffer,
     map_receiver: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    view_count: usize,
 }
 
 /// Tracks per-segment GPU timings using `wgpu::QuerySet` timestamp queries.
@@ -52,6 +54,8 @@ pub struct GpuTimer {
     last_segments_ms: [f32; SEGMENT_COUNT],
     resolved_this_frame: bool,
     last_completed_at: Option<std::time::Instant>,
+    view_count: usize,
+    view_index: usize,
 }
 
 impl GpuTimer {
@@ -67,7 +71,7 @@ impl GpuTimer {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("GPU Frame Timer Query Set"),
             ty: wgpu::QueryType::Timestamp,
-            count: (TIMESTAMP_COUNT * FRAMES_IN_FLIGHT) as u32,
+            count: (TIMESTAMP_COUNT * MAX_VIEWS * FRAMES_IN_FLIGHT) as u32,
         });
 
         let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -80,11 +84,12 @@ impl GpuTimer {
         let slots = std::array::from_fn(|_| ReadbackSlot {
             buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("GPU Frame Timer Readback Buffer"),
-                size: (TIMESTAMP_COUNT * std::mem::size_of::<u64>()) as u64,
+                size: (TIMESTAMP_COUNT * MAX_VIEWS * std::mem::size_of::<u64>()) as u64,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             }),
             map_receiver: None,
+            view_count: 1,
         });
 
         Some(Self {
@@ -96,6 +101,8 @@ impl GpuTimer {
             last_segments_ms: [0.0; SEGMENT_COUNT],
             resolved_this_frame: false,
             last_completed_at: None,
+            view_count: 1,
+            view_index: 0,
         })
     }
 
@@ -104,7 +111,9 @@ impl GpuTimer {
     /// `SEGMENT_COUNT` is the end. Segment `i` spans boundaries `i` to `i + 1`.
     pub fn write_timestamp(&self, encoder: &mut wgpu::CommandEncoder, boundary: usize) {
         debug_assert!(boundary < TIMESTAMP_COUNT);
-        let index = (self.frame_index * TIMESTAMP_COUNT + boundary) as u32;
+        let index = (self.frame_index * TIMESTAMP_COUNT * MAX_VIEWS
+            + self.view_index * TIMESTAMP_COUNT
+            + boundary) as u32;
         encoder.write_timestamp(&self.query_set, index);
     }
 
@@ -112,6 +121,9 @@ impl GpuTimer {
     /// once, after all `write_timestamp` calls for the frame, before `queue.submit`.
     pub fn resolve(&mut self, encoder: &mut wgpu::CommandEncoder) {
         self.resolved_this_frame = false;
+        if self.view_index + 1 < self.view_count {
+            return;
+        }
         let slot = &self.slots[self.frame_index];
         // If the previous readback for this slot hasn't completed yet, skip -
         // we'll catch up next time this slot comes around.
@@ -119,8 +131,8 @@ impl GpuTimer {
             return;
         }
 
-        let first = (self.frame_index * TIMESTAMP_COUNT) as u32;
-        let last = first + TIMESTAMP_COUNT as u32;
+        let first = (self.frame_index * TIMESTAMP_COUNT * MAX_VIEWS) as u32;
+        let last = first + (TIMESTAMP_COUNT * self.view_count) as u32;
         let resolve_offset = self.frame_index as u64 * RESOLVE_ALIGNMENT;
 
         encoder.resolve_query_set(
@@ -134,19 +146,24 @@ impl GpuTimer {
             resolve_offset,
             &slot.buffer,
             0,
-            (TIMESTAMP_COUNT * std::mem::size_of::<u64>()) as u64,
+            (TIMESTAMP_COUNT * self.view_count * std::mem::size_of::<u64>()) as u64,
         );
+        self.slots[self.frame_index].view_count = self.view_count;
         self.resolved_this_frame = true;
     }
 
     /// Age of the most recently received sample; absent until a readback completes.
     pub fn sample_age_ms(&self) -> Option<f64> {
-        self.last_completed_at.map(|at| at.elapsed().as_secs_f64() * 1000.0)
+        self.last_completed_at
+            .map(|at| at.elapsed().as_secs_f64() * 1000.0)
     }
 
     /// Call after `queue.submit`. Kicks off async mapping for the slot just
     /// resolved and polls all slots for completed readbacks.
     pub fn after_submit(&mut self, device: &wgpu::Device) {
+        if self.view_index + 1 < self.view_count {
+            return;
+        }
         if self.resolved_this_frame && self.slots[self.frame_index].map_receiver.is_none() {
             let slot = &mut self.slots[self.frame_index];
             let (sender, receiver) = std::sync::mpsc::channel();
@@ -183,10 +200,15 @@ impl GpuTimer {
                 {
                     let view = slot.buffer.slice(..).get_mapped_range();
                     let timestamps: &[u64] = bytemuck::cast_slice(&view);
-                    for i in 0..SEGMENT_COUNT {
-                        let delta_ticks = timestamps[i + 1].saturating_sub(timestamps[i]);
-                        self.last_segments_ms[i] =
-                            delta_ticks as f32 * self.period_ns / 1_000_000.0;
+                    self.last_segments_ms.fill(0.0);
+                    for view in 0..slot.view_count {
+                        let base = view * TIMESTAMP_COUNT;
+                        for i in 0..SEGMENT_COUNT {
+                            let delta_ticks =
+                                timestamps[base + i + 1].saturating_sub(timestamps[base + i]);
+                            self.last_segments_ms[i] +=
+                                delta_ticks as f32 * self.period_ns / 1_000_000.0;
+                        }
                     }
                 }
                 slot.buffer.unmap();
@@ -196,6 +218,20 @@ impl GpuTimer {
 
         self.resolved_this_frame = false;
         self.frame_index = (self.frame_index + 1) % FRAMES_IN_FLIGHT;
+    }
+
+    pub fn set_view_count(&mut self, count: usize) {
+        assert!((1..=MAX_VIEWS).contains(&count));
+        self.view_count = count;
+        self.view_index = 0;
+    }
+
+    pub fn begin_view(&mut self, advance_world: bool) {
+        self.view_index = if self.view_count == 2 && !advance_world {
+            1
+        } else {
+            0
+        };
     }
 
     /// GPU time per segment (ms) from the most recently completed readback.
@@ -217,15 +253,25 @@ mod tests {
     fn readback_recovers_and_only_maps_resolved_frames() {
         pollster::block_on(async {
             let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-            let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                ..Default::default()
-            }).await.unwrap();
-            let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-            if !adapter.features().contains(features) { return; }
-            let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
-                required_features: features, ..Default::default()
-            }).await.unwrap();
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let features =
+                wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+            if !adapter.features().contains(features) {
+                return;
+            }
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_features: features,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
             let mut timer = GpuTimer::new(&device, &queue).unwrap();
             timer.after_submit(&device);
             assert!(timer.slots.iter().all(|slot| slot.map_receiver.is_none()));
@@ -239,15 +285,59 @@ mod tests {
 
             for _ in 0..8 {
                 let mut encoder = device.create_command_encoder(&Default::default());
-                for boundary in 0..=SEGMENT_COUNT { timer.write_timestamp(&mut encoder, boundary); }
+                for boundary in 0..=SEGMENT_COUNT {
+                    timer.write_timestamp(&mut encoder, boundary);
+                }
                 timer.resolve(&mut encoder);
                 queue.submit([encoder.finish()]);
-                device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+                device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: None,
+                    })
+                    .unwrap();
                 timer.after_submit(&device);
             }
-            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
             timer.after_submit(&device);
             assert!(timer.sample_age_ms().is_some());
+
+            // A stereo sample must wait for both eyes. The first eye alone must
+            // not map a query range that the second eye will still write.
+            timer.last_completed_at = None;
+            timer.set_view_count(2);
+            for eye in 0..2 {
+                timer.begin_view(eye == 0);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                for boundary in 0..=SEGMENT_COUNT {
+                    timer.write_timestamp(&mut encoder, boundary);
+                }
+                timer.resolve(&mut encoder);
+                queue.submit([encoder.finish()]);
+                timer.after_submit(&device);
+                if eye == 0 {
+                    assert!(timer.sample_age_ms().is_none());
+                    assert!(!timer.resolved_this_frame);
+                }
+            }
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .unwrap();
+            timer.after_submit(&device);
+            assert!(timer.sample_age_ms().is_some());
+            assert!(timer
+                .segment_times_ms()
+                .iter()
+                .all(|ms| ms.is_finite() && *ms >= 0.0));
+            timer.set_view_count(1);
         });
     }
 }

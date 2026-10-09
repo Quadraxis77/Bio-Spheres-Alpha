@@ -1128,3 +1128,7 @@ impl CellRenderer {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "cell_lighting_tests.rs"]
+mod lighting_tests;

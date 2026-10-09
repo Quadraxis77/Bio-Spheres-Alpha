@@ -83,6 +83,9 @@ struct ExtractParams {
 // safely within u32 range without needing 64-bit atomics. Humidity is stored
 // as 0..255 units from the atmospheric humidity field.
 @group(0) @binding(4) var<storage, read_write> temp_stats: array<atomic<u32>>;
+// Reduce exact climate totals on-chip before touching the six global counters.
+// A 128^3 grid previously serialized millions of atomic adds into these slots.
+var<workgroup> local_temp_stats: array<atomic<u32>, 6>;
 // Light field intensity per voxel: 0.0 = fully shadowed, 1.0 = fully lit.
 // Same 128^3 grid/indexing as `voxels`. Written by LightFieldSystem one frame
 // behind the fluid step (fluid runs first each frame) - same lag already
@@ -1200,7 +1203,42 @@ fn cool_water_neighbors(gid: vec3<u32>, amount: f32) {
 // symmetric in heat units and divided by each side's thermal mass, which is
 // what makes water stabilize air while air only slowly warms water.
 @compute @workgroup_size(4, 4, 4)
-fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn update_temperature(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32,
+) {
+    update_temperature_group(gid, lane);
+}
+
+// Dynamic worlds visit one quarter of the volume per fluid tick. Every voxel
+// still receives one thermal update per four ticks, without a full-volume burst.
+@compute @workgroup_size(4, 4, 4)
+fn update_temperature_slice(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lane: u32,
+) {
+    let slice_depth = ((params.grid_resolution + 15u) / 16u) * 4u;
+    let offset = vec3<u32>(0u, 0u, params.climate_phase * slice_depth);
+    update_temperature_group(gid + offset, lane);
+}
+
+fn update_temperature_group(gid: vec3<u32>, lane: u32) {
+    if lane < 6u {
+        atomicStore(&local_temp_stats[lane], 0u);
+    }
+    workgroupBarrier();
+    update_temperature_voxel(gid);
+    // Every invocation reaches both barriers, including out-of-bounds voxels.
+    workgroupBarrier();
+    if lane < 6u {
+        let total = atomicLoad(&local_temp_stats[lane]);
+        if total != 0u {
+            atomicAdd(&temp_stats[lane], total);
+        }
+    }
+}
+
+fn update_temperature_voxel(gid: vec3<u32>) {
     let res = params.grid_resolution;
     if gid.x >= res || gid.y >= res || gid.z >= res {
         return;
@@ -1290,11 +1328,11 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Rolling-average stats: slots 0/1 = water phases, 2/3 = air,
     // 4/5 = atmospheric humidity across empty air and steam.
     if fluid_type == 1u || fluid_type == 2u || fluid_type == 4u {
-        atomicAdd(&temp_stats[0], u32(round(t_self) + 50.0));
-        atomicAdd(&temp_stats[1], 1u);
+        atomicAdd(&local_temp_stats[0], u32(round(t_self) + 50.0));
+        atomicAdd(&local_temp_stats[1], 1u);
     } else if fluid_type == 0u && !solid_self {
-        atomicAdd(&temp_stats[2], u32(round(t_self) + 50.0));
-        atomicAdd(&temp_stats[3], 1u);
+        atomicAdd(&local_temp_stats[2], u32(round(t_self) + 50.0));
+        atomicAdd(&local_temp_stats[3], 1u);
     }
     if !solid_self && (fluid_type == 0u || fluid_type == 1u || fluid_type == 3u || fluid_type == 4u) {
         var humidity_units = clamp(
@@ -1307,8 +1345,8 @@ fn update_temperature(@builtin(global_invocation_id) gid: vec3<u32>) {
         if fluid_type == 1u || fluid_type == 3u || fluid_type == 4u {
             humidity_units = 255.0;
         }
-        atomicAdd(&temp_stats[4], u32(humidity_units));
-        atomicAdd(&temp_stats[5], 1u);
+        atomicAdd(&local_temp_stats[4], u32(humidity_units));
+        atomicAdd(&local_temp_stats[5], 1u);
     }
 
     // "Up" for buoyancy: opposite the local gravity (radial-safe).

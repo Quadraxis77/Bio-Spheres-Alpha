@@ -1,0 +1,9 @@
+2026-10-07 04:09:05 -0700: VirtualDesktopOpenXR - v1.0.10 (f17345f7dbc7bc52395eaedb7aa15bfa13a675bf) (C:\Program Files\Virtual Desktop Streamer\OpenXR)
+2026-10-07 04:09:05 -0700: Application: Biospheres (bio-spheres.exe); Engine: Biospheres
+2026-10-07 04:09:05 -0700: Application request API version 1.0.0
+2026-10-07 04:09:05 -0700: Requested extension: XR_FB_display_refresh_rate
+2026-10-07 04:09:05 -0700: Requested extension: XR_KHR_vulkan_enable2
+2026-10-07 04:09:05 -0700: Using Virtual Desktop runtime
+2026-10-07 04:09:05 -0700: Streamer: 1.34.22
+2026-10-07 04:09:05 -0700: OVR: 1.64.0
+2026-10-07 04:09:05 -0700: xrGetSystem failed with XR_ERROR_FORM_FACTOR_UNAVAILABLE

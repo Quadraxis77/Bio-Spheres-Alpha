@@ -4,7 +4,7 @@ use std::{cmp::Ordering, ops::RangeInclusive};
 
 use crate::{
     Button, CursorIcon, Id, Key, MINUS_CHAR_STR, Modifiers, NumExt as _, Response, RichText, Sense,
-    TextEdit, TextWrapMode, Ui, Widget, WidgetInfo, emath, text,
+    TextEdit, TextWrapMode, Ui, Widget, WidgetInfo, emath, text, ControllerNumberPad,
 };
 
 // ----------------------------------------------------------------------------
@@ -44,6 +44,7 @@ pub struct DragValue<'a> {
     clamp_existing_to_range: bool,
     min_decimals: usize,
     max_decimals: Option<usize>,
+    allow_decimal: bool,
     custom_formatter: Option<NumFormatter<'a>>,
     custom_parser: Option<NumParser<'a>>,
     update_while_editing: bool,
@@ -59,7 +60,10 @@ impl<'a> DragValue<'a> {
         });
 
         if Num::INTEGRAL {
-            slf.max_decimals(0).range(Num::MIN..=Num::MAX).speed(0.25)
+            slf.allow_decimal(false)
+                .max_decimals(0)
+                .range(Num::MIN..=Num::MAX)
+                .speed(0.25)
         } else {
             slf
         }
@@ -75,10 +79,16 @@ impl<'a> DragValue<'a> {
             clamp_existing_to_range: true,
             min_decimals: 0,
             max_decimals: None,
+            allow_decimal: true,
             custom_formatter: None,
             custom_parser: None,
             update_while_editing: true,
         }
+    }
+
+    fn allow_decimal(mut self, allow_decimal: bool) -> Self {
+        self.allow_decimal = allow_decimal;
+        self
     }
 
     /// How much the value changes when dragged one point (logical pixel).
@@ -437,6 +447,7 @@ impl Widget for DragValue<'_> {
             suffix,
             min_decimals,
             max_decimals,
+            allow_decimal,
             custom_formatter,
             custom_parser,
             update_while_editing,
@@ -549,6 +560,14 @@ impl Widget for DragValue<'_> {
             let mut value_text = ui
                 .data_mut(|data| data.remove_temp::<String>(id))
                 .unwrap_or_else(|| value_text.clone());
+            ControllerNumberPad::register(
+                ui.ctx(),
+                id,
+                &prefix,
+                &suffix,
+                &value_text,
+                allow_decimal,
+            );
             let response = ui.add(
                 TextEdit::singleline(&mut value_text)
                     .clip_text(false)
@@ -575,6 +594,9 @@ impl Widget for DragValue<'_> {
                 // Update only when the edit has lost focus.
                 response.lost_focus() && !ui.input(|i| i.key_pressed(Key::Escape))
             };
+            if response.changed() {
+                ControllerNumberPad::mark_text_edited(ui.ctx(), id);
+            }
             if update {
                 let parsed_value = parse(&custom_parser, &value_text);
                 if let Some(mut parsed_value) = parsed_value {

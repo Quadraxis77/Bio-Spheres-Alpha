@@ -159,11 +159,32 @@ impl PresentationFrame {
 }
 
 pub struct App {
-    mirror_fallback: Option<wgpu::Texture>,
+    vr_capture_target: Option<wgpu::Texture>,
+    vr_submit_ms: f64,
     #[cfg(feature = "vr")]
     vr: Option<crate::vr::VrState>,
     #[cfg(feature = "vr")]
     vr_input_state: (bool, bool, bool, std::time::Instant),
+    #[cfg(feature = "vr")]
+    vr_screenshot_button_down: bool,
+    #[cfg(feature = "vr")]
+    vr_controls: crate::vr::controls::Controls,
+    #[cfg(feature = "vr")]
+    vr_screen_save_at: Option<std::time::Instant>,
+    #[cfg(feature = "vr")]
+    vr_scene_request: Option<crate::vr::controls::Choice>,
+    #[cfg(feature = "vr")]
+    vr_reset_request: Option<crate::ui::panel_context::SceneModeRequest>,
+    #[cfg(feature = "vr")]
+    vr_probe: Option<
+        std::sync::mpsc::Receiver<
+            crate::vr::VrResult<(crate::vr::VrBootstrap, crate::vr::VrGraphics)>,
+        >,
+    >,
+    #[cfg(feature = "vr")]
+    vr_probe_next: std::time::Instant,
+    #[cfg(feature = "vr")]
+    vr_was_presenting: bool,
     /// Prevents system sleep while focused or while an unpaused simulation runs.
     sleep_inhibitor: crate::sleep_inhibitor::SleepInhibitor,
     window_focused: bool,
@@ -175,8 +196,8 @@ pub struct App {
     ui: UiSystem,
     last_render_time: std::time::Instant,
     frame_count: u32,
-    cpu_phase_totals_ms: [f64; 8],
-    cpu_phase_max_ms: [f64; 8],
+    cpu_phase_totals_ms: [f64; 9],
+    cpu_phase_max_ms: [f64; 9],
     frame_lateness_max_ms: f64,
     fps_timer: std::time::Instant,
     /// Persistent genome editor state
@@ -218,6 +239,7 @@ pub struct App {
     // panics with "Trying to destroy a SurfaceAcquireSemaphores that is still
     // in use by a SurfaceTexture".
     surface: wgpu::Surface<'static>,
+    graphics_instance: wgpu::Instance,
     device: wgpu::Device,
     /// Current high-level application phase (main menu vs in-game).
     app_phase: AppPhase,
@@ -235,15 +257,159 @@ pub struct App {
 }
 
 impl App {
+    #[cfg(feature = "vr")]
+    fn detect_headset(&mut self) {
+        if self.vr.is_some() || std::env::args().any(|arg| arg == "--no-vr") {
+            return;
+        }
+        // Keep device changes outside screenshots, captures, and deferred GPU work.
+        if self.deferred_action.is_some() || self.editor_state.gif_capture.is_some() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some(probe) = &self.vr_probe {
+            let result = match probe.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(_) => Err("Headset detection worker stopped".into()),
+            };
+            self.vr_probe = None;
+            self.vr_probe_next = now + std::time::Duration::from_secs(2);
+            match result.and_then(|(bootstrap, graphics)| self.attach_headset(bootstrap, graphics))
+            {
+                Ok(()) => log::info!("Automatic VR headset connection ready"),
+                Err(error) => log::debug!("Automatic VR detection: {error}"),
+            }
+        } else if now >= self.vr_probe_next {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.vr_probe = Some(receiver);
+            std::thread::Builder::new()
+                .name("VR headset detection".into())
+                .spawn(move || {
+                    let result = crate::vr::VrBootstrap::new().and_then(|bootstrap| {
+                        bootstrap
+                            .create_graphics()
+                            .map(|graphics| (bootstrap, graphics))
+                    });
+                    let _ = sender.send(result);
+                })
+                .expect("VR headset detection thread");
+        }
+    }
+
+    #[cfg(feature = "vr")]
+    fn attach_headset(
+        &mut self,
+        bootstrap: crate::vr::VrBootstrap,
+        graphics: crate::vr::VrGraphics,
+    ) -> Result<(), String> {
+        let surface = graphics
+            .instance
+            .create_surface(self.window.clone())
+            .map_err(|e| e.to_string())?;
+        if !graphics.adapter.is_surface_supported(&surface) {
+            return Err("The headset GPU cannot present to this desktop window".into());
+        }
+        let caps = surface.get_capabilities(&graphics.adapter);
+        let vr = crate::vr::VrState::new(
+            bootstrap,
+            &graphics,
+            &caps.formats,
+            self.config.width,
+            self.config.height,
+        )?;
+        let mut config = self.config.clone();
+        config.format = vr.format();
+        config.present_mode = wgpu::PresentMode::AutoNoVsync;
+        config.alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+            wgpu::CompositeAlphaMode::Opaque
+        } else {
+            caps.alpha_modes[0]
+        };
+        // Construct replacements before touching the active desktop state.
+        let scene_manager = self.scene_manager.recreate_on_device(
+            &self.device,
+            &self.queue,
+            &graphics.device,
+            &graphics.queue,
+            &config,
+            &self.editor_state,
+        )?;
+        let mut renderer =
+            self.ui
+                .renderer_on_device(&graphics.device, &graphics.queue, config.format);
+        let menu = self.main_menu_scene.as_ref().map(|menu| {
+            menu.recreate_on_device(&graphics.device, &graphics.queue, &config, &mut renderer)
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(10)),
+            })
+            .map_err(|e| e.to_string())?;
+        Self::handoff_surface(
+            &mut self.surface,
+            surface,
+            &graphics.device,
+            &config,
+            &self.graphics_instance,
+            &self.device,
+            &self.config,
+            self.window.clone(),
+        )?;
+        self.vr_capture_target = None;
+        self.scene_manager = scene_manager;
+        self.main_menu_scene = menu;
+        self.ui.renderer = renderer;
+        self.graphics_instance = graphics.instance;
+        self.device = graphics.device;
+        self.queue = graphics.queue;
+        self.config = config;
+        self.vr = Some(vr);
+        self.last_render_time = std::time::Instant::now();
+        self.next_frame_time = self.last_render_time;
+        Ok(())
+    }
+
+    #[cfg(feature = "vr")]
+    fn handoff_surface(
+        current: &mut wgpu::Surface<'static>,
+        replacement: wgpu::Surface<'static>,
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        old_instance: &wgpu::Instance,
+        old_device: &wgpu::Device,
+        old_config: &wgpu::SurfaceConfiguration,
+        window: Arc<Window>,
+    ) -> Result<(), String> {
+        // A Windows HWND can own only one configured native swapchain. Merely
+        // creating the replacement surface is safe; configuring it before the
+        // previous surface is dropped produces "Native window is in use".
+        drop(std::mem::replace(current, replacement));
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        current.configure(device, config);
+        if let Some(error) = pollster::block_on(device.pop_error_scope()) {
+            let restored = old_instance
+                .create_surface(window)
+                .map_err(|e| e.to_string())?;
+            drop(std::mem::replace(current, restored));
+            current.configure(old_device, old_config);
+            return Err(format!("VR desktop swapchain handoff: {error}"));
+        }
+        Ok(())
+    }
+
     fn acquire_presentation_frame(&mut self) -> Option<PresentationFrame> {
         #[cfg(feature = "vr")]
-        let native = self.vr.as_ref().is_some_and(|vr| vr.running());
+        let native = self.vr.as_ref().is_some_and(|vr| vr.presenting());
         #[cfg(not(feature = "vr"))]
         let native = false;
         let size = self.window.inner_size();
         let minimized =
             size.width == 0 || size.height == 0 || self.window.is_minimized() == Some(true);
-        if !minimized {
+        // VR owns presentation while active; only acquire the desktop surface
+        // after the headset becomes idle or unworn.
+        if !minimized && !native {
             for attempt in 0..2 {
                 match self.surface.get_current_texture() {
                     Ok(surface) => {
@@ -258,7 +424,7 @@ impl App {
                         self.surface.configure(&self.device, &self.config)
                     }
                     Err(error) => {
-                        log::warn!("Desktop mirror surface: {error}");
+                        log::warn!("Desktop surface: {error}");
                         break;
                     }
                 }
@@ -269,12 +435,12 @@ impl App {
         }
         let dimensions = (self.config.width.max(1), self.config.height.max(1));
         if self
-            .mirror_fallback
+            .vr_capture_target
             .as_ref()
             .is_none_or(|texture| (texture.width(), texture.height()) != dimensions)
         {
-            self.mirror_fallback = Some(self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("VR mirror while minimized"),
+            self.vr_capture_target = Some(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("VR screenshot capture target"),
                 size: wgpu::Extent3d {
                     width: dimensions.0,
                     height: dimensions.1,
@@ -289,87 +455,399 @@ impl App {
             }));
         }
         Some(PresentationFrame {
-            texture: self.mirror_fallback.as_ref().unwrap().clone(),
+            texture: self.vr_capture_target.as_ref().unwrap().clone(),
             surface: None,
         })
     }
+
+    fn present_frame(&mut self, frame: PresentationFrame) {
+        self.vr_submit_ms = 0.0;
+        #[cfg(feature = "vr")]
+        {
+            let started = std::time::Instant::now();
+            self.finish_vr_frame();
+            self.vr_submit_ms = started.elapsed().as_secs_f64() * 1000.0;
+        }
+        frame.present();
+    }
+
+    #[cfg(feature = "vr")]
+    fn finish_vr_frame(&mut self) {
+        if let Some(vr) = &mut self.vr {
+            if let Err(error) = vr.end_frame() {
+                log::error!("Native VR presentation failed; returning to desktop: {error}");
+                self.vr = None;
+                self.scene_manager
+                    .resize(&self.device, self.config.width, self.config.height);
+                self.scene_manager
+                    .active_scene_mut()
+                    .camera_mut()
+                    .interaction_ray = None;
+            }
+        }
+    }
     #[cfg(feature = "vr")]
     fn update_vr_input(&mut self) {
-        let Some(vr) = &self.vr else {
-            if let Some(scene) = self.scene_manager.gpu_scene_mut() {
-                scene.camera.interaction_ray = None;
+        self.persist_vr_screen_settings(false);
+        if let Some(vr) = self.vr.as_mut() {
+            vr.set_panel_settings(self.vr_controls.panel_settings);
+        }
+        // Retain the last minute even while the wheel is closed or VR is unworn.
+        if self.app_phase == AppPhase::InGame
+            && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
+            if let Some(scene) = self.scene_manager.gpu_scene() {
+                self.vr_controls.population.observe(scene.current_time as f64, scene.current_cell_count);
+                self.vr_controls.simulation_speed = scene.time_scale;
             }
-            if let Some(scene) = self.scene_manager.preview_scene_mut() {
-                scene.camera.interaction_ray = None;
-            }
+        }
+        let Some(vr) = self.vr.as_ref().filter(|vr| vr.presenting()) else {
+            self.persist_vr_screen_settings(true);
+            self.vr_controls.suspend();
+            egui::ControllerSlider::close(&self.ui.ctx);
+            self.ui.native_ui_hidden = false;
+            self.ui.native_panel_visible = false;
+            egui::ControllerSlider::set_circular(&self.ui.ctx, self.vr_controls.wheel_open);
+            self.ui.set_native_input(
+                false,
+                None,
+                false,
+                0.0,
+                self.window.scale_factor() as f32,
+            );
+            self.vr_input_state.3 = std::time::Instant::now();
+            self.vr_screenshot_button_down = false;
+            self.scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .interaction_ray = None;
+            self.scene_manager.clear_dragged_cell();
+            self.editor_state.radial_menu.stop_dragging();
             if self.vr_input_state.0 {
-                self.handle_event(&WindowEvent::MouseInput {
-                    device_id: winit::event::DeviceId::dummy(),
-                    button: MouseButton::Left,
-                    state: ElementState::Released,
-                });
+                self.use_vr_tool(false);
                 self.vr_input_state.0 = false;
-            }
-            if self.vr_input_state.1 {
-                self.editor_state.radial_menu.close(false);
-                self.vr_input_state.1 = false;
             }
             return;
         };
-        let input = match vr.input() {
-            Ok(input) => input,
-            Err(error) => {
-                log::warn!("Native VR input: {error}");
-                Default::default()
-            }
-        };
-        let scale = vr.world_units_per_meter;
+        let mut input = vr.input().unwrap_or_else(|error| {
+            log::warn!("Native VR input: {error}");
+            Default::default()
+        });
+        let screenshot_pressed =
+            input.stick_clicks[1] && !self.vr_screenshot_button_down;
+        self.vr_screenshot_button_down = input.stick_clicks[1];
+        if screenshot_pressed && self.app_phase == AppPhase::InGame {
+            self.editor_state.request_screenshot = true;
+        }
+        let mut scale = vr.world_units_per_meter;
+        let immersive = self.app_phase == AppPhase::InGame
+            && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu;
+        input.ui_pointer = (!immersive || self.vr_controls.full_ui) && input.pointer.is_some();
+        let preview_ray = input.pointer.and_then(|pointer| {
+            vr.panel_pointer_ray(self.scene_manager.active_scene().camera(), pointer)
+        });
         let now = std::time::Instant::now();
         let dt = now
             .duration_since(self.vr_input_state.3)
             .as_secs_f32()
             .min(0.1);
         self.vr_input_state.3 = now;
-        let yaw = if input.turn.abs() > 0.7 && !self.vr_input_state.2 {
-            self.vr_input_state.2 = true;
-            -input.turn.signum() * std::f32::consts::FRAC_PI_6
-        } else {
-            0.0
-        };
-        if input.turn.abs() < 0.3 {
-            self.vr_input_state.2 = false;
+        let old_full_ui = self.vr_controls.full_ui;
+        let old_hover = self.vr_controls.hovered;
+        let old_adjustment = self.vr_controls.adjustment;
+        let old_wheel_open = self.vr_controls.wheel_open;
+        let previous_context=self.vr_controls.context;
+        self.vr_controls
+            .set_context(if self.app_phase == AppPhase::MainMenu {
+                crate::vr::controls::WheelContext::MainMenu
+            } else if immersive {
+                crate::vr::controls::WheelContext::Gpu
+            } else {
+                crate::vr::controls::WheelContext::Preview
+            });
+        if immersive {
+            if self
+                .scene_manager
+                .gpu_scene()
+                .is_some_and(|scene| scene.is_following_organism())
+            {
+                self.scene_manager.clear_organism_follow();
+            }
+            self.editor_state.radial_menu.close(false);
         }
-        let camera = self.scene_manager.active_scene_mut().camera_mut();
-        if self.app_phase == AppPhase::InGame {
-            camera.move_vr_rig(
-                input.movement,
-                yaw,
-                input.head_rotation.unwrap_or(glam::Quat::IDENTITY),
-                scale * 1.5 * dt,
+        if previous_context != self.vr_controls.context { egui::ControllerSlider::close(&self.ui.ctx); }
+        if let Some(slider)=egui::ControllerSlider::active(&self.ui.ctx) { self.vr_controls.sync_ui_slider(&slider); }
+        else if self.vr_controls.dial.as_ref().is_some_and(|dial| matches!(dial.target,crate::vr::dial::Target::Ui(_))) {
+            self.vr_controls.dial=None;
+            self.vr_controls.wheel_open=false;
+        }
+        let had_ui_slider=self.vr_controls.dial.as_ref().is_some_and(|dial| matches!(dial.target,crate::vr::dial::Target::Ui(_)));
+        let inspected = &self.editor_state.radial_menu.inspection;
+        self.vr_controls.cell_info.data = inspected.data;
+        self.vr_controls.cell_info.dead = inspected.dead;
+        self.vr_controls.cell_info.loadable = inspected.genome.is_some();
+        self.vr_controls.cell_info.genome_name = inspected.genome.as_ref().map(|g|g.name.clone()).unwrap_or_default();
+        self.vr_controls.cell_info.modes = inspected.genome.as_ref().map_or(0,|g|g.modes.len());
+        self.vr_controls.set_entry_radius(self.ui.state.world_diameter*0.5);
+        self.vr_controls.set_gravity(
+            self.ui.state.world_settings.gravity,
+            self.ui.state.world_settings.gravity_mode,
+        );
+        let choice = self.vr_controls.update(
+            &input,
+            self.scene_manager.active_scene_mut().camera_mut(),
+            &mut scale,
+            dt,
+        );
+        if had_ui_slider && self.vr_controls.dial.is_none() { egui::ControllerSlider::close(&self.ui.ctx); }
+        if let Some((target, normalized)) = self.vr_controls.dial.as_mut()
+            .and_then(|dial| dial.pending.take().map(|value| (dial.target,value))) {
+            use crate::vr::{controls::Choice,dial::Target};
+            match target {
+                Target::Ui(id) => egui::ControllerSlider::request(&self.ui.ctx,id,normalized as f64),
+                Target::Choice(Choice::Gravity) => self.ui.state.world_settings.gravity = -100.0+normalized*200.0,
+                Target::Choice(Choice::SunPosition) => {
+                    self.editor_state.sun_rotation_enabled=true;
+                    self.editor_state.sun_rotation_speed=0.0;
+                    self.editor_state.sun_orbit_angle=normalized*360.0;
+                    self.editor_state.apply_sun_orbit();
+                    self.editor_state.light_params_dirty=true;
+                }
+                Target::Choice(Choice::Brightness) => {
+                    self.editor_state.sun_intensity=normalized*5.0;
+                    self.editor_state.light_params_dirty=true;
+                }
+                Target::Choice(Choice::SimSpeed) => {
+                    let speed = 0.1 * (crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED / 0.1).powf(normalized);
+                    self.ui.state.gpu_headless_auto_speed = false;
+                    if let Some(scene) = self.scene_manager.gpu_scene_mut() { scene.time_scale = speed; }
+                    self.vr_controls.simulation_speed = speed;
+                }
+
+                Target::Choice(Choice::ScreenCurvature) => self.vr_controls.panel_settings.curvature = normalized * 110.0,
+                Target::Choice(Choice::ScreenDistance) => self.vr_controls.panel_settings.distance = 0.6 + normalized * 3.4,
+                Target::Choice(Choice::ScreenAspect) => self.vr_controls.panel_settings.aspect = 1.0 + normalized * 2.0,
+                Target::Choice(Choice::Nutrients) =>
+ self.editor_state.nutrient_density=normalized*0.5,
+                Target::Choice(choice @ (Choice::MoveSpeed | Choice::TurnThreshold)) =>
+                    self.vr_controls.adjust_navigation_slider(choice,normalized),
+                _ => {}
+            }
+        }
+        if let Some(choice)=self.vr_controls.adjustment.filter(|_| self.vr_controls.wheel_open) {
+            use crate::vr::controls::Choice;
+            let spec=match choice {
+                Choice::SimSpeed => self.scene_manager.gpu_scene().map(|scene|
+                    (scene.time_scale, 0.1, crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED)),
+
+                Choice::ScreenCurvature => Some((self.vr_controls.panel_settings.curvature, 0.0, 110.0)),
+                Choice::ScreenDistance => Some((self.vr_controls.panel_settings.distance, 0.6, 4.0)),
+                Choice::ScreenAspect => Some((self.vr_controls.panel_settings.aspect, 1.0, 3.0)),
+                Choice::Gravity => Some((self.ui.state.world_settings.gravity,-100.0,100.0)),
+
+                Choice::SunPosition => Some((self.editor_state.sun_orbit_angle,0.0,360.0)),
+                Choice::Brightness => Some((self.editor_state.sun_intensity,0.0,5.0)),
+                Choice::Nutrients => Some((self.editor_state.nutrient_density,0.0,0.5)),
+                Choice::MoveSpeed => Some((self.vr_controls.navigation_slider_value(choice),0.075,150.0)),
+                Choice::TurnThreshold => Some((self.vr_controls.navigation_slider_value(choice),0.1,4.0)),
+                _ => None,
+            };
+            if let Some((value,min,max))=spec { self.vr_controls.open_choice_slider(choice,value,min,max); }
+        }
+
+        self.persist_vr_screen_settings(choice.is_some_and(|c|matches!(c,crate::vr::controls::Choice::Back|crate::vr::controls::Choice::Close)) || (old_wheel_open && !self.vr_controls.wheel_open));
+        if old_wheel_open != self.vr_controls.wheel_open || choice.is_some() {
+            log::info!(
+                "VR wheel: context={:?}, open={}, tracked_left={}, pointer={:?}, choice={:?}",
+                self.vr_controls.context,
+                self.vr_controls.wheel_open,
+                self.vr_controls.menu_pose.is_some(),
+                self.vr_controls.pointer,
+                choice
             );
         }
-        camera.interaction_ray = input.ray.map(|(origin, direction)| {
-            (
-                camera.position() + camera.view_rotation() * origin * scale,
-                camera.view_rotation() * direction,
-            )
-        });
-        if let Some(pointer) = input.pointer {
-            self.handle_event(&WindowEvent::CursorMoved {
-                device_id: winit::event::DeviceId::dummy(),
-                position: winit::dpi::PhysicalPosition::new(pointer.x as f64, pointer.y as f64),
+        if self.app_phase == AppPhase::MainMenu && old_full_ui && !self.vr_controls.full_ui {
+            self.main_menu_settings_open = false;
+        }
+        if let Some(vr) = &mut self.vr {
+            vr.world_units_per_meter = scale;
+        }
+        if immersive && self.vr_controls.full_ui && !old_full_ui {
+            if let Some(vr) = &mut self.vr {
+                vr.recenter_panel();
+            }
+        }
+        self.ui.native_ui_hidden = immersive && !self.vr_controls.full_ui;
+        self.ui.native_panel_visible = immersive && self.vr_controls.full_ui;
+        if old_adjustment != self.vr_controls.adjustment {
+            use crate::vr::controls::Choice;
+            match old_adjustment {
+                Some(Choice::Gravity) => self.ui.save_ui_state(),
+                Some(Choice::Nutrients) => self.editor_state.save_fluid_settings(),
+                Some(Choice::Brightness | Choice::SunPosition) => {
+                    self.editor_state.save_sun_settings();
+                    self.editor_state.save_light_settings();
+                }
+                _ => {}
+            }
+        }
+        if choice.is_some()
+            || (self.vr_controls.hovered.is_some() && old_hover != self.vr_controls.hovered)
+        {
+            if let Some(vr) = &self.vr {
+                vr.selection_feedback(choice.is_some());
+            }
+        }
+        if let Some(choice) = choice {
+            use crate::vr::controls::Choice;
+            match choice {
+                Choice::Simulation | Choice::GenomeEditor | Choice::MainMenu | Choice::LoadInspectedGenome => {
+                    self.vr_scene_request = Some(choice)
+                }
+                Choice::FullUi if self.app_phase == AppPhase::MainMenu => {
+                    self.main_menu_settings_open = true
+                }
+                Choice::Tool(tool) => {
+                    self.scene_manager.clear_dragged_cell();
+                    self.editor_state.radial_menu.stop_dragging();
+                    self.editor_state.radial_menu.active_tool = tool;
+                }
+                Choice::Water => self.editor_state.request_toggle_water = true,
+                Choice::StaticWater => self.editor_state.request_toggle_static_water = true,
+                Choice::Floor => {
+                    self.editor_state.cave_flat_ground_enabled =
+                        !self.editor_state.cave_flat_ground_enabled;
+                    self.editor_state.cave_params_dirty = true;
+                    self.editor_state.save_cave_settings();
+                }
+                Choice::ResetCellsOnly | Choice::ResetEverything => {
+                    self.scene_manager.clear_dragged_cell();
+                    self.editor_state.radial_menu.stop_dragging();
+                    self.vr_reset_request = Some(if choice == Choice::ResetCellsOnly {
+                        crate::ui::panel_context::SceneModeRequest::ResetCellsOnly
+                    } else {
+                        crate::ui::panel_context::SceneModeRequest::Reset
+                    });
+                }
+                Choice::Pause => {
+                    let scene = self.scene_manager.active_scene_mut();
+                    scene.set_paused(!scene.is_paused());
+                }
+                _ => {}
+            }
+        }
+        if immersive {
+            if self.vr_controls.wheel_open {
+                let on = |value| {
+                    if value {
+                        "ON".to_owned()
+                    } else {
+                        "OFF".to_owned()
+                    }
+                };
+                self.vr_controls.status = [
+                    on(self.editor_state.fluid_continuous_spawn),
+                    on(self.editor_state.cave_flat_ground_enabled),
+                    format!("{:.1}", self.ui.state.world_settings.gravity),
+                    on(self.editor_state.fluid_static_water_world),
+                    format!("{:.0} deg", self.editor_state.sun_orbit_angle),
+                    format!("{:.2}", self.editor_state.sun_intensity),
+                    format!("{:.2}", self.editor_state.nutrient_density),
+                    if self.scene_manager.active_scene().is_paused() {
+                        "PAUSED"
+                    } else {
+                        "RUNNING"
+                    }
+                    .to_owned(),
+                    if self.vr_controls.orbit {
+                        "SCENE"
+                    } else {
+                        "GROUND"
+                    }
+                    .to_owned(),
+                    "Open panel".to_owned(),
+                ];
+            }
+            let ray = input.aims[1].map(|aim| {
+                let origin = glam::Vec3::new(aim.position.x, aim.position.y, aim.position.z);
+                let orientation = glam::Quat::from_xyzw(
+                    aim.orientation.x,
+                    aim.orientation.y,
+                    aim.orientation.z,
+                    aim.orientation.w,
+                );
+                (origin, orientation * glam::Vec3::NEG_Z)
+            });
+            let camera = self.scene_manager.active_scene_mut().camera_mut();
+            camera.interaction_ray = ray.map(|(origin, direction)| {
+                (
+                    camera.position() + camera.view_rotation() * origin * scale,
+                    camera.view_rotation() * direction,
+                )
             });
         } else {
-            let _ = self.ui.handle_event(
-                &self.window,
-                &WindowEvent::CursorLeft {
-                    device_id: winit::event::DeviceId::dummy(),
-                },
-            );
+            self.scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .interaction_ray = preview_ray;
         }
-        let select = input.select && input.pointer.is_some();
+        let flat_ui = !immersive || self.vr_controls.full_ui;
+        if flat_ui != self.vr_input_state.1 {
+            if self.vr_input_state.0 {
+                self.vr_input_state.0 = false;
+            }
+            self.scene_manager.clear_dragged_cell();
+            self.editor_state.radial_menu.stop_dragging();
+            self.vr_controls.trigger_consumed |= input.triggers[1];
+        }
+        self.vr_input_state.1 = flat_ui;
+        egui::ControllerSlider::set_circular(&self.ui.ctx, flat_ui);
+        if flat_ui {
+            self.window.set_cursor_visible(true);
+        }
+        let wheel_owns_ray = self.vr_controls.wheel_open && input.triggers[1]
+            && (self.vr_controls.dial.as_ref().is_some_and(crate::vr::dial::Dial::grabbing)
+                || self.vr_controls.pointer.is_some_and(|p| (p - glam::Vec2::splat(360.0)).length() <= 352.0));
+        let select = if flat_ui {
+            input.select
+                && input.pointer.is_some()
+                && !self.vr_controls.trigger_consumed
+                && !wheel_owns_ray
+        } else {
+            input.triggers[1]
+                && input.aims[1].is_some()
+                && !self.vr_controls.trigger_consumed
+                && !self.vr_controls.wheel_open
+                && !self.vr_controls.sensitivity_adjustment
+                && !input.squeeze.iter().any(|v| *v)
+        };
+        self.ui.set_native_input(
+            self.vr.as_ref().is_some_and(|vr| vr.input_focused()),
+            if flat_ui && !wheel_owns_ray {
+                input.pointer
+            } else {
+                None
+            },
+            flat_ui && select,
+            if flat_ui && !wheel_owns_ray && input.pointer.is_some() {
+                -input.lift * 600.0 * dt
+            } else {
+                0.0
+            },
+            self.window.scale_factor() as f32
+                * self.vr.as_ref().map_or(1.0, |vr| vr.ui_pixel_scale()),
+        );
+        // Preview tools still need a scene-space pointer. UI input goes directly
+        // to egui, so it never changes egui-winit's physical mouse state.
+        if !immersive && self.app_phase == AppPhase::InGame && select {
+            if let Some(pointer) = input.pointer {
+                self.handle_scene_event(&WindowEvent::CursorMoved {
+                    device_id: winit::event::DeviceId::dummy(),
+                    position: winit::dpi::PhysicalPosition::new(pointer.x as f64, pointer.y as f64),
+                });
+            }
+        }
         if select != self.vr_input_state.0 {
-            self.handle_event(&WindowEvent::MouseInput {
+            let event = WindowEvent::MouseInput {
                 device_id: winit::event::DeviceId::dummy(),
                 button: MouseButton::Left,
                 state: if select {
@@ -377,78 +855,346 @@ impl App {
                 } else {
                     ElementState::Released
                 },
-            });
+            };
+            if immersive && !flat_ui {
+                self.use_vr_tool(select);
+            } else if !immersive && self.app_phase == AppPhase::InGame {
+                self.handle_scene_event(&event);
+            }
             self.vr_input_state.0 = select;
         }
-        if input.menu != self.vr_input_state.1 && self.app_phase == AppPhase::InGame {
-            let menu = &mut self.editor_state.radial_menu;
-            if input.menu {
-                let pointer = input.pointer.unwrap_or(glam::Vec2::new(
-                    self.config.width as f32 * 0.5,
-                    self.config.height as f32 * 0.5,
-                ));
-                menu.open(egui::pos2(pointer.x, pointer.y) / self.window.scale_factor() as f32);
-            } else if menu.visible {
-                menu.close(true);
-            } else {
-                menu.alt_held = false;
-            }
-        }
-        self.vr_input_state.1 = input.menu;
-        if input.ray.is_none() {
+        if immersive
+            && (self.vr_controls.wheel_open
+                || self.vr_controls.full_ui
+                || self.vr_controls.sensitivity_adjustment
+                || input.aims[1].is_none())
+        {
+            self.scene_manager.clear_dragged_cell();
             self.editor_state.radial_menu.stop_dragging();
-            if let Some(scene) = self.scene_manager.gpu_scene_mut() {
-                scene.set_dragged_cell(u32::MAX);
-            }
         }
     }
 
+    #[cfg(feature="vr")]
+    fn persist_vr_screen_settings(&mut self, force:bool) {
+        let screen=self.vr_controls.panel_settings.sanitized();
+        self.vr_controls.panel_settings=screen;
+        let saved=crate::ui::types::VrScreenSettings {curvature:screen.curvature,distance:screen.distance,aspect:screen.aspect};
+        if self.ui.state.vr_screen != saved {
+            self.ui.state.vr_screen=saved;
+            self.ui.mark_ui_state_dirty();
+            self.vr_screen_save_at=Some(std::time::Instant::now());
+        }
+        if self.vr_screen_save_at.is_some_and(|at|force || at.elapsed().as_secs_f32()>=0.5) {
+            self.ui.save_ui_state();
+            self.vr_screen_save_at=None;
+        }
+    }
+    /// Switch only after submitting the XR frame, keeping its layers and scene consistent.
+    #[cfg(feature = "vr")]
+    fn apply_vr_scene_request(&mut self) {
+        use crate::ui::types::SimulationMode;
+        use crate::vr::controls::{Choice, WheelContext};
+        let Some(choice) = self.vr_scene_request.take() else {
+            return;
+        };
+        self.scene_manager.clear_dragged_cell();
+        self.editor_state.radial_menu.clear_drag_state();
+        self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+        self.editor_state.radial_menu.visible = false;
+        let _ = self
+            .window
+            .set_cursor_grab(winit::window::CursorGrabMode::None);
+        self.window.set_cursor_visible(true);
+        match choice {
+            Choice::MainMenu => {
+                if self.app_phase != AppPhase::MainMenu {
+                    self.main_menu_scene = Some(MainMenuScene::new(
+                        &self.device,
+                        &self.queue,
+                        &self.config,
+                        &mut self.ui.renderer,
+                    ));
+                }
+                self.app_phase = AppPhase::MainMenu;
+                self.main_menu_settings_open = false;
+                self.main_menu_hovered = MenuAction::None;
+                self.vr_controls.set_context(WheelContext::MainMenu);
+            }
+            Choice::Simulation | Choice::GenomeEditor | Choice::LoadInspectedGenome => {
+                let mode = if choice == Choice::Simulation {
+                    SimulationMode::Gpu
+                } else {
+                    SimulationMode::Preview
+                };
+                if mode == SimulationMode::Gpu
+                    && self.scene_manager.current_mode() == SimulationMode::Preview
+                {
+                    if let Some(preview) = self.scene_manager.get_preview_scene() {
+                        self.working_genome = preview.genome.clone();
+                    }
+                }
+                if choice==Choice::LoadInspectedGenome {
+                    let Some(genome)=self.editor_state.radial_menu.inspection.genome.clone() else { return; };
+                    self.working_genome=genome;
+                }
+                let initialized = self.scene_manager.switch_mode(
+                    mode,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    self.ui.state.world_diameter,
+                    self.ui.state.world_settings.cell_capacity,
+                    &self.editor_state,
+                );
+                if initialized {
+                    self.editor_state.cave_params_dirty = true;
+                }
+                if choice==Choice::LoadInspectedGenome {
+                    if let Some(preview)=self.scene_manager.get_preview_scene_mut() { preview.update_genome(&self.working_genome); }
+                }
+                self.ui.state.current_mode = mode;
+                self.dock_manager.switch_mode(mode);
+                self.app_phase = AppPhase::InGame;
+                self.main_menu_hovered = MenuAction::None;
+                self.vr_controls
+                    .set_context(if mode == SimulationMode::Gpu {
+                        WheelContext::Gpu
+                    } else {
+                        WheelContext::Preview
+                    });
+            }
+            _ => return,
+        }
+        self.vr_controls.wheel_open = false;
+        self.vr_controls.full_ui = false;
+        // Keep the initiating trigger consumed until released after the transition.
+        self.vr_controls.trigger_consumed = true;
+        self.vr_input_state.0 = false;
+        if let Some(vr) = &mut self.vr {
+            vr.recenter_panel();
+        }
+        self.sync_music_for_current_phase();
+        self.window.request_redraw();
+    }
+
+    #[cfg(feature = "vr")]
+    fn use_vr_tool(&mut self, pressed: bool) {
+        use crate::ui::radial_menu::RadialTool;
+        if !pressed {
+            self.scene_manager.clear_dragged_cell();
+            self.editor_state.radial_menu.stop_dragging();
+            return;
+        }
+        let (x, y) = self.mouse_position;
+        match self.editor_state.radial_menu.active_tool {
+            RadialTool::Insert => {
+                let camera = self.scene_manager.active_scene().camera();
+                let Some((origin, direction)) = camera.interaction_ray else {
+                    return;
+                };
+                let scale = self.vr.as_ref().map_or(20.0, |vr| vr.world_units_per_meter);
+                let Some(distance) = crate::vr::controls::placement_distance(
+                    origin,
+                    direction,
+                    self.ui.state.world_diameter * 0.5,
+                    scale,
+                ) else {
+                    return;
+                };
+                let position = origin + direction * distance;
+                if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+                    scene.queue_cell_insertion(position, self.working_genome.clone());
+                }
+            }
+            RadialTool::Inspect => self.scene_manager.start_cell_selection_query(x, y),
+            RadialTool::Remove => self.scene_manager.start_remove_tool_query(x, y),
+            RadialTool::Boost => self.scene_manager.start_boost_tool_query(x, y),
+            RadialTool::Drag => self.scene_manager.start_drag_selection_query(x, y),
+            RadialTool::None => {}
+        }
+    }
     #[cfg(feature = "vr")]
     fn render_vr_ui(&mut self, output: &egui::FullOutput) {
-        let Some(vr) = &mut self.vr else {
-            return;
-        };
-        let Some(target) = vr.ui_view() else {
-            return;
-        };
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Native VR menu"),
-            });
-        {
-            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
+        if let Some(vr) = &mut self.vr {
+            vr.set_panel_settings(self.vr_controls.panel_settings);
+            let camera = self.scene_manager.active_scene().camera();
+            vr.render_controllers(
+                (camera.position(), camera.view_rotation()),
+                self.ui.state.world_diameter * 0.5,
+                &self.vr_controls,
+                self.editor_state.radial_menu.active_tool,
+                self.editor_state
+                    .radial_menu
+                    .dragging_cell
+                    .map(|_| self.editor_state.drag_distance),
+            );
         }
-        let mut native_output = output.clone();
-        native_output.textures_delta.free.clear();
-        self.ui.render(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            &target,
-            ScreenDescriptor {
-                size_in_pixels: [self.config.width, self.config.height],
-                pixels_per_point: self.window.scale_factor() as f32,
-            },
-            native_output,
+        let immersive = self.app_phase == AppPhase::InGame
+            && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu;
+        if let Some(vr) = &mut self.vr {
+            vr.render_wheel(&self.vr_controls, self.editor_state.radial_menu.active_tool);
+        }
+        if immersive && !self.vr_controls.full_ui {
+            return;
+        }
+        if let Some(vr) = &mut self.vr {
+            if let Err(error) = vr.prepare_ui() {
+                log::warn!("Native VR panel: {error}");
+                return;
+            }
+        }
+        let Some(vr) = &self.vr else {
+            return;
+        };
+        let targets: Vec<_> = (0..2).filter_map(|eye| vr.ui_view(eye)).collect();
+        if targets.len() != 2 {
+            return;
+        }
+        let (ui_width, ui_height) = self.vr.as_ref().unwrap().ui_dimensions();
+        let ui_pixel_scale = output.pixels_per_point;
+        let rect = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(ui_width as f32, ui_height as f32),
         );
-        self.queue.submit([encoder.finish()]);
-        vr.mark_ui_drawn();
+        let preview = self.app_phase == AppPhase::InGame
+            && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview;
+        if preview {
+            let views = vr.panel_views(
+                self.scene_manager.active_scene().camera(),
+                rect,
+                ui_width,
+                ui_height,
+            );
+            if views.len() != 2 {
+                return;
+            }
+            self.scene_manager.render_stereo(
+                &self.device,
+                &self.queue,
+                targets.iter().cloned().zip(views).collect(),
+                &self.editor_state.cell_type_visuals,
+                self.ui.state.world_diameter,
+                self.ui.state.lod_scale_factor,
+                self.ui.state.lod_threshold_low,
+                self.ui.state.lod_threshold_medium,
+                self.ui.state.lod_threshold_high,
+                self.ui.state.lod_debug_colors,
+                self.editor_state.cell_outline_width,
+            );
+        }
+        let menu_views = if self.app_phase == AppPhase::MainMenu {
+            self.main_menu_scene.as_ref().map(|menu| {
+                // Read the actual egui image apertures, including DPI and margins.
+                let aperture = |id| {
+                    output.shapes.iter().find_map(|shape| {
+                        if let egui::Shape::Mesh(mesh) = &shape.shape {
+                            if mesh.texture_id == id {
+                                let bounds = mesh.calc_bounds();
+                                let scale = ui_pixel_scale;
+                                return Some(egui::Rect::from_min_max(
+                                    bounds.min * scale,
+                                    bounds.max * scale,
+                                ));
+                            }
+                        }
+                        None
+                    })
+                };
+                let left = aperture(menu.left_tex_id).unwrap_or(rect);
+                let right = aperture(menu.right_tex_id).unwrap_or(rect);
+                let vr = self.vr.as_ref().unwrap();
+                (
+                    vr.panel_views(
+                        &menu.left_preview.camera,
+                        left,
+                        menu.panel_width,
+                        menu.panel_height,
+                    ),
+                    vr.panel_views(
+                        &menu.right_preview.camera,
+                        right,
+                        menu.panel_width,
+                        menu.panel_height,
+                    ),
+                )
+            })
+        } else {
+            None
+        };
+        for (eye, target) in targets.iter().enumerate() {
+            if let (Some(menu), Some((left, right))) = (&mut self.main_menu_scene, &menu_views) {
+                if left.len() == 2 && right.len() == 2 {
+                    let previous_left = menu.left_preview.camera.set_render_view(Some(left[eye]));
+                    let previous_right =
+                        menu.right_preview.camera.set_render_view(Some(right[eye]));
+                    menu.render(
+                        &self.device,
+                        &self.queue,
+                        Some(&self.editor_state.cell_type_visuals),
+                    );
+                    menu.left_preview.camera.set_render_view(previous_left);
+                    menu.right_preview.camera.set_render_view(previous_right);
+                }
+            }
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Native VR menu"),
+                });
+            if !preview {
+                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(if immersive {
+                                wgpu::Color {
+                                    r: 0.008,
+                                    g: 0.014,
+                                    b: 0.025,
+                                    a: 1.0,
+                                }
+                            } else {
+                                wgpu::Color::TRANSPARENT
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+            }
+            let mut native_output = output.clone();
+            native_output.textures_delta.free.clear();
+            self.ui.render(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                target,
+                ScreenDescriptor {
+                    size_in_pixels: [ui_width, ui_height],
+                    pixels_per_point: output.pixels_per_point,
+                },
+                native_output,
+            );
+            self.queue.submit([encoder.finish()]);
+        }
+        if menu_views.is_some() {
+            // Restore the ordinary preview textures before the desktop UI samples them.
+            if let Some(menu) = &mut self.main_menu_scene {
+                menu.render(
+                    &self.device,
+                    &self.queue,
+                    Some(&self.editor_state.cell_type_visuals),
+                );
+            }
+        }
+        self.vr.as_mut().unwrap().mark_ui_drawn();
     }
 
     pub fn new(
         window: Arc<Window>,
+        graphics_instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -472,11 +1218,33 @@ impl App {
         let sleep_inhibitor = crate::sleep_inhibitor::SleepInhibitor::new(window_focused);
 
         Self {
-            mirror_fallback: None,
+            vr_capture_target: None,
+            vr_submit_ms: 0.0,
             #[cfg(feature = "vr")]
             vr: None,
             #[cfg(feature = "vr")]
             vr_input_state: (false, false, false, std::time::Instant::now()),
+            #[cfg(feature = "vr")]
+            vr_screenshot_button_down: false,
+            #[cfg(feature = "vr")]
+            vr_controls: {
+                let mut controls=crate::vr::controls::Controls::default();
+                let saved=ui.state.vr_screen;
+                controls.panel_settings=crate::vr::PanelSettings {curvature:saved.curvature,distance:saved.distance,aspect:saved.aspect}.sanitized();
+                controls
+            },
+            #[cfg(feature="vr")]
+            vr_screen_save_at: None,
+            #[cfg(feature = "vr")]
+            vr_scene_request: None,
+            #[cfg(feature = "vr")]
+            vr_reset_request: None,
+            #[cfg(feature = "vr")]
+            vr_probe: None,
+            #[cfg(feature = "vr")]
+            vr_probe_next: std::time::Instant::now(),
+            #[cfg(feature = "vr")]
+            vr_was_presenting: false,
             sleep_inhibitor,
             window_focused,
             window,
@@ -487,8 +1255,8 @@ impl App {
             ui,
             last_render_time: std::time::Instant::now(),
             frame_count: 0,
-            cpu_phase_totals_ms: [0.0; 8],
-            cpu_phase_max_ms: [0.0; 8],
+            cpu_phase_totals_ms: [0.0; 9],
+            cpu_phase_max_ms: [0.0; 9],
             frame_lateness_max_ms: 0.0,
             fps_timer: std::time::Instant::now(),
             editor_state: crate::ui::panel_context::GenomeEditorState::new(),
@@ -509,6 +1277,7 @@ impl App {
             app_cursor_icon: CursorIcon::Default,
             device,
             surface,
+            graphics_instance,
             app_phase: AppPhase::MainMenu,
             main_menu_scene: Some(main_menu_scene),
             main_menu_hovered: MenuAction::None,
@@ -1513,6 +2282,38 @@ impl App {
         // First, let egui handle the event
         let _egui_response = self.ui.handle_event(&self.window, event);
 
+        self.handle_scene_event(event)
+    }
+
+    fn handle_scene_event(&mut self, event: &WindowEvent) -> bool {
+        let vr_owns_camera = {
+            #[cfg(feature = "vr")]
+            {
+                self.app_phase == AppPhase::InGame
+                    && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+                    && self.vr.as_ref().is_some_and(|vr| vr.headset_active())
+            }
+            #[cfg(not(feature = "vr"))]
+            {
+                false
+            }
+        };
+        // The full VR panel is a UI surface, including its central viewport.
+        // Desktop clicks on it must not also start scene tools or camera drags.
+        #[cfg(feature = "vr")]
+        if self.vr.as_ref().is_some_and(|vr| vr.headset_active())
+            && (self.vr_controls.full_ui || self.vr_controls.wheel_open)
+            && self.app_phase == AppPhase::InGame
+            && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+            && matches!(
+                event,
+                WindowEvent::MouseInput { .. }
+                    | WindowEvent::CursorMoved { .. }
+                    | WindowEvent::MouseWheel { .. }
+            )
+        {
+            return true;
+        }
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
@@ -1862,7 +2663,8 @@ impl App {
                 }
 
                 // Only pass to camera if egui doesn't want the input and not dragging
-                if !self.ui.wants_pointer_input()
+                if !vr_owns_camera
+                    && !self.ui.wants_pointer_input()
                     && self.editor_state.radial_menu.dragging_cell.is_none()
                 {
                     self.scene_manager
@@ -1875,7 +2677,7 @@ impl App {
 
                 // Always release the camera drag on mouse-up, even if egui now owns the
                 // pointer (e.g. cursor drifted over a panel mid-drag).
-                if *state == ElementState::Released {
+                if !vr_owns_camera && *state == ElementState::Released {
                     self.scene_manager
                         .active_scene_mut()
                         .camera_mut()
@@ -1989,11 +2791,12 @@ impl App {
 
                 // Only pass to camera if egui doesn't want the input and not dragging
                 let camera = self.scene_manager.active_scene_mut().camera_mut();
-                if !self.ui.wants_pointer_input()
+                if !vr_owns_camera
+                    && !self.ui.wants_pointer_input()
                     && self.editor_state.radial_menu.dragging_cell.is_none()
                 {
                     camera.handle_mouse_move(*position);
-                } else if camera.is_dragging() || camera.is_look_dragging() {
+                } else if !vr_owns_camera && (camera.is_dragging() || camera.is_look_dragging()) {
                     // Camera is mid-drag but cursor drifted over a panel - keep feeding
                     // move events so the orbit/free-look doesn't freeze until re-entering the viewport.
                     camera.handle_mouse_move(*position);
@@ -2001,14 +2804,34 @@ impl App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // Only pass to camera if egui doesn't want the input
-                if !self.ui.wants_scroll_input() {
+                if !vr_owns_camera && !self.ui.wants_scroll_input() {
                     let camera = self.scene_manager.active_scene_mut().camera_mut();
                     camera.handle_scroll(*delta);
                     self.ui.state.camera_sprint_multiplier = camera.sprint_multiplier;
-                    self.ui.state.camera_alternate_speed_multiplier = camera.alternate_speed_multiplier;
+                    self.ui.state.camera_alternate_speed_multiplier =
+                        camera.alternate_speed_multiplier;
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                #[cfg(feature = "vr")]
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && event.physical_key
+                        == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::F1)
+                    && self.app_phase == AppPhase::InGame
+                    && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+                    && self.vr.as_ref().is_some_and(|vr| vr.headset_active())
+                {
+                    self.vr_controls.full_ui = !self.vr_controls.full_ui;
+                    self.vr_controls.wheel_open = false;
+                    if self.vr_controls.full_ui {
+                        if let Some(vr) = &mut self.vr {
+                            vr.recenter_panel();
+                        }
+                    }
+                    self.window.request_redraw();
+                    return true;
+                }
                 // Handle radial menu Alt key (GPU mode only)
                 if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu {
                     use winit::keyboard::{KeyCode, PhysicalKey};
@@ -2125,7 +2948,7 @@ impl App {
                 }
 
                 // Only pass to camera if egui doesn't want the input
-                if !self.ui.wants_keyboard_input() {
+                if !vr_owns_camera && !self.ui.wants_keyboard_input() {
                     let camera = self.scene_manager.active_scene_mut().camera_mut();
                     let previous_zoom_speed = camera.zoom_speed;
                     let mode_switch = camera.handle_keyboard(event);
@@ -2176,22 +2999,25 @@ impl App {
             menu.update(dt);
         }
 
-        // Render preview scenes into their off-screen textures.
-        let cell_type_visuals = &self.editor_state.cell_type_visuals;
-        if let Some(menu) = &mut self.main_menu_scene {
-            menu.render(&self.device, &self.queue, Some(cell_type_visuals));
-        }
-
         // Acquire swapchain texture.
         let Some(output) = self.acquire_presentation_frame() else {
             return;
         };
+        let desktop_present = output.surface.is_some();
+        // The VR panel renders its own per-eye previews. Refresh the desktop
+        // preview textures only when a desktop frame will actually be shown.
+        if desktop_present {
+            let cell_type_visuals = &self.editor_state.cell_type_visuals;
+            if let Some(menu) = &mut self.main_menu_scene {
+                menu.render(&self.device, &self.queue, Some(cell_type_visuals));
+            }
+        }
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Clear the swapchain to black before egui paints.
-        {
+        if desktop_present {
             let mut enc = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2223,7 +3049,7 @@ impl App {
         // egui frame.
         self.ui.begin_frame(&self.window);
         #[cfg(feature = "vr")]
-        if self.vr.is_some() {
+        if self.vr.as_ref().is_some_and(|vr| vr.presenting()) {
             if let Some(pointer) = self.ui.pointer_hover_pos() {
                 self.ui.ctx.debug_painter().circle_stroke(
                     pointer,
@@ -2294,6 +3120,27 @@ impl App {
         }
 
         let egui_output = self.ui.ctx.end_pass();
+        #[cfg(feature = "vr")]
+        let mut desktop_output = egui_output.clone();
+        #[cfg(not(feature = "vr"))]
+        let desktop_output = egui_output.clone();
+        #[cfg(feature = "vr")]
+        let desktop_pixels_per_point = if self.vr.is_some() {
+            self.window.scale_factor() as f32 * self.ui.ctx.zoom_factor()
+        } else {
+            self.window.scale_factor() as f32
+        };
+        #[cfg(not(feature = "vr"))]
+        let desktop_pixels_per_point = self.window.scale_factor() as f32;
+        #[cfg(feature = "vr")]
+        if self.vr.is_some() {
+            desktop_output.pixels_per_point =
+                desktop_pixels_per_point;
+        }
+        let screen_desc = ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: desktop_pixels_per_point,
+        };
 
         // Submit egui rendering.
         let mut enc = self
@@ -2301,22 +3148,22 @@ impl App {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("menu_egui"),
             });
-        let screen_desc = ScreenDescriptor {
-            size_in_pixels: [self.config.width, self.config.height],
-            pixels_per_point: self.window.scale_factor() as f32,
-        };
         #[cfg(feature = "vr")]
         self.render_vr_ui(&egui_output);
-        self.ui.render(
-            &self.device,
-            &self.queue,
-            &mut enc,
-            &view,
-            screen_desc,
-            egui_output,
-        );
-        self.queue.submit(std::iter::once(enc.finish()));
-        output.present();
+        let desktop_ui_needed =
+            desktop_present || !egui_output.textures_delta.free.is_empty();
+        if desktop_ui_needed {
+            self.ui.render(
+                &self.device,
+                &self.queue,
+                &mut enc,
+                &view,
+                screen_desc,
+                desktop_output,
+            );
+            self.queue.submit(std::iter::once(enc.finish()));
+        }
+        self.present_frame(output);
 
         // Handle button actions.
         match menu_response.action {
@@ -2395,6 +3242,8 @@ impl App {
     }
 
     fn save_persistent_settings(&mut self) {
+        #[cfg(feature="vr")]
+        self.persist_vr_screen_settings(true);
         self.dock_manager.save_all();
         self.ui.save_ui_state();
         self.save_editor_settings();
@@ -2918,7 +3767,13 @@ impl App {
     fn render(&mut self) {
         self.sync_sleep_inhibitor();
         #[cfg(feature = "vr")]
+        self.detect_headset();
+        #[cfg(feature = "vr")]
         if let Some(vr) = &mut self.vr {
+            vr.set_immersive(
+                self.app_phase == AppPhase::InGame
+                    && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu,
+            );
             if let Err(error) = vr.begin_frame() {
                 let _ = vr.end_frame();
                 log::error!("Native VR frame failed: {error}");
@@ -2928,23 +3783,67 @@ impl App {
             }
         }
         #[cfg(feature = "vr")]
+        {
+            let presenting = self.vr.as_ref().is_some_and(|vr| vr.headset_active());
+            self.performance.set_vr_refresh_hz(
+                self.vr
+                    .as_ref()
+                    .filter(|vr| vr.headset_active())
+                    .and_then(|vr| vr.display_refresh_hz()),
+            );
+            if presenting != self.vr_was_presenting {
+                log::info!(
+                    "Presentation switched to {}",
+                    if presenting { "VR" } else { "desktop" }
+                );
+                self.last_render_time = std::time::Instant::now();
+                self.next_frame_time = self.last_render_time;
+                self.vr_was_presenting = presenting;
+                if !presenting {
+                    self.scene_manager
+                        .resize(&self.device, self.config.width, self.config.height);
+                }
+            }
+        }
+        #[cfg(feature = "vr")]
+        if self
+            .vr
+            .as_ref()
+            .is_some_and(|vr| vr.headset_active() && !vr.presenting())
+        {
+            // Waiting for xrWaitFrame is not a switch to desktop presentation.
+            // Preserve held actions and the six-axis rig between headset frames.
+            self.finish_vr_frame();
+            return;
+        }
+        #[cfg(feature = "vr")]
         self.update_vr_input();
         self.render_frame();
         #[cfg(feature = "vr")]
-        if let Some(vr) = &mut self.vr {
-            if let Err(error) = vr.end_frame() {
-                log::error!("Native VR presentation failed; returning to desktop: {error}");
-                self.vr = None;
-                self.scene_manager
-                    .resize(&self.device, self.config.width, self.config.height);
-                self.scene_manager
-                    .active_scene_mut()
-                    .camera_mut()
-                    .interaction_ray = None;
+        self.finish_vr_frame();
+        #[cfg(feature = "vr")]
+        self.apply_vr_scene_request();
+        self.retain_inspected_genome();
+    }
+
+    fn retain_inspected_genome(&mut self) {
+        let inspection = &mut self.editor_state.radial_menu.inspection;
+        if inspection.death_pending {
+            inspection.death_pending = false;
+            self.ui.toasts.push(crate::ui::toast::Toast::info("Inspected cell died. Its selected genome and last readings are retained."));
+            #[cfg(feature="vr")]
+            { self.vr_controls.cell_death_notice = 7.0; }
+        }
+        if !inspection.capture_attempted {
+            if let (Some(data),Some(scene)) = (inspection.data,self.scene_manager.gpu_scene()) {
+                inspection.capture_attempted = true;
+                inspection.genome = scene.read_back_genome_for_inspected_cell(&self.device,&self.queue,data.genome_id,data.mode_index);
+                if inspection.genome.is_none() {
+                    log::warn!("Could not retain inspected genome {} (mode {})",data.genome_id,data.mode_index);
+                }
             }
         }
     }
-
     fn render_frame(&mut self) {
         // Don't render if surface has zero dimensions
         if self.config.width == 0 || self.config.height == 0 {
@@ -2958,19 +3857,24 @@ impl App {
         let runtime_paced = {
             #[cfg(feature = "vr")]
             {
-                self.vr.as_ref().is_some_and(|vr| vr.frame_active())
+                self.vr.as_ref().is_some_and(|vr| vr.presenting())
             }
             #[cfg(not(feature = "vr"))]
             {
                 false
             }
         };
+        // Keep real GPU samples in the VR performance log without changing the
+        // user's desktop diagnostics preference.
+        let gpu_timing_enabled = self.ui.state.gpu_timing_enabled || runtime_paced;
         if !runtime_paced && now < self.next_frame_time {
             return;
         }
 
         self.frame_lateness_max_ms = self.frame_lateness_max_ms.max(
-            now.saturating_duration_since(self.next_frame_time).as_secs_f64() * 1000.0,
+            now.saturating_duration_since(self.next_frame_time)
+                .as_secs_f64()
+                * 1000.0,
         );
         let dt = now
             .duration_since(self.last_render_time)
@@ -3058,6 +3962,7 @@ impl App {
         // Update camera gravity direction only for GPU scene (preview scene ignores gravity)
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
             && !gpu_headless
+            && !runtime_paced
         {
             let camera = self.scene_manager.active_scene_mut().camera_mut();
             camera.set_gravity_direction(
@@ -3066,7 +3971,7 @@ impl App {
             );
             camera.set_world_radius(self.ui.state.world_diameter * 0.5);
         }
-        if !gpu_headless {
+        if !gpu_headless && !runtime_paced {
             self.scene_manager
                 .active_scene_mut()
                 .camera_mut()
@@ -3105,6 +4010,7 @@ impl App {
         // shift the startup view away from the world origin.
         if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
             && !gpu_headless
+            && !runtime_paced
         {
             if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                 if gpu_scene.camera.mode == crate::ui::camera::CameraMode::FreeFly {
@@ -3176,10 +4082,16 @@ impl App {
                     &mut self.editor_state.drag_distance,
                     &self.queue,
                 );
+                #[cfg(feature = "vr")]
+                if runtime_paced && !self.vr_input_state.0 {
+                    // An asynchronous selection may finish after trigger release.
+                    self.scene_manager.clear_dragged_cell();
+                    self.editor_state.radial_menu.stop_dragging();
+                }
             }
 
             // Poll organism follow readback and update camera center
-            if !gpu_headless {
+            if !gpu_headless && !runtime_paced {
                 self.scene_manager.poll_organism_follow(&self.device, dt);
             }
 
@@ -3228,6 +4140,7 @@ impl App {
                 }
 
                 // Sync volumetric fog visibility toggle
+                // Keep the effective day/night and seasonal intensity applied above.
                 gpu_scene.show_volumetric_fog = self.editor_state.show_volumetric_fog;
 
                 // Sync fluid voxel visibility toggle
@@ -3358,7 +4271,11 @@ impl App {
                 crate::ui::camera::MAX_HORIZONTAL_FOV_DEGREES,
             );
             camera.sprint_multiplier = self.ui.state.camera_sprint_multiplier.clamp(0.05, 20.0);
-            camera.alternate_speed_multiplier = self.ui.state.camera_alternate_speed_multiplier.clamp(0.05, 20.0);
+            camera.alternate_speed_multiplier = self
+                .ui
+                .state
+                .camera_alternate_speed_multiplier
+                .clamp(0.05, 20.0);
             camera.zoom_speed = self.ui.state.camera_scroll_sensitivity.clamp(0.01, 2.0);
         }
 
@@ -3366,6 +4283,8 @@ impl App {
         let Some(output) = self.acquire_presentation_frame() else {
             return;
         };
+        let desktop_frame_needed =
+            output.surface.is_some() || self.editor_state.request_screenshot;
         let acquire_done = std::time::Instant::now();
         let view = output
             .texture
@@ -3385,7 +4304,7 @@ impl App {
             gpu_scene.set_occlusion_min_distance(self.ui.state.occlusion_min_distance);
             gpu_scene.set_readbacks_enabled(self.ui.state.gpu_readbacks_enabled);
             gpu_scene.audio_readbacks_enabled = self.ui.state.sfx_volume > 0.0;
-            gpu_scene.set_gpu_timing_enabled(self.ui.state.gpu_timing_enabled);
+            gpu_scene.set_gpu_timing_enabled(gpu_timing_enabled);
             gpu_scene.show_adhesion_lines = self.ui.state.show_adhesion_lines;
 
             // Apply LOD settings from UI
@@ -3500,7 +4419,12 @@ impl App {
         #[cfg(feature = "vr")]
         let native_rendered = if let Some(vr) = &mut self.vr {
             let camera = self.scene_manager.active_scene().camera();
-            let eyes = vr.eye_views(camera.position(), camera.view_rotation());
+            let eyes = if self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+            {
+                vr.eye_views(camera.position(), camera.view_rotation())
+            } else {
+                Vec::new()
+            };
             let rendered = self.scene_manager.render_stereo(
                 &self.device,
                 &self.queue,
@@ -3516,7 +4440,10 @@ impl App {
             );
             if rendered {
                 vr.mark_eyes_drawn();
-                vr.render_mirror(&self.queue, &view);
+                vr.fade_world(self.vr_controls.scene_fade);
+                if self.editor_state.request_screenshot && vr.presenting() {
+                    vr.capture_left_eye(&self.queue, &view);
+                }
             }
             rendered
         } else {
@@ -3524,7 +4451,7 @@ impl App {
         };
         #[cfg(not(feature = "vr"))]
         let native_rendered = false;
-        if !native_rendered {
+        if !native_rendered && desktop_frame_needed {
             #[cfg(feature = "vr")]
             if self.vr.is_some() {
                 self.scene_manager.ensure_render_size(
@@ -3551,7 +4478,7 @@ impl App {
         let scene_done = std::time::Instant::now();
         // Pull the latest GPU frame timing breakdown (lags a few frames behind
         // due to async readback) for the performance monitor.
-        if self.ui.state.gpu_timing_enabled {
+        if gpu_timing_enabled {
             if let Some(timer) = self
                 .scene_manager
                 .gpu_scene()
@@ -3566,7 +4493,7 @@ impl App {
             self.performance.clear_gpu_segment_times();
         }
 
-        if gpu_headless {
+        if gpu_headless && desktop_frame_needed {
             let mut clear_encoder =
                 self.device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3616,6 +4543,11 @@ impl App {
             }
         }
 
+        if self.editor_state.radial_menu.dragging_cell.is_some()
+            && self.scene_manager.gpu_scene().is_some_and(|scene| scene.dragged_cell_index == u32::MAX) {
+            self.editor_state.radial_menu.stop_dragging();
+        }
+
         // Update continuous drag position every frame when dragging
         if !gpu_headless {
             if let Some(cell_idx) = self.editor_state.radial_menu.dragging_cell {
@@ -3635,7 +4567,7 @@ impl App {
         // Begin egui frame
         self.ui.begin_frame(&self.window);
         #[cfg(feature = "vr")]
-        if self.vr.is_some() {
+        if self.vr.as_ref().is_some_and(|vr| vr.presenting()) {
             if let Some(pointer) = self.ui.pointer_hover_pos() {
                 self.ui.ctx.debug_painter().circle_stroke(
                     pointer,
@@ -3655,6 +4587,10 @@ impl App {
         self.ui.state.current_mode = current_mode;
 
         // Use persistent editor state and create scene request
+        #[cfg(feature = "vr")]
+        let mut scene_request = self.vr_reset_request.take()
+            .unwrap_or(crate::ui::panel_context::SceneModeRequest::None);
+        #[cfg(not(feature = "vr"))]
         let mut scene_request = crate::ui::panel_context::SceneModeRequest::None;
         let selected_modes_before_audio = (
             self.editor_state.selected_mode_index,
@@ -3665,7 +4601,7 @@ impl App {
         // Sync working genome from preview scene if in Preview mode
         // This keeps the genome available for GPU scene cell insertion.
         // Skip if a genome was just loaded this frame (the loaded genome takes priority).
-        let egui_output = {
+        let mut egui_output = {
             let mut dummy_camera = crate::ui::camera::CameraController::new();
 
             // Get real data if in Preview mode
@@ -4441,6 +5377,8 @@ impl App {
                     // Reset the GPU scene
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
+                        #[cfg(feature = "vr")]
+                        self.vr_controls.population.clear();
 
                         // Reset fluid simulation
                         let mut encoder =
@@ -4491,6 +5429,8 @@ impl App {
                     // Reset the GPU scene (cells only, keep fluid)
                     if let Some(gpu_scene) = self.scene_manager.gpu_scene_mut() {
                         gpu_scene.reset(&self.queue);
+                        #[cfg(feature = "vr")]
+                        self.vr_controls.population.clear();
 
                         // Reapply saved cave settings after reset
                         self.editor_state.cave_params_dirty = true;
@@ -4739,17 +5679,15 @@ impl App {
                         );
                     }
                 }
-                crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpuCell {
-                    genome_id,
-                    mode_index,
-                } => {
-                    if let Some(gpu_scene) = self.scene_manager.gpu_scene() {
-                        if let Some(genome) = gpu_scene.read_back_genome_for_inspected_cell(
-                            &self.device,
-                            &self.queue,
-                            genome_id,
-                            mode_index,
-                        ) {
+                request @ (crate::ui::panel_context::SceneModeRequest::LoadInspectedGenome |
+                    crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpuCell { .. }) => {
+                    let genome = match request {
+                        crate::ui::panel_context::SceneModeRequest::LoadInspectedGenome => self.editor_state.radial_menu.inspection.genome.clone(),
+                        crate::ui::panel_context::SceneModeRequest::LoadGenomeFromGpuCell { genome_id,mode_index } => self.scene_manager.gpu_scene().and_then(|scene|scene.read_back_genome_for_inspected_cell(&self.device,&self.queue,genome_id,mode_index)),
+                        _ => None,
+                    };
+                    {
+                        if let Some(genome) = genome {
                             log::info!(
                                 "Loaded inspected cell genome '{}' ({} modes) from GPU",
                                 genome.name,
@@ -4800,9 +5738,7 @@ impl App {
                             }
                         } else {
                             log::error!(
-                                "Failed to read back inspected cell genome: reported_genome_id={} mode_index={}",
-                                genome_id,
-                                mode_index
+                                "Selected inspected genome is unavailable"
                             );
                         }
                     }
@@ -4914,23 +5850,46 @@ impl App {
             });
 
         // Create screen descriptor
+        #[cfg(feature = "vr")]
+        let desktop_pixels_per_point = if self.vr.is_some() {
+            self.window.scale_factor() as f32 * self.ui.ctx.zoom_factor()
+        } else {
+            self.window.scale_factor() as f32
+        };
+        #[cfg(not(feature = "vr"))]
+        let desktop_pixels_per_point = self.window.scale_factor() as f32;
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [self.config.width, self.config.height],
-            pixels_per_point: self.window.scale_factor() as f32,
+            pixels_per_point: desktop_pixels_per_point,
         };
 
         let ui_build_done = std::time::Instant::now();
+        if self.ui.native_ui_hidden {
+            egui_output.shapes.clear();
+        }
+        #[cfg(feature = "vr")]
+        let mut desktop_output = egui_output.clone();
+        #[cfg(feature = "vr")]
+        if self.vr.is_some() {
+            desktop_output.pixels_per_point = desktop_pixels_per_point;
+        }
+        #[cfg(not(feature = "vr"))]
+        let desktop_output = egui_output.clone();
         // Render egui
         #[cfg(feature = "vr")]
         self.render_vr_ui(&egui_output);
-        self.ui.render(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            &view,
-            screen_descriptor,
-            egui_output,
-        );
+        let desktop_ui_needed =
+            desktop_frame_needed || !egui_output.textures_delta.free.is_empty();
+        if desktop_ui_needed {
+            self.ui.render(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &view,
+                screen_descriptor,
+                desktop_output,
+            );
+        }
 
         // If a screenshot was requested, copy the fully-rendered swapchain texture
         // to a staging buffer in the same encoder pass (before submit + present).
@@ -4975,10 +5934,12 @@ impl App {
         };
 
         // Submit egui commands (includes the screenshot copy if requested)
-        self.queue.submit(std::iter::once(encoder.finish()));
+        if desktop_ui_needed {
+            self.queue.submit(std::iter::once(encoder.finish()));
+        }
 
         let present_started = std::time::Instant::now();
-        output.present();
+        self.present_frame(output);
         let present_done = std::time::Instant::now();
 
         // -- Process screenshot readback ----------------------------------------
@@ -5255,9 +6216,12 @@ impl App {
             scene_done.duration_since(acquire_done).as_secs_f64() * 1000.0,
             ui_build_done.duration_since(scene_done).as_secs_f64() * 1000.0,
             present_started.duration_since(ui_build_done).as_secs_f64() * 1000.0,
-            present_done.duration_since(present_started).as_secs_f64() * 1000.0,
+            (present_done.duration_since(present_started).as_secs_f64() * 1000.0
+                - self.vr_submit_ms)
+                .max(0.0),
             present_done.elapsed().as_secs_f64() * 1000.0,
             audio_ms, // A subset of Update, useful for separating environment audio.
+            self.vr_submit_ms,
         ];
         for (i, ms) in phase_ms.iter().enumerate() {
             self.cpu_phase_totals_ms[i] += ms;
@@ -5269,10 +6233,28 @@ impl App {
             let frames = self.frame_count.max(1) as f64;
             let fps = (frames / elapsed_seconds).round() as u32;
             let frame_ms = elapsed_seconds * 1000.0 / frames;
-            let cpu_phases = ["Update", "Acquire", "Scene", "UI Build", "UI Submit", "Present", "Deferred", "Audio subset"]
-                .iter().enumerate().map(|(i, label)| format!(
-                    "{label}={:.2}/{:.2}ms", self.cpu_phase_totals_ms[i] / frames, self.cpu_phase_max_ms[i],
-                )).collect::<Vec<_>>().join(", ");
+            let cpu_phases = [
+                "Update",
+                "Acquire",
+                "Scene",
+                "UI Build",
+                "UI Submit",
+                "Present",
+                "Deferred",
+                "Audio subset",
+                "VR Submit",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(i, label)| {
+                format!(
+                    "{label}={:.2}/{:.2}ms",
+                    self.cpu_phase_totals_ms[i] / frames,
+                    self.cpu_phase_max_ms[i],
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
 
             let segments = self.performance.gpu_segment_times_ms();
             let gpu_total_ms: f32 = segments.iter().sum();
@@ -5288,18 +6270,20 @@ impl App {
             let cell_count = gpu_scene.map_or(0, |s| s.current_cell_count);
             let physics_steps = gpu_scene.map_or(0, |s| s.last_physics_steps);
 
-            let gpu_sample_age_ms = gpu_scene.and_then(|scene| scene.gpu_timer.as_ref())
+            let gpu_sample_age_ms = gpu_scene
+                .and_then(|scene| scene.gpu_timer.as_ref())
                 .and_then(|timer| timer.sample_age_ms());
             log::warn!(
                 "[perf-cpu] avg/max: {cpu_phases} | deadline_late_max={:.2}ms gpu_sample_age_ms={gpu_sample_age_ms:?}",
                 self.frame_lateness_max_ms,
             );
-            self.cpu_phase_totals_ms = [0.0; 8];
-            self.cpu_phase_max_ms = [0.0; 8];
+            self.cpu_phase_totals_ms = [0.0; 9];
+            self.cpu_phase_max_ms = [0.0; 9];
             self.frame_lateness_max_ms = 0.0;
 
             log::warn!(
-                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms physics_steps={physics_steps} | {segments_str} | rain_intensity={rain_intensity:.2} cells={cell_count}"
+                "[perf] fps={fps} frame={frame_ms:.2}ms gpu_total={gpu_total_ms:.2}ms physics_steps={physics_steps} | {segments_str} | rain_intensity={rain_intensity:.2} cells={cell_count} presentation={} refresh_hz={:?}",
+                if runtime_paced { "VR" } else { "desktop" }, self.performance.vr_refresh_hz()
             );
 
             self.frame_count = 0;
@@ -5314,8 +6298,8 @@ impl App {
     /// Keep the machine awake while the window is focused. Once a simulation
     /// is running, preserve it across focus loss, screen locking, and lid close.
     fn sync_sleep_inhibitor(&mut self) {
-        let simulation_running = self.app_phase == AppPhase::InGame
-            && !self.scene_manager.active_scene().is_paused();
+        let simulation_running =
+            self.app_phase == AppPhase::InGame && !self.scene_manager.active_scene().is_paused();
         self.sleep_inhibitor
             .set_active(self.window_focused || simulation_running);
     }
@@ -5479,19 +6463,29 @@ impl ApplicationHandler for AppState {
         // wgpu 27 exposes ray queries through Vulkan. A platform's default
         // backend (notably DX12) may omit them even on ray-tracing hardware.
         // Prefer a surface-compatible RT adapter when the default lacks queries.
-        let adapter = if !adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY) {
-            let mut ray_adapters: Vec<_> = instance.enumerate_adapters(wgpu::Backends::VULKAN)
-                .into_iter().filter(|candidate| {
-                    candidate.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+        let adapter = if !adapter
+            .features()
+            .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+        {
+            let mut ray_adapters: Vec<_> = instance
+                .enumerate_adapters(wgpu::Backends::VULKAN)
+                .into_iter()
+                .filter(|candidate| {
+                    candidate
+                        .features()
+                        .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
                         && candidate.is_surface_supported(&surface)
-                }).collect();
+                })
+                .collect();
             ray_adapters.sort_by_key(|candidate| match candidate.get_info().device_type {
                 wgpu::DeviceType::DiscreteGpu => 0,
                 wgpu::DeviceType::IntegratedGpu => 1,
                 _ => 2,
             });
             ray_adapters.into_iter().next().unwrap_or(adapter)
-        } else { adapter };
+        } else {
+            adapter
+        };
         #[cfg(feature = "vr")]
         let adapter = vr_graphics
             .as_ref()
@@ -5534,13 +6528,20 @@ impl ApplicationHandler for AppState {
 
         let create_desktop_device = || {
             let mut required_features = required_features;
-            let hardware_ray_queries = adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+            let hardware_ray_queries = adapter
+                .features()
+                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
             if hardware_ray_queries {
                 required_features |= wgpu::Features::EXPERIMENTAL_RAY_QUERY;
             }
-            log::info!("Luminocyte occlusion: {}", if hardware_ray_queries {
-                "hardware ray tracing"
-            } else { "voxel fallback (ray queries unsupported by adapter/backend)" });
+            log::info!(
+                "Luminocyte occlusion: {}",
+                if hardware_ray_queries {
+                    "hardware ray tracing"
+                } else {
+                    "voxel fallback (ray queries unsupported by adapter/backend)"
+                }
+            );
 
             let mut device_descriptor = wgpu::DeviceDescriptor {
                 label: Some("Bio-Spheres Device"),
@@ -5567,20 +6568,28 @@ impl ApplicationHandler for AppState {
                     // SAFETY: opt into wgpu's experimental ray-query implementation;
                     // all geometry/build/binding operations use its validated safe API.
                     unsafe { wgpu::ExperimentalFeatures::enabled() }
-                } else { Default::default() },
+                } else {
+                    Default::default()
+                },
             };
             if hardware_ray_queries {
-                device_descriptor.required_limits = device_descriptor.required_limits
+                device_descriptor.required_limits = device_descriptor
+                    .required_limits
                     .using_acceleration_structure_values(adapter.limits());
             }
             let requested_device = pollster::block_on(adapter.request_device(&device_descriptor));
             match requested_device {
                 Ok(pair) => pair,
                 Err(error) if hardware_ray_queries => {
-                    log::warn!("Ray-query device creation failed ({error}); retrying with voxel lighting");
-                    device_descriptor.required_features.remove(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+                    log::warn!(
+                        "Ray-query device creation failed ({error}); retrying with voxel lighting"
+                    );
+                    device_descriptor
+                        .required_features
+                        .remove(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
                     device_descriptor.experimental_features = Default::default();
-                    device_descriptor.required_limits = device_descriptor.required_limits
+                    device_descriptor.required_limits = device_descriptor
+                        .required_limits
                         .using_acceleration_structure_values(wgpu::Limits::default());
                     pollster::block_on(adapter.request_device(&device_descriptor))
                         .expect("Failed to create fallback wgpu device")
@@ -5595,7 +6604,12 @@ impl ApplicationHandler for AppState {
             .unwrap_or_else(create_desktop_device);
         #[cfg(not(feature = "vr"))]
         let (device, queue) = create_desktop_device();
-        log::info!("Luminocyte ray queries enabled on device: {}", device.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY));
+        log::info!(
+            "Luminocyte ray queries enabled on device: {}",
+            device
+                .features()
+                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+        );
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -5701,6 +6715,7 @@ impl ApplicationHandler for AppState {
 
         self.app = Some(App::new(
             window,
+            instance,
             surface,
             device,
             queue,
@@ -5725,9 +6740,7 @@ impl ApplicationHandler for AppState {
         let Some(app) = &mut self.app else { return };
 
         #[cfg(feature = "vr")]
-        if matches!(event, WindowEvent::RedrawRequested)
-            && app.vr.as_ref().is_some_and(|vr| vr.running())
-        {
+        if matches!(event, WindowEvent::RedrawRequested) && app.vr.is_some() {
             return;
         }
         if window_id != app.window().id() {
@@ -5742,17 +6755,19 @@ impl ApplicationHandler for AppState {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(app) = &mut self.app {
             #[cfg(feature = "vr")]
-            if let Some(vr) = &app.vr {
-                if vr.should_exit() {
-                    app.save_persistent_settings();
-                    event_loop.exit();
-                    return;
-                }
-                if vr.running() {
-                    app.render();
+            if app.vr.as_ref().is_some_and(|vr| vr.should_exit()) {
+                app.vr = None;
+                app.vr_probe_next = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            }
+            #[cfg(feature = "vr")]
+            if app.vr.is_some() {
+                app.render();
+                if app.vr.as_ref().is_some_and(|vr| vr.headset_active()) {
                     event_loop.set_control_flow(ControlFlow::Poll);
-                    return;
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(app.next_frame_time()));
                 }
+                return;
             }
             // Wait for the configured desktop frame deadline.
             let next_frame = app.next_frame_time();
@@ -5793,9 +6808,16 @@ pub fn run() {
         .expect("Failed to open log file");
 
     // Build env_logger to write to the file.
-    // Level: WARN by default; set RUST_LOG=info or RUST_LOG=debug to get more.
+    // Native VR needs session transitions in the log to diagnose headset startup.
+    // Set RUST_LOG to override the default verbosity in either launch mode.
+    let native_vr_requested = std::env::args().any(|arg| arg == "--vr");
     env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Warn)
+        .filter_level(if native_vr_requested {
+            log::LevelFilter::Info
+        } else {
+            log::LevelFilter::Warn
+        })
+        .filter_module("bio_spheres::vr", log::LevelFilter::Info)
         .parse_default_env() // still respect RUST_LOG if set
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .format_timestamp_secs()
@@ -5862,4 +6884,94 @@ pub fn run() {
     let mut state = AppState { app: None };
 
     event_loop.run_app(&mut state).unwrap();
+}
+
+#[cfg(all(test, feature = "vr", target_os = "windows"))]
+mod vr_tests {
+    use super::*;
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    #[test]
+    #[allow(deprecated)]
+    fn desktop_to_vr_surface_handoff_releases_the_native_window_first() {
+        let mut builder = EventLoop::builder();
+        builder.with_any_thread(true);
+        let event_loop = builder.build().unwrap();
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_visible(false)
+                        .with_inner_size(winit::dpi::PhysicalSize::new(64, 64)),
+                )
+                .unwrap(),
+        );
+        let create = || {
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::VULKAN,
+                ..Default::default()
+            });
+            let surface = instance.create_surface(window.clone()).unwrap();
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    compatible_surface: Some(&surface),
+                    ..Default::default()
+                }))
+                .unwrap();
+            let (device, queue) =
+                pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+            let config = surface.get_default_config(&adapter, 64, 64).unwrap();
+            (instance, surface, device, queue, config)
+        };
+        let (old_instance, mut current, old_device, old_queue, old_config) = create();
+        current.configure(&old_device, &old_config);
+        let old_frame = current.get_current_texture().unwrap();
+        old_frame.present();
+        old_device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .unwrap();
+        let (_instance, replacement, device, queue, config) = create();
+        App::handoff_surface(
+            &mut current,
+            replacement,
+            &device,
+            &config,
+            &old_instance,
+            &old_device,
+            &old_config,
+            window,
+        )
+        .unwrap();
+        let frame = current.get_current_texture().unwrap();
+        let view = frame.texture.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLUE),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        queue.submit([encoder.finish()]);
+        frame.present();
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .unwrap();
+        drop(view);
+        drop(current);
+        drop(old_queue);
+    }
 }

@@ -127,6 +127,7 @@ impl InitialState {
 /// When resim completes, work is promoted to display. During resim the
 /// viewport stays frozen on the last completed result while the yellow
 /// progress bar shows `work_time` advancing toward the target.
+#[derive(Clone)]
 pub struct PreviewState {
     /// Work buffer - resimulation runs physics steps on this
     pub work_state: CanonicalState,

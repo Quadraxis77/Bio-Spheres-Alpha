@@ -61,6 +61,48 @@ pub struct MainMenuScene {
 }
 
 impl MainMenuScene {
+    #[cfg(feature = "vr")]
+    pub(crate) fn recreate_on_device(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &wgpu::SurfaceConfiguration,
+        renderer: &mut egui_wgpu::Renderer,
+    ) -> Self {
+        let mut panel_config = config.clone();
+        panel_config.width = self.panel_width;
+        panel_config.height = self.panel_height;
+        let (left_color_tex, right_color_tex) =
+            Self::create_textures(device, config.format, self.panel_width, self.panel_height);
+        let register = |renderer: &mut egui_wgpu::Renderer, texture: &wgpu::Texture| {
+            renderer.register_native_texture(
+                device,
+                &texture.create_view(&Default::default()),
+                wgpu::FilterMode::Linear,
+            )
+        };
+        let left_tex_id = register(renderer, &left_color_tex);
+        let right_tex_id = register(renderer, &right_color_tex);
+        Self {
+            left_preview: self
+                .left_preview
+                .recreate_on_device(device, queue, &panel_config),
+            right_preview: self
+                .right_preview
+                .recreate_on_device(device, queue, &panel_config),
+            left_genome_name: self.left_genome_name.clone(),
+            right_genome_name: self.right_genome_name.clone(),
+            left_color_tex,
+            right_color_tex,
+            left_tex_id,
+            right_tex_id,
+            left_orbit_angle: self.left_orbit_angle,
+            right_orbit_angle: self.right_orbit_angle,
+            panel_width: self.panel_width,
+            panel_height: self.panel_height,
+            format: config.format,
+        }
+    }
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
