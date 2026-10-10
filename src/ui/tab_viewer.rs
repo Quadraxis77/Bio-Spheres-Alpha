@@ -6876,7 +6876,7 @@ fn render_light_settings_organized(
                     .step_by(0.1)
                     .fixed_decimals(1),
                 )
-                .on_hover_text("Controls heat storage and freeze/melt delay. At 4, air responds in about 4 seconds, water 18 seconds, ice 23 seconds, and exposed rock 33 seconds. Calibrated for a 1°/s sun orbit: brief shadows retain warmth, sustained shade can freeze, and sunlight melts. Lower values react faster; 5 stores heat longer.")
+                .on_hover_text("Controls heat storage and freeze/melt delay. At 4, air responds in about 4 seconds, water 71 seconds, ice 93 seconds, and exposed rock 33 seconds. Water slowly follows average air temperature and settles a little cooler. Sustained freezing air can form ice; warm air gradually melts it. Lower values react faster; 5 stores heat longer.")
                 .changed()
             {
                 changed = true;

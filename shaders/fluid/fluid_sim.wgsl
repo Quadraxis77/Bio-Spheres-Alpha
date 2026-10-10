@@ -47,7 +47,8 @@ struct FluidParams {
     snow_threshold: u32,
     evaporation_threshold: u32,
     optimal_cell_temp: u32,
-    _pad_thresholds: u32,
+    // (average air Celsius + 50) * 256; zero until the first air readback.
+    air_temperature_reference: u32,
 
     // ---- Climate tunables (see CLIMATE_SPEC) ----
     // Per-tick humidity diffusion rate (fraction of a voxel's humidity shared with each neighbor).
@@ -177,11 +178,12 @@ const DARK_BASELINE_C: f32 = -18.0;
 // as -18 C made the world average approach freezing whenever the sun moved.
 // This is independent of the visual ambient-light floor and local emitters.
 const ATMOSPHERIC_REDISTRIBUTED_SOLAR: f32 = 0.875;
-// Direct sunlight warms condensed water more than the surrounding atmosphere.
-// Surface losses and exchange with that atmosphere bring the pool average back
-// into the temperate range, while its shaded skin can still freeze.
-const WATER_DIRECT_SOLAR_GAIN: f32 = 1.4;
-const SHADED_SURFACE_COOLING_GAIN: f32 = 5.0;
+// Unresolved atmospheric exchange slowly brings water/ice toward the measured
+// air mean. A modest evaporative offset keeps shaded water a little cooler;
+// direct sun recovers part of that offset rather than driving a separate climate.
+const WATER_AIR_COOLING_OFFSET_C: f32 = 3.0;
+const WATER_DIRECT_SOLAR_WARMING_C: f32 = 2.0;
+const WATER_AIR_EXCHANGE_RATE: f32 = 0.25;
 const EVAPORATION_FLOOR_C: f32 = -12.0;   // only deep cold shuts down the vapor cycle
 const BOILING_POINT_C: f32 = 100.0;        // steam stays vapor at/above this; condensation possible at any cooler ambient
 const SNOW_FALL_PROBABILITY: f32 = 0.04;   // snow drifts down far slower than water/rain
@@ -192,13 +194,16 @@ const FREEZE_HYSTERESIS_C: f32 = 2.0;      // water freezes below (FREEZE_POINT 
 // Snow melts just above freezing; ice retains its wider configured melt threshold.
 const SNOW_MELT_THRESHOLD_C: f32 = FREEZE_POINT_C + FREEZE_HYSTERESIS_C;
 const PHASE_DEBT_THRESHOLD: f32 = 100.0;   // accumulated freeze/melt debt required to flip water<->ice
+// Extra persistence for water/ice only: brief cold/warm spells need 50% more
+// accumulated debt before changing phase, including in static-water worlds.
+const ICE_PHASE_RESISTANCE: f32 = 1.5;
 const PHASE_DEBT_DECAY: f32 = 0.90;        // per-tick decay applied to phase debt while not past the threshold
 const DEEP_FREEZE_MARGIN_C: f32 = 10.0;    // low-inertia surface water this far below freezing can ice over immediately
 // Sheet-first freezing: extra freeze-debt rate per adjacent lateral ice
 // crystal (surface sheet racing outward), and the rate multiplier for water
 // thickening the sheet from below. Spread >> thicken keeps pools freezing as
 // a sheet that extends downward rather than as plunging columns.
-const SHEET_SPREAD_BONUS: f32 = 24.0;
+const SHEET_SPREAD_BONUS: f32 = 16.0;
 const ICE_THICKEN_MULT: f32 = 0.15;
 // ---- Simplified thermodynamics: per-voxel conduction model ----
 // Every voxel carries a temperature in `temp_field`. Each tick, heat conducts
@@ -213,11 +218,11 @@ const ICE_THICKEN_MULT: f32 = 0.15;
 // Effective heat capacities in simulation units, calibrated for a 360 s sun
 // orbit (1 degree/s). At default inertia 4 and 60 fluid ticks/s the isolated
 // heating response is mass / (60 * cooling_coupling * cooling_strength * rate):
-// air 4.1 s, water 17.8 s, ice 23.3 s, vapor 4.1 s, snow 6.8 s, rock 32.7 s.
+// air 4.1 s, water 71.2 s, ice 93.2 s, vapor 4.1 s, snow 6.8 s, rock 32.7 s.
 // These represent the active surface layer, not SI masses of entire boulders.
-// Buried layers retain heat and exchange it by conduction. An exposed water
-// skin cools faster in full shade; coupled to the warm pool and atmosphere it
-// freezes over tens of seconds, then thaws promptly when sunlight returns.
+// Buried layers retain heat and exchange it by conduction. Water/ice also
+// follow the bulk atmosphere over minutes, so shading alone cannot freeze a
+// pool while the air remains warm.
 const THERMAL_MASS_AIR: f32 = 1.0;
 const THERMAL_MASS_WATER: f32 = 5.0;
 const THERMAL_MASS_ICE: f32 = 6.0;
@@ -258,9 +263,8 @@ const WATER_DENSITY_INVERSION_C: f32 = 4.0;
 // atmosphere also receives redistributed solar energy (see above).
 // Brightness is a climate control, not a linear watts scale. At 3, clear
 // sunlight supplies a 48 C rise above the cold baseline to air and rock.
-// Condensed water absorbs extra direct heat (49.2 C isolated full-sun target),
-// balancing exposed-surface losses to keep the coupled pool temperate over
-// the orbit. At 5 even 40% exposure can sustain >100 C.
+// Water/ice receive slow atmospheric exchange and a smaller direct-sun boost.
+// At brightness 5 the atmosphere can still supply enough heat to boil water.
 const SOLAR_COUPLING: f32 = 0.018;
 const SOLAR_INPUT_C_PER_REFERENCE_PASS: f32 = 48.0 / 1.4;
 const RADIATIVE_COOLING_COUPLING: f32 = 0.018;
@@ -311,18 +315,30 @@ fn solar_heat_scale() -> f32 {
     return relative * relative * (1.0 + 4.0 * boost * boost);
 }
 
+fn average_air_temperature_c() -> f32 {
+    if params.air_temperature_reference != 0u {
+        return TEMP_MIN_C + f32(params.air_temperature_reference) / TFIELD_FP;
+    }
+    // Static water worlds contain no air voxels. Also provides a consistent
+    // startup reference until the asynchronous atmosphere readback is ready.
+    return clamp(DARK_BASELINE_C + ATMOSPHERIC_REDISTRIBUTED_SOLAR * solar_heat_scale()
+        * SOLAR_INPUT_C_PER_REFERENCE_PASS * SOLAR_COUPLING
+        / (RADIATIVE_COOLING_COUPLING * RADIATIVE_COOLING_STRENGTH_AIR),
+        TEMP_MIN_C, TEMP_MAX_C);
+}
+
 fn water_phase_threshold() -> f32 {
     // Water should have real latent inertia across the useful slider range:
     // 0 stays responsive, 3-4 resists snap-freezing, 5 is very slow.
     let inertia = pow(thermal_inertia_fraction(), 2.2);
-    return PHASE_DEBT_THRESHOLD * mix(1.0, 20.0, inertia);
+    return PHASE_DEBT_THRESHOLD * ICE_PHASE_RESISTANCE * mix(1.0, 20.0, inertia);
 }
 
 fn ice_phase_threshold() -> f32 {
-    // Existing ice/snow should still melt/freeze noticeably, just without
+    // Existing ice should still melt noticeably, just without
     // flickering instantly when the brightness slider changes.
     let inertia = pow(thermal_inertia_fraction(), 1.6);
-    return PHASE_DEBT_THRESHOLD * mix(1.0, 6.0, inertia);
+    return PHASE_DEBT_THRESHOLD * ICE_PHASE_RESISTANCE * mix(1.0, 6.0, inertia);
 }
 
 fn ice_melt_temperature() -> f32 {
@@ -800,26 +816,6 @@ fn in_contact_with_air(gid: vec3<u32>) -> bool {
             if !is_solid(ux, uy, uz) && get_fluid_type(n_state) == 0u {
                 return true;
             }
-        }
-    }
-    return false;
-}
-
-// Condensed material loses heat from its exposed surface, not independently
-// from every buried voxel. A cold shaded skin may freeze while the pool below
-// stores warmth; steam counts as atmosphere at this boundary too.
-fn exposed_thermal_surface(gid: vec3<u32>) -> bool {
-    let res = i32(params.grid_resolution);
-    for (var axis = 0u; axis < 3u; axis++) {
-        for (var side = -1; side <= 1; side += 2) {
-            var neighbor = vec3<i32>(gid);
-            neighbor[axis] += side;
-            if any(neighbor < vec3<i32>(0)) || any(neighbor >= vec3<i32>(res)) { return true; }
-            let n = vec3<u32>(neighbor);
-            if !is_thermal_voxel(n) { return true; }
-            let i = grid_index(n.x, n.y, n.z);
-            let phase = get_fluid_type(atomicLoad(&voxels[i]));
-            if !is_solid(n.x, n.y, n.z) && (phase == 0u || phase == 3u) { return true; }
         }
     }
     return false;
@@ -1335,18 +1331,16 @@ fn update_temperature_voxel(gid: vec3<u32>) {
     var self_delta_c = 0.0;
 
     // The atmosphere has a brightness-dependent background from redistributed
-    // solar heat, plus a smaller direct-sun variation. Water, ice, snow, and
-    // rock retain local exposure so persistent cold shadows can form. Neither
+    // solar heat, plus a smaller direct-sun variation. Water/ice follow the
+    // measured atmosphere slowly, even in shadow. Exposed rock also receives
+    // ambient heat rather than acting as a permanent cold-space reservoir. Neither
     // visual ambient light nor geothermal/luminocyte radiance supplies heat.
     {
         let sunlight = local_light_fraction(idx);
         let solar_scale = solar_heat_scale();
         let atmospheric = !solid_self && (fluid_type == 0u || fluid_type == 3u);
-        var thermal_exposure = select(sunlight,
+        let thermal_exposure = select(sunlight,
             mix(ATMOSPHERIC_REDISTRIBUTED_SOLAR, 1.0, sunlight), atmospheric);
-        if !solid_self && (fluid_type == 1u || fluid_type == 2u) {
-            thermal_exposure *= WATER_DIRECT_SOLAR_GAIN;
-        }
         let cooling_strength = radiative_cooling_strength(fluid_type, solid_self, mobile_self);
         var cooling_rate = min(
             RADIATIVE_COOLING_COUPLING * cooling_strength * rate_scale / m_self,
@@ -1355,20 +1349,18 @@ fn update_temperature_voxel(gid: vec3<u32>) {
         // Limit heating and cooling together, preserving the equilibrium at
         // every inertia setting. Independent caps made bright sun stop having
         // an effect on air at low inertia.
-        let equilibrium = clamp(DARK_BASELINE_C + thermal_exposure * solar_scale
+        var equilibrium = clamp(DARK_BASELINE_C + thermal_exposure * solar_scale
             * solar_absorption_strength(fluid_type, solid_self)
             * SOLAR_INPUT_C_PER_REFERENCE_PASS * SOLAR_COUPLING
             / (RADIATIVE_COOLING_COUPLING * cooling_strength), TEMP_MIN_C, TEMP_MAX_C);
-        if !solid_self && (fluid_type == 1u || fluid_type == 2u) && equilibrium < t_self {
-            if !exposed_thermal_surface(gid) {
-                cooling_rate = 0.0;
-            } else {
-                // Stronger net loss at a persistently shaded surface provides
-                // frost without forcing the entire atmosphere to deep cold.
-                // Keep the same CFL budget as all other radiative forcing.
-                let shadow_loss = mix(SHADED_SURFACE_COOLING_GAIN, 1.0, smoothstep(0.0, 0.3, sunlight));
-                cooling_rate = min(cooling_rate * shadow_loss, 0.25);
-            }
+        if !solid_self && (fluid_type == 1u || fluid_type == 2u) {
+            equilibrium = clamp(average_air_temperature_c() - WATER_AIR_COOLING_OFFSET_C
+                + sunlight * WATER_DIRECT_SOLAR_WARMING_C * solar_scale, TEMP_MIN_C, TEMP_MAX_C);
+            cooling_rate *= WATER_AIR_EXCHANGE_RATE;
+        } else if solid_self {
+            let sunlit_equilibrium = equilibrium;
+            let shaded_equilibrium = average_air_temperature_c() - WATER_AIR_COOLING_OFFSET_C;
+            equilibrium = mix(shaded_equilibrium, max(shaded_equilibrium, sunlit_equilibrium), sunlight);
         }
         // Buried rock exchanges heat through conduction, not radiation.
         if !solid_self || sunlight > 0.0 || in_contact_with_air(gid) {

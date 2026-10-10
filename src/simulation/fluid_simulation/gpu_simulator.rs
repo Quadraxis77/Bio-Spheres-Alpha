@@ -107,7 +107,9 @@ pub struct GpuFluidParams {
     pub snow_threshold: u32,
     pub evaporation_threshold: u32,
     pub optimal_cell_temp: u32,
-    pub _pad_thresholds: u32,
+    /// Measured average air temperature, encoded as (Celsius + 50) * 256.
+    /// Zero means no air sample yet; the shader uses the atmospheric equilibrium.
+    pub air_temperature_reference: u32,
 
     // ---- Climate tunables (see CLIMATE_SPEC) ----
     // Per-tick humidity diffusion rate (fraction of a voxel's humidity shared with each neighbor).
@@ -462,7 +464,7 @@ impl GpuFluidSimulator {
             snow_threshold: 60,
             evaporation_threshold: 120,
             optimal_cell_temp: 105,
-            _pad_thresholds: 0,
+            air_temperature_reference: 0,
             humidity_diffusion_rate: DEFAULT_HUMIDITY_DIFFUSION_RATE,
             freeze_rate: DEFAULT_FREEZE_RATE,
             melt_rate: DEFAULT_MELT_RATE,
@@ -1611,7 +1613,11 @@ impl GpuFluidSimulator {
             snow_threshold: self.snow_threshold.get(),
             evaporation_threshold: self.evaporation_threshold.get(),
             optimal_cell_temp: self.optimal_cell_temp.get(),
-            _pad_thresholds: 0,
+            air_temperature_reference: self.avg_air_temp_c.get().map_or(0, |temperature| {
+                ((temperature.clamp(-50.0, 150.0) + 50.0) * 256.0)
+                    .round()
+                    .max(1.0) as u32
+            }),
             humidity_diffusion_rate: self.humidity_diffusion_rate.get(),
             freeze_rate: self.freeze_rate.get(),
             melt_rate: self.melt_rate.get(),
@@ -3159,6 +3165,14 @@ mod frame_timing_tests {
             );
             simulator.set_static_water_world(false);
             simulator.set_surface_pressure(0.625);
+            assert_eq!(
+                simulator
+                    .make_params(3, 0, 0.0, 9.8, [false, true, false], [1.0; 4])
+                    .air_temperature_reference,
+                0,
+                "No air sample must use the shader's atmospheric fallback"
+            );
+            simulator.avg_air_temp_c.set(Some(21.125));
             let params_bytes = std::mem::size_of::<GpuFluidParams>() as u64;
             let readback = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Fluid Tick Parameter Readback"),
@@ -3206,9 +3220,11 @@ mod frame_timing_tests {
                 assert!((params.time - (index + 1) as f32 / 60.0).abs() < 1e-6);
                 assert_eq!(params.sub_step, 3);
                 assert_eq!(params.surface_pressure, 0.625);
+                assert_eq!(params.air_temperature_reference, 18208);
             }
             drop(mapped);
             readback.unmap();
+            simulator.avg_air_temp_c.set(None);
 
             // Validate exact workgroup-reduced totals across mixed phases and
             // solids, including partially occupied workgroups at the grid edge.
