@@ -13,6 +13,23 @@ fn index(x: u32, y: u32, z: u32) -> usize {
     (x + y * RES + z * RES * RES) as usize
 }
 
+fn evaporation_tick(draw: std::ops::Range<u32>) -> u32 {
+    // Select a deterministic draw for the source at (4, 4, 4), so a rare
+    // phase event can be exercised without waiting minutes for random weather.
+    (0..10_000_000u32)
+        .find(|tick| {
+            let time_hash = ((*tick as f32 / 60.0) * 1000.0) as u32;
+            let mut hash = (4u32 * 73856093 ^ 4u32 * 19349663 ^ 4u32 * 83492791) ^ time_hash;
+            hash ^= hash >> 16;
+            hash = hash.wrapping_mul(0x7FEB352D);
+            hash ^= hash >> 15;
+            hash = hash.wrapping_mul(0x846CA68B);
+            hash ^= hash >> 16;
+            draw.contains(&(hash & 0x00ffffff))
+        })
+        .unwrap()
+}
+
 type Climate = ClimateGrid<RES>;
 
 struct ClimateGrid<const N: u32> {
@@ -27,6 +44,7 @@ struct ClimateGrid<const N: u32> {
     movement: wgpu::ComputePipeline,
     static_phase: wgpu::ComputePipeline,
     fog: wgpu::ComputePipeline,
+    evaporation: wgpu::ComputePipeline,
     params: GpuFluidParams,
     tick: u32,
 }
@@ -76,7 +94,19 @@ impl<const N: u32> ClimateGrid<N> {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Production climate shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../shaders/fluid/fluid_sim.wgsl").into(),
+                    format!(
+                        "{}\n{}",
+                        include_str!("../shaders/fluid/fluid_sim.wgsl"),
+                        r#"
+@compute @workgroup_size(4, 4, 4)
+fn sample_evaporation(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if any(gid >= vec3<u32>(params.grid_resolution)) { return; }
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    atomicStore(&water_velocity[idx], bitcast<u32>(evaporation_probability(idx, field_temp_c(idx))));
+}
+"#,
+                    )
+                    .into(),
                 ),
             });
             let pipeline = |entry| {
@@ -96,6 +126,7 @@ impl<const N: u32> ClimateGrid<N> {
             let movement = pipeline("fluid_swap");
             let static_phase = pipeline("fluid_static_water_phase");
             let fog = pipeline("diffuse_humidity");
+            let evaporation = pipeline("sample_evaporation");
             let mut params = GpuFluidParams::zeroed();
             params.grid_resolution = N;
             params.cell_size = 1.0;
@@ -159,6 +190,7 @@ impl<const N: u32> ClimateGrid<N> {
                 movement,
                 static_phase,
                 fog,
+                evaporation,
                 params,
                 tick: 0,
             }
@@ -171,12 +203,13 @@ impl<const N: u32> ClimateGrid<N> {
     }
 
     fn reset(&self, phase: u32, celsius: f32, sunlight: f32) {
-        for binding in [2, 3, 4, 6, 7] {
+        for binding in [2, 3, 4, 6, 7, 9] {
             self.write(binding, &vec![0; Self::COUNT]);
         }
         self.write(1, &vec![0xffff0000 | phase; Self::COUNT]);
         self.write(5, &vec![sunlight.to_bits(); Self::COUNT]);
         self.write(8, &vec![encode(celsius); Self::COUNT]);
+        self.write(10, &vec![0; Self::COUNT * 4]);
     }
 
     fn run(&mut self, entry: &str, ticks: u32) {
@@ -186,6 +219,8 @@ impl<const N: u32> ClimateGrid<N> {
             "weather" => &self.weather,
             "movement" => &self.movement,
             "static" => &self.static_phase,
+            "fog" => &self.fog,
+            "evaporation" => &self.evaporation,
             _ => unreachable!(),
         };
         for start in (0..ticks).step_by(64) {
@@ -193,7 +228,7 @@ impl<const N: u32> ClimateGrid<N> {
             for _ in start..(start + 64).min(ticks) {
                 self.params.time = self.tick as f32 / 60.0;
                 self.params.climate_phase = self.tick % 4;
-                self.tick += if matches!(entry, "thermal" | "weather" | "static") {
+                self.tick += if matches!(entry, "thermal" | "weather" | "static" | "fog") {
                     4
                 } else {
                     1
@@ -420,6 +455,12 @@ impl<const N: u32> ClimateGrid<N> {
     // Run the actual dynamic sequence: 60 Hz, one temperature slice/tick,
     // fog and cloud precipitation every four ticks, four movement substeps.
     fn dynamic_seconds(&mut self, seconds: u32) {
+        self.fluid_seconds(seconds, true);
+    }
+
+    // Holding the thermal field fixed lets cold-source tests isolate vapor
+    // production/lifetime from the separate sun-driven climate equilibrium.
+    fn fluid_seconds(&mut self, seconds: u32, update_temperature: bool) {
         for _ in 0..seconds {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             for _ in 0..60 {
@@ -437,19 +478,21 @@ impl<const N: u32> ClimateGrid<N> {
                             });
                     encoder.copy_buffer_to_buffer(&params, 0, &self.buffers[0], 0, params.size());
                     if sub_step == 0 {
-                        if self.params.climate_phase == 0 {
-                            encoder.clear_buffer(&self.buffers[4], 0, None);
+                        if update_temperature {
+                            if self.params.climate_phase == 0 {
+                                encoder.clear_buffer(&self.buffers[4], 0, None);
+                            }
+                            encoder.copy_buffer_to_buffer(
+                                &self.buffers[8],
+                                0,
+                                &self.buffers[11],
+                                0,
+                                (Self::COUNT * 4) as u64,
+                            );
+                            encoder.clear_buffer(&self.buffers[8], 0, None);
+                            self.dispatch(&mut encoder, &self.sliced, true);
+                            self.dispatch(&mut encoder, &self.apply, false);
                         }
-                        encoder.copy_buffer_to_buffer(
-                            &self.buffers[8],
-                            0,
-                            &self.buffers[11],
-                            0,
-                            (Self::COUNT * 4) as u64,
-                        );
-                        encoder.clear_buffer(&self.buffers[8], 0, None);
-                        self.dispatch(&mut encoder, &self.sliced, true);
-                        self.dispatch(&mut encoder, &self.apply, false);
                         if self.params.climate_phase == 2 {
                             self.dispatch(&mut encoder, &self.fog, false);
                         }
@@ -469,6 +512,55 @@ impl<const N: u32> ClimateGrid<N> {
             };
         }
         self.params.sub_step = 0;
+    }
+}
+
+#[test]
+fn vents_warm_air_and_water_in_darkness_and_heat_spreads_to_neighbors() {
+    let mut climate = Climate::new();
+    climate.params.sun_brightness = 0.0;
+    let source = index(4, 4, 4);
+    let neighbor = index(4, 4, 3);
+    for entry in ["thermal", "sliced"] {
+        for medium in [0, 1] {
+            climate.reset(medium, 18.0, 0.0);
+            climate.tick = 0;
+            let ticks_per_second = if entry == "thermal" { 15 } else { 60 };
+            climate.run(entry, 15 * ticks_per_second);
+            let unheated = climate.temperatures();
+
+            climate.reset(medium, 18.0, 0.0);
+            climate.tick = 0;
+            let mut heat = vec![0.0f32; COUNT];
+            heat[source] = 34.0;
+            climate.write(
+                9,
+                &heat.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+            );
+            climate.run(entry, 15 * ticks_per_second);
+            let warmed = climate.temperatures();
+            eprintln!(
+                "vent, {entry}, medium {medium}: source +{:.2} C, neighbor +{:.2} C",
+                warmed[source] - unheated[source],
+                warmed[neighbor] - unheated[neighbor]
+            );
+            assert!(
+                warmed[source] > unheated[source] + 1.0,
+                "the vent must supply real heat to medium {medium}, {entry}"
+            );
+            assert!(
+                warmed[neighbor] > unheated[neighbor] + 0.25,
+                "vent heat must conduct into neighboring medium {medium}, {entry}"
+            );
+            assert!(
+                warmed[source] > warmed[neighbor],
+                "vent heating must remain local"
+            );
+            assert!(
+                warmed.iter().all(|t| *t < 100.0),
+                "the default vent must warm gradually"
+            );
+        }
     }
 }
 
@@ -1038,12 +1130,74 @@ fn thermal_masses_track_a_six_minute_sun_orbit() {
         eprintln!("1 degree/s, brightness {brightness}: exposed water {night:.1}..{day:.1} C before latent heat");
     }
     climate.params.sun_brightness = 5.0;
-    climate.reset(1, 18.0, 0.4); // strongest cloud shading, not a clear-sky shortcut
+    climate.reset(1, 18.0, 0.4); // hot climate with cloud shading
     climate.run("thermal", 120 * 15);
     assert!(
-        climate.mean_temperature() > 115.0,
-        "brightness 5 must overcome cloud shading and reach boiling"
+        (45.0..70.0).contains(&climate.mean_temperature()),
+        "brightness 5 should warm shaded water without forcing it to boil: {} C",
+        climate.mean_temperature()
     );
+}
+
+#[test]
+fn upper_sun_brightness_warms_air_gradually_without_hitting_the_temperature_cap() {
+    let mut climate = Climate::new();
+    for sunlight in [0.0, 0.4, 1.0] {
+        let mut previous = None;
+        for step in 0..=8 {
+            let brightness = 3.0 + step as f32 * 0.25;
+            climate.params.sun_brightness = brightness;
+            climate.reset(0, 30.0, sunlight);
+            climate.run("thermal", 120 * 15);
+            let air = climate.mean_temperature();
+            if let Some(last) = previous {
+                assert!(air > last && air - last < 8.1,
+                    "brightness {brightness}, sunlight {sunlight}: abrupt air change {last} -> {air} C");
+            }
+            if step == 0 {
+                assert!(
+                    (23.5..30.5).contains(&air),
+                    "brightness 3 must remain temperate: {air}"
+                );
+            } else if step == 8 {
+                assert!(
+                    (67.0..80.5).contains(&air),
+                    "brightness 5 air should be hot without reaching the cap: {air}"
+                );
+                if sunlight == 0.4 {
+                    assert!(
+                        (70.0..80.0).contains(&air),
+                        "cloud-shaded air must meet the requested 70-80 C range: {air}"
+                    );
+                }
+            }
+            eprintln!("sun {brightness}, sunlight {sunlight}: air {air:.1} C");
+            previous = Some(air);
+        }
+    }
+}
+
+#[test]
+fn brightness_three_clouds_produce_substantial_rain_within_five_seconds() {
+    let mut climate = Climate::new();
+    climate.params.sun_brightness = 3.0;
+    climate.reset(3, 27.0, 1.0);
+    for _ in 0..5 * 15 {
+        // Both climate passes run on the same 15 Hz tick. Use the actual
+        // steam fog source, rather than an artificial humidity budget.
+        let tick = climate.tick;
+        climate.run("fog", 1);
+        climate.tick = tick;
+        climate.run("weather", 1);
+    }
+    let counts = climate.phase_counts();
+    eprintln!("brightness 3 cloud after 5s: {counts:?}");
+    assert!(
+        counts[1] >= COUNT / 2,
+        "temperate clouds should release at least half their vapor as real rain within five seconds: {counts:?}"
+    );
+    assert_eq!(counts[1..].iter().sum::<usize>(), COUNT);
+    assert_eq!(counts[2] + counts[4], 0);
 }
 
 #[test]
@@ -1073,37 +1227,116 @@ fn clouds_can_rain_and_snow_at_attainable_fog_density() {
     }
     climate.reset(3, -18.0, 0.0); // no fog budget or surfaces required in deep cold
     climate.run("movement", 1);
-    assert_eq!(
-        climate.phase_counts()[4],
-        COUNT,
-        "all deeply cold vapor must become snow"
+    assert!(
+        climate.phase_counts()[3] > COUNT * 9 / 10,
+        "deeply cold vapor must linger rather than all turning into snow immediately"
     );
+    climate.run("movement", 180);
+    let counts = climate.phase_counts();
+    assert!(
+        counts[2] + counts[4] > COUNT / 4,
+        "cold vapor must still deposit: {counts:?}"
+    );
+    assert!(
+        counts[3] > 0,
+        "some cold vapor must remain airborne: {counts:?}"
+    );
+    assert_eq!(counts[1..].iter().sum::<usize>(), COUNT);
 }
 
 #[test]
-fn cool_surfaces_still_supply_vapor_until_deep_cold() {
+fn liquid_evaporation_has_a_strong_cold_baseline_and_increases_with_temperature() {
+    let mut climate = Climate::new();
+    let temperatures = [-49.0, -18.0, 0.0, 5.0, 20.0, 40.0, 70.0, 99.0];
+    climate.reset(0, 0.0, 1.0);
+    climate.write(
+        8,
+        &(0..COUNT)
+            .map(|idx| encode(temperatures[idx % temperatures.len()]))
+            .collect::<Vec<_>>(),
+    );
+    for humidity in [0, 255 * 256] {
+        climate.write(6, &vec![humidity; COUNT]);
+        climate.run("evaporation", 1);
+        let rates: Vec<_> = climate.read(3)[..temperatures.len()]
+            .iter()
+            .map(|raw| f32::from_bits(*raw))
+            .collect();
+        assert!(
+            rates.iter().all(|rate| *rate >= 0.0014),
+            "cold/humid source too faint: {rates:?}"
+        );
+        assert!(
+            rates.windows(2).all(|pair| pair[1] >= pair[0]),
+            "temperature must never reduce evaporation: {rates:?}"
+        );
+        assert!(
+            rates[6] > rates[2] * 2.0,
+            "hot water must emit substantially more than cold water: {rates:?}"
+        );
+    }
+}
+
+#[test]
+fn cold_liquid_keeps_visible_vapor_in_the_air_across_successive_seconds() {
+    let mut climate = ClimateGrid::<16>::new();
+    climate.params.gravity_mode = 1;
+    // Keep liquid available at each tested temperature. Freezing has its own
+    // regressions; a fully frozen source no longer represents liquid water.
+    climate.params.freeze_rate = 0.0;
+    climate.params.humidity_diffusion_rate = 0.15;
+    let idx = |x, y, z| (x + y * 16 + z * 256) as usize;
+    let mut solids = vec![0; 16 * 16 * 16];
+    let mut pool = vec![0; 16 * 16 * 16];
+    for z in 0..16 {
+        for x in 0..16 {
+            solids[idx(x, 0, z)] = 1;
+            pool[idx(x, 1, z)] = 0xffff0001;
+            pool[idx(x, 2, z)] = 0xffff0001;
+        }
+    }
+    let volume = 16 * 16 * 2;
+    for temperature in [-49.0, -18.0, 0.0, 20.0] {
+        climate.reset(0, temperature, 1.0);
+        climate.tick = 0;
+        climate.write(1, &pool);
+        climate.write(2, &solids);
+        for second in 1..=8 {
+            climate.fluid_seconds(1, false);
+            let counts = climate.phase_counts();
+            assert_eq!(counts[1..].iter().sum::<usize>(), volume);
+            assert!(
+                counts[1] >= volume / 2,
+                "the pool's bottom layer must survive at brightness 3: {counts:?}"
+            );
+            if second >= 2 {
+                assert!(
+                    counts[3] > 0,
+                    "{temperature} C, second {second}: {counts:?}"
+                );
+                assert!(
+                    climate.visible_vapor() > 0,
+                    "{temperature} C, second {second}: visible wisps required"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn only_liquid_water_supplies_vapor_at_every_temperature() {
     let mut climate = Climate::new();
     climate.params.gravity_mode = 1;
+    climate.params.sun_brightness = 4.0;
     let center = index(4, 4, 4);
-    // Select a rare evaporation draw so this tests the actual phase path
-    // without waiting minutes for a single voxel's natural random event.
-    let tick = (0..10_000_000u32)
-        .find(|tick| {
-            let time_hash = ((*tick as f32 / 60.0) * 1000.0) as u32;
-            let mut hash = (4u32 * 73856093 ^ 4u32 * 19349663 ^ 4u32 * 83492791) ^ time_hash;
-            hash ^= hash >> 16;
-            hash = hash.wrapping_mul(0x7FEB352D);
-            hash ^= hash >> 15;
-            hash = hash.wrapping_mul(0x846CA68B);
-            hash ^= hash >> 16;
-            hash & 0x00ffffff < 8
-        })
-        .unwrap();
+    let tick = evaporation_tick(0..8);
     for (phase, temperature, evaporates) in [
         (1, 5.0, true),
-        (2, -5.0, true),
-        (4, -5.0, true),
-        (1, -18.0, false),
+        (1, 0.0, true),
+        (1, -18.0, true),
+        (1, -49.0, true),
+        (2, -5.0, false),
+        (4, -5.0, false),
         (2, -18.0, false),
     ] {
         climate.reset(0, temperature, 0.0);
@@ -1123,10 +1356,186 @@ fn cool_surfaces_still_supply_vapor_until_deep_cold() {
         );
         assert_eq!(counts[1..].iter().sum::<usize>(), 1);
     }
+
+    // Saturated air slows evaporation but cannot switch liquid vapor off.
+    climate.reset(0, 0.0, 0.0);
+    climate.tick = tick;
+    let mut states = vec![0; COUNT];
+    states[center] = 0xffff0001;
+    climate.write(1, &states);
+    let mut solids = vec![0; COUNT];
+    solids[index(4, 3, 4)] = 1;
+    climate.write(2, &solids);
+    climate.write(6, &vec![255 * 256; COUNT]);
+    climate.run("movement", 1);
+    assert_eq!(climate.phase_counts()[3], 1);
+
+    // Exposed falling droplets are liquid too: support is needed for
+    // freezing, but must not gate their evaporation.
+    climate.reset(0, 0.0, 0.0);
+    climate.tick = tick;
+    climate.write(1, &states);
+    climate.run("movement", 1);
+    assert_eq!(climate.phase_counts()[3], 1);
 }
 
 #[test]
-fn brightness_five_boils_a_cloud_shaded_pool_into_mostly_steam() {
+fn warm_water_emits_vapor_on_draws_that_cold_water_does_not() {
+    let mut climate = Climate::new();
+    climate.params.gravity_mode = 1;
+    climate.params.sun_brightness = 4.0;
+    let center = index(4, 4, 4);
+    let tick = evaporation_tick(65_000..67_000);
+    for (temperature, evaporates) in [(0.0, false), (5.0, false), (40.0, true), (70.0, true)] {
+        climate.reset(0, temperature, 0.0);
+        climate.tick = tick;
+        let mut states = vec![0; COUNT];
+        states[center] = 0xffff0001;
+        let mut solids = vec![0; COUNT];
+        solids[index(4, 3, 4)] = 1;
+        climate.write(1, &states);
+        climate.write(2, &solids);
+        climate.run("movement", 1);
+        assert_eq!(climate.phase_counts()[3], usize::from(evaporates));
+        assert_eq!(climate.phase_counts()[1..].iter().sum::<usize>(), 1);
+    }
+}
+
+#[test]
+fn pools_keep_their_last_liquid_layer_until_brightness_four() {
+    let mut climate = Climate::new();
+    climate.params.gravity_mode = 1;
+    let source = index(4, 4, 4);
+    let mut states = vec![0; COUNT];
+    states[source] = 0xffff0001;
+    // Enclose one last-layer liquid cell so movement cannot obscure the
+    // brightness gate. Probe both passive evaporation and boiling.
+    let mut solids = vec![1; COUNT];
+    for y in 4..7 {
+        solids[index(4, y, 4)] = 0;
+    }
+    for brightness in [0.0, 3.0, 3.999, 4.0, 5.0] {
+        climate.params.sun_brightness = brightness;
+        for temperature in [0.0, 25.0, 110.0] {
+            climate.reset(0, temperature, 0.0);
+            climate.tick = evaporation_tick(0..8);
+            climate.write(1, &states);
+            climate.write(2, &solids);
+            climate.run("movement", 1);
+            let counts = climate.phase_counts();
+            assert_eq!(counts[1..].iter().sum::<usize>(), 1);
+            assert_eq!(
+                counts[3],
+                usize::from(brightness >= 4.0),
+                "brightness {brightness}, {temperature} C: {counts:?}"
+            );
+            if brightness < 4.0 {
+                climate.run("movement", 600);
+                assert_eq!(
+                    climate.read(1)[source] & 7,
+                    1,
+                    "the reserve must survive repeated evaporation and boiling attempts"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pool_reserve_follows_axis_and_radial_gravity() {
+    let mut climate = Climate::new();
+    let source = index(4, 4, 4);
+    for (gravity, axis) in [(0, 0), (1, 1), (2, 2), (3, 2)] {
+        climate.params.gravity_mode = gravity;
+        // The radial source is at (0.5, 0.5, 0.5); the simulation's
+        // deterministic gravity tie-break chooses its Z direction.
+        let mut solids = vec![1; COUNT];
+        for coordinate in 4..RES {
+            let mut pos = [4, 4, 4];
+            pos[axis] = coordinate;
+            solids[index(pos[0], pos[1], pos[2])] = 0;
+        }
+        for brightness in [3.999, 4.0] {
+            climate.params.sun_brightness = brightness;
+            climate.reset(0, 110.0, 0.0);
+            climate.tick = evaporation_tick(0..8);
+            let mut states = vec![0; COUNT];
+            states[source] = 0xffff0001;
+            climate.write(1, &states);
+            climate.write(2, &solids);
+            climate.run("movement", 128);
+            let counts = climate.phase_counts();
+            assert_eq!(counts[1..].iter().sum::<usize>(), 1);
+            assert_eq!(
+                counts[1],
+                usize::from(brightness < 4.0),
+                "gravity {gravity}, brightness {brightness}: {counts:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn freezing_point_liquid_supplies_vapor_that_condenses_into_rain() {
+    let mut climate = Climate::new();
+    climate.params.gravity_mode = 1;
+    climate.params.freeze_rate = 0.0;
+    climate.reset(0, 0.0, 1.0);
+    climate.tick = evaporation_tick(0..8);
+    let source = index(4, 4, 4);
+    let mut states = vec![0; COUNT];
+    states[source] = 0xffff0001;
+    states[index(4, 3, 4)] = 0xffff0001;
+    let mut solids = vec![1; COUNT];
+    for y in 3..RES {
+        solids[index(4, y, 4)] = 0;
+    }
+    climate.write(1, &states);
+    climate.write(2, &solids);
+    climate.run("movement", 1);
+    // Newly spawned vapor can already rise during the in-place motion pass.
+    let vapor = climate
+        .read(1)
+        .iter()
+        .position(|state| *state & 7 == 3)
+        .unwrap();
+    assert!(climate.visible_vapor() > 0);
+    // Use the real vapor fog source, without seeding an artificial humidity
+    // budget. Cold liquid must feed the complete conserved rain cycle.
+    climate.run("fog", 1);
+    assert!(climate.read(6)[vapor] > 0);
+    climate.run("weather", 600);
+    assert_eq!(climate.read(1)[vapor], 0xffff0001);
+    assert_eq!(climate.phase_counts()[1..].iter().sum::<usize>(), 2);
+    for _ in 0..128 {
+        climate.run("movement", 1);
+        let states = climate.read(1);
+        if states[source] & 7 == 1 && states[index(4, 3, 4)] & 7 == 1 {
+            break;
+        }
+    }
+    assert_eq!(
+        climate.read(1)[source] & 7,
+        1,
+        "rain must return to the pool surface"
+    );
+    assert_eq!(
+        climate.read(1)[index(4, 3, 4)] & 7,
+        1,
+        "the liquid reserve must survive"
+    );
+    climate.tick = evaporation_tick(0..8);
+    climate.run("movement", 1);
+    let counts = climate.phase_counts();
+    assert_eq!(
+        counts[3], 1,
+        "rain must recharge the next real evaporation cycle"
+    );
+    assert_eq!(counts[1..].iter().sum::<usize>(), 2);
+}
+
+#[test]
+fn temperate_pool_keeps_raining_and_brightness_five_warms_it_without_boiling() {
     let mut climate = Climate::new();
     climate.params.gravity_mode = 1;
     climate.params.sun_brightness = 5.0;
@@ -1150,12 +1559,12 @@ fn brightness_five_boils_a_cloud_shaded_pool_into_mostly_steam() {
     let temperate = climate.phase_counts();
     eprintln!("brightness 3 after 10s sunlight: {temperate:?}");
     assert!(
-        temperate[3] > 0,
-        "temperate evaporation must start within ten seconds"
+        temperate[3] > water_volume / 10,
+        "temperate evaporation must supply significant vapor within ten seconds"
     );
     assert!(
-        temperate[1] > water_volume * 8 / 10,
-        "temperate water must not boil away"
+        temperate[1] >= water_volume / 2,
+        "persistent temperate vapor must preserve the pool's bottom layer"
     );
     assert!(
         climate.visible_vapor() > 0,
@@ -1167,8 +1576,8 @@ fn brightness_five_boils_a_cloud_shaded_pool_into_mostly_steam() {
     eprintln!("brightness 3 after 60s shade: {night:?}");
     assert_eq!(night[1..].iter().sum::<usize>(), water_volume);
     assert!(
-        night[2] == 0 && night[1] > water_volume * 8 / 10,
-        "a sustained shadow must retain liquid water when the air is warm"
+        night[2] == 0 && night[1] >= water_volume / 2,
+        "a sustained shadow must preserve the pool's bottom layer when the air is warm"
     );
     climate.write(5, &vec![1.0f32.to_bits(); COUNT]);
     climate.dynamic_seconds(45);
@@ -1176,8 +1585,8 @@ fn brightness_five_boils_a_cloud_shaded_pool_into_mostly_steam() {
     eprintln!("brightness 3 after 45s sunlight: {day:?}");
     assert_eq!(day[1..].iter().sum::<usize>(), water_volume);
     assert!(
-        day[1] > water_volume * 8 / 10,
-        "daylight must melt ice and retain mostly liquid water: {day:?}"
+        day[1] >= water_volume / 2,
+        "daylight must melt ice and preserve the pool's bottom layer alongside significant vapor: {day:?}"
     );
     climate.params.sun_brightness = 5.0;
     climate.write(5, &vec![0.4f32.to_bits(); COUNT]);
@@ -1189,9 +1598,24 @@ fn brightness_five_boils_a_cloud_shaded_pool_into_mostly_steam() {
         water_volume,
         "phase cycling must conserve total water"
     );
+    assert!(counts[3] > water_volume / 2 && counts[1] < water_volume / 2,
+        "brightness 5 must permit depletion past the protected pool reserve through real evaporation: {counts:?}");
+    let temperatures = climate.temperatures();
+    let states = climate.read(1);
+    let air: Vec<_> = states
+        .iter()
+        .zip(&temperatures)
+        .filter_map(|(state, temperature)| matches!(state & 7, 0 | 3).then_some(*temperature))
+        .collect();
+    let air_mean = air.iter().sum::<f32>() / air.len() as f32;
+    eprintln!("brightness 5 pool atmosphere: {air_mean:.1} C");
     assert!(
-        counts[3] > water_volume * 9 / 10,
-        "brightness 5 should leave mostly steam: {counts:?}"
+        (70.0..80.0).contains(&air_mean),
+        "the pool's atmosphere must stay near the requested hot climate: {air_mean}"
+    );
+    assert!(
+        temperatures.iter().all(|t| *t < 90.0),
+        "brightness 5 must not force boiling"
     );
     assert_eq!(counts[2] + counts[4], 0, "no ice or snow in this hot world");
 }
@@ -1307,7 +1731,13 @@ fn sun_response_is_monotonic_for_air_water_and_rock() {
                             30.0
                         }
                     }
-                    5.0 => 150.0,
+                    5.0 => {
+                        if matches!(medium, 1 | 2) {
+                            68.83333
+                        } else {
+                            80.0
+                        }
+                    }
                     _ => unreachable!(),
                 };
                 assert!(
@@ -1422,6 +1852,7 @@ fn static_water_preserves_rock_heat_and_evaporation_preserves_displaced_air_heat
 
     climate.reset(0, 30.0, 0.0);
     climate.params.gravity_mode = 1;
+    climate.params.sun_brightness = 4.0;
     let mut states = vec![0; COUNT];
     states[center] = 0xffff0001;
     climate.write(1, &states);

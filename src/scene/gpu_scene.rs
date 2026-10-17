@@ -8045,7 +8045,7 @@ impl GpuScene {
 
 impl Scene for GpuScene {
     fn update(&mut self, dt: f32) {
-        self.frame_clock.record(dt, self.paused, self.time_scale);
+        self.frame_clock.record(dt);
         if self.paused {
             return;
         }

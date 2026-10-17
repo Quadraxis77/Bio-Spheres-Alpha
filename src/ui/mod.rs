@@ -1,5 +1,6 @@
 pub mod camera;
 pub mod control_usage;
+mod cpu_usage;
 pub mod dock;
 pub mod genome_browser;
 pub mod inspection;

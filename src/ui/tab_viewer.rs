@@ -23,6 +23,10 @@ use crate::ui::ui_system::{
 };
 use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
 
+#[cfg(test)]
+#[path = "sun_orbit_slider_tests.rs"]
+mod sun_orbit_slider_tests;
+
 /// TabViewer implementation for Bio-Spheres panels.
 ///
 /// This struct implements the egui_dock TabViewer trait to provide
@@ -3840,7 +3844,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new("Cores")
+                egui::RichText::new("Logical CPUs")
                     .size(11.0)
                     .color(palette().text_secondary),
             );
@@ -3851,7 +3855,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             );
             ui.end_row();
             ui.label(
-                egui::RichText::new("Usage")
+                egui::RichText::new("System usage")
                     .size(11.0)
                     .color(palette().text_secondary),
             );
@@ -3859,7 +3863,8 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                 egui::RichText::new(format!("{:.1}%", perf.cpu_usage_total()))
                     .size(11.0)
                     .color(palette().text_primary),
-            );
+            )
+            .on_hover_text("CPU busy time across the whole system, including other programs. Updated once per second from valid samples.");
             ui.end_row();
         });
 
@@ -6666,6 +6671,20 @@ fn apply_light_panel_changes(context: &mut PanelContext, sun_changed: bool) {
     context.editor_state.save_light_settings();
 }
 
+fn sun_orbit_position_slider(ui: &mut Ui, angle: &mut f32) -> egui::Response {
+    ui.add(
+        egui::Slider::new(angle, 0.0..=360.0)
+            // The angle advances between frames. Default Always clamping also
+            // rounds existing values, even when a focused slider has no input.
+            .clamping(egui::SliderClamping::Edits)
+            .text("Position")
+            .suffix("°")
+            .step_by(0.1)
+            .fixed_decimals(1),
+    )
+    .on_hover_text("Sun position along the visible orbit ring.")
+}
+
 fn render_light_settings_organized(
     ui: &mut Ui,
     context: &mut PanelContext,
@@ -6744,18 +6763,8 @@ fn render_light_settings_organized(
             if context.editor_state.sun_rotation_enabled {
                 let mut orbit_angle = context.editor_state.sun_orbit_angle;
                 ui.label("Position");
-                let position_response = ui
-                    .add(
-                        egui::Slider::new(&mut orbit_angle, 0.0..=360.0)
-                            .text("Position")
-                            .suffix("°")
-                            .step_by(0.1)
-                            .fixed_decimals(1),
-                    )
-                    .on_hover_text("Sun position along the visible orbit ring.");
-                if position_response.changed()
-                    && (position_response.dragged() || position_response.has_focus())
-                {
+                let position_response = sun_orbit_position_slider(ui, &mut orbit_angle);
+                if position_response.changed() {
                     context.editor_state.sun_orbit_angle = orbit_angle;
                     context.editor_state.apply_sun_orbit();
                     changed = true;

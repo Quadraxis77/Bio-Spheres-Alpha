@@ -44,6 +44,8 @@ egui_dock = { path = "./egui_dock_local", features = ["serde"] }
 ron = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+regex = "1"
+fastrand = "2"
 serde_yaml = "0.9"
 rfd = "0.15"
 thiserror = "2.0"
@@ -58,13 +60,14 @@ gif = "0.13"
 dirs = "5.0"
 kira = { version = "0.12", default-features = false, features = ["cpal", "mp3", "ogg", "vorbis", "wav", "pcm"] }
 keep-active = "0.2"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5.3"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["wincon", "consoleapi", "winuser", "libloaderapi", "basetsd"] }
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Performance", "Win32_System_Threading"] }
 
 [build-dependencies]
 winres = "0.1"

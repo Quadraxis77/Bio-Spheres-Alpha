@@ -73,6 +73,7 @@ enum MenuAction {
     GenomeEditor,
     Tutorial,
     Settings,
+    BugReport,
     Exit,
 }
 
@@ -159,6 +160,9 @@ impl PresentationFrame {
 }
 
 pub struct App {
+    bug_reporter: crate::bug_report::BugReporter,
+    bug_report_gpu: Option<wgpu::AdapterInfo>,
+    last_menu_profile: serde_json::Value,
     vr_capture_target: Option<wgpu::Texture>,
     vr_submit_ms: f64,
     #[cfg(feature = "vr")]
@@ -257,6 +261,123 @@ pub struct App {
 }
 
 impl App {
+    fn start_bug_report(&mut self) {
+        let context = self.bug_report_context();
+        self.bug_reporter.open_form(context);
+        self.window.request_redraw();
+    }
+
+    fn bug_report_context(&self) -> serde_json::Value {
+        let gpu = self.bug_report_gpu.as_ref().map(|info| serde_json::json!({
+            "name": info.name, "type": format!("{:?}", info.device_type),
+            "backend": format!("{:?}", info.backend), "driver": info.driver,
+            "driver_info": info.driver_info,
+        }));
+        let menu = self.main_menu_scene.as_ref().map(|menu| serde_json::json!({
+            "left_cells": menu.left_preview.state.display_state.cell_count,
+            "right_cells": menu.right_preview.state.display_state.cell_count,
+            "left_modes": menu.left_preview.genome.modes.len(),
+            "right_modes": menu.right_preview.genome.modes.len(),
+            "preview_resolution": [menu.panel_width, menu.panel_height],
+        }));
+        let state = &self.ui.state;
+        let editor = &self.editor_state;
+        let scene = self.scene_manager.active_scene();
+        let camera = scene.camera();
+        #[cfg(feature = "vr")]
+        let vr = self.vr.as_ref().map(|vr| vr.diagnostics());
+        #[cfg(not(feature = "vr"))]
+        let vr: Option<serde_json::Value> = None;
+        let report_camera = vr.is_none().then(|| serde_json::json!({
+            "mode": format!("{:?}", camera.mode), "position": camera.position().to_array(),
+            "rotation": camera.rotation.to_array(), "distance": camera.distance,
+        }));
+        let gpu_scene = (self.app_phase == AppPhase::InGame && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu)
+            .then(|| self.scene_manager.gpu_scene()).flatten();
+        let gpu_timings = gpu_scene.and_then(|s| s.gpu_timer.as_ref()).map(|timer| {
+            let times = timer.segment_times_ms();
+            serde_json::json!({"sample_age_ms": timer.sample_age_ms(), "segments_ms": crate::scene::gpu_timer::SEGMENT_LABELS.iter().zip(times).map(|(label, ms)| ((*label).to_owned(), ms)).collect::<std::collections::BTreeMap<_, _>>()})
+        });
+        let report_display = serde_json::json!({
+                "focused": self.window_focused, "minimized": self.window.is_minimized(),
+                "scale_factor": self.window.scale_factor(), "ui_scale": state.ui_scale,
+                "monitor_resolution": self.window.current_monitor().map(|m| [m.size().width, m.size().height]),
+                "monitor_refresh_millihertz": self.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()),
+                "surface_format": format!("{:?}", self.config.format),
+                "alpha_mode": format!("{:?}", self.config.alpha_mode),
+                "desired_frame_latency": self.config.desired_maximum_frame_latency,
+            });
+        let report_runtime_settings = serde_json::json!({
+                "world": state.world_settings, "fluid": state.fluid_settings,
+                "occlusion": state.occlusion_enabled, "frustum_culling": state.frustum_enabled,
+                "gpu_readbacks": state.gpu_readbacks_enabled, "gpu_timing_requested": state.gpu_timing_enabled,
+                "field_reports": state.field_reports_enabled, "headless": state.gpu_headless_mode,
+                "lod": [state.lod_scale_factor, state.lod_threshold_low, state.lod_threshold_medium, state.lod_threshold_high],
+                "horizontal_fov_degrees": state.horizontal_fov_degrees,
+                "music_volume": state.music_volume, "sfx_volume": state.sfx_volume,
+                "sun": serde_json::json!({"visible": editor.show_sun, "rotation_enabled": editor.sun_rotation_enabled,
+                    "axis": editor.sun_rotation_axis, "orbit_degrees": editor.sun_orbit_angle,
+                    "speed_radians_per_second": editor.sun_rotation_speed, "light_direction": editor.light_dir,
+                    "intensity": editor.sun_intensity, "cycle_enabled": editor.sun_cycle_enabled,
+                    "cycle_period_seconds": editor.sun_cycle_period, "night_ratio": editor.sun_night_ratio}),
+                "cave": serde_json::json!({"seed": editor.cave_seed, "resolution": editor.cave_resolution,
+                    "density": editor.cave_density, "scale": editor.cave_scale, "octaves": editor.cave_octaves,
+                    "threshold": editor.cave_threshold, "dirty": editor.cave_params_dirty}),
+                "rendering": serde_json::json!({"fog": editor.show_volumetric_fog, "fog_steps": editor.fog_steps,
+                    "dof": editor.show_dof, "shadows": editor.shadow_enabled, "skins": editor.show_organism_skins,
+                    "bloom": editor.luminocyte_bloom_enabled, "ray_tracing_requested": editor.luminocyte_ray_tracing,
+                    "fluid_mesh": editor.fluid_show_mesh, "static_water_world": editor.fluid_static_water_world,
+                    "fluid_pressure_iterations": editor.fluid_pressure_iterations,
+                    "continuous_water_spawn": editor.fluid_continuous_spawn}),
+                "cached_fluid_statistics": {"solid_voxels": editor.fluid_solid_count,
+                    "water_voxels": editor.fluid_water_count, "lava_voxels": editor.fluid_lava_count,
+                    "steam_voxels": editor.fluid_steam_count, "memory_mb": editor.fluid_memory_usage_mb},
+            });
+        let report_scene = serde_json::json!({"relevant_to_current_phase": self.app_phase == AppPhase::InGame,
+                "paused": scene.is_paused(), "time_seconds": scene.current_time(), "cells": scene.cell_count(),
+                "desktop_camera": report_camera,
+                "gpu": gpu_scene.map(|s| serde_json::json!({"capacity": s.capacity(), "speed": s.time_scale,
+                    "last_physics_steps": s.last_physics_steps, "physics": s.config,
+                    "max_physics_steps_per_frame": s.max_physics_steps_per_frame, "genome_count": s.genomes.len()})),
+            });
+        serde_json::json!({
+            "phase": format!("{:?}", self.app_phase),
+            "mode": self.scene_manager.current_mode().display_name(),
+            "gpu": gpu,
+            "resolution": [self.config.width, self.config.height],
+            "present_mode": format!("{:?}", self.config.present_mode),
+            "frame_limit": self.ui.state.desktop_render_fps,
+            "fullscreen": self.ui.state.fullscreen,
+            "vr_enabled_build": cfg!(feature = "vr"),
+            "vr_refresh_hz": self.performance.vr_refresh_hz(),
+            "performance": self.performance.diagnostics(),
+            "diagnostic_events": crate::bug_report::diagnostic_events(),
+            "gpu_timing": gpu_timings,
+            "vr": vr,
+            "display": report_display,
+            "device_features": format!("{:?}", self.device.features()),
+            "device_limits": format!("{:?}", self.device.limits()),
+            "runtime_settings": report_runtime_settings,
+            "scene": report_scene,
+            "world_diameter": self.ui.state.world_diameter,
+            "gpu_cells": self.scene_manager.gpu_scene().map(|scene| scene.current_cell_count),
+            "last_menu_profile": self.last_menu_profile,
+            "menu": menu,
+            "working_genome_structure": {"modes": self.working_genome.modes.len(), "scaffold_rules": self.working_genome.scaffold_rules.len()},
+        })
+    }
+
+    fn submit_bug_report(&mut self) {
+        self.bug_reporter.submit(self.bug_report_context());
+        self.window.request_redraw();
+    }
+
+    fn show_bug_report_ui(&mut self) {
+        if self.bug_reporter.show(&self.ui.ctx) {
+            self.submit_bug_report();
+        }
+    }
+
     #[cfg(feature = "vr")]
     fn detect_headset(&mut self) {
         if self.vr.is_some() || std::env::args().any(|arg| arg == "--no-vr") {
@@ -361,6 +482,7 @@ impl App {
         self.scene_manager = scene_manager;
         self.main_menu_scene = menu;
         self.ui.renderer = renderer;
+        self.bug_report_gpu = Some(graphics.adapter.get_info());
         self.graphics_instance = graphics.instance;
         self.device = graphics.device;
         self.queue = graphics.queue;
@@ -1342,9 +1464,19 @@ impl App {
 
         let window_focused = window.has_focus();
         let sleep_inhibitor = crate::sleep_inhibitor::SleepInhibitor::new(window_focused);
+        ui.toasts.push(crate::ui::toast::Toast::info(
+            "Press F8 to send a bug report.",
+        ));
 
         Self {
             vr_capture_target: None,
+            bug_reporter: {
+                let mut reporter = crate::bug_report::BugReporter::default();
+                reporter.resume_pending();
+                reporter
+            },
+            bug_report_gpu: None,
+            last_menu_profile: serde_json::Value::Null,
             vr_submit_ms: 0.0,
             #[cfg(feature = "vr")]
             vr: None,
@@ -2410,6 +2542,14 @@ impl App {
     }
 
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
+        if let WindowEvent::KeyboardInput { event, .. } = event {
+            if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::F8) {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    self.start_bug_report();
+                }
+                return true;
+            }
+        }
         // First, let egui handle the event
         let _egui_response = self.ui.handle_event(&self.window, event);
 
@@ -3122,18 +3262,22 @@ impl App {
 
     /// Full render pass for a single main-menu frame.
     fn render_main_menu_frame(&mut self, dt: f32) {
+        let menu_started = std::time::Instant::now();
         self.sync_music_for_current_phase();
         self.audio.update();
+        let audio_done = std::time::Instant::now();
 
         // Update genome simulations and orbit cameras.
         if let Some(menu) = &mut self.main_menu_scene {
             menu.update(dt);
         }
+        let simulation_done = std::time::Instant::now();
 
         // Acquire swapchain texture.
         let Some(output) = self.acquire_presentation_frame() else {
             return;
         };
+        let acquire_done = std::time::Instant::now();
         let desktop_present = output.surface.is_some();
         // The VR panel renders its own per-eye previews. Refresh the desktop
         // preview textures only when a desktop frame will actually be shown.
@@ -3143,6 +3287,7 @@ impl App {
                 menu.render(&self.device, &self.queue, Some(cell_type_visuals));
             }
         }
+        let previews_done = std::time::Instant::now();
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -3252,6 +3397,9 @@ impl App {
             self.audio.play_menu_select();
         }
 
+        crate::ui::toast::render_toasts(&self.ui.ctx, &self.ui.toasts);
+        crate::ui::toast::tick_toasts(&mut self.ui.toasts, dt);
+        self.show_bug_report_ui();
         let egui_output = self.ui.ctx.end_pass();
         self.ui.collect_control_usage("Main menu");
         #[cfg(feature = "vr")]
@@ -3295,10 +3443,13 @@ impl App {
             );
             self.queue.submit(std::iter::once(enc.finish()));
         }
+        let ui_done = std::time::Instant::now();
         self.present_frame(output);
+        let present_done = std::time::Instant::now();
 
         // Handle button actions.
         match menu_response.action {
+            MenuAction::BugReport => self.start_bug_report(),
             MenuAction::Play => {
                 self.app_phase = AppPhase::InGame;
                 self.main_menu_hovered = MenuAction::None;
@@ -3363,9 +3514,31 @@ impl App {
         }
         self.sync_music_for_current_phase();
 
-        // FPS counter.
+        let phases = [
+            audio_done.duration_since(menu_started),
+            simulation_done.duration_since(audio_done),
+            acquire_done.duration_since(simulation_done),
+            previews_done.duration_since(acquire_done),
+            ui_done.duration_since(previews_done),
+            present_done.duration_since(ui_done),
+        ];
+        for (index, duration) in phases.iter().enumerate() {
+            let ms = duration.as_secs_f64() * 1000.0;
+            self.cpu_phase_totals_ms[index] += ms;
+            self.cpu_phase_max_ms[index] = self.cpu_phase_max_ms[index].max(ms);
+        }
         self.frame_count += 1;
         if self.fps_timer.elapsed().as_secs_f32() >= 1.0 {
+            let frames = f64::from(self.frame_count.max(1));
+            let fps = frames / self.fps_timer.elapsed().as_secs_f64();
+            let names = ["audio", "simulation", "acquire", "previews", "ui", "present"];
+            let timings: serde_json::Map<String, serde_json::Value> = names.iter().enumerate().map(|(i, name)| {
+                ((*name).into(), serde_json::json!({"avg_ms": self.cpu_phase_totals_ms[i] / frames, "max_ms": self.cpu_phase_max_ms[i]}))
+            }).collect();
+            self.last_menu_profile = serde_json::json!({"fps": fps, "phases": timings});
+            log::warn!("[perf-menu] {}", self.last_menu_profile);
+            self.cpu_phase_totals_ms = [0.0; 9];
+            self.cpu_phase_max_ms = [0.0; 9];
             self.frame_count = 0;
             self.fps_timer = std::time::Instant::now();
         }
@@ -3798,6 +3971,13 @@ impl App {
                     FontId::new(11.0, FontFamily::Proportional),
                     Color32::from_rgb(100, 190, 155),
                 );
+                let report_rect = egui::Rect::from_min_size(
+                    rect.right_top() + egui::vec2(-168.0, 12.0),
+                    egui::vec2(156.0, 28.0),
+                );
+                if ui.put(report_rect, egui::Button::new("Report a bug (F8)")).clicked() {
+                    action = MenuAction::BugReport;
+                }
                 let _ = y;
             });
 
@@ -3898,6 +4078,7 @@ impl App {
     }
 
     fn render(&mut self) {
+        self.bug_reporter.poll();
         self.sync_sleep_inhibitor();
         #[cfg(feature = "vr")]
         self.detect_headset();
@@ -4022,13 +4203,14 @@ impl App {
                 .as_secs_f64()
                 * 1000.0,
         );
-        let dt = now
-            .duration_since(self.last_render_time)
-            .as_secs_f32()
-            .min(0.1);
+        let wall_dt = now.duration_since(self.last_render_time).as_secs_f32();
+        let dt = wall_dt.min(0.1);
         self.last_render_time = now;
 
         self.next_frame_time = now + self.ui.state.desktop_frame_interval();
+        // Diagnostics need real frame intervals, including stalls in the menu.
+        self.performance.set_report_phase(if self.app_phase == AppPhase::MainMenu { "Main menu" } else { self.scene_manager.current_mode().display_name() });
+        self.performance.update(wall_dt);
 
         // -- Main menu fast path -----------------------------------------------
         if self.app_phase == AppPhase::MainMenu {
@@ -4036,8 +4218,6 @@ impl App {
             return;
         }
 
-        // Update performance metrics (includes automatic spike detection)
-        self.performance.update(dt);
         self.sync_music_for_current_phase();
         self.update_cell_link_hold();
         let gpu_headless = self.scene_manager.current_mode()
@@ -5402,6 +5582,7 @@ impl App {
                 }
             }
 
+            self.show_bug_report_ui();
             let output = self.ui.end_frame(
                 &mut self.dock_manager,
                 &mut self.working_genome,
@@ -6029,7 +6210,7 @@ impl App {
         };
 
         let ui_build_done = std::time::Instant::now();
-        if self.ui.native_ui_hidden {
+        if self.ui.native_ui_hidden && !self.bug_reporter.open {
             egui_output.shapes.clear();
         }
         #[cfg(feature = "vr")]
@@ -6888,6 +7069,9 @@ impl ApplicationHandler for AppState {
             dock_manager,
             ui,
         ));
+        if let Some(app) = &mut self.app {
+            app.bug_report_gpu = Some(adapter_info);
+        }
 
         #[cfg(feature = "vr")]
         if let Some(app) = &mut self.app {
@@ -6962,6 +7146,7 @@ pub fn run() {
     // Write logs to the AppData config directory so they're always findable
     // regardless of where the exe is launched from.
     let log_path = crate::app_dirs::log_file();
+    crate::bug_report::preserve_previous_log(&crate::app_dirs::config_dir());
 
     // Open (or create) the log file, truncating it each run so it stays small.
     let log_file = std::fs::OpenOptions::new()
@@ -6985,6 +7170,11 @@ pub fn run() {
         .parse_default_env() // still respect RUST_LOG if set
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .format_timestamp_secs()
+        .format(|buffer, record| {
+            use std::io::Write;
+            crate::bug_report::record_diagnostic_event(record);
+            writeln!(buffer, "[{} {:5} {}] {}", buffer.timestamp_seconds(), record.level(), record.target(), record.args())
+        })
         .init();
 
     // -- Panic hook -----------------------------------------------------------
@@ -6992,6 +7182,7 @@ pub fn run() {
     // knows the crash happened and where to find the log.
     let log_path_for_hook = log_path.clone();
     std::panic::set_hook(Box::new(move |info| {
+        crate::bug_report::record_panic_location(info.location());
         let msg = format!(
             "PANIC: {}\n\nLog file: {}\n\nPlease send the log file to the developer.",
             info,
@@ -7039,6 +7230,7 @@ pub fn run() {
     }));
 
     log::warn!("Bio-Spheres starting — log: {}", log_path.display());
+    log::warn!("[diagnostics-build] {}", crate::bug_report::build_identity());
 
     // Migrate config files: write defaults for first-time users, and add any
     // new keys introduced in this version without touching existing user values.
@@ -7049,6 +7241,10 @@ pub fn run() {
 
     event_loop.run_app(&mut state).unwrap();
 }
+
+#[cfg(test)]
+#[path = "bug_report_ui_tests.rs"]
+mod bug_report_ui_tests;
 
 #[cfg(all(test, feature = "vr", target_os = "windows"))]
 mod vr_tests {

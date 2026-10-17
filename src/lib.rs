@@ -109,6 +109,7 @@
 pub mod app;
 pub mod app_dirs;
 pub mod audio;
+pub mod bug_report;
 pub mod cell;
 pub mod field_report;
 pub mod genome;

@@ -4,6 +4,7 @@ use ash::vk::{self, Handle};
 use glam::{Quat, Vec3};
 use openxr as xr;
 use std::sync::{Arc, Mutex};
+mod activity;
 mod controllers;
 pub mod controls;
 pub mod dial;
@@ -513,6 +514,8 @@ impl RuntimeSwapchain {
 }
 
 pub struct VrState {
+    report_runtime: Option<String>,
+    report_headset_model: Option<String>,
     actions: input::Actions,
     mirror: mirror::Mirror,
     fade: fade::Fade,
@@ -528,7 +531,7 @@ pub struct VrState {
     wheel_ctx: egui::Context,
     wheel_renderer: egui_wgpu::Renderer,
     wheel_pose: Option<xr::Posef>,
-    frame_stream: xr::FrameStream<xr::Vulkan>,
+    frame_stream: Arc<Mutex<xr::FrameStream<xr::Vulkan>>>,
     frame_waiter: frame_wait::FrameWait,
     session_epoch: u64,
     local: xr::Space,
@@ -541,6 +544,7 @@ pub struct VrState {
     focused: bool,
     visible: bool,
     user_present: Option<bool>,
+    frame_activity: activity::FrameActivity,
     display_refresh_hz: Option<f32>,
     exiting: bool,
     frame: Option<xr::FrameState>,
@@ -658,6 +662,7 @@ impl VrState {
             None
         };
         log::info!("OpenXR eye resolution: {width} x {height}");
+        let frame_stream = Arc::new(Mutex::new(frame_stream));
         Ok(Self {
             wheel: RuntimeSwapchain::new(
                 &session,
@@ -690,16 +695,19 @@ impl VrState {
                 2,
             )?,
             hands_drawn: false,
+            report_runtime: bootstrap.instance.properties().ok().map(|p| format!("{} {}", p.runtime_name, p.runtime_version)),
+            report_headset_model: bootstrap.instance.system_properties(bootstrap.system).ok().map(|p| p.system_name),
             tracked_input: std::cell::RefCell::new(Default::default()),
             eyes,
             ui,
             ui_pixel_scale,
-            frame_stream,
             frame_waiter: frame_wait::FrameWait::new(
                 frame_waiter,
+                frame_stream.clone(),
                 graphics.queue.clone(),
                 graphics.device.clone(),
             ),
+            frame_stream,
             session_epoch: 0,
             local,
             view_space,
@@ -711,6 +719,7 @@ impl VrState {
             focused: false,
             visible: false,
             user_present: None,
+            frame_activity: Default::default(),
             display_refresh_hz,
             exiting: false,
             frame: None,
@@ -733,6 +742,17 @@ impl VrState {
     pub fn dimensions(&self) -> (u32, u32) {
         (self.eyes.width, self.eyes.height)
     }
+    /// No poses, controller identifiers, tracking history or account data.
+    pub fn diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({
+            "runtime": self.report_runtime, "headset_model": self.report_headset_model,
+            "running": self.running, "focused": self.focused, "visible": self.visible,
+            "headset_active": self.headset_active(), "presenting": self.presenting(),
+            "eye_resolution": self.dimensions(), "ui_resolution": self.ui_dimensions(),
+            "refresh_hz": self.display_refresh_hz, "immersive": self.immersive,
+            "world_units_per_meter": self.world_units_per_meter,
+        })
+    }
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
     }
@@ -746,7 +766,11 @@ impl VrState {
         self.running
     }
     pub fn headset_active(&self) -> bool {
-        self.running && self.visible && self.user_present.unwrap_or(self.focused)
+        self.headset_available()
+            && (self.frame.is_some() || self.frame_activity.active(std::time::Instant::now()))
+    }
+    fn headset_available(&self) -> bool {
+        self.running && !self.exiting && self.visible && self.user_present.unwrap_or(self.focused)
     }
     pub fn presenting(&self) -> bool {
         self.headset_active() && self.frame.is_some_and(|frame| frame.should_render)
@@ -858,6 +882,7 @@ impl VrState {
                     );
                     match event.state() {
                         xr::SessionState::READY => {
+                            self.frame_activity.reset();
                             self.session
                                 .begin(VIEW_TYPE)
                                 .map_err(|e| format!("OpenXR begin session: {e}"))?;
@@ -866,6 +891,7 @@ impl VrState {
                             self.ui_space_change = None;
                         }
                         xr::SessionState::STOPPING => {
+                            self.frame_activity.reset();
                             self.session
                                 .end()
                                 .map_err(|e| format!("OpenXR end session: {e}"))?;
@@ -899,6 +925,9 @@ impl VrState {
                 _ => {}
             }
         }
+        if !self.headset_available() {
+            self.frame_activity.reset();
+        }
         if !self.running || self.exiting {
             return Ok(());
         }
@@ -908,7 +937,22 @@ impl VrState {
         else {
             return Ok(());
         };
+        // Refresh activity independently of headset_active so a sleeping
+        // headset can resume on its first renderable frame. should_render=false
+        // is an idle signal even when focus/presence events have not changed.
+        self.frame_activity.observe(
+            self.headset_available() && frame.should_render,
+            std::time::Instant::now(),
+        );
+        if !self.headset_available() || !frame.should_render {
+            // SteamVR can throttle empty xrEndFrame calls for ~100 ms after
+            // headset removal. Keep the required frame lifecycle on the worker
+            // so every desktop scene remains responsive during that interval.
+            return self.frame_waiter.submit_empty(self.session_epoch, frame);
+        }
         self.frame_stream
+            .lock()
+            .unwrap()
             .begin()
             .map_err(|e| format!("OpenXR begin frame: {e}"))?;
         self.frame = Some(frame);
@@ -1306,6 +1350,8 @@ impl VrState {
         }
         let end = self
             .frame_stream
+            .lock()
+            .unwrap()
             .end(
                 frame.predicted_display_time,
                 xr::EnvironmentBlendMode::OPAQUE,

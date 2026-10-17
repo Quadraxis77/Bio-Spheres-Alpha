@@ -641,8 +641,9 @@ impl PreviewState {
 
     /// Run incremental resimulation toward target time.
     ///
-    /// Runs a time-budgeted chunk of physics steps per call (~8ms) so the
-    /// UI thread never blocks. The viewport stays frozen on `display_state`
+    /// Runs a time-budgeted chunk of physics steps per call (~2ms, plus at most
+    /// one physics step) to leave room for rendering at 120 Hz.
+    /// The viewport stays frozen on `display_state`
     /// while `work_state` catches up. When complete, work is promoted to display.
     ///
     /// Returns true when resim is complete, false when more work remains.
@@ -653,6 +654,22 @@ impl PreviewState {
         config: &crate::simulation::physics_config::PhysicsConfig,
         test_signals: &[crate::simulation::signal_system::SignalEmission],
     ) -> bool {
+        self.step_to_with_budget(
+            genome,
+            config,
+            test_signals,
+            std::time::Duration::from_millis(2),
+        )
+    }
+
+    fn step_to_with_budget(
+        &mut self,
+        genome: &Genome,
+        config: &crate::simulation::physics_config::PhysicsConfig,
+        test_signals: &[crate::simulation::signal_system::SignalEmission],
+        budget: std::time::Duration,
+    ) -> bool {
+        let start_instant = std::time::Instant::now();
         let Some(target_time) = self.target_time else {
             self.is_resimulating = false;
             return true;
@@ -701,13 +718,8 @@ impl PreviewState {
             return true;
         }
 
-        // Time-budgeted stepping: run for up to ~8ms per call
-        let budget_ms = 8.0_f64;
-        let check_interval = 50u32;
-        let start_instant = std::time::Instant::now();
         let mut last_checkpoint_index =
             (self.work_time / self.checkpoint_interval).floor() as usize;
-        let mut steps_run = 0u32;
 
         for step in 0..remaining {
             let sim_time = (start_step + step) as f32 * config.fixed_timestep;
@@ -719,8 +731,6 @@ impl PreviewState {
                 sim_time,
                 Some(test_signals),
             );
-
-            steps_run += 1;
 
             // Checkpoint at intervals - keep a rolling window of 60 entries so
             // the Vec doesn't grow without bound during long menu sessions.
@@ -736,12 +746,11 @@ impl PreviewState {
                 }
             }
 
-            // Check time budget periodically
-            if steps_run % check_interval == 0 && step + 1 < remaining {
-                if start_instant.elapsed().as_secs_f64() * 1000.0 > budget_ms {
-                    self.work_time = (start_step + step + 1) as f32 * config.fixed_timestep;
-                    return false; // More work next frame
-                }
+            // A batch of 50 expensive steps could previously overrun an entire
+            // headset frame. Yield after each step, including checkpoint cost.
+            if step + 1 < remaining && start_instant.elapsed() >= budget {
+                self.work_time = (start_step + step + 1) as f32 * config.fixed_timestep;
+                return false; // More work next frame
             }
         }
 
@@ -772,6 +781,55 @@ impl PreviewState {
 mod tests {
     use super::PreviewState;
     use crate::genome::Genome;
+
+    #[test]
+    fn budgeted_seek_yields_after_one_step_and_preserves_the_simulation() {
+        use crate::simulation::physics_config::PhysicsConfig;
+        use std::time::Duration;
+
+        let config = PhysicsConfig::default();
+        let genome = Genome::new_with_mode_count(1);
+        let mut chunked = PreviewState::new(64, &config);
+        chunked.update_initial_state(&genome, &config);
+        chunked.reset_to_initial();
+        chunked.display_state.velocities[0] = glam::vec3(1.0, 2.0, 3.0);
+        let mut uninterrupted = chunked.clone();
+        let target = config.fixed_timestep * 32.0;
+        chunked.seek_to_time(target);
+        uninterrupted.seek_to_time(target);
+        assert!(uninterrupted.step_to_with_budget(&genome, &config, &[], Duration::MAX));
+
+        assert!(!chunked.step_to_with_budget(&genome, &config, &[], Duration::ZERO));
+        assert_eq!(chunked.work_time, config.fixed_timestep);
+        assert_eq!(chunked.display_time, 0.0);
+        assert!(chunked.is_resimulating);
+        let mut calls = 1;
+        while !chunked.step_to_with_budget(&genome, &config, &[], Duration::ZERO) {
+            calls += 1;
+            assert!(calls < 32, "seek stopped making progress");
+            assert_eq!(chunked.display_time, 0.0);
+        }
+        assert_eq!(calls + 1, 32);
+        assert_eq!(chunked.display_time, target);
+        assert!(!chunked.is_resimulating);
+        assert!(chunked.target_time.is_none());
+        assert_eq!(
+            chunked.display_state.positions,
+            uninterrupted.display_state.positions
+        );
+        assert_eq!(
+            chunked.display_state.velocities,
+            uninterrupted.display_state.velocities
+        );
+        assert_eq!(
+            chunked.display_state.nutrients,
+            uninterrupted.display_state.nutrients
+        );
+        assert_eq!(
+            chunked.display_state.cell_count,
+            uninterrupted.display_state.cell_count
+        );
+    }
 
     #[test]
     fn stemocyte_settings_affect_genome_hash() {

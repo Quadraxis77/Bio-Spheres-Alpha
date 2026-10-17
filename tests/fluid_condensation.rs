@@ -136,7 +136,7 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
         });
 
         // Rain must displace the steam below it, reach the floor, and remain
-        // liquid at a temperature below the evaporation threshold.
+        // liquid long enough to settle despite the passive evaporation source.
         let mut encoder = device.create_command_encoder(&Default::default());
         let mut parameter_copies = Vec::with_capacity(128);
         for tick in 0..128 {
@@ -196,7 +196,9 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
 
         // Retain the existing outer-shell condensation regression as a second
         // run in the same GPU fixture, using radial gravity so the resulting
-        // liquid does not immediately fall out of the test voxel.
+        // liquid does not immediately fall out of the test voxel. Record each
+        // tick: increased evaporation may return the condensate to vapor
+        // before the final tick, so a final-state-only assertion misses it.
         let mut voxels = vec![0u32; 64];
         voxels[steam_index] = (u16::MAX as u32) << 16 | 3;
         let mut temperatures = vec![0u32; 64];
@@ -205,6 +207,12 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
         queue.write_buffer(&buffers[8], 0, bytemuck::cast_slice(&temperatures));
         params.gravity_mode = 3;
         queue.write_buffer(&buffers[0], 0, bytemuck::bytes_of(&params));
+        let history = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Condensation and re-evaporation history"),
+            size: 128 * staging.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
         let mut encoder = device.create_command_encoder(&Default::default());
         let mut parameter_copies = Vec::with_capacity(128);
         for tick in 0..128 {
@@ -230,25 +238,39 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
+            drop(pass);
+            encoder.copy_buffer_to_buffer(
+                &buffers[1],
+                0,
+                &history,
+                tick as u64 * staging.size(),
+                staging.size(),
+            );
         }
         queue.submit([encoder.finish()]);
-        let mut encoder = device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(&buffers[1], 0, &staging, 0, staging.size());
-        queue.submit([encoder.finish()]);
         let (sender, receiver) = std::sync::mpsc::channel();
-        staging
+        history
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 sender.send(result).unwrap();
             });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         receiver.recv().unwrap().unwrap();
-        let mapped = staging.slice(..).get_mapped_range();
-        let final_voxels: &[u32] = bytemuck::cast_slice(&mapped);
-        assert_eq!(
-            final_voxels.iter().filter(|state| **state & 7 == 1).count(),
-            1,
+        let mapped = history.slice(..).get_mapped_range();
+        let snapshots: &[u32] = bytemuck::cast_slice(&mapped);
+        assert!(
+            snapshots.iter().any(|state| *state & 7 == 1),
             "cool steam should condense above the blocking solid"
         );
+        for snapshot in snapshots.chunks_exact(64) {
+            assert_eq!(
+                snapshot
+                    .iter()
+                    .filter(|state| matches!(**state & 7, 1..=4))
+                    .count(),
+                1,
+                "condensation and evaporation must preserve the single water voxel"
+            );
+        }
     });
 }

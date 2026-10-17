@@ -42,6 +42,29 @@ cargo build --release
 cargo run --release
 ```
 
+## Bug reports
+
+Press **F8** from the main menu or gameplay (or click **Report a bug (F8)** in
+the menu). Describe the bug in the in-game dialog and click **Send report**.
+The message and diagnostics are uploaded in the background and delivered to
+**Quadraxis77@gmail.com**. Players do not need an email program, browser, or
+account, and do not select attachments. Failed uploads retry automatically;
+pending reports survive restarting the game.
+
+Reports include hardware models and driver versions, build identity, display/VR
+configuration, live settings, snapshots at F8 and Send, and recent performance
+history. Only allowlisted performance log records and numeric settings are
+collected. Known personal identifiers are scrubbed locally before reports are
+saved or sent; players should leave personal details out of their descriptions.
+No hardware serials, account IDs, screenshots, genome names, or environment dumps
+are collected. See the [data and privacy details](bug-report-receiver/README.md#collected-data-and-privacy).
+Reports are stored under the application config directory in `bug_reports`.
+Nothing is uploaded until the player clicks Send; queued submissions retry later.
+The deployed receiver URL is embedded automatically in new builds. Incoming
+reports are filed under Gmail's **Bio-Spheres Bug Reports** label. See
+[receiver configuration](bug-report-receiver/README.md) to update the deployment
+or run a live delivery test.
+
 ## Native VR
 
 Native VR is included in the default build. Launch `bio-spheres.exe` normally;

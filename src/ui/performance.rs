@@ -3,14 +3,43 @@
 //! Tracks FPS, frame times, CPU usage, and GPU information for the
 //! performance monitor panel. Also detects and logs performance spikes.
 
+use super::cpu_usage::{CpuSample, CpuUsageSampler};
 use std::collections::VecDeque;
 use sysinfo::{Pid, System};
 
-struct SystemSample {
+struct SystemSampler {
     system: System,
-    cpu_usage: Vec<f32>,
+    cpu: CpuUsageSampler,
+    process_primed: bool,
+}
+
+struct SystemSample {
+    sampler: SystemSampler,
+    cpu_usage: Option<CpuSample>,
     memory_used: u64,
     memory_total: u64,
+    process_virtual_memory: u64,
+    process_cpu: Option<f32>,
+    sampled_at: std::time::Instant,
+}
+
+#[derive(Default, serde::Serialize)]
+struct ReportWindow {
+    frames: u64,
+    elapsed_seconds: f64,
+    max_frame_ms: f32,
+    frames_over_50ms: u64,
+    frames_over_100ms: u64,
+}
+
+impl ReportWindow {
+    fn record(&mut self, dt: f32) {
+        self.frames += 1;
+        self.elapsed_seconds += f64::from(dt);
+        self.max_frame_ms = self.max_frame_ms.max(dt * 1000.0);
+        self.frames_over_50ms += u64::from(dt > 0.05);
+        self.frames_over_100ms += u64::from(dt > 0.1);
+    }
 }
 
 /// Number of frame time samples to keep for averaging.
@@ -49,10 +78,18 @@ impl PerformanceSpikeDetector {
 
 /// Performance metrics tracker.
 pub struct PerformanceMetrics {
+    process_virtual_memory: u64,
+    process_cpu_percent: Option<f32>,
+    cpu_sampled_at: Option<std::time::Instant>,
+    system_sampled_at: Option<std::time::Instant>,
+    report_phase: &'static str,
+    report_elapsed_seconds: f64,
+    report_window: ReportWindow,
+    report_history: VecDeque<serde_json::Value>,
     /// Recent frame times for averaging (in seconds).
     frame_times: VecDeque<f32>,
     /// System info for CPU metrics.
-    system: Option<System>,
+    system: Option<SystemSampler>,
     system_sample: Option<std::sync::mpsc::Receiver<SystemSample>>,
     /// Time since last system refresh.
     time_since_refresh: f32,
@@ -60,9 +97,9 @@ pub struct PerformanceMetrics {
     time_since_culling_refresh: f32,
     /// Cached CPU core count.
     cpu_core_count: usize,
-    /// Cached per-core CPU usage (0-100%).
+    /// Cached system-wide usage per logical CPU (0-100%).
     cpu_usage_per_core: Vec<f32>,
-    /// Cached total CPU usage (0-100%).
+    /// Cached system-wide CPU busy time (0-100%), including other programs.
     cpu_usage_total: f32,
     /// Process memory usage in bytes.
     memory_used: u64,
@@ -83,15 +120,25 @@ pub struct PerformanceMetrics {
 impl PerformanceMetrics {
     /// Create a new performance metrics tracker.
     pub fn new() -> Self {
-        let mut system = System::new_all();
-        system.refresh_cpu_all();
-        system.refresh_memory();
-
-        let cpu_core_count = system.cpus().len();
+        let mut system = System::new();
+        let cpu = CpuUsageSampler::new(&mut system);
+        let cpu_core_count = cpu.core_count();
 
         let mut metrics = Self {
+            process_virtual_memory: 0,
+            process_cpu_percent: None,
+            cpu_sampled_at: None,
+            system_sampled_at: None,
+            report_phase: "startup",
+            report_elapsed_seconds: 0.0,
+            report_window: ReportWindow::default(),
+            report_history: VecDeque::with_capacity(120),
             frame_times: VecDeque::with_capacity(FRAME_TIME_SAMPLES),
-            system: Some(system),
+            system: Some(SystemSampler {
+                system,
+                cpu,
+                process_primed: false,
+            }),
             system_sample: None,
             time_since_refresh: 0.0,
             time_since_culling_refresh: 0.0,
@@ -112,15 +159,26 @@ impl PerformanceMetrics {
 
     /// Update metrics with a new frame time.
     pub fn update(&mut self, dt: f32) {
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
         if let Some(Ok(sample)) = self.system_sample.as_ref().map(|rx| rx.try_recv()) {
             self.system_sample = None;
-            self.cpu_core_count = sample.cpu_usage.len();
-            self.cpu_usage_total =
-                sample.cpu_usage.iter().sum::<f32>() / self.cpu_core_count.max(1) as f32;
-            self.cpu_usage_per_core = sample.cpu_usage;
+            // Preserve the last good CPU reading during warm-up or counter failures.
+            if let Some(cpu) = sample.cpu_usage {
+                self.cpu_core_count = cpu.per_core.len();
+                self.cpu_usage_total = cpu.total;
+                self.cpu_usage_per_core = cpu.per_core;
+                self.cpu_sampled_at = Some(sample.sampled_at);
+            }
+            self.process_cpu_percent = sample
+                .process_cpu
+                .and_then(|raw| normalized_process_cpu(raw, self.cpu_core_count));
+            self.system_sampled_at = Some(sample.sampled_at);
             self.memory_used = sample.memory_used;
             self.memory_total = sample.memory_total;
-            self.system = Some(sample.system);
+            self.process_virtual_memory = sample.process_virtual_memory;
+            self.system = Some(sample.sampler);
         }
         // Track frame time
         if self.frame_times.len() >= FRAME_TIME_SAMPLES {
@@ -143,6 +201,66 @@ impl PerformanceMetrics {
 
         // Check for performance spikes (after other updates)
         self.check_for_performance_spike(dt);
+        self.report_elapsed_seconds += f64::from(dt);
+        self.report_window.record(dt);
+        if self.report_window.elapsed_seconds >= 1.0 {
+            self.finish_report_window();
+        }
+    }
+
+    pub fn set_report_phase(&mut self, phase: &'static str) {
+        if phase != self.report_phase {
+            if self.report_window.frames > 0 {
+                self.finish_report_window();
+            }
+            self.report_phase = phase;
+        }
+    }
+
+    fn finish_report_window(&mut self) {
+        let window = std::mem::take(&mut self.report_window);
+        if self.report_history.len() == 120 {
+            self.report_history.pop_front();
+        }
+        self.report_history.push_back(serde_json::json!({
+            "phase": self.report_phase, "end_elapsed_seconds": self.report_elapsed_seconds,
+            "fps": window.frames as f64 / window.elapsed_seconds,
+            "frame_window": window,
+            "system_cpu_percent": self.cpu_sampled_at.map(|_| self.cpu_usage_total),
+            "system_cpu_sample_age_ms": self.cpu_sampled_at.map(|t| t.elapsed().as_millis() as u64),
+            "game_cpu_percent_of_machine": self.process_cpu_percent,
+            "process_memory_bytes": self.system_sampled_at.map(|_| self.memory_used),
+        }));
+    }
+
+    /// Build this only for a report; sorting is kept off the frame hot path.
+    pub fn diagnostics(&self) -> serde_json::Value {
+        let mut times: Vec<f32> = self.frame_time_history().collect();
+        times.sort_by(f32::total_cmp);
+        let percentile = |p: f64| {
+            times
+                .get(((times.len() as f64 * p).ceil() as usize).saturating_sub(1))
+                .copied()
+        };
+        serde_json::json!({
+            "elapsed_seconds": self.report_elapsed_seconds, "frames_rendered": self.frame_count,
+            "fps": self.fps(), "recent_frame_times_ms": self.frame_time_history().collect::<Vec<_>>(),
+            "recent_frame_window_seconds": self.frame_times.iter().map(|&s| f64::from(s)).sum::<f64>(),
+            "frame_ms": {"mean": self.average_frame_time_ms(), "p95": percentile(0.95), "p99": percentile(0.99), "max": times.last()},
+            "system_cpu_percent": self.cpu_sampled_at.map(|_| self.cpu_usage_total),
+            "logical_cpu_usage": self.cpu_sampled_at.map(|_| &self.cpu_usage_per_core),
+            "system_cpu_sample_age_ms": self.cpu_sampled_at.map(|t| t.elapsed().as_millis() as u64),
+            "system_cpu_source": if cfg!(windows) { "validated PDH Processor Time" } else { "sysinfo" },
+            "game_cpu_percent_of_machine": self.process_cpu_percent,
+            "game_cpu_normalization": "100% means all logical CPUs busy; other programs excluded",
+            "process_memory_bytes": self.system_sampled_at.map(|_| self.memory_used),
+            "process_virtual_memory_bytes": self.system_sampled_at.map(|_| self.process_virtual_memory),
+            "system_ram_total_bytes": self.system_sampled_at.map(|_| self.memory_total),
+            "process_sample_age_ms": self.system_sampled_at.map(|t| t.elapsed().as_millis() as u64),
+            "system_sample_in_flight": self.system_sample.is_some(),
+            "current_interval": self.report_window,
+            "recent_intervals": self.report_history,
+        })
     }
 
     /// Check if culling stats should be refreshed (once per second).
@@ -157,7 +275,7 @@ impl PerformanceMetrics {
 
     /// Refresh CPU and memory usage from system.
     fn refresh_system_info(&mut self) {
-        let Some(mut system) = self.system.take() else {
+        let Some(mut sampler) = self.system.take() else {
             return;
         };
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -167,19 +285,29 @@ impl PerformanceMetrics {
         std::thread::Builder::new()
             .name("Performance metrics".into())
             .spawn(move || {
-                system.refresh_cpu_all();
+                let cpu_usage = sampler.cpu.sample(&mut sampler.system);
+                let system = &mut sampler.system;
                 system.refresh_memory();
                 let pid = Pid::from(std::process::id() as usize);
                 system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
-                let (memory_used, memory_total) = system.process(pid).map_or((0, 0), |process| {
-                    (process.memory(), process.virtual_memory())
-                });
-                let cpu_usage = system.cpus().iter().map(|cpu| cpu.cpu_usage()).collect();
+                let (memory_used, process_virtual_memory) =
+                    system.process(pid).map_or((0, 0), |process| {
+                        (process.memory(), process.virtual_memory())
+                    });
+                let process_cpu = sampler
+                    .process_primed
+                    .then(|| system.process(pid).map(|p| p.cpu_usage()))
+                    .flatten();
+                let memory_total = system.total_memory();
+                sampler.process_primed = true;
                 let _ = sender.send(SystemSample {
-                    system,
+                    sampler,
                     cpu_usage,
                     memory_used,
                     memory_total,
+                    process_virtual_memory,
+                    process_cpu,
+                    sampled_at: std::time::Instant::now(),
                 });
             })
             .expect("Performance metrics worker");
@@ -533,5 +661,46 @@ impl PerformanceMetrics {
 impl Default for PerformanceMetrics {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn normalized_process_cpu(raw: f32, logical_cpus: usize) -> Option<f32> {
+    (raw.is_finite() && raw >= 0.0 && logical_cpus > 0)
+        .then(|| (raw / logical_cpus as f32).min(100.0))
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+
+    #[test]
+    fn process_cpu_is_normalized_to_machine_capacity_and_invalid_samples_stay_unknown() {
+        assert_eq!(normalized_process_cpu(400.0, 8), Some(50.0));
+        assert_eq!(normalized_process_cpu(f32::NAN, 8), None);
+        assert_eq!(normalized_process_cpu(1.0, 0), None);
+        assert_eq!(normalized_process_cpu(-1.0, 8), None);
+    }
+
+    #[test]
+    fn interval_history_keeps_stalls_after_the_short_frame_history_rolls_over() {
+        let mut metrics = PerformanceMetrics::new();
+        metrics.set_report_phase("menu");
+        metrics.update(0.8);
+        for _ in 0..400 {
+            metrics.update(0.01);
+        }
+        let report = metrics.diagnostics();
+        assert_eq!(
+            report["recent_frame_times_ms"].as_array().unwrap().len(),
+            120
+        );
+        assert_eq!(
+            report["recent_intervals"][0]["frame_window"]["max_frame_ms"],
+            800.0
+        );
+        for _ in 0..130 {
+            metrics.update(1.0);
+        }
+        assert_eq!(metrics.report_history.len(), 120);
     }
 }

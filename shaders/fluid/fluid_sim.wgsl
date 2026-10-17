@@ -101,8 +101,7 @@ var<workgroup> local_temp_stats: array<atomic<u32>, 6>;
 // conduction pass snaps such voxels to the fixed dark baseline on first touch, and
 // encode_field_temp never produces 0 for a legit value.
 @group(0) @binding(8) var<storage, read_write> temp_field: array<atomic<u32>>;
-// Retained in the shared fluid bind-group layout for compatibility; geothermal
-// heat does not enter the thermal solver.
+// Prebaked vent heat source, converted to local thermal energy below.
 @group(0) @binding(9) var<storage, read> geothermal_heat: array<f32>;
 
 // Immutable temperatures captured before each thermal dispatch. Neighbor heat
@@ -184,11 +183,14 @@ const ATMOSPHERIC_REDISTRIBUTED_SOLAR: f32 = 0.875;
 const WATER_AIR_COOLING_OFFSET_C: f32 = 3.0;
 const WATER_DIRECT_SOLAR_WARMING_C: f32 = 2.0;
 const WATER_AIR_EXCHANGE_RATE: f32 = 0.25;
-const EVAPORATION_FLOOR_C: f32 = -12.0;   // only deep cold shuts down the vapor cycle
+const VAPOR_DEPOSITION_C: f32 = -12.0;    // deeply cold vapor gradually deposits as snow; liquid evaporation has no cutoff
+const COLD_VAPOR_DEPOSITION_RATE: f32 = 0.004; // let cold wisps linger instead of disappearing on their first movement pass
 const BOILING_POINT_C: f32 = 100.0;        // steam stays vapor at/above this; condensation possible at any cooler ambient
 const SNOW_FALL_PROBABILITY: f32 = 0.04;   // snow drifts down far slower than water/rain
 const EVAPORATION_BRISK_C: f32 = 70.0;
 const EVAPORATION_CURVE_POWER: f32 = 2.0;
+const EVAPORATION_MIN_FRACTION: f32 = 0.40; // substantial vapor even from the coldest liquid water
+const EVAPORATION_SATURATED_FRACTION: f32 = 0.50; // humid air can slow the source, but cannot suppress its baseline
 const FREEZE_POINT_C: f32 = 0.0;
 const FREEZE_HYSTERESIS_C: f32 = 2.0;      // water freezes below (FREEZE_POINT - this); ice melts above (FREEZE_POINT + this) - prevents flicker at the boundary
 // Snow melts just above freezing; ice retains its wider configured melt threshold.
@@ -264,8 +266,11 @@ const WATER_DENSITY_INVERSION_C: f32 = 4.0;
 // Brightness is a climate control, not a linear watts scale. At 3, clear
 // sunlight supplies a 48 C rise above the cold baseline to air and rock.
 // Water/ice receive slow atmospheric exchange and a smaller direct-sun boost.
-// At brightness 5 the atmosphere can still supply enough heat to boil water.
+// Brightness 5 targets roughly 70-80 C air instead of the 150 C field cap.
 const SOLAR_COUPLING: f32 = 0.018;
+// Vent output uses the same heat-input scale as reference sunlight. Dividing
+// by thermal mass warms air quickly and water gradually; inertia affects both.
+const GEOTHERMAL_HEAT_COUPLING: f32 = 0.018;
 const SOLAR_INPUT_C_PER_REFERENCE_PASS: f32 = 48.0 / 1.4;
 const RADIATIVE_COOLING_COUPLING: f32 = 0.018;
 // Base absorption is balanced by phase-specific heat loss; additional
@@ -307,12 +312,17 @@ fn heat_flow_rate_scale() -> f32 {
 }
 
 fn solar_heat_scale() -> f32 {
-    let relative = max(params.sun_brightness, 0.0) / REFERENCE_SUN_BRIGHTNESS;
-    // The curve and its slope are continuous at the temperate anchor. The
-    // upper range adds enough energy to overcome vapor-cloud shading; the
-    // previous linear curve could never boil (only 37 C at brightness 5).
-    let boost = max(relative - 1.0, 0.0);
-    return relative * relative * (1.0 + 4.0 * boost * boost);
+    let brightness = clamp(params.sun_brightness, 0.0, 5.0);
+    let relative = brightness / REFERENCE_SUN_BRIGHTNESS;
+    // Preserve the temperate anchor and the cold side of the slider. Above
+    // 3, use a gentle rise with a continuous slope rather than the quartic
+    // boost that drove both 4.5 and 5 to the 150 C field cap. At 5 this gives
+    // 80 C in direct sun and 67.75 C in shade before thermal exchange.
+    let boost = max(brightness - REFERENCE_SUN_BRIGHTNESS, 0.0);
+    if boost > 0.0 {
+        return 1.0 + (2.0 / REFERENCE_SUN_BRIGHTNESS) * boost / (1.0 + 0.14 * boost);
+    }
+    return relative * relative;
 }
 
 fn average_air_temperature_c() -> f32 {
@@ -384,13 +394,16 @@ fn conductivity(fluid_type: u32, solid: bool) -> f32 {
 fn is_thermally_mobile(fluid_type: u32, solid: bool) -> bool {
     return !solid && (fluid_type == 0u || fluid_type == 1u || fluid_type == 3u);
 }
-const NATURAL_VAPORIZATION_RATE: f32 = 0.0006; // visible, gentle surface cycling at temperate temperatures
+const NATURAL_VAPORIZATION_RATE: f32 = 0.008; // supply cloud-building vapor even while temperate clouds rain
+const POOL_EVAPORATION_BRIGHTNESS: f32 = 4.0; // only higher settings may evaporate a pool's last liquid layer
 const NATURAL_CONDENSATION_RATE: f32 = 0.04;  // base per-tick chance scalar once cool enough to condense
 // Steam pins fog at 120. An 80-unit onset exceeded its achievable excess
 // over temperate capacity (~59), preventing ordinary clouds from raining.
 const PRECIP_BUILDUP_EXCESS: f32 = 8.0;
 const PRECIP_BURST_EXCESS: f32 = 64.0;
-const RAIN_RATE: f32 = 0.0015;
+// Temperate clouds should rain within seconds, not hold most vapor for a
+// minute. Snow keeps its existing, faster deposition rate.
+const RAIN_RATE: f32 = 0.010;
 
 // ---- Humidity model constants (see CLIMATE_SPEC) ----
 const HUMIDITY_FIXED_POINT: f32 = 256.0;     // fixed-point scale for the humidity buffer (stored = value * 256)
@@ -571,17 +584,23 @@ fn precipitation_strength(gid: vec3<u32>, humidity_val: f32, capacity: f32) -> f
     return excess_buildup * saturation_buildup * cooling_buildup * airflow_nucleation_strength(gid);
 }
 
-fn local_saturation(gid: vec3<u32>, temp_c: f32) -> f32 {
-    let idx = grid_index(gid.x, gid.y, gid.z);
+fn local_saturation(idx: u32, temp_c: f32) -> f32 {
     let humidity_val = f32(atomicLoad(&humidity[idx])) / HUMIDITY_FIXED_POINT;
     let capacity = max(humidity_capacity(temp_c), 1.0);
     return saturate(humidity_val / capacity);
 }
 
-fn evaporation_probability(gid: vec3<u32>, temp_c: f32) -> f32 {
-    let warmth = saturate((temp_c - EVAPORATION_FLOOR_C) / (EVAPORATION_BRISK_C - EVAPORATION_FLOOR_C));
-    let humidity_room = 1.0 - smoothstep(0.55, 0.88, local_saturation(gid, temp_c));
-    return NATURAL_VAPORIZATION_RATE * pow(warmth, EVAPORATION_CURVE_POWER) * humidity_room;
+fn evaporation_probability(air_idx: u32, temp_c: f32) -> f32 {
+    let warmth = max(temp_c - FREEZE_POINT_C, 0.0) / (EVAPORATION_BRISK_C - FREEZE_POINT_C);
+    // Humidity slows evaporation, but liquid surfaces always supply substantial
+    // vapor. The quadratic rise continues above 70 C until boiling takes over.
+    // Humidity resistance comes from the atmosphere receiving the vapor,
+    // rather than the fog field inside the liquid source.
+    let humidity_room = mix(EVAPORATION_SATURATED_FRACTION, 1.0,
+        1.0 - smoothstep(0.55, 0.88, local_saturation(air_idx, temp_c)));
+    let thermal_rate = EVAPORATION_MIN_FRACTION
+        + (1.0 - EVAPORATION_MIN_FRACTION) * pow(warmth, EVAPORATION_CURVE_POWER);
+    return NATURAL_VAPORIZATION_RATE * thermal_rate * humidity_room;
 }
 
 // Check if a grid position is solid based on the solid mask
@@ -854,6 +873,26 @@ fn surface_air_index(gid: vec3<u32>) -> u32 {
     return air_idx;
 }
 
+// Real evaporation feeds clouds and rain at every brightness. Below 4,
+// preserve the final liquid layer: only water with liquid beneath it may
+// vaporize. Rain replenishes that surface layer for the next cycle. This
+// also prevents falling droplets from re-evaporating before reaching pools.
+fn can_evaporate_without_drying_pool(gid: vec3<u32>) -> bool {
+    if params.sun_brightness >= POOL_EVAPORATION_BRIGHTNESS {
+        return true;
+    }
+    let down = get_offset(gravity_dir_to_index(get_effective_gravity(gid)));
+    let below = vec3<i32>(gid) + down;
+    if any(below < vec3<i32>(0)) || any(below >= vec3<i32>(i32(params.grid_resolution))) {
+        return false;
+    }
+    let bx = u32(below.x);
+    let by = u32(below.y);
+    let bz = u32(below.z);
+    return !is_solid(bx, by, bz)
+        && get_fluid_type(atomicLoad(&voxels[grid_index(bx, by, bz)])) == 1u;
+}
+
 fn vaporize_into_surface_air(source_idx: u32, source_state: u32, air_idx: u32, temp_c: f32) -> bool {
     if air_idx == INVALID_VOXEL_INDEX {
         return false;
@@ -928,19 +967,21 @@ fn touches_condensation_surface(gid: vec3<u32>) -> bool {
 fn should_condense_steam(gid: vec3<u32>) -> bool {
     let idx = grid_index(gid.x, gid.y, gid.z);
     let temp_c = field_temp_c(idx);
-    // Deep cold deposits ALL vapor as snow, including isolated vapor whose
-    // fog has diffused away. Milder clouds use the humidity/weather pass.
-    if temp_c <= EVAPORATION_FLOOR_C { return true; }
+    // Cold vapor must remain airborne long enough to make persistent wisps.
+    // Gradual deposition still reaches isolated vapor whose fog diffused away,
+    // while saturated clouds can also precipitate through the weather pass.
+    if temp_c <= VAPOR_DEPOSITION_C {
+        return random_unit(hash_position(gid) ^ u32(params.time * 1000.0))
+            < COLD_VAPOR_DEPOSITION_RATE;
+    }
     if !touches_condensation_surface(gid) {
         return false;
     }
 
     // Purely thermal: steam can condense at any temperature below boiling -
     // all the way down through freezing (where it forms snow instead of
-    // liquid water; see fluid_swap). It is NOT gated by the much-higher
-    // evaporation floor - that threshold only governs whether liquid water
-    // passively evaporates, not whether vapor condenses back. Uses the
-    // steam's own field temperature, not a global temperature target.
+    // liquid water; see fluid_swap). Uses the steam's own field temperature,
+    // not a global temperature target.
     if temp_c >= BOILING_POINT_C {
         return false;
     }
@@ -953,7 +994,7 @@ fn should_condense_steam(gid: vec3<u32>) -> bool {
         PRECIP_BUILDUP_EXCESS,
         humidity_val - capacity
     ) * 0.12;
-    // Humidity is a render-only fog-density field and can diffuse away before
+    // Humidity is a fog-density field and can diffuse away before
     // vapor reaches the boundary. Cool surfaces therefore condense steam on
     // their own; supersaturated weather can still increase the rate.
     let thermal_cooling = 1.0 - smoothstep(20.0, BOILING_POINT_C, temp_c);
@@ -1333,8 +1374,9 @@ fn update_temperature_voxel(gid: vec3<u32>) {
     // The atmosphere has a brightness-dependent background from redistributed
     // solar heat, plus a smaller direct-sun variation. Water/ice follow the
     // measured atmosphere slowly, even in shadow. Exposed rock also receives
-    // ambient heat rather than acting as a permanent cold-space reservoir. Neither
-    // visual ambient light nor geothermal/luminocyte radiance supplies heat.
+    // ambient heat rather than acting as a permanent cold-space reservoir.
+    // Visual ambient light and local radiance do not supply heat; vents use
+    // their separate heat-source field below.
     {
         let sunlight = local_light_fraction(idx);
         let solar_scale = solar_heat_scale();
@@ -1367,6 +1409,11 @@ fn update_temperature_voxel(gid: vec3<u32>) {
             self_delta_c += (equilibrium - t_self) * cooling_rate;
         }
     }
+    // Deposit real vent heat in the authoritative temperature field. The
+    // existing conduction stencil then warms neighboring water, air and rock,
+    // even in darkness. Slice updates use the same compensated rate as sun.
+    self_delta_c += max(geothermal_heat[idx], 0.0)
+        * GEOTHERMAL_HEAT_COUPLING * rate_scale / m_self;
     // Unbiased source rounding avoids a 1-2 C dead band for high-mass media
     // at 15 Hz, while retaining the compact fixed-point temperature field.
     let rounding_noise = random_unit(hash_position(gid) ^ u32(params.time * 1000.0));
@@ -1617,7 +1664,7 @@ fn condense_humidity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let combined_hash = pos_hash ^ time_hash;
     // Temperate clouds drizzle slowly. Colder clouds shed their vapor as
     // snow much faster, before the orbit carries them back into sunlight.
-    let cold_fraction = 1.0 - smoothstep(EVAPORATION_FLOOR_C, 5.0, temp_c);
+    let cold_fraction = 1.0 - smoothstep(VAPOR_DEPOSITION_C, 5.0, temp_c);
     let rate = mix(RAIN_RATE, NATURAL_CONDENSATION_RATE, cold_fraction);
     let condense_chance = min(rate * CLIMATE_TICK_INTERVAL * precip_strength, 1.0);
     if random_unit(combined_hash) >= condense_chance {
@@ -1690,8 +1737,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     if fluid_type == 3u && should_condense_steam(gid) {
         let condensed_c = field_temp_c(idx);
         // Below freezing, vapor condenses directly into snow rather than
-        // liquid water - condensation itself never stops in cold weather,
-        // only evaporation does.
+        // liquid water. Both condensation and liquid evaporation continue
+        // in cold weather.
         var condensed_type = 1u;
         if condensed_c < FREEZE_POINT_C {
             condensed_type = 4u;
@@ -1703,19 +1750,6 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             nudge_field_temp(idx, min(LATENT_VAPOR_CONDENSE_WARM_C,
                 select(LATENT_VAPOR_CONDENSE_WARM_C, -condensed_c, condensed_c < FREEZE_POINT_C)));
             return; // Successfully condensed, no further processing needed
-        }
-    }
-
-    // Exposed ice and snow can supply a little vapor by sublimation until
-    // deep cold shuts down evaporation altogether. Preserve voxel volume.
-    if (fluid_type == 2u || fluid_type == 4u) && params.sub_step == 0u {
-        let temp_c = field_temp_c(idx);
-        let roll = random_unit(hash_position(gid) ^ u32(params.time * 1000.0));
-        if roll < evaporation_probability(gid, temp_c) * 0.3 {
-            let air_idx = surface_air_index(gid);
-            if air_idx != INVALID_VOXEL_INDEX {
-                if vaporize_into_surface_air(idx, state, air_idx, temp_c) { return; }
-            }
         }
     }
 
@@ -1873,8 +1907,8 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         } else {
 
-        // Falling rain transitions nowhere: a droplet must land before it
-        // can freeze or evaporate. Radial mode follows the existing support
+        // Falling rain must land before it can freeze; at brightness 4 or
+        // higher exposed liquid can evaporate in flight. Radial mode follows the existing support
         // convention (treated as always settled - radial_move handles it).
         var settled = true;
         if fluid_type == 1u && params.gravity_mode != 3u {
@@ -1980,7 +2014,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         if fluid_type == 1u && temp_c >= BOILING_POINT_C && vapor_air_idx != INVALID_VOXEL_INDEX {
             let boil_hash = (hash_position(gid) * 0x85EBCA6Bu) ^ u32(params.time * 1000.0);
-            if random_unit(boil_hash) < BOIL_PROBABILITY {
+            if random_unit(boil_hash) < BOIL_PROBABILITY && can_evaporate_without_drying_pool(gid) {
                 if vaporize_into_surface_air(idx, state, vapor_air_idx, temp_c) {
                     cool_water_neighbors(gid, LATENT_VAPOR_NEIGHBOR_COOL_C);
                     return;
@@ -1989,27 +2023,24 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // --- Vaporization: passive evaporation ramping toward a rolling boil. ---
-        // Evaporation continues weakly through cool weather and stops only
-        // in deep cold. Also requires the voxel to actually be in contact with
-        // air directly above the local surface (steam needs somewhere to go)
+        // Every liquid temperature has a nonzero evaporation rate. Below
+        // brightness 4, retain the pool's final liquid layer. Requires
+        // contact with air directly above the surface (steam needs somewhere to go)
         // - water buried deep in a pool doesn't spontaneously vaporize.
-        if fluid_type == 1u && settled && vapor_air_idx != INVALID_VOXEL_INDEX && params.sub_step == 0u {
-            if temp_c > EVAPORATION_FLOOR_C {
-                let rate = evaporation_probability(gid, temp_c);
-                let pos_hash = hash_position(gid);
-                let time_hash = u32(params.time * 1000.0);
-                let combined_hash = pos_hash ^ time_hash;
-                if random_unit(combined_hash) < rate {
-                    // 1:1 phase change: one voxel of water becomes one voxel
-                    // of steam in the air cell above the surface. Moisture
-                    // enters the humidity field only when steam later
-                    // dissolves (paying HUMIDITY_PER_VOXEL for the whole voxel).
-                    if vaporize_into_surface_air(idx, state, vapor_air_idx, temp_c) {
-                        // Latent heat of vaporization: evaporative cooling -
-                        // the departing vapor takes heat from the pool.
-                        cool_water_neighbors(gid, LATENT_VAPOR_NEIGHBOR_COOL_C);
-                        return;
-                    }
+        if fluid_type == 1u && vapor_air_idx != INVALID_VOXEL_INDEX && params.sub_step == 0u {
+            let rate = evaporation_probability(vapor_air_idx, temp_c);
+            let pos_hash = hash_position(gid);
+            let time_hash = u32(params.time * 1000.0);
+            let combined_hash = pos_hash ^ time_hash;
+            if random_unit(combined_hash) < rate && can_evaporate_without_drying_pool(gid) {
+                // 1:1 phase change: one voxel of water becomes one voxel
+                // of steam in the air cell above the surface, supplying the
+                // fog that can later condense into rain.
+                if vaporize_into_surface_air(idx, state, vapor_air_idx, temp_c) {
+                    // Latent heat of vaporization: evaporative cooling -
+                    // the departing vapor takes heat from the pool.
+                    cool_water_neighbors(gid, LATENT_VAPOR_NEIGHBOR_COOL_C);
+                    return;
                 }
             }
         }

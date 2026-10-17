@@ -270,7 +270,9 @@ fn read_voxel_environment(world_pos: vec3<f32>) -> VoxelEnvironment {
     var temp_internal = BASE_ENV_TEMP;
     let raw_temp = atomicLoad(&voxel_temperature[voxel_idx]);
     if (raw_temp != 0u) {
-        let temp_c = VOXEL_TEMP_MIN_C + f32(raw_temp) / VOXEL_TEMP_FP + geothermal_heat[voxel_idx] * 0.15;
+        // Vent heating is already included in the shared voxel temperature.
+        // Adding the source field here would count the vent twice.
+        let temp_c = VOXEL_TEMP_MIN_C + f32(raw_temp) / VOXEL_TEMP_FP;
         temp_internal = celsius_to_internal_temp(temp_c);
     } else if (geothermal_heat[voxel_idx] > 0.0) {
         temp_internal = celsius_to_internal_temp(20.0 + geothermal_heat[voxel_idx] * 0.15);
