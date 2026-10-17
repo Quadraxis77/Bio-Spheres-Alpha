@@ -74,8 +74,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Create soft circular particle
     let center_dist = length(in.uv - vec2<f32>(0.5));
     let soot = in.kind > 2.5;
+    let vapor = in.kind > 0.5 && in.kind < 2.5;
     var circle_alpha = 1.0 - smoothstep(0.3, 0.5, center_dist);
-    if soot {
+    if vapor {
+        let radius = center_dist * 2.0;
+        circle_alpha = exp(-4.0 * radius * radius) * (1.0 - smoothstep(0.75, 1.0, radius));
+    } else if soot {
         circle_alpha = 1.0 - smoothstep(0.18, 0.42, center_dist);
     }
 

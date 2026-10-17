@@ -13,7 +13,8 @@ use crate::scene::{PreviewState, Scene};
 use crate::simulation::PhysicsConfig;
 use crate::ui::camera::CameraController;
 
-const PREVIEW_LIGHT_COLOR: [f32; 3] = [5.2, 5.0, 4.6];
+// Shared by the Genome Editor and both main-menu organism previews.
+const PREVIEW_LIGHT_COLOR: [f32; 3] = [4.16, 4.0, 3.68];
 const PREVIEW_LIGHT_DIR: [f32; 3] = [0.35, -0.78, -0.52];
 const SCRUB_TICK_INTERVAL_SECONDS: f32 = 0.25;
 const MAX_SCRUB_TICKS_PER_FRAME: usize = 8;

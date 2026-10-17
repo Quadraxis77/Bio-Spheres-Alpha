@@ -1067,7 +1067,7 @@ pub fn render_tutorial(
 // Drawing helpers
 // -----------------------------------------------------------------------------
 
-fn draw_schematic_pointer(
+pub(super) fn draw_schematic_pointer(
     painter: &egui::Painter,
     d_rect: egui::Rect,
     tip: egui::Pos2,

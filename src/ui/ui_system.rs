@@ -1230,19 +1230,21 @@ impl UiSystem {
 
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
 
-                        // Themes button - opens theme picker popup
-                        let themes_resp = ui.add(
-                            egui::Button::new(egui::RichText::new("🎨 Themes").size(11.5).color(tb_text_primary))
-                                .frame(false)
-                        );
-                        egui::Popup::menu(&themes_resp)
-                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                            .show(|ui| {
-                                ui.set_min_width(180.0);
-                                show_themes_menu(ui, &mut ui_state_copy, dock_manager);
-                            });
+                        if ui_state_copy.cosmetic_options_visible() {
+                            // Themes button - opens theme picker popup
+                            let themes_resp = ui.add(
+                                egui::Button::new(egui::RichText::new("🎨 Themes").size(11.5).color(tb_text_primary))
+                                    .frame(false)
+                            );
+                            egui::Popup::menu(&themes_resp)
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                .show(|ui| {
+                                    ui.set_min_width(180.0);
+                                    show_themes_menu(ui, &mut ui_state_copy, dock_manager);
+                                });
 
-                        ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
+                            ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
+                        }
 
                         // Panels button - frameless, same style as Tutorial/Help
                         let panels_resp = ui.add(
@@ -1938,6 +1940,10 @@ impl UiSystem {
             }
 
             // Create panel context for PanelTabViewer
+            // Targets are reported only by controls rendered in this frame.
+            editor_state.panel_rects.remove("LightingTab");
+            editor_state.panel_rects.remove("SunBrightness");
+            crate::ui::reset_settings::prepare_quick_start(&ui_state_copy, dock_manager);
             let current_mode = ui_state_copy.current_mode;
             let hide_ui = ui_state_copy.hide_ui;
 
@@ -2846,34 +2852,47 @@ impl UiSystem {
             self.loading_gif_timer = 0.0;
         }
 
-        // -- Tutorial overlay --------------------------------------------------
-        // Auto-launch the tutorial the very first time the player opens the
-        // Genome Editor, before they've ever seen it.
-        if !ui_state_copy.tutorial.ever_shown
-            && ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview
-        {
-            ui_state_copy.tutorial.start();
-        }
-
-        // Render the tutorial dialogue + schematic pointer line.
-        crate::ui::tutorial::render_tutorial(
-            &self.ctx,
-            &mut ui_state_copy.tutorial,
-            &editor_state.panel_rects,
-            genome,
-            editor_state.selected_mode_index,
+        let reset_dialog_active = crate::ui::reset_settings::render_dialogs(
+            &self.ctx, &mut ui_state_copy,
+            editor_state.panel_rects.get("ResetSettings").copied(),
+            crate::ui::reset_settings::brightness_target(&editor_state.panel_rects),
         );
+        if !reset_dialog_active {
+            // -- Tutorial overlay --------------------------------------------------
+            // Auto-launch the tutorial the very first time the player opens the
+            // Genome Editor, before they've ever seen it.
+            if !ui_state_copy.tutorial.ever_shown
+                && ui_state_copy.current_mode == crate::ui::types::SimulationMode::Preview
+            {
+                ui_state_copy.tutorial.start();
+            }
+
+            // Render the tutorial dialogue + schematic pointer line.
+            crate::ui::tutorial::render_tutorial(
+                &self.ctx,
+                &mut ui_state_copy.tutorial,
+                &editor_state.panel_rects,
+                genome,
+                editor_state.selected_mode_index,
+            );
+        }
 
         // Apply any changes back to the original state
         if self.native_ui_hidden || self.native_panel_visible {
             ui_state_copy.hide_ui = desktop_hide_ui;
         }
+        let intro_acknowledged = self.state.reset_intro_seen != ui_state_copy.reset_intro_seen
+            || self.state.main_scene_quick_start_seen != ui_state_copy.main_scene_quick_start_seen;
         let state_changed = self.state != ui_state_copy;
         self.state = ui_state_copy;
 
         // Mark UI state as dirty if it changed
         if state_changed {
             self.mark_ui_state_dirty();
+        }
+
+        if intro_acknowledged {
+            self.save_ui_state();
         }
 
         // Handle global click to clear label text selection
@@ -3228,6 +3247,7 @@ fn show_windows_menu(
     ];
 
     for panel in &layout_panels {
+        if panel.is_cosmetic() && !state.cosmetic_options_visible() { continue; }
         let is_open = is_panel_open(dock_manager.current_tree(), panel);
         let panel_name = format!("{:?}", panel);
         let is_locked = state.is_panel_locked(&panel_name);
@@ -3752,7 +3772,7 @@ pub(crate) fn draw_headless_fps_graph(
 // -----------------------------------------------------------------------------
 
 /// Render the left side rail with stacked icon buttons.
-fn render_side_rail(
+pub(super) fn render_side_rail(
     ui: &mut egui::Ui,
     state: &mut GlobalUiState,
     editor_state: &mut crate::ui::panel_context::GenomeEditorState,
@@ -3823,7 +3843,7 @@ fn render_side_rail(
             if rail_button_toggle(
                 ui,
                 "⚙",
-                "Advanced Options (toggle fine-tuning sliders)",
+                "Advanced Options (appearance settings and fine-tuning sliders)",
                 adv_active,
                 &p,
             ) {
@@ -3906,9 +3926,8 @@ fn render_side_rail(
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
         ui.add_space(4.0);
-        if rail_button(ui, "⟲", "Reset Layout", &p) {
-            dock_manager.reset_current_to_default();
-        }
+        let rect = crate::ui::reset_settings::rail_button(ui, state);
+        editor_state.panel_rects.insert("ResetSettings".to_string(), rect);
     });
 }
 

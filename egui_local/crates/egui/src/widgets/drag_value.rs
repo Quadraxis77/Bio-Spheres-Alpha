@@ -570,7 +570,8 @@ impl Widget for DragValue<'_> {
             );
             let response = ui.add(
                 TextEdit::singleline(&mut value_text)
-                    .clip_text(false)
+                    // Keep a long edit inside the allocated numeric field.
+                    .clip_text(true)
                     .horizontal_align(ui.layout().horizontal_align())
                     .vertical_align(ui.layout().vertical_align())
                     .margin(ui.spacing().button_padding)

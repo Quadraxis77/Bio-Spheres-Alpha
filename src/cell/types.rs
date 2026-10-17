@@ -506,6 +506,11 @@ impl Default for CellTypeVisualsStore {
 impl CellTypeVisualsStore {
     const FILE_NAME: &'static str = "cell_visuals.ron";
 
+    pub fn bundled_defaults() -> Self {
+        ron::from_str(include_str!("../../assets/defaults/main-scene/cell_visuals.ron"))
+            .expect("bundled cell appearance defaults must be valid")
+    }
+
     /// Save cell type visuals to disk.
     pub fn save(
         visuals: &[CellTypeVisuals],
@@ -545,7 +550,7 @@ impl CellTypeVisualsStore {
             }
         }
 
-        let default = Self::default();
+        let default = Self::bundled_defaults();
         (default.visuals, default.cell_outline_width)
     }
 

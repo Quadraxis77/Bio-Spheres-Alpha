@@ -28,7 +28,7 @@ impl RadialTool {
     pub fn display_name(&self) -> &'static str {
         match self {
             RadialTool::None => "None",
-            RadialTool::Insert => "Insert",
+            RadialTool::Insert => "Add",
             RadialTool::Inspect => "Inspect",
             RadialTool::Drag => "Drag",
             RadialTool::Boost => "Boost",

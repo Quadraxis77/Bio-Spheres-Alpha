@@ -1,4 +1,9 @@
 (
+    vr_screen: (
+        curvature: 0.0,
+        distance: 1.6,
+        aspect: 1.7777778,
+    ),
     current_mode: Gpu,
     ui_scale: 1.0,
     windows_locked: false,
@@ -48,9 +53,9 @@
                 show_lighting_settings: false,
             ),
             locked_windows: [
+                "Viewport",
                 "SceneManager",
                 "RightPanel",
-                "Viewport",
             ],
             lock_settings: (
                 lock_tab_bar: false,
@@ -69,9 +74,14 @@
     gpu_timing_enabled: false,
     field_reports_enabled: false,
     horizontal_fov_degrees: 97.0,
+    desktop_render_fps: 120,
     camera_sprint_multiplier: 20.0,
+    camera_alternate_speed_multiplier: 1.0,
     camera_scroll_sensitivity: 0.8,
     field_report_interval_seconds: 300.0,
+    fullscreen: false,
+    music_volume: 0.18,
+    sfx_volume: 0.45,
     gpu_headless_auto_speed: false,
     gpu_headless_target_fps: 30.0,
     gpu_headless_min_speed: 0.1,
@@ -122,7 +132,7 @@
             rim_strength: 0.35,
         ),
         climate: (
-            humidity_diffusion_rate: 0.15,
+            humidity_diffusion_rate: 0.41,
             thermal_inertia: 4.0,
             freeze_rate: 1.0,
             melt_rate: 1.5,
@@ -171,9 +181,7 @@
         status_info: ((60, 150, 230)),
         dark_mode: true,
     ),
-    tutorial: (
-        active: false,
-        current_step: 0,
-        ever_shown: true,
-    ),
+    tutorial: (active: false, current_step: 0, ever_shown: false),
+    reset_intro_seen: (false, false),
+    main_scene_quick_start_seen: false,
 )

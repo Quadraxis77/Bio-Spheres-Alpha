@@ -4,10 +4,10 @@
 //! TabViewer trait to render panel content and handle panel interactions.
 
 use egui::{Id, Ui, WidgetText};
+use crate::cell::types::CellType;
 use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{NodeIndex, SurfaceIndex, TabViewer};
 
-use crate::cell::types::CellType;
 use crate::field_report::{
     format_simulation_time, render_lineage_snapshot_report, render_specimen_report,
     ArchivedFieldReport, FieldReportHistory, FieldReportSeverity, LineageSnapshotReportSnapshot,
@@ -22,6 +22,9 @@ use crate::ui::ui_system::{
     stat_label,
 };
 use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
+
+#[path = "scene_settings.rs"]
+mod scene_settings;
 
 #[cfg(test)]
 #[path = "sun_orbit_slider_tests.rs"]
@@ -94,6 +97,11 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             }
             return;
         }
+        // Saved and floating panels must obey the same visibility rule as menus.
+        if tab.is_cosmetic() && !self.state.cosmetic_options_visible() {
+            ui.label("Enable Advanced Options to edit appearance settings.");
+            return;
+        }
         let usage_ctx = ui.ctx().clone();
         let usage_name = tab.display_name();
         let usage_id = Id::new(format!("usage_{:?}_{:?}", self.context.current_mode, tab));
@@ -124,11 +132,9 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::CaveSystem => render_cave_system(ui, self.context, self.state),
             Panel::FluidSettings => {
                 render_fluid_settings(ui, self.context, self.state);
-                render_organism_skin_settings(
-                    ui,
-                    self.context,
-                    &mut self.state.fluid_settings.organism_skin,
-                );
+                if self.state.cosmetic_options_visible() {
+                    render_organism_skin_settings(ui, self.context, &mut self.state.fluid_settings.organism_skin);
+                }
             }
             Panel::WorldSettings => render_world_settings(ui, self.context, self.state),
             Panel::LightSettings => render_light_settings_organized(ui, self.context, self.state),
@@ -150,6 +156,17 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
     }
 
     fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
+        if *tab == Panel::LightSettings
+            && self.context.current_mode == SimulationMode::Gpu
+            && !self.state.main_scene_quick_start_seen
+        {
+            response.scroll_to_me(Some(egui::Align::Center));
+        }
+        if *tab == Panel::LightSettings && response.interact_rect.is_positive() {
+            self.context.editor_state.panel_rects.insert(
+                "LightingTab".to_string(), response.interact_rect,
+            );
+        }
         if response.clicked() {
             crate::ui::control_usage::panel_input(&response.ctx,
                 Id::new(format!("usage_{:?}_{:?}", self.context.current_mode, tab)), tab.display_name());
@@ -383,8 +400,7 @@ fn render_scene_manager(ui: &mut Ui, context: &mut PanelContext, state: &mut Glo
         let speed = context.simulation_speed();
         let display_speed = (speed * 2.0).round() / 2.0;
         let mut slider_speed = display_speed;
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut slider_speed, 0.5..=10.0)
                     .step_by(0.5)
                     .suffix("x")
@@ -3593,6 +3609,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                 }
             });
 
+        if state.cosmetic_options_visible() {
         ui.add_space(6.0);
         section_header(ui, "LOD");
         egui::Grid::new("lod_grid")
@@ -3636,6 +3653,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
             });
 
         ui.add_space(6.0);
+        }
     }
 
     // FPS and Frame Time section
@@ -3971,18 +3989,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
     );
 }
 
-/// Render the RenderingControls panel (placeholder).
-fn render_rendering_controls(ui: &mut Ui) {
-    ui.heading("Rendering");
-    ui.separator();
-    ui.label("Fog, bloom, and visual settings.");
-    // TODO: Implement rendering controls
-}
-
-/// Render the Cave System panel for procedural cave generation and collision.
 fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiState) {
-    let sw = (ui.available_width() - 60.0).max(60.0);
-    ui.style_mut().spacing.slider_width = sw;
     ui.separator();
 
     // Check if we're in GPU mode
@@ -4096,43 +4103,38 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             ui.add_space(4.0);
             ui.label("Density:")
                 .on_hover_text("How much of the world is filled with cave rock. Higher values create denser, more enclosed caves with less open space");
-            params_changed |= ui
-                .add(egui::Slider::new(&mut density, 0.01..=1.0))
+            params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut density, 0.01..=1.0))
                 .changed();
 
             ui.add_space(4.0);
             ui.label("Scale:")
                 .on_hover_text("Size of the cave features. Higher values create larger, more open chambers; lower values create tighter, more intricate passages");
-            params_changed |= ui
-                .add(egui::Slider::new(&mut scale, 50.0..=300.0))
+            params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut scale, 50.0..=300.0))
                 .changed();
 
             if state.show_advanced_options {
                 ui.add_space(4.0);
                 ui.label("Octaves:")
                     .on_hover_text("Number of noise layers combined to generate the cave shape. More octaves add finer detail and rougher surfaces");
-                params_changed |= ui.add(egui::Slider::new(&mut octaves, 1..=8)).changed();
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut octaves, 1..=8)).changed();
 
                 ui.add_space(4.0);
                 ui.label("Smoothness:").on_hover_text(
                     "How smooth the cave walls are. 0 = rough and jagged; 1 = smooth and rounded",
                 );
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut smoothness, 0.0..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut smoothness, 0.0..=1.0))
                     .changed();
 
                 ui.add_space(4.0);
                 ui.label("Resolution:")
                     .on_hover_text("Voxel grid resolution for the cave mesh. Higher values produce more detailed geometry but take longer to generate and use more memory");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut resolution, 32..=128))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut resolution, 32..=128))
                     .changed();
 
                 ui.add_space(4.0);
                 ui.label("Fragment Cull:")
                     .on_hover_text("Minimum isolated fragment volume to keep. Higher values remove larger floating cave chunks; 0 disables fragment cleanup");
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut isolated_chunk_cull_volume,
                         0.0..=1000000.0,
                     ))
@@ -4141,15 +4143,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(4.0);
                 ui.label("Mesh Smoothing Iterations:")
                     .on_hover_text("Number of Laplacian smoothing passes applied to the cave mesh after marching cubes. 0 disables smoothing; higher values round off the blocky voxel surface more");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut mesh_smoothing_iterations, 0..=8))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut mesh_smoothing_iterations, 0..=8))
                     .changed();
 
                 ui.add_space(4.0);
                 ui.label("Mesh Smoothing Factor:")
                     .on_hover_text("How strongly each smoothing pass pulls vertices toward their neighbors' average position. 0 = no effect; 1 = fully snap to the average");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut mesh_smoothing_factor, 0.0..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut mesh_smoothing_factor, 0.0..=1.0))
                     .changed();
 
                 ui.add_space(4.0);
@@ -4195,6 +4195,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             ui.add_space(10.0);
             ui.separator();
+            if state.cosmetic_options_visible() {
             ui.heading("Appearance");
             ui.add_space(5.0);
 
@@ -4380,16 +4381,14 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Vertical frequency of the sediment layer pattern"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_layer_scale, 0.0..=0.2))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_layer_scale, 0.0..=0.2))
                     .changed();
                 ui.label("Warp:").on_hover_text(if lava_tubes_selected {
                     "How much procedural noise bends and sags the lava flow"
                 } else {
                     "How much procedural noise bends the sediment bands"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Plate Variation:"
@@ -4401,8 +4400,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Strength of the pale fine-layer highlights"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_fine_band_strength,
                         0.0..=1.0,
                     ))
@@ -4417,8 +4415,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Amount of cool slate color variation"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_cool_mottle_strength,
                         0.0..=1.0,
                     ))
@@ -4433,8 +4430,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Brightness variation from the triplanar rock grain"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_grain_strength, 0.0..=0.25))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_grain_strength, 0.0..=0.25))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Ash Deposits:"
@@ -4446,8 +4442,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Large mottled light and dark patch contrast"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_patch_contrast, 0.0..=0.5))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_patch_contrast, 0.0..=0.5))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Seam Darkness:"
@@ -4459,8 +4454,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Darkness of narrow sediment seams"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_seam_darkening, 0.0..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_darkening, 0.0..=1.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Shelf Scuffs:"
@@ -4472,8 +4466,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "How strongly steep walls keep crisp sediment lines"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_wall_line_strength,
                         0.0..=1.0,
                     ))
@@ -4491,8 +4484,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     } else {
                         "Scale of the triplanar rock grain. Higher values create finer, denser surface texture"
                     });
-                params_changed |= ui
-                    .add(
+                params_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut cave_rock_texture_scale, 0.005..=0.2)
                             .logarithmic(true),
                     )
@@ -4503,8 +4495,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     } else {
                         "Blends strata from world-horizontal height lines toward lines that follow the local cave surface normal"
                     });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_geometry_conform,
                         0.0..=1.0,
                     ))
@@ -4515,8 +4506,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     } else {
                         "Stable shading depth for the rock grain and strata. This adds surface relief without sliding the pattern toward the camera"
                     });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_parallax_depth, 0.0..=4.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_parallax_depth, 0.0..=4.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Plate Size:"
@@ -4528,8 +4518,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Density of broad sediment bands"
                 });
-                params_changed |= ui
-                    .add(
+                params_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut cave_rock_coarse_frequency, 0.5..=32.0)
                             .logarithmic(true),
                     )
@@ -4544,8 +4533,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Density of thin pale sediment lines"
                 });
-                params_changed |= ui
-                    .add(
+                params_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut cave_rock_fine_frequency, 1.0..=96.0)
                             .logarithmic(true),
                     )
@@ -4560,8 +4548,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Density of dark seam lines"
                 });
-                params_changed |= ui
-                    .add(
+                params_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut cave_rock_seam_frequency, 1.0..=64.0)
                             .logarithmic(true),
                     )
@@ -4576,8 +4563,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Spatial scale of distortion on fine lines"
                 });
-                params_changed |= ui
-                    .add(
+                params_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut cave_rock_fine_noise_scale, 0.005..=0.2)
                             .logarithmic(true),
                     )
@@ -4592,8 +4578,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "How strongly fine lines bend and ripple"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_fine_noise_strength,
                         0.0..=12.0,
                     ))
@@ -4608,8 +4593,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Spatial scale of distortion on dark seams"
                 });
-                params_changed |= ui
-                    .add(
+                params_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut cave_rock_seam_noise_scale, 0.005..=0.2)
                             .logarithmic(true),
                     )
@@ -4624,8 +4608,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "How strongly seam lines bend and break"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_seam_noise_strength,
                         0.0..=12.0,
                     ))
@@ -4640,8 +4623,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Lower smoothstep edge for broad sediment bands"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_coarse_band_low,
                         -1.0..=1.0,
                     ))
@@ -4656,8 +4638,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Upper smoothstep edge for broad sediment bands"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_coarse_band_high,
                         -1.0..=1.0,
                     ))
@@ -4672,8 +4653,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Lower smoothstep edge for pale fine-line coverage"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_fine_band_low, -1.0..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_fine_band_low, -1.0..=1.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Blister High:"
@@ -4685,8 +4665,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Upper smoothstep edge for pale fine-line coverage"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_fine_band_high, -1.0..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_fine_band_high, -1.0..=1.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Crack Thin:"
@@ -4698,8 +4677,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Lower edge for dark seam thickness"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_seam_low, 0.0..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_low, 0.0..=1.0))
                     .changed();
                 ui.label(if lava_tubes_selected {
                     "Crack Thick:"
@@ -4711,50 +4689,44 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 } else {
                     "Upper edge for dark seam thickness"
                 });
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_seam_high, 0.0..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_high, 0.0..=1.0))
                     .changed();
 
                 ui.add_space(4.0);
                 ui.label("Lighting");
                 ui.label("Ambient:");
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_ambient_strength,
                         0.0..=0.5,
                     ))
                     .changed();
                 ui.label("Diffuse:");
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_diffuse_strength,
                         0.0..=2.0,
                     ))
                     .changed();
                 ui.label("Specular:");
-                params_changed |= ui
-                    .add(egui::Slider::new(
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
                         &mut cave_rock_specular_strength,
                         0.0..=2.0,
                     ))
                     .changed();
                 ui.label("Spec Power:");
-                params_changed |= ui
-                    .add(
+                params_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut cave_rock_specular_power, 1.0..=128.0)
                             .logarithmic(true),
                     )
                     .changed();
                 ui.label("Min Tone:");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_min_color, 0.0..=0.25))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_min_color, 0.0..=0.25))
                     .changed();
                 ui.label("Max Tone:");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut cave_rock_max_color, 0.25..=1.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_max_color, 0.25..=1.0))
                     .changed();
             }
 
+            }
             ui.add_space(10.0);
             ui.separator();
             ui.heading("Thermal Smoke Stacks");
@@ -4795,8 +4767,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(4.0);
                 ui.label("Frequency:")
                     .on_hover_text("Target number of smoke stacks to place on eligible boundary or cave wall voxels");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_count, 0..=64))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_count, 0..=64))
                     .changed();
 
                 ui.add_space(6.0);
@@ -4806,33 +4777,28 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Length:").on_hover_text(
                     "How far each smoke stack footprint runs along the sphere boundary, in voxels",
                 );
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_length, 1.0..=32.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_length, 1.0..=32.0))
                     .changed();
 
                 ui.label("Width:")
                     .on_hover_text("Approximate radius of the chimney. The base flares wider and conforms to the sphere boundary");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_width, 1.0..=10.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_width, 1.0..=10.0))
                     .changed();
 
                 ui.label("Depth:")
                     .on_hover_text("Height of the hollow smoke-stack chimney rising inward from a closed, flared base. Glow is placed deep in the shaft so it peeks out through the opening");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_depth, 1.0..=20.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_depth, 1.0..=20.0))
                     .changed();
 
                 if state.show_advanced_options {
                     ui.label("Back Margin:")
                         .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks use the sphere surface instead of cave wall thickness");
-                    params_changed |= ui
-                        .add(egui::Slider::new(&mut geothermal_back_margin, 0.0..=20.0))
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_back_margin, 0.0..=20.0))
                         .changed();
 
                     ui.label("Top Margin:")
                         .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks are independent of gravity direction");
-                    params_changed |= ui
-                        .add(egui::Slider::new(&mut geothermal_top_margin, 0.0..=12.0))
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_top_margin, 0.0..=12.0))
                         .changed();
                 }
 
@@ -4843,14 +4809,12 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Heat Output:").on_hover_text(
                     "Directional heat injected inward from the vent plume, in degrees Celsius",
                 );
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0).suffix(" C"))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0).suffix(" C"))
                     .changed();
 
                 ui.label("Heat Radius:")
                     .on_hover_text("Distance and spread of the baked inward heat plume, in voxels");
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
                     .changed();
 
                 ui.add_space(6.0);
@@ -4868,15 +4832,13 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.label("Glow Strength:").on_hover_text(
                     "Brightness of the colored glow injected into the local light field",
                 );
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_glow_strength, 0.0..=8.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_glow_strength, 0.0..=8.0))
                     .changed();
 
                 ui.label("Glow Radius:").on_hover_text(
                     "Radius of the baked colored glow around the lowest crevice point, in voxels",
                 );
-                params_changed |= ui
-                    .add(egui::Slider::new(&mut geothermal_glow_radius, 1.0..=32.0))
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_glow_radius, 1.0..=32.0))
                     .changed();
             }
 
@@ -4998,8 +4960,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                 ui.label("Growth Rate:")
                     .on_hover_text("How quickly moss spreads to adjacent voxels per second. Logarithmic scale — small values create slow, patchy growth; large values fill surfaces rapidly");
-                if ui
-                    .add(
+                if scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
                             .logarithmic(true),
                     )
@@ -5012,8 +4973,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Min Light Level:")
                     .on_hover_text("Minimum light intensity required for moss to grow in a voxel. Moss won't grow in completely dark areas below this threshold");
-                if ui
-                    .add(egui::Slider::new(
+                if scene_settings::slider_control(ui,egui::Slider::new(
                         &mut context.editor_state.moss_min_light,
                         0.0..=0.5,
                     ))
@@ -5026,8 +4986,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Water Radius (voxels):")
                     .on_hover_text("Radius around water voxels where moss can grow. Moss requires proximity to water — larger values allow moss to grow further from water sources");
-                if ui
-                    .add(egui::Slider::new(
+                if scene_settings::slider_control(ui,egui::Slider::new(
                         &mut context.editor_state.moss_water_radius,
                         2.0..=50.0,
                     ))
@@ -5040,8 +4999,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Decay Rate:")
                     .on_hover_text("How quickly moss dies when conditions are unfavorable (too dark or too dry). Logarithmic scale");
-                if ui
-                    .add(
+                if scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
                             .logarithmic(true),
                     )
@@ -5057,8 +5015,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                 ui.label("Water Erosion Rate:")
                     .on_hover_text("How much flowing water erodes moss. Higher values cause moss to be washed away more quickly by water currents");
-                if ui
-                    .add(egui::Slider::new(
+                if scene_settings::slider_control(ui,egui::Slider::new(
                         &mut context.editor_state.moss_erosion_rate,
                         0.0..=2.0,
                     ))
@@ -5071,8 +5028,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Wetness Evaporation:")
                     .on_hover_text("How quickly surface wetness dries out. Higher values mean moss dries faster and needs more frequent water contact to survive");
-                if ui
-                    .add(
+                if scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.moss_wetness_evaporation,
                             0.001..=0.2,
@@ -5091,8 +5047,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                 ui.label("Graze Cooldown:")
                     .on_hover_text("Seconds a phagocyte must wait before it can graze the same moss voxel again. Prevents a single cell from instantly consuming all nearby moss");
-                if ui
-                    .add(egui::Slider::new(
+                if scene_settings::slider_control(ui,egui::Slider::new(
                         &mut context.editor_state.moss_consume_rate,
                         1.0..=30.0,
                     ))
@@ -5105,8 +5060,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 ui.add_space(2.0);
                 ui.label("Nutrients per Moss:")
                     .on_hover_text("How many nutrients a phagocyte gains from grazing one moss voxel. Higher values make moss a richer food source");
-                if ui
-                    .add(egui::Slider::new(
+                if scene_settings::slider_control(ui,egui::Slider::new(
                         &mut context.editor_state.moss_nutrient_per_moss,
                         1.0..=200.0,
                     ))
@@ -5123,8 +5077,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.label("Texture Scale:")
                         .on_hover_text("UV scale of the moss texture on cave surfaces. Smaller values = larger texture tiles; larger values = finer, more detailed texture");
-                    if ui
-                        .add(egui::Slider::new(
+                    if scene_settings::slider_control(ui,egui::Slider::new(
                             &mut context.editor_state.moss_scale,
                             0.02..=0.5,
                         ))
@@ -5137,8 +5090,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     ui.add_space(2.0);
                     ui.label("Parallax Depth:")
                         .on_hover_text("Strength of the parallax occlusion mapping effect on moss. Higher values make the moss appear to have more 3D depth and volume");
-                    if ui
-                        .add(egui::Slider::new(
+                    if scene_settings::slider_control(ui,egui::Slider::new(
                             &mut context.editor_state.moss_parallax_depth,
                             0.0..=0.3,
                         ))
@@ -5170,8 +5122,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.add_space(2.0);
                     ui.label("Noise Frequency:");
-                    if ui
-                        .add(
+                    if scene_settings::slider_control(ui,
                             egui::Slider::new(
                                 &mut context.editor_state.moss_noise_frequency,
                                 4.0..=80.0,
@@ -5186,8 +5137,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.add_space(2.0);
                     ui.label("Noise Lacunarity:");
-                    if ui
-                        .add(egui::Slider::new(
+                    if scene_settings::slider_control(ui,egui::Slider::new(
                             &mut context.editor_state.moss_noise_lacunarity,
                             1.5..=5.0,
                         ))
@@ -5199,8 +5149,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.add_space(2.0);
                     ui.label("Height Sharpness (low):");
-                    if ui
-                        .add(egui::Slider::new(
+                    if scene_settings::slider_control(ui,egui::Slider::new(
                             &mut context.editor_state.moss_height_sharpness_low,
                             0.0..=0.5,
                         ))
@@ -5212,8 +5161,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.add_space(2.0);
                     ui.label("Height Sharpness (high):");
-                    if ui
-                        .add(egui::Slider::new(
+                    if scene_settings::slider_control(ui,egui::Slider::new(
                             &mut context.editor_state.moss_height_sharpness_high,
                             0.3..=1.0,
                         ))
@@ -5225,8 +5173,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
                     ui.add_space(2.0);
                     ui.label("Bump Strength:");
-                    if ui
-                        .add(egui::Slider::new(
+                    if scene_settings::slider_control(ui,egui::Slider::new(
                             &mut context.editor_state.moss_bump_strength,
                             0.0..=15.0,
                         ))
@@ -5297,7 +5244,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut target = gpu_scene.boulder_target_count as i32;
             ui.label("Target Count:")
                 .on_hover_text("How many mossrocks the system tries to maintain in the world at any time. New rocks spawn when the count falls below this");
-            if ui.add(egui::Slider::new(&mut target, 1..=128)).changed() {
+            if scene_settings::slider_control(ui,egui::Slider::new(&mut target, 1..=128)).changed() {
                 gpu_scene.boulder_target_count = target as u32;
                 if let Some(ref mut bs) = gpu_scene.boulder_system {
                     bs.target_count = target as u32;
@@ -5311,8 +5258,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
             let mut interval = gpu_scene.boulder_spawn_interval;
             ui.label("Approx. Spawn Interval (seconds):")
                 .on_hover_text("Average time between new mossrock spawns. Logarithmic scale — small values spawn rocks rapidly; large values create rare spawns");
-            if ui
-                .add(egui::Slider::new(&mut interval, 0.5..=60.0).logarithmic(true))
+            if scene_settings::slider_control(ui,egui::Slider::new(&mut interval, 0.5..=60.0).logarithmic(true))
                 .changed()
             {
                 gpu_scene.boulder_spawn_interval = interval;
@@ -5414,8 +5360,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                         .small()
                         .weak(),
                 );
-                if ui
-                    .add(egui::Slider::new(&mut buoyancy, 0.0..=1.0).step_by(0.01))
+                if scene_settings::slider_control(ui,egui::Slider::new(&mut buoyancy, 0.0..=1.0).step_by(0.01))
                     .changed()
                 {
                     gpu_scene.boulder_buoyancy = buoyancy;
@@ -5439,7 +5384,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .small()
                     .weak(),
                 );
-                if ui.add(egui::Slider::new(&mut gate, 1.0..=200.0)).changed() {
+                if scene_settings::slider_control(ui,egui::Slider::new(&mut gate, 1.0..=200.0)).changed() {
                     gpu_scene.boulder_size_gate = gate;
                     boulder_changed = true;
                 }
@@ -5484,8 +5429,6 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
 /// Render the Fluid Settings panel for fluid simulation controls and visualization.
 fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
-    let sw = (ui.available_width() - 60.0).max(60.0);
-    ui.style_mut().spacing.slider_width = sw;
     // Check if we're in GPU mode
     if !context.is_gpu_mode() {
         return;
@@ -5609,8 +5552,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Density:")
         .on_hover_text("Fraction of the world volume that contains nutrient voxels at any given time. Higher values create a richer food environment");
-    if ui
-        .add(
+    if scene_settings::slider_control(ui,
             egui::Slider::new(&mut context.editor_state.nutrient_density, 0.0..=0.5)
                 .step_by(0.01)
                 .fixed_decimals(2),
@@ -5625,8 +5567,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Epoch Duration:")
         .on_hover_text("Total length of one nutrient spawn cycle in seconds. Nutrients spawn during the first part of the epoch and despawn during the last part");
-    if ui
-        .add(
+    if scene_settings::slider_control(ui,
             egui::Slider::new(
                 &mut context.editor_state.nutrient_epoch_duration,
                 2.0..=30.0,
@@ -5645,8 +5586,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Epoch Spacing:")
         .on_hover_text("Gap between consecutive nutrient epochs in seconds. Longer spacing creates feast-and-famine cycles that drive organism behavior");
-    if ui
-        .add(
+    if scene_settings::slider_control(ui,
             egui::Slider::new(&mut context.editor_state.nutrient_epoch_spacing, 1.0..=30.0)
                 .step_by(0.5)
                 .fixed_decimals(1)
@@ -5668,8 +5608,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if state.show_advanced_options {
         ui.label("Spawn Ramp:")
             .on_hover_text("Fraction of the epoch duration over which nutrients gradually appear. 0.1 = nutrients appear quickly at the start; 0.9 = nutrients trickle in slowly over most of the epoch");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.nutrient_spawn_end, 0.05..=0.9)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -5692,8 +5631,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.label("Despawn Ramp:")
             .on_hover_text("Fraction of the epoch at which nutrients start disappearing. Must be greater than Spawn Ramp. Lower values give organisms less time to consume nutrients before they vanish");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.nutrient_despawn_start, 0.1..=0.95)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -5723,8 +5661,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if state.show_advanced_options && state.world_settings.gravity_mode == 3 {
         ui.label("Surface Pressure:")
             .on_hover_text("Tangential smoothing strength for radial fluid mode. Higher values push fluid toward the world surface more aggressively, creating a more uniform water layer");
-        if ui
-            .add(egui::Slider::new(
+        if scene_settings::slider_control(ui,egui::Slider::new(
                 &mut state.fluid_settings.surface_pressure,
                 0.0..=1.0,
             ))
@@ -5745,8 +5682,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Humidity Diffusion Rate:")
             .on_hover_text("How quickly atmospheric humidity spreads between voxels each tick");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(
                     &mut state.fluid_settings.climate.humidity_diffusion_rate,
                     0.0..=1.0,
@@ -5765,8 +5701,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label("Freeze Rate:").on_hover_text(
             "How quickly sustained cold accumulates freeze debt, converting water to ice",
         );
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut state.fluid_settings.climate.freeze_rate, 0.0..=5.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -5781,8 +5716,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label("Melt Rate:").on_hover_text(
             "How quickly sustained warmth accumulates melt debt, converting ice to water",
         );
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut state.fluid_settings.climate.melt_rate, 0.0..=5.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -5797,8 +5731,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label("Snow Melt Rate:").on_hover_text(
             "How quickly sustained warmth accumulates melt debt, converting snow to water",
         );
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut state.fluid_settings.climate.snow_melt_rate, 0.0..=5.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -5812,8 +5745,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.label("Snow Compaction Rate:")
             .on_hover_text("How quickly sustained cold packs snow down into ice (debt units per tick per degree below freezing)");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(
                     &mut state.fluid_settings.climate.snow_compact_rate,
                     0.0..=5.0,
@@ -5840,8 +5772,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             ui.add_space(4.0);
             ui.label("Lateral Flow Probability:")
                 .on_hover_text("Probability that a fluid voxel moves sideways each step. Higher values create more horizontal spreading and mixing");
-            if ui
-                .add(
+            if scene_settings::slider_control(ui,
                     egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
                         .step_by(0.01)
                         .fixed_decimals(2),
@@ -5862,6 +5793,8 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     // temperature and contact with air (see thermal model in fluid_sim.wgsl) -
     // no manual probability controls needed.
 
+    if !state.cosmetic_options_visible() { return; }
+
     // === Ice Appearance ===
     // Written to fluid_settings.ice (persisted with the UI state); app.rs
     // pushes the values into the ice render params uniform every frame.
@@ -5876,8 +5809,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label("Facet Size:")
             .on_hover_text("Size of each crystal face in world units. Faces are irregular Voronoi regions, independent of mesh tessellation");
         let mut facet_size = 1.0 / ice.facet_scale.max(0.001);
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut facet_size, 1.0..=200.0)
                     .step_by(1.0)
                     .fixed_decimals(0)
@@ -5891,7 +5823,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Facet Depth:")
             .on_hover_text("How far vertices are displaced onto each flat crystal facet plane. 0 = smooth ice (no displacement), higher = deeper, more angular faceting");
-        ui.add(
+        scene_settings::slider_control(ui,
             egui::Slider::new(&mut ice.displacement_strength, 0.0..=2.0)
                 .step_by(0.05)
                 .fixed_decimals(2),
@@ -5900,7 +5832,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Facet Shading:")
             .on_hover_text("How much the flat facet normals affect diffuse shading. Low = facets only show as glints; high = each face shades as its own patch (patchwork look)");
-        ui.add(
+        scene_settings::slider_control(ui,
             egui::Slider::new(&mut ice.facet_diffuse, 0.0..=1.0)
                 .step_by(0.01)
                 .fixed_decimals(2),
@@ -5909,7 +5841,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Glint Intensity:")
             .on_hover_text("Brightness of the per-face specular sparkle");
-        ui.add(
+        scene_settings::slider_control(ui,
             egui::Slider::new(&mut ice.glint_strength, 0.0..=3.0)
                 .step_by(0.05)
                 .fixed_decimals(2),
@@ -5918,7 +5850,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Opacity:")
             .on_hover_text("Base opacity of the ice body. Grazing angles always read more solid. At 1.00, ice is rendered fully opaque (no transparency blending).");
-        ui.add(
+        scene_settings::slider_control(ui,
             egui::Slider::new(&mut ice.alpha, 0.2..=1.0)
                 .step_by(0.01)
                 .fixed_decimals(2),
@@ -5936,7 +5868,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             ui.label("Glint Sharpness:").on_hover_text(
                 "Blinn-Phong exponent for the facet glints. Higher = tighter, sharper sparkles",
             );
-            ui.add(
+            scene_settings::slider_control(ui,
                 egui::Slider::new(&mut ice.glint_shininess, 4.0..=256.0)
                     .step_by(1.0)
                     .fixed_decimals(0)
@@ -5946,7 +5878,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             ui.add_space(4.0);
             ui.label("Reflection:")
                 .on_hover_text("Fresnel-weighted environment reflection mix at grazing angles");
-            ui.add(
+            scene_settings::slider_control(ui,
                 egui::Slider::new(&mut ice.fresnel_reflection, 0.0..=1.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -5955,7 +5887,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
             ui.add_space(4.0);
             ui.label("Reflection Brightness:")
                 .on_hover_text("Brightness multiplier for the reflected environment");
-            ui.add(
+            scene_settings::slider_control(ui,
                 egui::Slider::new(&mut ice.reflection_brightness, 0.0..=4.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -5972,8 +5904,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     if state.show_advanced_options {
         ui.label("Ambient:")
             .on_hover_text("Minimum light level on the water surface regardless of light direction. Higher values brighten the water in shadowed areas");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -5986,8 +5917,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Diffuse:")
             .on_hover_text("Strength of the diffuse (Lambertian) lighting on the water surface. Higher values make the water respond more strongly to the light direction");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6000,8 +5930,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Specular:")
             .on_hover_text("Strength of the specular highlight (glint) on the water surface. Higher values create a brighter, more mirror-like reflection of the light source");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6014,8 +5943,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Shininess:")
             .on_hover_text("Sharpness of the specular highlight. Low values = broad, soft glint. High values = tight, sharp glint like polished glass");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
                     .step_by(1.0)
                     .fixed_decimals(0)
@@ -6029,8 +5957,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Rim Light:")
             .on_hover_text("Backlit glow around the edges of the water surface. Creates a halo effect when the light is behind the water");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6045,8 +5972,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("Alpha (Transparency):")
         .on_hover_text("Overall transparency of the water surface. 0 = fully transparent (invisible); 1 = fully opaque");
-    if ui
-        .add(
+    if scene_settings::slider_control(ui,
             egui::Slider::new(&mut context.editor_state.fluid_alpha, 0.0..=1.0)
                 .step_by(0.01)
                 .fixed_decimals(2),
@@ -6064,8 +5990,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.label("Fresnel Strength:")
             .on_hover_text("How strongly the Fresnel effect controls reflection intensity. Higher values make the water more reflective at grazing angles");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6078,8 +6003,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Fresnel Power:")
             .on_hover_text("Sharpness of the Fresnel transition. Higher values make the reflection appear only at very shallow angles; lower values spread it across more of the surface");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
                     .step_by(0.1)
                     .fixed_decimals(1),
@@ -6093,8 +6017,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label("Reflection Intensity:").on_hover_text(
             "Overall strength of the cubemap/environment reflection on the water surface",
         );
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6107,8 +6030,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Reflection Brightness:")
             .on_hover_text("Brightness multiplier applied to the reflected environment. Higher values make the reflection appear brighter and more vivid");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(
                     &mut context.editor_state.fluid_reflection_brightness,
                     1.0..=50.0,
@@ -6124,8 +6046,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Below-Waterline Opacity:")
             .on_hover_text("Transparency of faces below the water surface (sides and bottom). Set low to see inside the sphere");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_waterline_alpha, 0.0..=1.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6143,8 +6064,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
         ui.label("Wave Height:")
             .on_hover_text("Amplitude of the animated wave displacement on the water surface. 0 = flat water; higher values create more dramatic waves");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -6158,8 +6078,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Wave Speed:")
             .on_hover_text("How fast the wave pattern animates across the water surface");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -6173,8 +6092,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Noise Scale (lower = larger waves):")
             .on_hover_text("Spatial frequency of the wave noise pattern. Lower values create large, rolling waves; higher values create small, choppy ripples");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
                     .step_by(0.01)
                     .fixed_decimals(2)
@@ -6189,8 +6107,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Octaves:")
             .on_hover_text("Number of noise layers combined for the wave pattern. More octaves add finer detail to the waves");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
                     .step_by(1.0)
                     .fixed_decimals(0),
@@ -6204,8 +6121,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Lacunarity (freq per octave):")
             .on_hover_text("How much the frequency increases with each successive noise octave. Higher values create more varied, complex wave patterns");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
                     .step_by(0.1)
                     .fixed_decimals(1),
@@ -6219,8 +6135,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Persistence (amp per octave):")
             .on_hover_text("How much the amplitude decreases with each successive noise octave. Lower values make higher octaves contribute less, creating smoother waves");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
                     .step_by(0.05)
                     .fixed_decimals(2),
@@ -6237,8 +6152,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Sunlight Attenuation:")
             .on_hover_text("How quickly sunlight darkens with water depth. Higher values simulate deeper water where sunlight cannot reach.");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(
                     &mut context.editor_state.water_light_attenuation,
                     0.1..=20.0,
@@ -6262,8 +6176,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Ambient Spread:")
             .on_hover_text("Minimum indirect light in shadowed or deep-water areas. Set to 0 for truly black depths; raise it for scattered ambient light.");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(
                     &mut context.editor_state.light_field_ambient_floor,
                     0.0..=0.2,
@@ -6285,8 +6198,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Shadow Depth:")
             .on_hover_text("How dark unlit regions are allowed to become. Lit and partially sun-penetrated areas are preserved; set to 1.0 for pitch-black shadows.");
-        if ui
-            .add(
+        if scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6312,8 +6224,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.label("Intensity:").on_hover_text(
             "Brightness of the caustic light patterns projected onto surfaces beneath the water",
         );
-        caustic_changed |= ui
-            .add(
+        caustic_changed |= scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.caustic_intensity, 0.0..=2.0)
                     .step_by(0.01)
                     .fixed_decimals(2),
@@ -6323,8 +6234,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Scale:")
             .on_hover_text("Size of the caustic pattern. Smaller values create tighter, more detailed caustic ripples; larger values create broader patterns");
-        caustic_changed |= ui
-            .add(
+        caustic_changed |= scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.caustic_scale, 0.1..=30.0)
                     .step_by(0.1)
                     .fixed_decimals(1),
@@ -6334,8 +6244,7 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Speed:")
             .on_hover_text("How fast the caustic pattern animates. Higher values create more dynamic, rapidly shifting light patterns");
-        caustic_changed |= ui
-            .add(
+        caustic_changed |= scene_settings::slider_control(ui,
                 egui::Slider::new(&mut context.editor_state.caustic_speed, 0.0..=5.0)
                     .step_by(0.1)
                     .fixed_decimals(1),
@@ -6391,7 +6300,7 @@ fn render_organism_skin_settings(
     // -- Geometry --------------------------------------------------------------
     ui.label("Skin Offset (gap from cell surface, world units):")
         .on_hover_text("How far the skin mesh extends beyond the cell surfaces. Larger values create a more inflated, blobby appearance");
-    ui.add(
+    scene_settings::slider_control(ui,
         egui::Slider::new(&mut organism_skin.radius_scale, 0.0..=5.0)
             .step_by(0.05)
             .fixed_decimals(2),
@@ -6400,7 +6309,7 @@ fn render_organism_skin_settings(
     ui.add_space(4.0);
     ui.label("Shrink Speed (fraction of gap closed per iteration):")
         .on_hover_text("How aggressively the skin mesh wraps around the cells each iteration. Higher values create a tighter fit but may cause artifacts");
-    ui.add(
+    scene_settings::slider_control(ui,
         egui::Slider::new(&mut organism_skin.shrink_speed, 0.01..=1.0)
             .step_by(0.01)
             .fixed_decimals(2),
@@ -6409,7 +6318,7 @@ fn render_organism_skin_settings(
     ui.add_space(4.0);
     ui.label("Smooth Factor (Laplacian blend per iteration):")
         .on_hover_text("How much the skin mesh is smoothed each iteration. Higher values create a smoother, more organic surface");
-    ui.add(
+    scene_settings::slider_control(ui,
         egui::Slider::new(&mut organism_skin.smooth_factor, 0.0..=0.8)
             .step_by(0.01)
             .fixed_decimals(2),
@@ -6419,7 +6328,7 @@ fn render_organism_skin_settings(
     ui.horizontal(|ui| {
         ui.label("Shrink Iterations:")
             .on_hover_text("Number of shrink-wrap passes. More iterations create a tighter skin but increase GPU cost");
-        ui.add(egui::Slider::new(&mut organism_skin.shrink_iters, 1u32..=20u32));
+        scene_settings::slider_control(ui,egui::Slider::new(&mut organism_skin.shrink_iters, 1u32..=20u32));
     });
 
     ui.add_space(2.0);
@@ -6427,7 +6336,7 @@ fn render_organism_skin_settings(
         ui.label("Smooth Iterations:").on_hover_text(
             "Number of Laplacian smoothing passes. More iterations create a smoother surface",
         );
-        ui.add(egui::Slider::new(
+        scene_settings::slider_control(ui,egui::Slider::new(
             &mut organism_skin.smooth_iters,
             0u32..=8u32,
         ));
@@ -6437,7 +6346,7 @@ fn render_organism_skin_settings(
     ui.horizontal(|ui| {
         ui.label("Min Cells for Skin:")
             .on_hover_text("Minimum number of cells an organism must have before a skin is rendered. Prevents skins on isolated single cells");
-        ui.add(egui::Slider::new(&mut organism_skin.min_cells, 1u32..=50u32));
+        scene_settings::slider_control(ui,egui::Slider::new(&mut organism_skin.min_cells, 1u32..=50u32));
     });
 
     // -- Material --------------------------------------------------------------
@@ -6452,7 +6361,7 @@ fn render_organism_skin_settings(
     ui.label("Opacity:").on_hover_text(
         "Transparency of the organism skin. 0 = fully transparent; 1 = fully opaque",
     );
-    ui.add(
+    scene_settings::slider_control(ui,
         egui::Slider::new(&mut organism_skin.alpha, 0.0..=1.0)
             .step_by(0.01)
             .fixed_decimals(2),
@@ -6461,7 +6370,7 @@ fn render_organism_skin_settings(
     ui.add_space(4.0);
     ui.label("Subsurface Scattering:")
         .on_hover_text("Simulates light penetrating and scattering beneath the skin surface, creating a soft, translucent biological look");
-    ui.add(
+    scene_settings::slider_control(ui,
         egui::Slider::new(&mut organism_skin.sss_strength, 0.0..=3.0)
             .step_by(0.05)
             .fixed_decimals(2),
@@ -6470,7 +6379,7 @@ fn render_organism_skin_settings(
     ui.add_space(4.0);
     ui.label("Rim Light:")
         .on_hover_text("Backlit glow around the edges of the organism skin. Creates a halo effect that makes organisms stand out against the background");
-    ui.add(
+    scene_settings::slider_control(ui,
         egui::Slider::new(&mut organism_skin.rim_strength, 0.0..=3.0)
             .step_by(0.05)
             .fixed_decimals(2),
@@ -6503,6 +6412,7 @@ fn render_organism_skin_settings(
     ui.add_space(4.0);
 }
 
+#[allow(dead_code)]
 fn sun_tint_color32(color: [f32; 3]) -> egui::Color32 {
     egui::Rgba::from_rgb(
         color[0].clamp(0.0, 1.0),
@@ -6512,6 +6422,7 @@ fn sun_tint_color32(color: [f32; 3]) -> egui::Color32 {
     .into()
 }
 
+#[allow(dead_code)]
 fn render_sun_tint_control(ui: &mut Ui, tint: &mut [f32; 3], sun_intensity: f32) -> bool {
     let mut changed = false;
     let presets = [
@@ -6645,6 +6556,7 @@ fn render_sun_direction_control(ui: &mut Ui, light_dir: &mut [f32; 3]) -> bool {
     changed
 }
 
+#[allow(dead_code)]
 trait AbsDiffEq {
     fn abs_diff_eq(self, other: Self, epsilon: Self) -> bool;
 }
@@ -6657,6 +6569,20 @@ impl AbsDiffEq for f32 {
 
 /// Push light-panel edits to the scene and persist them. Shared by the
 /// early-return (non-advanced) and full panel paths.
+fn render_rendering_controls(ui: &mut Ui) {
+    ui.heading("Rendering");
+    ui.separator();
+    ui.label("Fog, bloom, and visual settings.");
+    // TODO: Implement rendering controls
+}
+
+fn render_lighting_settings(ui: &mut Ui) {
+    ui.heading("Lighting");
+    ui.separator();
+    ui.label("Scene lighting configuration.");
+    // TODO: Implement lighting settings
+}
+
 fn apply_light_panel_changes(context: &mut PanelContext, sun_changed: bool) {
     if sun_changed {
         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
@@ -6677,7 +6603,6 @@ fn sun_orbit_position_slider(ui: &mut Ui, angle: &mut f32) -> egui::Response {
             // The angle advances between frames. Default Always clamping also
             // rounds existing values, even when a focused slider has no input.
             .clamping(egui::SliderClamping::Edits)
-            .text("Position")
             .suffix("°")
             .step_by(0.1)
             .fixed_decimals(1),
@@ -6690,8 +6615,6 @@ fn render_light_settings_organized(
     context: &mut PanelContext,
     state: &mut GlobalUiState,
 ) {
-    let sw = (ui.available_width() - 60.0).max(60.0);
-    ui.style_mut().spacing.slider_width = sw;
 
     if !context.is_gpu_mode() {
         ui.label("Lighting settings are only available in GPU mode.");
@@ -6716,12 +6639,13 @@ fn render_light_settings_organized(
 
     egui::CollapsingHeader::new("Sun")
         .default_open(true)
+        .open((!state.main_scene_quick_start_seen).then_some(true))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                sun_changed |= ui
-                    .checkbox(&mut context.editor_state.show_sun, "Sun Disc")
-                    .on_hover_text("Render the visible sun disc in the sky.")
-                    .changed();
+                if state.cosmetic_options_visible() {
+                    sun_changed |= ui.checkbox(&mut context.editor_state.show_sun, "Sun Disc")
+                        .on_hover_text("Render the visible sun disc in the sky.").changed();
+                }
                 let orbit_toggle = ui
                     .checkbox(&mut context.editor_state.sun_rotation_enabled, "Orbit")
                     .on_hover_text("Rotate the sun along the defined orbit path.");
@@ -6729,7 +6653,7 @@ fn render_light_settings_organized(
                     context.editor_state.capture_sun_orbit_angle();
                 }
                 changed |= orbit_toggle.changed();
-                if context.editor_state.sun_rotation_enabled {
+                if state.cosmetic_options_visible() && context.editor_state.sun_rotation_enabled {
                     changed |= ui
                         .checkbox(&mut context.editor_state.show_orbit_ring, "Show Ring")
                         .on_hover_text("Keep the orbit path ring visible in the scene.")
@@ -6738,17 +6662,22 @@ fn render_light_settings_organized(
             });
 
             ui.add_space(4.0);
-            ui.label("Brightness (0-5)");
-            changed |= ui
-                .add(
+            let brightness_response = scene_settings::setting(ui, "Brightness (0-5)",
                     egui::Slider::new(&mut context.editor_state.sun_intensity, 0.0..=5.0)
-                        .text("Brightness")
                         .step_by(0.1)
                         .fixed_decimals(1),
                 )
-                .on_hover_text("Sun brightness controls baseline air temperature: 0=dark, 3=temperate (recommended), 5=extreme heat. Affects photocyte energy and thermal model.")
-                .changed();
+                .on_hover_text("Sun brightness controls baseline air temperature: 0=dark, 3=temperate (recommended), 5=extreme heat. Affects photocyte energy and thermal model.");
+            changed |= brightness_response.changed();
+            let visible_brightness = brightness_response.rect.intersect(ui.clip_rect());
+            if visible_brightness.is_positive() {
+                context.editor_state.panel_rects.insert("SunBrightness".into(), visible_brightness);
+            }
+            if !state.main_scene_quick_start_seen && !ui.clip_rect().contains_rect(brightness_response.rect) {
+                brightness_response.scroll_to_me(Some(egui::Align::Center));
+            }
 
+            if state.cosmetic_options_visible() {
             ui.horizontal(|ui| {
                 ui.label("Tint");
                 if ui
@@ -6758,6 +6687,7 @@ fn render_light_settings_organized(
                     sun_changed = true;
                 }
             });
+            }
 
             ui.add_space(4.0);
             if context.editor_state.sun_rotation_enabled {
@@ -6772,10 +6702,8 @@ fn render_light_settings_organized(
 
                 let mut speed_degrees = context.editor_state.sun_rotation_speed.to_degrees().max(0.0);
                 ui.label("Speed");
-                if ui
-                    .add(
+                if scene_settings::slider_control(ui,
                         egui::Slider::new(&mut speed_degrees, 0.0..=30.0)
-                            .text("Speed")
                             .suffix("°/s")
                             .logarithmic(true)
                             .smallest_positive(0.01)
@@ -6793,20 +6721,16 @@ fn render_light_settings_organized(
                         light_dir_to_pitch_yaw(context.editor_state.sun_rotation_axis);
                     let mut orbit_changed = false;
                     ui.label("Path Tilt");
-                    orbit_changed |= ui
-                        .add(
+                    orbit_changed |= scene_settings::slider_control(ui,
                             egui::Slider::new(&mut orbit_pitch, -90.0..=90.0)
-                                .text("Tilt")
                                 .suffix("°")
                                 .fixed_decimals(0),
                         )
                         .on_hover_text("Tilt of the orbit plane. 0° = equatorial, 90° = polar.")
                         .changed();
                     ui.label("Path Yaw");
-                    orbit_changed |= ui
-                        .add(
+                    orbit_changed |= scene_settings::slider_control(ui,
                             egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
-                                .text("Direction")
                                 .suffix("°")
                                 .fixed_decimals(0),
                         )
@@ -6826,13 +6750,11 @@ fn render_light_settings_organized(
             if state.show_advanced_options && context.editor_state.show_sun {
                 ui.add_space(4.0);
                 ui.label("Disc Size");
-                sun_changed |= ui
-                    .add(
+                sun_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.sun_angular_radius,
                             0.005..=0.2,
                         )
-                        .text("Disc Size")
                         .step_by(0.005)
                         .fixed_decimals(3),
                     )
@@ -6846,10 +6768,8 @@ fn render_light_settings_organized(
         .default_open(true)
         .show(ui, |ui| {
             ui.label("Night Ratio (0-1)");
-            changed |= ui
-                .add(
+            changed |= scene_settings::slider_control(ui,
                     egui::Slider::new(&mut context.editor_state.sun_night_ratio, 0.0..=1.0)
-                        .text("Night Ratio")
                         .step_by(0.05)
                         .fixed_decimals(2),
                 )
@@ -6860,10 +6780,8 @@ fn render_light_settings_organized(
                 )
                 .changed();
             ui.label("Cycle Length");
-            changed |= ui
-                .add(
+            changed |= scene_settings::slider_control(ui,
                     egui::Slider::new(&mut context.editor_state.sun_cycle_period, 10.0..=3600.0)
-                        .text("Cycle Length")
                         .suffix(" s")
                         .step_by(1.0)
                         .fixed_decimals(0),
@@ -6875,13 +6793,11 @@ fn render_light_settings_organized(
             // is what drives temperature swings. Edits the persisted climate
             // setting (app.rs syncs it into the scene each frame).
             ui.label("Thermal Inertia (0-5)");
-            if ui
-                .add(
+            if scene_settings::slider_control(ui,
                     egui::Slider::new(
                         &mut state.fluid_settings.climate.thermal_inertia,
                         0.0..=5.0,
                     )
-                    .text("Inertia")
                     .step_by(0.1)
                     .fixed_decimals(1),
                 )
@@ -6904,19 +6820,15 @@ fn render_light_settings_organized(
                 .changed();
             if context.editor_state.sun_cycle_enabled {
                 ui.label("Season Min");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.sun_cycle_min, 0.0..=20.0)
-                            .text("Min")
                             .step_by(0.1)
                             .fixed_decimals(1),
                     )
                     .changed();
                 ui.label("Season Max");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.sun_cycle_max, 0.0..=20.0)
-                            .text("Max")
                             .step_by(0.1)
                             .fixed_decimals(1),
                     )
@@ -6979,19 +6891,15 @@ fn render_light_settings_organized(
                 .changed();
             ui.add_enabled_ui(context.editor_state.shadow_enabled, |ui| {
                 ui.label("Strength");
-                shadow_changed |= ui
-                    .add(
+                shadow_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
-                            .text("Strength")
                             .step_by(0.01)
                             .fixed_decimals(2),
                     )
                     .changed();
                 ui.label("Quality");
-                shadow_changed |= ui
-                    .add(
+                shadow_changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
-                            .text("Quality")
                             .step_by(0.01)
                             .fixed_decimals(2),
                     )
@@ -7015,8 +6923,7 @@ fn render_light_settings_organized(
                 ui.label(egui::RichText::new("Light Field").strong());
                 let mut steps = context.editor_state.light_field_max_steps as i32;
                 ui.label("Ray Steps");
-                if ui
-                    .add(egui::Slider::new(&mut steps, 1..=256).text("Ray Steps"))
+                if scene_settings::slider_control(ui,egui::Slider::new(&mut steps, 1..=256))
                     .on_hover_text("More steps improve shadow accuracy but cost more GPU time.")
                     .changed()
                 {
@@ -7024,49 +6931,41 @@ fn render_light_settings_organized(
                     changed = true;
                 }
                 ui.label("Step Size");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.light_field_step_size,
                             0.5..=4.0,
                         )
-                        .text("Step Size")
                         .step_by(0.1)
                         .fixed_decimals(1),
                     )
                     .changed();
                 ui.label("Rock Absorption");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.light_field_absorption_solid,
                             0.1..=20.0,
                         )
-                        .text("Rock Absorption")
                         .step_by(0.1)
                         .fixed_decimals(1),
                     )
                     .changed();
                 ui.label("Cell Absorption");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.light_field_absorption_cell,
                             0.0..=5.0,
                         )
-                        .text("Cell Absorption")
                         .step_by(0.05)
                         .fixed_decimals(2),
                     )
                     .changed();
                 ui.label("Ambient Floor");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.light_field_ambient_floor,
                             0.0..=0.2,
                         )
-                        .text("Ambient Floor")
                         .step_by(0.005)
                         .fixed_decimals(3),
                     )
@@ -7086,32 +6985,26 @@ fn render_light_settings_organized(
 
             ui.add_enabled_ui(context.editor_state.show_volumetric_fog, |ui| {
                 ui.label("Density");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
-                            .text("Density")
                             .step_by(0.01)
                             .fixed_decimals(2),
                     )
                     .changed();
                 ui.label("Glow");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.light_intensity, 0.0..=20.0)
-                            .text("Glow")
                             .step_by(0.1)
                             .fixed_decimals(1),
                     )
                     .on_hover_text("Brightness of fog scattering from sun and luminocytes.")
                     .changed();
                 ui.label("Directionality");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.fog_scattering_anisotropy,
                             0.0..=0.95,
                         )
-                        .text("Directionality")
                         .step_by(0.01)
                         .fixed_decimals(2),
                     )
@@ -7120,10 +7013,8 @@ fn render_light_settings_organized(
                     )
                     .changed();
                 ui.label("Absorption");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
-                            .text("Absorption")
                             .step_by(0.01)
                             .fixed_decimals(2),
                     )
@@ -7142,22 +7033,18 @@ fn render_light_settings_organized(
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("Height Fog").strong());
                 ui.label("Bottom Density");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
-                            .text("Bottom Density")
                             .step_by(0.01)
                             .fixed_decimals(2),
                     )
                     .changed();
                 ui.label("Falloff");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.fog_height_falloff,
                             0.001..=0.1,
                         )
-                        .text("Falloff")
                         .step_by(0.001)
                         .fixed_decimals(3),
                     )
@@ -7167,8 +7054,7 @@ fn render_light_settings_organized(
                 ui.label(egui::RichText::new("Quality").strong());
                 let mut fsteps = context.editor_state.fog_steps as i32;
                 ui.label("Steps");
-                if ui
-                    .add(egui::Slider::new(&mut fsteps, 8..=128).text("Steps"))
+                if scene_settings::slider_control(ui,egui::Slider::new(&mut fsteps, 8..=128))
                     .changed()
                 {
                     context.editor_state.fog_steps = fsteps as u32;
@@ -7182,10 +7068,8 @@ fn render_light_settings_organized(
                     .on_hover_text("Trilinear light-field sampling for fog.")
                     .changed();
                 ui.label("Blur");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.fog_composite_blur, 0.25..=4.0)
-                            .text("Blur")
                             .step_by(0.25)
                             .fixed_decimals(2),
                     )
@@ -7194,25 +7078,21 @@ fn render_light_settings_organized(
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("Water Distortion").strong());
                 ui.label("Strength");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.fog_water_wave_strength,
                             0.0..=2.0,
                         )
-                        .text("Strength")
                         .step_by(0.05)
                         .fixed_decimals(2),
                     )
                     .changed();
                 ui.label("Scale");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.fog_water_wave_scale,
                             0.01..=1.0,
                         )
-                        .text("Scale")
                         .step_by(0.01)
                         .fixed_decimals(2),
                     )
@@ -7235,13 +7115,11 @@ fn render_light_settings_organized(
 
             ui.add_enabled_ui(context.editor_state.luminocyte_bloom_enabled, |ui| {
                 ui.label("Halo Radius");
-                changed |= ui
-                    .add(
+                changed |= scene_settings::slider_control(ui,
                         egui::Slider::new(
                             &mut context.editor_state.luminocyte_bloom_radius,
                             0.02..=0.8,
                         )
-                        .text("Radius")
                         .step_by(0.01)
                         .fixed_decimals(2),
                     )
@@ -7281,8 +7159,7 @@ fn render_light_settings_organized(
                 ui.label("Contrast").on_hover_text(
                     "Midpoint contrast. Values above 1 separate lights and darks; 1 is neutral.",
                 );
-                let contrast_changed = ui
-                    .add(
+                let contrast_changed = scene_settings::slider_control(ui,
                         egui::Slider::new(&mut context.editor_state.pp_contrast, 0.25..=4.0)
                             .step_by(0.05)
                             .fixed_decimals(2),
@@ -7315,10 +7192,8 @@ fn render_light_settings_organized(
                 if context.editor_state.pp_adapt_enabled {
                     ui.add_space(4.0);
                     ui.label("Adapt Speed");
-                    let adapt_speed_changed = ui
-                        .add(
+                    let adapt_speed_changed = scene_settings::slider_control(ui,
                             egui::Slider::new(&mut context.editor_state.pp_adapt_speed, 0.01..=0.4)
-                                .text("Adapt Speed")
                                 .step_by(0.01)
                                 .fixed_decimals(2),
                         )
@@ -7332,10 +7207,8 @@ fn render_light_settings_organized(
                         }
                     }
                     ui.label("Min Exposure");
-                    let adapt_min_changed = ui
-                        .add(
+                    let adapt_min_changed = scene_settings::slider_control(ui,
                             egui::Slider::new(&mut context.editor_state.pp_adapt_min, 0.05..=2.0)
-                                .text("Min Exposure")
                                 .step_by(0.05)
                                 .fixed_decimals(2),
                         )
@@ -7349,10 +7222,8 @@ fn render_light_settings_organized(
                         }
                     }
                     ui.label("Max Exposure");
-                    let adapt_max_changed = ui
-                        .add(
+                    let adapt_max_changed = scene_settings::slider_control(ui,
                             egui::Slider::new(&mut context.editor_state.pp_adapt_max, 1.0..=20.0)
-                                .text("Max Exposure")
                                 .step_by(0.5)
                                 .fixed_decimals(1),
                         )
@@ -7370,49 +7241,41 @@ fn render_light_settings_organized(
                 if context.editor_state.show_dof {
                     ui.add_space(6.0);
                     ui.label("Focal Distance");
-                    changed |= ui
-                        .add(
+                    changed |= scene_settings::slider_control(ui,
                             egui::Slider::new(
                                 &mut context.editor_state.dof_focal_distance,
                                 5.0..=500.0,
                             )
-                            .text("Focal Distance")
                             .step_by(1.0)
                             .fixed_decimals(0),
                         )
                         .changed();
                     ui.label("Focal Range");
-                    changed |= ui
-                        .add(
+                    changed |= scene_settings::slider_control(ui,
                             egui::Slider::new(
                                 &mut context.editor_state.dof_focal_range,
                                 1.0..=200.0,
                             )
-                            .text("Focal Range")
                             .step_by(1.0)
                             .fixed_decimals(0),
                         )
                         .changed();
                     ui.label("Max Blur");
-                    changed |= ui
-                        .add(
+                    changed |= scene_settings::slider_control(ui,
                             egui::Slider::new(
                                 &mut context.editor_state.dof_max_blur_radius,
                                 1.0..=24.0,
                             )
-                            .text("Max Blur")
                             .step_by(0.5)
                             .fixed_decimals(1),
                         )
                         .changed();
                     ui.label("Blur Strength");
-                    changed |= ui
-                        .add(
+                    changed |= scene_settings::slider_control(ui,
                             egui::Slider::new(
                                 &mut context.editor_state.dof_blur_strength,
                                 0.0..=3.0,
                             )
-                            .text("Blur Strength")
                             .step_by(0.05)
                             .fixed_decimals(2),
                         )
@@ -7465,7 +7328,7 @@ fn render_light_settings_organized(
 
     ui.label("Max Steps / Frame:")
         .on_hover_text("Maximum physics steps per render frame at 1x speed. Lower = better frame times at high simulation speeds; higher = simulation keeps up during fast-forward.");
-    ui.add(egui::Slider::new(&mut max_steps, 1..=16));
+    scene_settings::slider_control(ui,egui::Slider::new(&mut max_steps, 1..=16));
     ui.label(
         egui::RichText::new(
             "Caps physics budget per frame (lower = smoother, may slow sim at high speed)",
@@ -7484,7 +7347,6 @@ fn render_light_settings_organized(
     ui.add_space(10.0);
 }
 
-/// Render the Lighting settings panel.
 #[allow(dead_code)]
 fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiState) {
     let sw = (ui.available_width() - 60.0).max(60.0);
@@ -8082,7 +7944,6 @@ fn render_light_settings(ui: &mut Ui, context: &mut PanelContext, state: &Global
     ui.add_space(10.0);
 }
 
-/// Render the TimeScrubber panel (placeholder).
 fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
     ui.heading("Time Scrubber");
     ui.separator();
@@ -8100,7 +7961,68 @@ fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-/// Render the ThemeEditor panel - full custom theme color editor.
+/// Theme presets replace the per-color interface editor.
+fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mut GlobalUiState) {
+    ui.heading("Camera");
+    ui.separator();
+
+    let camera = &mut *context.camera;
+    ui.label(format!("Mode: {:?}", camera.mode));
+    ui.label(format!("Distance: {:.1}", camera.distance));
+
+    ui.label("Base Movement Speed:")
+        .on_hover_text("Base movement speed shared by both FreeFly speed settings");
+    scene_settings::slider_control(ui,egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
+    ui.label("Speed 1:").on_hover_text(
+        "Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed while flying",
+    );
+    let sprint_response = scene_settings::slider_control(ui,
+        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 0.05..=20.0)
+            .custom_formatter(|value, _| format!("{value:.1}x")),
+    );
+    let mut sprint_multiplier_changed = sprint_response.changed();
+    if sprint_response.double_clicked() {
+        ui_state.camera_sprint_multiplier = 6.0;
+        sprint_multiplier_changed = true;
+    }
+    if sprint_multiplier_changed {
+        camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
+    }
+    ui.label("Speed 2:")
+        .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
+    let alternate_response = scene_settings::slider_control(ui,
+        egui::Slider::new(&mut ui_state.camera_alternate_speed_multiplier, 0.05..=20.0)
+            .logarithmic(true)
+            .custom_formatter(|value, _| format!("{value:.2}x")),
+    );
+    if alternate_response.double_clicked() {
+        ui_state.camera_alternate_speed_multiplier = 1.0;
+    }
+    if alternate_response.changed() || alternate_response.double_clicked() {
+        camera.alternate_speed_multiplier = ui_state.camera_alternate_speed_multiplier;
+    }
+    ui.label("Zoom Speed:")
+        .on_hover_text("How fast scrolling zooms the camera in Orbit mode");
+    let zoom_response = scene_settings::slider_control(ui,
+        egui::Slider::new(&mut ui_state.camera_scroll_sensitivity, 0.01..=2.0)
+            .logarithmic(true)
+            .custom_formatter(|value, _| format!("{value:.2}x")),
+    );
+    let mut scroll_sensitivity_changed = zoom_response.changed();
+    if zoom_response.double_clicked() {
+        ui_state.camera_scroll_sensitivity = 0.2;
+        scroll_sensitivity_changed = true;
+    }
+    if scroll_sensitivity_changed {
+        camera.zoom_speed = ui_state.camera_scroll_sensitivity;
+    }
+    ui.label("Mouse Sensitivity:")
+        .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
+    scene_settings::slider_control(ui,egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01).logarithmic(true));
+    ui.checkbox(&mut camera.enable_spring, "Enable Spring")
+        .on_hover_text("Adds a spring/lag to camera movement for a smoother cinematic feel. Disable for instant, precise camera control");
+}
+
 fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
     use crate::ui::types::{ThemeColor, UiTheme};
 
@@ -8340,78 +8262,6 @@ fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
                 state.custom_theme = crate::ui::types::CustomThemePalette::default();
             }
         });
-}
-
-/// Render the CameraSettings panel (placeholder).
-fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mut GlobalUiState) {
-    let sw = (ui.available_width() - 60.0).max(60.0);
-    ui.style_mut().spacing.slider_width = sw;
-    ui.heading("Camera");
-    ui.separator();
-
-    let camera = &mut *context.camera;
-    ui.label(format!("Mode: {:?}", camera.mode));
-    ui.label(format!("Distance: {:.1}", camera.distance));
-
-    ui.label("Base Movement Speed:")
-        .on_hover_text("Base movement speed shared by both FreeFly speed settings");
-    ui.add(egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
-    ui.label("Speed 1:").on_hover_text(
-        "Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed while flying",
-    );
-    let sprint_response = ui.add(
-        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 0.05..=20.0)
-            .custom_formatter(|value, _| format!("{value:.1}x")),
-    );
-    let mut sprint_multiplier_changed = sprint_response.changed();
-    if sprint_response.double_clicked() {
-        ui_state.camera_sprint_multiplier = 6.0;
-        sprint_multiplier_changed = true;
-    }
-    if sprint_multiplier_changed {
-        camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
-    }
-    ui.label("Speed 2:")
-        .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
-    let alternate_response = ui.add(
-        egui::Slider::new(&mut ui_state.camera_alternate_speed_multiplier, 0.05..=20.0)
-            .logarithmic(true)
-            .custom_formatter(|value, _| format!("{value:.2}x")),
-    );
-    if alternate_response.double_clicked() {
-        ui_state.camera_alternate_speed_multiplier = 1.0;
-    }
-    if alternate_response.changed() || alternate_response.double_clicked() {
-        camera.alternate_speed_multiplier = ui_state.camera_alternate_speed_multiplier;
-    }
-    ui.label("Zoom Speed:")
-        .on_hover_text("How fast scrolling zooms the camera in Orbit mode");
-    let zoom_response = ui.add(
-        egui::Slider::new(&mut ui_state.camera_scroll_sensitivity, 0.01..=2.0)
-            .logarithmic(true)
-            .custom_formatter(|value, _| format!("{value:.2}x")),
-    );
-    let mut scroll_sensitivity_changed = zoom_response.changed();
-    if zoom_response.double_clicked() {
-        ui_state.camera_scroll_sensitivity = 0.2;
-        scroll_sensitivity_changed = true;
-    }
-    if scroll_sensitivity_changed {
-        camera.zoom_speed = ui_state.camera_scroll_sensitivity;
-    }
-    ui.label("Mouse Sensitivity:")
-        .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
-    ui.add(egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01).logarithmic(true));
-    ui.checkbox(&mut camera.enable_spring, "Enable Spring")
-        .on_hover_text("Adds a spring/lag to camera movement for a smoother cinematic feel. Disable for instant, precise camera control");
-}
-
-/// Render the LightingSettings panel (placeholder).
-fn render_lighting_settings(ui: &mut Ui) {
-    ui.heading("Lighting");
-    ui.separator();
-    ui.label("Scene lighting configuration.");
-    // TODO: Implement lighting settings
 }
 
 fn categorized_cell_types() -> &'static [(&'static str, &'static [crate::cell::types::CellType])] {
@@ -9672,11 +9522,7 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Adhesion Break Force:")
                     .on_hover_text("Force magnitude (in simulation units) required to snap this adhesion bond. Higher values make bonds harder to break");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.break_force, 200.0..=1000.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.break_force).speed(0.1).range(200.0..=1000.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.break_force, 200.0..=1000.0).drag_value_speed(0.1));
                 });
             });
 
@@ -9685,11 +9531,7 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Adhesion Rest Length:")
                     .on_hover_text("The natural (equilibrium) distance between two bonded cells. The spring pulls them toward this distance");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.rest_length, 0.5..=5.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.rest_length).speed(0.01).range(0.5..=5.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.rest_length, 0.5..=5.0).drag_value_speed(0.01));
                 });
             });
 
@@ -9698,21 +9540,13 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Linear Spring Stiffness:")
                     .on_hover_text("How strongly the bond resists stretching or compression along its axis. Higher values create stiffer, more rigid connections");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.linear_spring_stiffness, 0.1..=500.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.linear_spring_stiffness).speed(0.1).range(0.1..=500.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.linear_spring_stiffness, 0.1..=500.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Linear Spring Damping:")
                     .on_hover_text("Reduces oscillation along the bond axis. Higher values cause the spring to settle faster with less bouncing");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.linear_spring_damping, 0.0..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.linear_spring_damping).speed(0.01).range(0.0..=10.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.linear_spring_damping, 0.0..=10.0).drag_value_speed(0.01));
                 });
             });
 
@@ -9721,31 +9555,19 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Orientation Spring Stiffness:")
                     .on_hover_text("How strongly the bond resists angular bending. Higher values keep bonded cells more rigidly aligned to each other");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_stiffness, 0.1..=100.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_stiffness).speed(0.1).range(0.1..=100.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_stiffness, 0.1..=100.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Orientation Spring Damping:")
                     .on_hover_text("Reduces rotational oscillation. Higher values prevent cells from wobbling around their bond axis");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_damping, 0.0..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.orientation_spring_damping).speed(0.01).range(0.0..=10.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.orientation_spring_damping, 0.0..=10.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Max Angular Deviation:")
                     .on_hover_text("Maximum angle (in degrees) the bond can bend before the orientation spring starts pushing back. 0° = perfectly rigid, 180° = fully flexible");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.max_angular_deviation, 0.0..=180.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.max_angular_deviation).speed(0.1).range(0.0..=180.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.max_angular_deviation, 0.0..=180.0).drag_value_speed(0.1));
                 });
             });
 
@@ -9757,21 +9579,13 @@ fn render_adhesion_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Twist Constraint Stiffness:")
                     .on_hover_text("How strongly the constraint resists axial rotation. Higher values lock the twist angle more firmly");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_stiffness, 0.0..=20.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_stiffness).speed(0.1).range(0.0..=20.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_stiffness, 0.0..=20.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Twist Constraint Damping:")
                     .on_hover_text("Reduces rotational oscillation around the bond axis. Higher values prevent spinning after a disturbance");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_damping, 0.0..=50.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.adhesion_settings.twist_constraint_damping).speed(0.1).range(0.0..=50.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.adhesion_settings.twist_constraint_damping, 0.0..=50.0).drag_value_speed(0.1));
                 });
             });
 
@@ -9869,11 +9683,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Nutrient Generation Rate:")
                         .on_hover_text("Nutrients produced per second by this cell. Test cells generate nutrients directly without needing food sources");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.nutrient_gain_rate, 0.0..=20.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.nutrient_gain_rate).speed(0.01).range(0.0..=20.0).suffix("/s"));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.nutrient_gain_rate, 0.0..=20.0).drag_value_speed(0.01).suffix("/s"));
                     });
                 });
             } else if mode.cell_type == 3 { // Photocyte (cell_type == 3)
@@ -9889,21 +9699,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Signal Channel:")
                             .on_hover_text("Channel (0-15) to emit on when the light threshold condition is met");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_channel, 0..=15).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_channel).speed(0.1).range(0..=15));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.photocyte_emit_channel, 0..=15).drag_value_speed(0.1));
                         });
 
                         ui.label("Signal Value:")
                             .on_hover_text("Nonnegative signal quantity produced per second while the condition is met");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_value, 0.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_value).speed(1.0).range(0.0..=1000.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.photocyte_emit_value, 0.0..=1000.0).drag_value_speed(1.0));
                         });
 
                         ui.separator();
@@ -9917,11 +9719,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Threshold:")
                             .on_hover_text("Light level (0.0-1.0) that triggers emission");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.photocyte_emit_threshold, 0.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.photocyte_emit_threshold).speed(0.01).range(0.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.photocyte_emit_threshold, 0.0..=1.0).drag_value_speed(0.01));
                         });
                     }
                 });
@@ -9932,13 +9730,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                     ui.label("Signal Channel:")
                         .on_hover_text("Channel (0-7) read by this luminocyte.");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
+                    scene_settings::paired_row(ui, |ui| {
                         mode.luminocyte_signal_channel = mode.luminocyte_signal_channel.clamp(0, 7);
-                        ui.add(egui::Slider::new(&mut mode.luminocyte_signal_channel, 0..=7).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.luminocyte_signal_channel).speed(0.1).range(0..=7));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.luminocyte_signal_channel, 0..=7).drag_value_speed(0.1));
                     });
                     signal_response_mode_control(
                         ui,
@@ -9949,11 +9743,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Threshold:")
                         .on_hover_text("Signal value required to switch state.");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.luminocyte_threshold, 0.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.luminocyte_threshold).speed(0.5).range(0.0..=1000.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.luminocyte_threshold, 0.0..=1000.0).drag_value_speed(0.5));
                     });
 
                     ui.checkbox(&mut mode.luminocyte_invert, "On without signal")
@@ -9962,11 +9752,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Glow:")
                         .on_hover_text("Maximum emitted light intensity when the signal is above threshold. The visible cell glow uses the same value.");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.emissive, 0.0..=8.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.emissive).speed(0.05).range(0.0..=8.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.emissive, 0.0..=8.0).drag_value_speed(0.05));
                     });
                 });
             } else if mode.cell_type == 17 { // Siphonocyte (cell_type == 17)
@@ -9974,31 +9760,19 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Intake Rate:")
                         .on_hover_text("Reads the occupied voxel and fills internal reserve. This never removes volume, changes phase, or writes back into voxels.");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.siphon_intake_rate, 0.0..=4.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.siphon_intake_rate).speed(0.01).range(0.0..=4.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.siphon_intake_rate, 0.0..=4.0).drag_value_speed(0.01));
                     });
 
                     ui.label("Expel Rate:")
                         .on_hover_text("Internal reserve spent per second while expelling. Expulsion does not create water, steam, spray, droplets, or voxel phase.");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.siphon_expel_rate, 0.0..=4.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.siphon_expel_rate).speed(0.01).range(0.0..=4.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.siphon_expel_rate, 0.0..=4.0).drag_value_speed(0.01));
                     });
 
                     ui.label("Impulse:")
                         .on_hover_text("Directional impulse applied to the cell body when expelling.");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.siphon_impulse, 0.0..=3.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.siphon_impulse).speed(0.01).range(0.0..=3.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.siphon_impulse, 0.0..=3.0).drag_value_speed(0.01));
                     });
 
                     let mode_names = [
@@ -10019,13 +9793,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     if mode.siphon_mode >= 1 {
                         ui.label("Signal Channel:")
                             .on_hover_text("Channel used by the selected signal-gated siphon behavior.");
-                        ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
+                        scene_settings::paired_row(ui, |ui| {
                             mode.siphon_signal_channel = mode.siphon_signal_channel.clamp(0, 15);
-                            ui.add(egui::Slider::new(&mut mode.siphon_signal_channel, 0..=15).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.siphon_signal_channel).speed(0.1).range(0..=15));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.siphon_signal_channel, 0..=15).drag_value_speed(0.1));
                         });
                         signal_response_mode_control(
                             ui,
@@ -10036,11 +9806,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Signal Threshold:")
                             .on_hover_text("Signal value required by signal-gated siphon modes.");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.siphon_signal_threshold, 0.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.siphon_signal_threshold).speed(1.0).range(0.0..=1000.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.siphon_signal_threshold, 0.0..=1000.0).drag_value_speed(1.0));
                         });
 
                         ui.checkbox(&mut mode.siphon_signal_invert, "Invert")
@@ -10052,20 +9818,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Drag:")
                         .on_hover_text("Passive fall-slowing multiplier. It resists downward motion along gravity without braking organism-initiated forward movement.");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.plumocyte_drag_mult, 0.0..=3.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.plumocyte_drag_mult).speed(0.01).range(0.0..=3.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.plumocyte_drag_mult, 0.0..=3.0).drag_value_speed(0.01));
                     });
                     ui.label("Rotation:")
                         .on_hover_text("Passive spin resistance. It damps angular velocity so Plumocytes stay oriented instead of tumbling freely.");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.plumocyte_rotation_resistance, 0.0..=3.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.plumocyte_rotation_resistance).speed(0.01).range(0.0..=3.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.plumocyte_rotation_resistance, 0.0..=3.0).drag_value_speed(0.01));
                     });
                 });
             } else if mode.cell_type == 19 { // Stemocyte (cell_type == 19)
@@ -10168,21 +9926,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Signal Channel:")
                             .on_hover_text("Channel (0-15) to emit on when the storage threshold condition is met");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_channel, 0..=15).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_channel).speed(0.1).range(0..=15));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.lipocyte_emit_channel, 0..=15).drag_value_speed(0.1));
                         });
 
                         ui.label("Signal Value:")
                             .on_hover_text("Nonnegative signal quantity produced per second while the condition is met");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_value, 0.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_value).speed(1.0).range(0.0..=1000.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.lipocyte_emit_value, 0.0..=1000.0).drag_value_speed(1.0));
                         });
 
                         ui.separator();
@@ -10196,11 +9946,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Threshold:")
                             .on_hover_text("Storage fraction (0.0-1.0) that triggers emission. 1.0 = completely full");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.lipocyte_emit_threshold, 0.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.lipocyte_emit_threshold).speed(0.01).range(0.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.lipocyte_emit_threshold, 0.0..=1.0).drag_value_speed(0.01));
                         });
                     }
                 });
@@ -10289,11 +10035,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Swim Force:")
                             .on_hover_text("Thrust force applied in the cell's forward direction each frame. Higher values = faster swimming. Consumes nutrients proportional to force (0.2 nutrients/sec at force 1.0)");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.swim_force, 0.0..=3.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.swim_force).speed(0.01).range(0.0..=3.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.swim_force, 0.0..=3.0).drag_value_speed(0.01));
                         });
                     } else {
                         // Signal-based speed mode
@@ -10321,31 +10063,19 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Speed A (signal < C):")
                             .on_hover_text("Swim force when the signal channel is below Threshold C. Use 0 to stop swimming when no target is detected");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.flagellocyte_speed_a, 0.0..=3.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_speed_a).speed(0.01).range(0.0..=3.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.flagellocyte_speed_a, 0.0..=3.0).drag_value_speed(0.01));
                         });
 
                         ui.label("Speed B (signal >= C):")
                             .on_hover_text("Swim force when the signal channel is at or above Threshold C. Use a higher value to accelerate toward a detected target");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.flagellocyte_speed_b, 0.0..=3.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_speed_b).speed(0.01).range(0.0..=3.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.flagellocyte_speed_b, 0.0..=3.0).drag_value_speed(0.01));
                         });
 
                         ui.label("Threshold C:")
                             .on_hover_text("Signal strength at which the flagellocyte switches from Speed A to Speed B");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.flagellocyte_threshold_c, -100.0..=100.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.flagellocyte_threshold_c).speed(0.1).range(-100.0..=100.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.flagellocyte_threshold_c, -100.0..=100.0).drag_value_speed(0.1));
                         });
                     }
                 });
@@ -10354,11 +10084,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Buoyancy Force:")
                         .on_hover_text("Upward force applied to this cell each frame. Positive values push the cell upward (away from gravity). Use to make cells float or rise through water");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.buoyancy_force, 0.0..=3.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.buoyancy_force).speed(0.01).range(0.0..=3.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.buoyancy_force, 0.0..=3.0).drag_value_speed(0.01));
                     });
                 });
             } else if mode.cell_type == 7 { // Oculocyte (cell_type == 7)
@@ -10391,33 +10117,21 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Signal Channel:")
                         .on_hover_text("Which sensory channel (0–7) to emit on when the ray detects its target. Sensory channels drive behavioural responses (locomotion speed, contraction) — use developmental channels 8–15 to gate division or mode switching");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_channel, 0..=7).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_channel).speed(0.1).range(0..=7));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.oculocyte_signal_channel, 0..=7).drag_value_speed(0.1));
                     });
 
                     // Signal Value
                     ui.label("Signal Value:")
                         .on_hover_text("Nonnegative signal quantity produced per second while the ray detects its target. Signal diffuses through all eligible connections and degrades over time");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_signal_value, 0.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_signal_value).speed(1.0).range(0.0..=1000.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.oculocyte_signal_value, 0.0..=1000.0).drag_value_speed(1.0));
                     });
 
                     // Ray Length
                     ui.label("Ray Length:")
                         .on_hover_text("Maximum distance the detection ray travels from this cell. Longer rays detect targets further away but may be more expensive");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.oculocyte_ray_length, 1.0..=100.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.oculocyte_ray_length).speed(0.1).range(1.0..=100.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.oculocyte_ray_length, 1.0..=100.0).drag_value_speed(0.1));
                     });
 
                     if (mode.oculocyte_sense_type & (1 << 2)) != 0 {
@@ -10426,27 +10140,20 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             .on_hover_text("Light detection only fires when the ray hits light close to this RGB color. The default is a narrow warm sun band");
                         ui.horizontal(|ui| {
                             ui.label("R");
-                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_target_color.x, 0.0..=2.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_target_color.x).speed(0.01).range(0.0..=2.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.oculocyte_light_target_color.x, 0.0..=2.0).drag_value_speed(0.01));
                         });
                         ui.horizontal(|ui| {
                             ui.label("G");
-                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_target_color.y, 0.0..=2.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_target_color.y).speed(0.01).range(0.0..=2.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.oculocyte_light_target_color.y, 0.0..=2.0).drag_value_speed(0.01));
                         });
                         ui.horizontal(|ui| {
                             ui.label("B");
-                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_target_color.z, 0.0..=2.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_target_color.z).speed(0.01).range(0.0..=2.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.oculocyte_light_target_color.z, 0.0..=2.0).drag_value_speed(0.01));
                         });
                         ui.label("Tolerance:")
                             .on_hover_text("Maximum RGB distance from the target color. Lower values make the detectable color range narrower");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.oculocyte_light_color_tolerance, 0.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.oculocyte_light_color_tolerance).speed(0.01).range(0.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.oculocyte_light_color_tolerance, 0.0..=1.0).drag_value_speed(0.01));
                         });
                     }
                 });
@@ -10471,11 +10178,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Cilia Speed:")
                             .on_hover_text("Beat speed and direction. Positive values push fluid/particles in the cell's forward direction; negative values push backward. 0 = no movement");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cilia_speed, -1.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cilia_speed).speed(0.01).range(-1.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cilia_speed, -1.0..=1.0).drag_value_speed(0.01));
                         });
                     } else {
                         // Signal-based speed mode
@@ -10503,31 +10206,19 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Speed Below (signal < threshold):")
                             .on_hover_text("Cilia speed when the signal channel is below the threshold. Negative = reverse direction");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cilia_speed_below, -1.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cilia_speed_below).speed(0.01).range(-1.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cilia_speed_below, -1.0..=1.0).drag_value_speed(0.01));
                         });
 
                         ui.label("Speed Above (signal >= threshold):")
                             .on_hover_text("Cilia speed when the signal channel is at or above the threshold");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cilia_speed_above, -1.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cilia_speed_above).speed(0.01).range(-1.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cilia_speed_above, -1.0..=1.0).drag_value_speed(0.01));
                         });
 
                         ui.label("Threshold:")
                             .on_hover_text("Signal strength at which the cilia switch from Speed Below to Speed Above");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cilia_threshold, -100.0..=100.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cilia_threshold).speed(0.1).range(-100.0..=100.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cilia_threshold, -100.0..=100.0).drag_value_speed(0.1));
                         });
                     }
 
@@ -10539,11 +10230,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Attract Force:")
                         .on_hover_text("Pulls nearby unattached cells and particles toward this cell. 0 = no attraction. Useful for filter-feeding structures that funnel food inward");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.cilia_attract_force, 0.0..=1.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.cilia_attract_force).speed(0.01).range(0.0..=1.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cilia_attract_force, 0.0..=1.0).drag_value_speed(0.01));
                     });
                 });
             } else if mode.cell_type == 9 { // Myocyte (cell_type == 9)
@@ -10577,10 +10264,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
 
                         ui.label("Pulse Rate (cycles/sec):")
                             .on_hover_text("How many full contraction-relaxation cycles per second. Higher rates create faster but potentially less powerful strokes. Must match between paired myocytes for coordinated locomotion");
-                        ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
+                        scene_settings::paired_row(ui, |ui| {
                             ui.add(egui::Slider::new(&mut mode.myocyte_pulse_rate, 0.1..=10.0).show_value(false).logarithmic(true));
                             ui.add(egui::DragValue::new(&mut mode.myocyte_pulse_rate).speed(0.01).range(0.1..=10.0));
                         });
@@ -10588,11 +10272,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Contraction:")
                             .on_hover_text("How much the cell shortens its adhesion bonds during the active phase. 0 = no contraction, 1 = maximum shortening");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.myocyte_contraction, 0.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.myocyte_contraction).speed(0.01).range(0.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.myocyte_contraction, 0.0..=1.0).drag_value_speed(0.01));
                         });
                     } else {
                         // Signal-based contraction mode
@@ -10621,31 +10301,19 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Contraction Below (signal < threshold):")
                             .on_hover_text("How much the cell shortens its adhesion bonds when the signal is below the threshold. 0 = no contraction, 1 = maximum shortening");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.myocyte_contraction_below, 0.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.myocyte_contraction_below).speed(0.01).range(0.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.myocyte_contraction_below, 0.0..=1.0).drag_value_speed(0.01));
                         });
 
                         ui.label("Contraction Above (signal >= threshold):")
                             .on_hover_text("How much the cell shortens its adhesion bonds when the signal is at or above the threshold. Pair opposite ring positions with different above/below values to create locomotion");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.myocyte_contraction_above, 0.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.myocyte_contraction_above).speed(0.01).range(0.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.myocyte_contraction_above, 0.0..=1.0).drag_value_speed(0.01));
                         });
 
                         ui.label("Threshold:")
                             .on_hover_text("Signal strength at which the myocyte switches between Contraction Below and Contraction Above");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.myocyte_threshold, -100.0..=100.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.myocyte_threshold).speed(0.1).range(-100.0..=100.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.myocyte_threshold, -100.0..=100.0).drag_value_speed(0.1));
                         });
                     }
 
@@ -10669,20 +10337,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Grip on Contract:")
                             .on_hover_text("Friction drag when fully contracted (~10–20 = strong). Higher than Grip on Extend = pushes forward on the power stroke.");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.myocyte_grip_contracted, 0.0..=30.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.myocyte_grip_contracted).speed(0.1).range(0.0..=30.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.myocyte_grip_contracted, 0.0..=30.0).drag_value_speed(0.1));
                         });
                         ui.label("Grip on Extend:")
                             .on_hover_text("Friction drag when fully extended. Keep near 0 for efficient forward motion; set higher than Grip on Contract to reverse direction.");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.myocyte_grip_extended, 0.0..=30.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.myocyte_grip_extended).speed(0.1).range(0.0..=30.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.myocyte_grip_extended, 0.0..=30.0).drag_value_speed(0.1));
                         });
                     }
                 });
@@ -10701,11 +10361,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Release after (seconds attached):")
                             .on_hover_text("Minimum time in seconds the egg must remain attached before it can be released");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.embryocyte_release_timer, 0.1..=300.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.embryocyte_release_timer).speed(0.1).range(0.1..=300.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.embryocyte_release_timer, 0.1..=300.0).drag_value_speed(0.1));
                         });
                     }
 
@@ -10719,13 +10375,9 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     if mode.embryocyte_use_threshold {
                         ui.label("Release when reserve >=:")
                             .on_hover_text("Reserve level required before release. The egg burns reserve at 10 units/sec when free. 62000 ≈ 6.2 seconds of life after detachment");
-                        ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
+                        scene_settings::paired_row(ui, |ui| {
                             let mut threshold_f32 = mode.embryocyte_threshold_value as f32;
-                            ui.add(egui::Slider::new(&mut threshold_f32, 0.0_f32..=65535.0_f32).show_value(false));
-                            ui.add(egui::DragValue::new(&mut threshold_f32).speed(10.0).range(0.0_f32..=65535.0_f32));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut threshold_f32, 0.0_f32..=65535.0_f32).drag_value_speed(10.0));
                             mode.embryocyte_threshold_value = threshold_f32 as u32;
                         });
                     }
@@ -10761,11 +10413,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label("Release when signal >=:")
                             .on_hover_text("Minimum signal strength required on the chosen channel before the egg will release");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=1000.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=1000.0).drag_value_speed(1.0));
                         });
                     }
 
@@ -10799,10 +10447,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     });
                     if mode.embryocyte_use_timer {
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
-                            ui.add(egui::Slider::new(&mut mode.embryocyte_release_timer, 0.1..=300.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.embryocyte_release_timer).speed(0.1).range(0.1..=300.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.embryocyte_release_timer, 0.1..=300.0).drag_value_speed(0.1));
                         });
                     }
                     ui.horizontal(|ui| {
@@ -10814,8 +10459,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             let available = ui.available_width();
                             ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
                             let mut threshold_f32 = mode.embryocyte_threshold_value as f32;
-                            ui.add(egui::Slider::new(&mut threshold_f32, 0.0_f32..=65535.0_f32).show_value(false));
-                            ui.add(egui::DragValue::new(&mut threshold_f32).speed(10.0).range(0.0_f32..=65535.0_f32));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut threshold_f32, 0.0_f32..=65535.0_f32).drag_value_speed(10.0));
                             mode.embryocyte_threshold_value = threshold_f32 as u32;
                         });
                     }
@@ -10843,10 +10487,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             "gametocyte_signal_response",
                         );
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            ui.style_mut().spacing.slider_width = (available - 70.0).max(50.0);
-                            ui.add(egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.embryocyte_signal_value).speed(1.0).range(0.0..=1000.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.embryocyte_signal_value, 0.0..=1000.0).drag_value_speed(1.0));
                         });
                     }
                     if !mode.embryocyte_use_timer && !mode.embryocyte_use_threshold && !mode.embryocyte_use_signal {
@@ -10889,21 +10530,13 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Contact Range:")
                         .on_hover_text("Extra reach beyond the cell's physical radius. A value of 0 means the devorocyte must physically overlap the target. Higher values let it steal nutrients from nearby cells without touching");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.devorocyte_consume_range, 0.0..=3.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.devorocyte_consume_range).speed(0.01).range(0.0..=3.0).suffix(" u"));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.devorocyte_consume_range, 0.0..=3.0).drag_value_speed(0.01).suffix(" u"));
                     });
 
                     ui.label("Consume Rate:")
                         .on_hover_text("Nutrients stolen per second from each target cell in range. The target loses nutrients at this rate and dies when depleted");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.devorocyte_consume_rate, 0.0..=200.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.devorocyte_consume_rate).speed(1.0).range(0.0..=200.0).suffix("/s"));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.devorocyte_consume_rate, 0.0..=200.0).drag_value_speed(1.0).suffix("/s"));
                     });
                 });
             } else if mode.cell_type == 14 { // Cognocyte (cell_type == 14)
@@ -10938,40 +10571,26 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         // Oscillate mode: show rate and phase, hide input channels
                         ui.label("Rate (cycles/sec):")
                             .on_hover_text("How many full oscillation cycles per second. Two Cognocytes at the same rate but phase 0.5 apart give fully complementary signals for left/right gating.");
-                        ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
+                        scene_settings::paired_row(ui, |ui| {
                             ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_rate, 0.1..=10.0).show_value(false).logarithmic(true));
                             ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_rate).speed(0.01).range(0.1..=10.0));
                         });
                         ui.label("Phase Offset (0–1):")
                             .on_hover_text("Fraction of a full cycle to offset this oscillator. 0.0 = in phase, 0.5 = opposite phase. Use 0.0 on one side and 0.5 on the other for left/right locomotion gating.");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_phase, 0.0..=1.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_phase).speed(0.01).range(0.0..=1.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cognocyte_oscillator_phase, 0.0..=1.0).drag_value_speed(0.01));
                         });
                         if mode.cognocyte_operation == 15 {
                             ui.label("Envelope: Sawtooth ramp")
                                 .on_hover_text("Number of discrete steps per cycle (also the maximum hop reach). The signal propagates 1 hop on step 1, 2 hops on step 2, and so on. Cells at hop k only receive the signal during steps k–N of each cycle, creating a natural phase gradient along the chain.");
-                            ui.horizontal(|ui| {
-                                let available = ui.available_width();
-                                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                                ui.style_mut().spacing.slider_width = slider_width;
+                            scene_settings::paired_row(ui, |ui| {
                                 ui.label("Strength ramps from zero to the configured peak, then resets.");
                             });
                         }
                         ui.label("Signal Strength:")
                             .on_hover_text("Peak value of the output signal. Downstream cells see this value at the top of each cycle and 0 at the trough.");
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cognocyte_oscillator_strength, 0.0..=1000.0).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cognocyte_oscillator_strength).speed(1.0).range(0.0..=1000.0));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cognocyte_oscillator_strength, 0.0..=1000.0).drag_value_speed(1.0));
                         });
                         ui.label("Polarity:");
                         egui::ComboBox::from_id_salt("cognocyte_oscillator_polarity")
@@ -10999,11 +10618,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         ui.label(input_a_label)
                             .on_hover_text(input_a_tooltip);
                         ui.horizontal(|ui| {
-                            let available = ui.available_width();
-                            let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                            ui.style_mut().spacing.slider_width = slider_width;
-                            ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_a, 0..=15).show_value(false));
-                            ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_a).speed(0.1).range(0..=15));
+                            scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cognocyte_input_channel_a, 0..=15).drag_value_speed(0.1));
                         });
 
                         if !matches!(mode.cognocyte_operation, 12 | 16 | 17 | 18 | 19) {
@@ -11026,11 +10641,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                             ui.label(input_b_label)
                                 .on_hover_text(input_b_tooltip);
                             ui.horizontal(|ui| {
-                                let available = ui.available_width();
-                                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                                ui.style_mut().spacing.slider_width = slider_width;
-                                ui.add(egui::Slider::new(&mut mode.cognocyte_input_channel_b, 0..=15).show_value(false));
-                                ui.add(egui::DragValue::new(&mut mode.cognocyte_input_channel_b).speed(0.1).range(0..=15));
+                                scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cognocyte_input_channel_b, 0..=15).drag_value_speed(0.1));
                             });
                         } else {
                             ui.label(egui::RichText::new("Input B unused for unary operations").small());
@@ -11043,11 +10654,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Output Channel:")
                         .on_hover_text("Signal channel (0–15) the result is emitted on. Channels 0–7 are sensory channels; 8–15 are developmental/regulation channels that can gate division, apoptosis, and mode switching");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.cognocyte_output_channel, 0..=15).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.cognocyte_output_channel).speed(0.1).range(0..=15));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.cognocyte_output_channel, 0..=15).drag_value_speed(0.1));
                     });
 
                     ui.label("Boolean true: +1000")
@@ -11062,11 +10669,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Rate:")
                         .on_hover_text("Fraction of the gap between memory and input closed per second. 0 = never tracks (holds state forever), 1 = instant snap (no memory). Output always converges toward input — never amplifies beyond it");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.memorocyte_rate, 0.0..=1.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.memorocyte_rate).speed(0.005).range(0.0..=1.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.memorocyte_rate, 0.0..=1.0).drag_value_speed(0.005));
                     });
 
                     ui.separator();
@@ -11075,22 +10678,14 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Input Channel:")
                         .on_hover_text("Signal channel (0–15) to integrate. If no signal is present on this channel, the memory simply decays");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.memorocyte_input_channel, 0..=15).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.memorocyte_input_channel).speed(0.1).range(0..=15));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.memorocyte_input_channel, 0..=15).drag_value_speed(0.1));
                     });
 
                     // Output Channel
                     ui.label("Output Channel:")
                         .on_hover_text("Signal channel (0–15) the memory value is emitted on every frame. Channels 0–7 reach sensory readers (locomotion, contraction); channels 8–15 can gate division, apoptosis, and mode switching");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.memorocyte_output_channel, 0..=15).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.memorocyte_output_channel).speed(0.1).range(0..=15));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.memorocyte_output_channel, 0..=15).drag_value_speed(0.1));
                     });
 
                 });
@@ -11107,10 +10702,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 let mut nutrient_threshold = ((mode.split_mass - 1.0) * 100.0).clamp(1.0, never_sentinel);
                 ui.label("Split Nutrients:")
                     .on_hover_text("How many nutrients this cell must accumulate before it can divide. 'Never' means the cell will never divide regardless of nutrients");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
+                scene_settings::paired_row(ui, |ui| {
                     ui.add(egui::Slider::new(&mut nutrient_threshold, 1.0..=never_sentinel)
                         .show_value(false)
                         .custom_formatter(move |v, _| {
@@ -11129,43 +10721,27 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Split Interval:")
                     .on_hover_text("Minimum time in seconds between consecutive divisions. The cell will not divide again until this cooldown has elapsed after the previous split");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.split_interval).speed(0.1).range(1.0..=60.0).suffix("s"));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.split_interval, 1.0..=60.0).drag_value_speed(0.1).suffix("s"));
                 });
 
                 ui.add_space(4.0);
                 ui.label("Split Ratio:")
                     .on_hover_text("Controls only how adhesion bonds are distributed between children and the Zone C width. Nutrients and other cell state always split evenly. 0.5 = balanced adhesion inheritance; values toward 0 or 1 bias inheritance toward one child");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.split_ratio, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.split_ratio).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.split_ratio, 0.0..=1.0).drag_value_speed(0.01));
                 });
 
                 ui.add_space(4.0);
                 ui.label("Max Cell Size:")
                     .on_hover_text("Maximum radius this cell can grow to before it is forced to divide (if nutrients allow). Larger values let the cell grow bigger before splitting");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.max_cell_size, 0.5..=2.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.max_cell_size).speed(0.01).range(0.5..=2.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.max_cell_size, 0.5..=2.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Membrane Stiffness:")
                     .on_hover_text("How strongly this cell resists being compressed by collisions. Higher values make the cell harder and bouncier; lower values make it softer and more deformable");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.membrane_stiffness, 0.0..=250.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.membrane_stiffness).speed(0.1).range(0.0..=250.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.membrane_stiffness, 0.0..=250.0).drag_value_speed(0.1));
                 });
             });
 
@@ -11190,19 +10766,12 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                     ui.label("Emit Value:")
                         .on_hover_text("Nonnegative signal quantity produced per second. Production adds to the local concentration; diffusion transfers it to connected cells");
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.regulation_emit_value, 0.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.regulation_emit_value).speed(1.0).range(0.0..=1000.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.regulation_emit_value, 0.0..=1000.0).drag_value_speed(1.0));
                     });
 
                     ui.label("Network Reach:")
                         .on_hover_text("Signals diffuse through all ordinary cell-to-cell adhesions. Production, conductance, degradation, and receiver thresholds determine effective range");
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
+                    scene_settings::paired_row(ui, |ui| {
                         ui.label("Signal spreads over time through every eligible connection, with no hop cutoff.");
                     });
                 }
@@ -11235,10 +10804,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_DIVISION],
                         "division_signal_response",
                     );
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
+                    scene_settings::paired_row(ui, |ui| {
                         ui.add(egui::Slider::new(&mut mode.division_signal_threshold, 0.0..=1000.0).show_value(false))
                             .on_hover_text("Signal strength threshold. The cell divides when the channel value is above this level (or below it if Invert is checked)");
                         ui.add(egui::DragValue::new(&mut mode.division_signal_threshold).speed(1.0).range(0.0..=1000.0));
@@ -11267,10 +10833,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_APOPTOSIS],
                         "apoptosis_signal_response",
                     );
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
+                    scene_settings::paired_row(ui, |ui| {
                         ui.add(egui::Slider::new(&mut mode.apoptosis_signal_threshold, 0.0..=1000.0).show_value(false))
                             .on_hover_text("Signal strength threshold for triggering death");
                         ui.add(egui::DragValue::new(&mut mode.apoptosis_signal_threshold).speed(1.0).range(0.0..=1000.0));
@@ -11300,11 +10863,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         "child_a_signal_response",
                     );
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.signal_child_a_threshold, 0.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.signal_child_a_threshold).speed(1.0).range(0.0..=1000.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.signal_child_a_threshold, 0.0..=1000.0).drag_value_speed(1.0));
                     });
                     // Mode above threshold
                     {
@@ -11381,11 +10940,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         "child_b_signal_response",
                     );
                     ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
-                        ui.add(egui::Slider::new(&mut mode.signal_child_b_threshold, 0.0..=1000.0).show_value(false));
-                        ui.add(egui::DragValue::new(&mut mode.signal_child_b_threshold).speed(1.0).range(0.0..=1000.0));
+                        scene_settings::slider_control(ui, egui::Slider::new(&mut mode.signal_child_b_threshold, 0.0..=1000.0).drag_value_speed(1.0));
                     });
                     // Mode above threshold
                     {
@@ -11461,10 +11016,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                         &mut mode.signal_response_modes[crate::genome::SIGNAL_LISTENER_MODE_SWITCH],
                         "mode_switch_signal_response",
                     );
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                        ui.style_mut().spacing.slider_width = slider_width;
+                    scene_settings::paired_row(ui, |ui| {
                         ui.add(egui::Slider::new(&mut mode.mode_switch_signal_threshold, 0.0..=1000.0).show_value(false))
                             .on_hover_text("Signal strength threshold for triggering the mode switch. Minimum 1 — a threshold of 0 would fire unconditionally with no signal present");
                         ui.add(egui::DragValue::new(&mut mode.mode_switch_signal_threshold).speed(1.0).range(0.0..=1000.0));
@@ -11505,11 +11057,7 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Nutrient Priority:")
                     .on_hover_text("Controls nutrient sharing through attached cells. For gametocytes and embryocytes, priority directly multiplies reserve intake: 0.5 halves it, 1.0 is normal, and 2.0 doubles it. Baseline intake per feeding connection is 10 nutrients/sec for gametocytes and 100 for embryocytes, subject to available food. Donors retain their safety buffer.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.nutrient_priority, 0.1..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.nutrient_priority).speed(0.01).range(0.1..=10.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.nutrient_priority, 0.1..=10.0).drag_value_speed(0.01));
                 });
 
                 ui.checkbox(&mut mode.prioritize_when_low, "Prioritize When Low")
@@ -11521,29 +11069,18 @@ fn render_parent_settings(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Max Connections:")
                     .on_hover_text("Maximum number of adhesion bonds this cell can hold simultaneously. Hard limit is 20 per cell. Ring leaf nodes should budget carefully: 2 ring bonds + 1 per attached sequence");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.max_adhesions, 0..=20).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.max_adhesions).speed(1).range(0..=20));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.max_adhesions, 0..=20).drag_value_speed(1.0));
                 });
 
                 ui.label("Min Connections:")
                     .on_hover_text("Minimum adhesion bonds required before this cell will divide or emit signals. Use as a structural completion gate — e.g. set to 4 on a gonad so it only starts shedding eggs once the body is fully connected");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut mode.min_adhesions, 0..=10).show_value(false));
-                    ui.add(egui::DragValue::new(&mut mode.min_adhesions).speed(1).range(0..=10));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut mode.min_adhesions, 0..=10).drag_value_speed(1.0));
                 });
 
                 ui.label("Max Splits:")
                     .on_hover_text("Maximum number of times this cell can divide. -1 (∞) means unlimited divisions. Once the limit is reached, the cell switches to the 'After Splits' mode if one is set");
-                let max_splits_row = ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
+                let max_splits_row = scene_settings::paired_row(ui, |ui| {
                     ui.add(egui::Slider::new(&mut mode.max_splits, -1..=20).show_value(false));
 
                     // Custom DragValue that shows infinity symbol for -1
@@ -12791,17 +12328,8 @@ fn render_time_slider(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("");
             }
 
-            ui.horizontal(|ui| {
-                ui.label("Time:");
-
-                let available = ui.available_width();
-                let slider_width = if available > 80.0 {
-                    available - 70.0
-                } else {
-                    50.0
-                };
-                ui.style_mut().spacing.slider_width = slider_width;
-
+            ui.label("Time");
+            scene_settings::paired_row(ui, |ui| {
                 // Slider range is 0 to max_preview_duration (in seconds)
                 // The slider is purely user-driven - simulation never writes to time_value
                 let slider_response = ui.add_enabled(
@@ -12871,7 +12399,7 @@ fn render_gizmo_settings(ui: &mut Ui, context: &mut PanelContext) {
     .on_hover_text("Display animated ring effects around cells that are about to divide");
 }
 
-/// Render the Cell Type Visuals panel for appearance settings.
+/// Render the Mode Graph panel for visualizing mode connections.
 fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
     use crate::cell::types::CellType;
 
@@ -12886,11 +12414,7 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
             ui.label("Outline Width:")
                 .on_hover_text("Width of the dark outline drawn around each cell. 0 = no outline; higher values create a more pronounced cell border");
             ui.horizontal(|ui| {
-                let available = ui.available_width();
-                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                ui.style_mut().spacing.slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut context.editor_state.cell_outline_width, 0.0..=0.2).show_value(false));
-                ui.add(egui::DragValue::new(&mut context.editor_state.cell_outline_width).speed(0.005).range(0.0..=0.2));
+                scene_settings::slider_control(ui, egui::Slider::new(&mut context.editor_state.cell_outline_width, 0.0..=0.2).drag_value_speed(0.005));
             });
 
             ui.add_space(8.0);
@@ -12939,33 +12463,21 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
             ui.label("Specular Strength:")
                 .on_hover_text("How much this cell type reflects specular (mirror-like) highlights. 0 = fully matte; 1 = maximum gloss");
             ui.horizontal(|ui| {
-                let available = ui.available_width();
-                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                ui.style_mut().spacing.slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut visuals.specular_strength, 0.0..=1.0).show_value(false));
-                ui.add(egui::DragValue::new(&mut visuals.specular_strength).speed(0.01).range(0.0..=1.0));
+                scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.specular_strength, 0.0..=1.0).drag_value_speed(0.01));
             });
 
             // Specular Power (shininess)
             ui.label("Specular Sharpness:")
                 .on_hover_text("Tightness of the specular highlight. Low values = broad, soft gloss. High values = tight, sharp glint like polished metal");
             ui.horizontal(|ui| {
-                let available = ui.available_width();
-                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                ui.style_mut().spacing.slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut visuals.specular_power, 1.0..=128.0).logarithmic(true).show_value(false));
-                ui.add(egui::DragValue::new(&mut visuals.specular_power).speed(0.5).range(1.0..=128.0));
+                scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.specular_power, 1.0..=128.0).logarithmic(true).drag_value_speed(0.5));
             });
 
             // Fresnel (rim lighting)
             ui.label("Rim Lighting:")
                 .on_hover_text("Backlit glow around the cell edges. Creates a halo effect that makes cells stand out against the background");
             ui.horizontal(|ui| {
-                let available = ui.available_width();
-                let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                ui.style_mut().spacing.slider_width = slider_width;
-                ui.add(egui::Slider::new(&mut visuals.fresnel_strength, 0.0..=1.0).show_value(false));
-                ui.add(egui::DragValue::new(&mut visuals.fresnel_strength).speed(0.01).range(0.0..=1.0));
+                scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.fresnel_strength, 0.0..=1.0).drag_value_speed(0.01));
             });
 
             ui.add_space(12.0);
@@ -13004,64 +12516,41 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Tail Length:")
                     .on_hover_text("Length of the flagellum tail relative to the cell radius");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.tail_length, 0.5..=3.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.tail_length).speed(0.01).range(0.5..=3.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.tail_length, 0.5..=3.0).drag_value_speed(0.01));
                 });
 
                 // Tail Thickness (0.01 - 0.3, default 0.15)
                 ui.label("Tail Thickness:")
                     .on_hover_text("Diameter of the flagellum at its base");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.tail_thickness, 0.01..=0.3).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.tail_thickness).speed(0.005).range(0.01..=0.3));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.tail_thickness, 0.01..=0.3).drag_value_speed(0.005));
                 });
 
                 // Wave Amplitude (0.0 - 0.5, default 0.17)
                 ui.label("Wave Amplitude:")
                     .on_hover_text("How far the flagellum bends side-to-side during its wave motion");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.tail_amplitude, 0.0..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.tail_amplitude).speed(0.01).range(0.0..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.tail_amplitude, 0.0..=0.5).drag_value_speed(0.01));
                 });
 
                 // Wave Frequency (0.5 - 10.0, default 1.0)
                 ui.label("Wave Frequency:")
                     .on_hover_text("How many wave cycles appear along the flagellum length. Higher values create more tightly coiled waves");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.tail_frequency, 0.5..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.tail_frequency).speed(0.1).range(0.5..=10.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.tail_frequency, 0.5..=10.0).drag_value_speed(0.1));
                 });
 
                 // Taper (0.0 - 1.0, default 1.0)
                 ui.label("Taper:")
                     .on_hover_text("How much the flagellum narrows toward its tip. 0 = uniform thickness; 1 = tapers to a point");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.tail_taper, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.tail_taper).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.tail_taper, 0.0..=1.0).drag_value_speed(0.01));
                 });
 
                 // Segments (4 - 64, default 10)
                 ui.label("Segments:")
                     .on_hover_text("Number of geometry segments in the flagellum mesh. More segments = smoother curves but higher GPU cost");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
+                scene_settings::paired_row(ui, |ui| {
                     ui.add(egui::Slider::new(&mut visuals.tail_segments, 4.0..=64.0).show_value(false).integer());
                     ui.add(egui::DragValue::new(&mut visuals.tail_segments).speed(1.0).range(4.0..=64.0));
                 });
@@ -13078,71 +12567,43 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Cell Scale:")
                     .on_hover_text("Scale of the slime pattern cells on the surface. Higher values create larger, more visible pattern cells");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=12.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.1).range(1.0..=12.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=12.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Border Width:")
                     .on_hover_text("Width of the borders between slime pattern cells");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.01..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).drag_value_speed(0.005));
                 });
 
                 ui.label("Meander:")
                     .on_hover_text("How much the pattern borders waver and curve. Higher values create a more organic, irregular look");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=1.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Border Darkness:")
                     .on_hover_text("How dark the borders between pattern cells appear. Higher values create more visible, defined borders");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=1.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Anim Speed:")
                     .on_hover_text("Speed of the animated slime pattern movement. 0 = static pattern; higher values create faster flowing motion");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.membrane_noise_speed, 0.0..=5.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.membrane_noise_speed).speed(0.05).range(0.0..=5.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.membrane_noise_speed, 0.0..=5.0).drag_value_speed(0.05));
                 });
 
                 ui.label("Pattern Scale:")
                     .on_hover_text("Scale of the underlying noise pattern driving the slime texture. Higher values create finer, more detailed noise");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.membrane_noise_scale, 0.0..=10.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.membrane_noise_scale).speed(0.1).range(0.0..=10.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.membrane_noise_scale, 0.0..=10.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Pattern Strength:")
                     .on_hover_text("How strongly the noise pattern perturbs the surface normals. Higher values create a more bumpy, textured appearance");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.membrane_noise_strength, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.membrane_noise_strength).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.membrane_noise_strength, 0.0..=1.0).drag_value_speed(0.01));
                 });
             }
 
@@ -13158,20 +12619,13 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Nucleus Scale:")
                     .on_hover_text("Size of the inner nucleus sphere relative to the cell. Smaller values create a more prominent nucleus");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.nucleus_scale, 0.1..=0.95).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.nucleus_scale).speed(0.01).range(0.1..=0.95));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.nucleus_scale, 0.1..=0.95).drag_value_speed(0.01));
                 });
 
                 // Subdivision level (1-6)
                 ui.label("Subdivision:")
                     .on_hover_text("Number of membrane ridge subdivisions. Higher values create more, finer ridges on the cell surface");
-                ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
+                scene_settings::paired_row(ui, |ui| {
                     ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=6.0).show_value(false).integer());
                     ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(1.0).range(1.0..=6.0));
                 });
@@ -13180,33 +12634,21 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Ridge Width:")
                     .on_hover_text("Width of the membrane ridges on the cell surface");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.01..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).drag_value_speed(0.005));
                 });
 
                 // Meander
                 ui.label("Meander:")
                     .on_hover_text("How much the ridge lines waver. Higher values create more organic, irregular ridge patterns");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.005).range(0.0..=0.3));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).drag_value_speed(0.005));
                 });
 
                 // Ridge Strength (normal perturbation)
                 ui.label("Ridge Depth:")
                     .on_hover_text("How pronounced the ridges appear. Higher values create deeper, more visible ridges with stronger normal map perturbation");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.005).range(0.0..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.5).drag_value_speed(0.005));
                 });
             }
 
@@ -13221,31 +12663,19 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Ring Frequency:")
                     .on_hover_text("Number of visible cilia ring bands along the cell's forward axis. Higher values create more, tighter bands");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.cilia_ring_frequency, 2.0..=20.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.cilia_ring_frequency).speed(0.1).range(2.0..=20.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.cilia_ring_frequency, 2.0..=20.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Ring Depth:")
                     .on_hover_text("How strongly the cilia rings perturb the surface normals. Higher values create deeper, more pronounced ring grooves");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.cilia_ring_depth, 0.0..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.cilia_ring_depth).speed(0.005).range(0.0..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.cilia_ring_depth, 0.0..=0.5).drag_value_speed(0.005));
                 });
 
                 ui.label("Scroll Speed:")
                     .on_hover_text("Base animation scroll rate of the cilia ring pattern. Higher values create faster-beating cilia motion");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.cilia_ring_speed, 0.0..=20.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.cilia_ring_speed).speed(0.1).range(0.0..=20.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.cilia_ring_speed, 0.0..=20.0).drag_value_speed(0.1));
                 });
             }
 
@@ -13260,31 +12690,19 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Ring Frequency:")
                     .on_hover_text("Number of concentric rings. 0 = plain sphere with no pattern");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.0..=20.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.1).range(0.0..=20.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 0.0..=20.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Ring Sharpness:")
                     .on_hover_text("How sharp the ring edges are. Lower values create soft, blended rings; higher values create crisp bands");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.01..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.01..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.01..=1.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Ring Brightness:")
                     .on_hover_text("Intensity of the ring pattern. 0 = plain sphere; higher values make rings more visible");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.0..=1.0).drag_value_speed(0.01));
                 });
             }
 
@@ -13299,31 +12717,19 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Nucleus Radius:")
                     .on_hover_text("Size of the nucleus sphere visible through the cytoplasm");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.1..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.005).range(0.1..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 0.1..=0.5).drag_value_speed(0.005));
                 });
 
                 ui.label("Nucleus Darkness:")
                     .on_hover_text("How much darker the nucleus appears compared to the surrounding cytoplasm");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.1..=0.8).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.1..=0.8));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.1..=0.8).drag_value_speed(0.01));
                 });
 
                 ui.label("Edge Softness:")
                     .on_hover_text("How soft the nucleus boundary is. Lower values create a sharper, more defined nucleus edge");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.01..=0.15).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.002).range(0.01..=0.15));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.01..=0.15).drag_value_speed(0.002));
                 });
             }
 
@@ -13338,41 +12744,25 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Droplet Scale:")
                     .on_hover_text("Size of the fat droplets. Lower values create many small droplets; higher values create fewer, larger blobs");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 1.0..=8.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.05).range(1.0..=8.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 1.0..=8.0).drag_value_speed(0.05));
                 });
 
                 ui.label("Droplet Threshold:")
                     .on_hover_text("Noise threshold that determines where droplets form. Lower values create more droplets; higher values create fewer");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.2..=0.6).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.005).range(0.2..=0.6));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.2..=0.6).drag_value_speed(0.005));
                 });
 
                 ui.label("Boundary Sharpness:")
                     .on_hover_text("How sharp the dark boundaries between droplets are");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.05..=0.3).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.005).range(0.05..=0.3));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.05..=0.3).drag_value_speed(0.005));
                 });
 
                 ui.label("Brightness:")
                     .on_hover_text("Overall brightness of the droplet pattern");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.3..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.01).range(0.3..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_d, 0.3..=1.0).drag_value_speed(0.01));
                 });
             }
 
@@ -13387,41 +12777,25 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Bubble Size:")
                     .on_hover_text("Scale of all gas bubbles inside the cell. Values below 1.0 create smaller bubbles; above 1.0 creates larger ones");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.5..=2.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.01).range(0.5..=2.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 0.5..=2.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Rotation Speed:")
                     .on_hover_text("How fast the bubble cluster rotates inside the cell");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.1..=2.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.1..=2.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.1..=2.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Membrane Brightness:")
                     .on_hover_text("Brightness of the bubble membrane walls");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.3..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.3..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.3..=1.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Gas Brightness:")
                     .on_hover_text("Brightness of the gas interior inside each bubble");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.5..=1.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.01).range(0.5..=1.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_d, 0.5..=1.5).drag_value_speed(0.01));
                 });
             }
 
@@ -13436,41 +12810,25 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Spike Length:")
                     .on_hover_text("How far the spikes extend beyond the cell surface");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.3..=1.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.01).range(0.3..=1.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 0.3..=1.5).drag_value_speed(0.01));
                 });
 
                 ui.label("Spike Sharpness:")
                     .on_hover_text("How narrow the spike cones are. Higher values create thinner, needle-like spikes; lower values create broader, stubbier ones");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.95..=0.999).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.001).range(0.95..=0.999));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.95..=0.999).drag_value_speed(0.001));
                 });
 
                 ui.label("Embed Depth:")
                     .on_hover_text("How far the spike base is embedded into the cell body. Higher values anchor spikes more deeply");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.05..=0.25).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.005).range(0.05..=0.25));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.05..=0.25).drag_value_speed(0.005));
                 });
 
                 ui.label("Tip Fade:")
                     .on_hover_text("How much the spike darkens toward its tip. 0 = uniform color; 1 = fully fades to dark at the tip");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_d, 0.0..=1.0).drag_value_speed(0.01));
                 });
             }
 
@@ -13485,31 +12843,19 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Fiber Count:")
                     .on_hover_text("Number of longitudinal muscle fiber bundles visible on the cell surface. Higher values create more, finer fibers");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 4.0..=20.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.1).range(4.0..=20.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_scale, 4.0..=20.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Bulge Strength:")
                     .on_hover_text("How much each fiber bundle bulges outward. Higher values create more pronounced 3D fiber ridges");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.1..=0.9).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.01).range(0.1..=0.9));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.1..=0.9).drag_value_speed(0.01));
                 });
 
                 ui.label("Fiber Warp:")
                     .on_hover_text("How much the fiber lines deviate from straight meridians. Higher values create a more organic, twisted fiber appearance");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.005).range(0.0..=0.3));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).drag_value_speed(0.005));
                 });
             }
 
@@ -13524,31 +12870,19 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Yolk Radius:")
                     .on_hover_text("Size of the yolk sphere inside the egg. Larger values fill more of the cell interior");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 0.3..=0.7).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.01).range(0.3..=0.7));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_scale, 0.3..=0.7).drag_value_speed(0.01));
                 });
 
                 ui.label("Yolk Drop:")
                     .on_hover_text("How far the yolk sinks toward the bottom of the cell. Higher values create a more settled, gravity-affected yolk");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.0..=0.35).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.0..=0.35));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.0..=0.35).drag_value_speed(0.005));
                 });
 
                 ui.label("Yolk Brightness:")
                     .on_hover_text("How bright and warm the yolk appears. Higher values create a more vivid amber glow");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.5..=1.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.01).range(0.5..=1.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_meander, 0.5..=1.5).drag_value_speed(0.01));
                 });
             }
 
@@ -13563,41 +12897,25 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Pupil Size:")
                     .on_hover_text("Radius of the dark pupil at the center of the eye. Larger values create a wider, more dilated pupil");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 0.1..=0.45).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.005).range(0.1..=0.45));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_scale, 0.1..=0.45).drag_value_speed(0.005));
                 });
 
                 ui.label("Iris Detail:")
                     .on_hover_text("Number of radial striations in the iris. Higher values create a more complex, detailed iris pattern");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 2.0..=16.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.1).range(2.0..=16.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_width, 2.0..=16.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Iris Texture:")
                     .on_hover_text("Blend between two overlapping striation patterns. Higher values create a more complex, layered iris texture");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.6).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.01).range(0.0..=0.6));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.6).drag_value_speed(0.01));
                 });
 
                 ui.label("Pupil Darkness:")
                     .on_hover_text("How dark the pupil appears. Higher values create a deeper, more absorbing pupil");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.5..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.01).range(0.5..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.5..=1.0).drag_value_speed(0.01));
                 });
             }
 
@@ -13612,41 +12930,25 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Cell Scale:")
                     .on_hover_text("Scale of the endothelial cell pattern on the vessel wall surface");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=12.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_scale).speed(0.1).range(1.0..=12.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_scale, 1.0..=12.0).drag_value_speed(0.1));
                 });
 
                 ui.label("Border Width:")
                     .on_hover_text("Width of the borders between vessel wall cells");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_width).speed(0.005).range(0.01..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_width, 0.01..=0.5).drag_value_speed(0.005));
                 });
 
                 ui.label("Meander:")
                     .on_hover_text("How much the cell borders waver. Higher values create a more organic, irregular vessel wall pattern");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_meander).speed(0.005).range(0.0..=0.3));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_meander, 0.0..=0.3).drag_value_speed(0.005));
                 });
 
                 ui.label("Border Depth:")
                     .on_hover_text("How strongly the cell borders perturb the surface normals, creating a 3D cobblestone appearance");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.005).range(0.0..=0.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.5).drag_value_speed(0.005));
                 });
             }
 
@@ -13661,51 +12963,31 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Crater Radius:")
                     .on_hover_text("Base radius of the rear Siphonocyte volcanic nozzle.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.08..=0.65).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.005).range(0.08..=0.65));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 0.08..=0.65).drag_value_speed(0.005));
                 });
 
                 ui.label("Throat Darkness:")
                     .on_hover_text("Darkening strength inside the nozzle throat.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.0..=1.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.01).range(0.0..=1.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.0..=1.0).drag_value_speed(0.01));
                 });
 
                 ui.label("Rim Brightness:")
                     .on_hover_text("Highlight strength on the raised crater rim.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.0..=1.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.0..=1.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.0..=1.5).drag_value_speed(0.01));
                 });
 
                 ui.label("Nozzle Height:")
                     .on_hover_text("How far the rear crater rises off the cell surface.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=0.55).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.005).range(0.0..=0.55));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_d, 0.0..=0.55).drag_value_speed(0.005));
                 });
 
                 ui.label("Embed Depth:")
                     .on_hover_text("How deeply the nozzle base sinks into the cell border so it reads as attached tissue.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.28).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.goldberg_ridge_strength).speed(0.002).range(0.0..=0.28));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.goldberg_ridge_strength, 0.0..=0.28).drag_value_speed(0.002));
                 });
             }
 
@@ -13720,41 +13002,25 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Feather Length:")
                     .on_hover_text("Length of each of the 8 fixed radial feathers. The feather equator is oriented to local gravity.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.2..=1.35).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.01).range(0.2..=1.35));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 0.2..=1.35).drag_value_speed(0.01));
                 });
 
                 ui.label("Feather Width:")
                     .on_hover_text("Thickness of each feather stroke and its barbs. Higher values create broader, softer feathers.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.025..=0.22).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.002).range(0.025..=0.22));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.025..=0.22).drag_value_speed(0.002));
                 });
 
                 ui.label("Feather Brightness:")
                     .on_hover_text("Brightness of the feathered starfish pattern inside the Plumocyte.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.0..=1.8).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.0..=1.8));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.0..=1.8).drag_value_speed(0.01));
                 });
 
                 ui.label("Stroke Speed:")
                     .on_hover_text("Speed of the alternating even/odd feather stroke cycle. Frozen cells halt the animation.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=8.0).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.05).range(0.0..=8.0));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_d, 0.0..=8.0).drag_value_speed(0.05));
                 });
             }
 
@@ -13770,41 +13036,25 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
                 ui.label("Core Radius:")
                     .on_hover_text("Size of the bright central pluripotent nucleus.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_a, 0.16..=0.38).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_a).speed(0.005).range(0.16..=0.38));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_a, 0.16..=0.38).drag_value_speed(0.005));
                 });
 
                 ui.label("Daughter Bud Size:")
                     .on_hover_text("Size of the five potential daughter-state nuclei around the core.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_b, 0.07..=0.22).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_b).speed(0.004).range(0.07..=0.22));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_b, 0.07..=0.22).drag_value_speed(0.004));
                 });
 
                 ui.label("Branch Brightness:")
                     .on_hover_text("Brightness of the five developmental paths connecting the core to its possible outcomes.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_c, 0.2..=1.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_c).speed(0.01).range(0.2..=1.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_c, 0.2..=1.5).drag_value_speed(0.01));
                 });
 
                 ui.label("Developmental Pulse:")
                     .on_hover_text("Speed of the slow pulse and rotation through the five potential states.");
                 ui.horizontal(|ui| {
-                    let available = ui.available_width();
-                    let slider_width = if available > 80.0 { available - 70.0 } else { 50.0 };
-                    ui.style_mut().spacing.slider_width = slider_width;
-                    ui.add(egui::Slider::new(&mut visuals.param_d, 0.0..=2.5).show_value(false));
-                    ui.add(egui::DragValue::new(&mut visuals.param_d).speed(0.02).range(0.0..=2.5));
+                    scene_settings::slider_control(ui, egui::Slider::new(&mut visuals.param_d, 0.0..=2.5).drag_value_speed(0.02));
                 });
             }
 
@@ -13834,7 +13084,6 @@ fn render_cell_type_visuals(ui: &mut Ui, context: &mut PanelContext) {
         });
 }
 
-/// Render the Mode Graph panel for visualizing mode connections.
 fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     use crate::genome::node_graph::{ModeGraphViewer, ModeNode};
     use egui_snarl::ui::{SnarlStyle, SnarlWidget};
@@ -13996,12 +13245,10 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
     }
 }
 
-/// Render the WorldSettings panel for simulation parameters and physics.
+/// Render the Help panel showing context-specific controls and shortcuts.
 fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     // Set slider width to fill the panel, leaving room for value + suffix labels.
     // Use a more conservative margin (80px) to account for suffixes like " units", "k", "x".
-    let sw = (ui.available_width() - 80.0).max(60.0);
-    ui.style_mut().spacing.slider_width = sw;
 
     // Only show world settings in GPU mode
     if context.current_mode != crate::ui::types::SimulationMode::Gpu {
@@ -14020,7 +13267,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.label("World Radius:")
         .on_hover_text("Radius of the spherical world boundary in simulation units. Cells are confined within this sphere. ⚠ Changing this requires a scene reset to take effect");
-    ui.add(egui::Slider::new(&mut world.world_radius, 50.0..=500.0).suffix(" units"));
+    scene_settings::slider_control(ui,egui::Slider::new(&mut world.world_radius, 50.0..=500.0).suffix(" units"));
 
     if (world.world_radius - current_world_radius).abs() > 0.5 {
         ui.horizontal(|ui| {
@@ -14035,8 +13282,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.label("Cell Capacity:")
         .on_hover_text("Maximum number of cells the simulation can hold simultaneously. Higher values use more GPU memory. ⚠ Changing this requires a scene reset to take effect");
     let mut capacity_k_mut = capacity_k;
-    if ui
-        .add(egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k"))
+    if scene_settings::slider_control(ui,egui::Slider::new(&mut capacity_k_mut, 10..=200).suffix("k"))
         .changed()
     {
         world.cell_capacity = capacity_k_mut * 1000;
@@ -14091,7 +13337,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     // Global velocity damping
     ui.label("Velocity Damping:")
         .on_hover_text("Multiplier applied to cell velocity each frame. 1.0 = no drag (cells coast forever). 0.8 = heavy drag (cells slow down quickly). Lower values create a more viscous environment");
-    ui.add(egui::Slider::new(
+    scene_settings::slider_control(ui,egui::Slider::new(
         &mut world.acceleration_damping,
         0.8..=1.0,
     ));
@@ -14108,7 +13354,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         // Adhesion constraint solver iterations
         ui.label("Constraint Iterations:")
             .on_hover_text("Number of extra adhesion solver passes per physics step. More iterations = stiffer, more accurate joints but higher GPU cost. 0 = single pass (fast, slightly springy). 8–16 = rigid joints");
-        ui.add(egui::Slider::new(&mut world.constraint_iterations, 0..=16));
+        scene_settings::slider_control(ui,egui::Slider::new(&mut world.constraint_iterations, 0..=16));
         ui.label(
             egui::RichText::new(
                 "Extra adhesion solver passes (higher = stiffer joints, more GPU cost)",
@@ -14121,7 +13367,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         // Water viscosity
         ui.label("Water Viscosity:")
             .on_hover_text("Additional drag applied to cells that are inside water voxels. 0 = water has no effect on movement. 1 = maximum resistance — cells move very slowly through water");
-        ui.add(egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
+        scene_settings::slider_control(ui,egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
         ui.label(
             egui::RichText::new(
                 "Drag applied to cells moving through water (0 = off, higher = thicker fluid)",
@@ -14144,7 +13390,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         ui.add_space(4.0);
         ui.label("Metabolism Multiplier:")
             .on_hover_text("How much faster solo cells (0 connections) burn nutrients compared to connected cells. Gradient: 1 connection = partial penalty, 3+ connections = normal rate");
-        ui.add(egui::Slider::new(
+        scene_settings::slider_control(ui,egui::Slider::new(
             &mut world.solo_metabolism_multiplier,
             1.5..=10.0,
         ));
@@ -14173,7 +13419,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         normalized.clamp(0.0, 1.0) as f32
     };
 
-    let response = ui.add(
+    let response = scene_settings::slider_control(ui,
         egui::Slider::new(&mut log_slider, 0.0..=1.0)
             .custom_formatter(|value, _| {
                 if value < EPSILON as f64 {
@@ -14301,7 +13547,6 @@ fn compact_cell_type_label(cell_type: CellType) -> &'static str {
     }
 }
 
-/// Render the Help panel showing context-specific controls and shortcuts.
 fn render_help(ui: &mut Ui, _context: &mut PanelContext, _state: &mut GlobalUiState) {
     ui.heading("Help");
     ui.add_space(8.0);

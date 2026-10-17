@@ -428,7 +428,13 @@ fn sample_evaporation(@builtin(global_invocation_id) gid: vec3<u32>) {
             .chunks_exact(std::mem::size_of::<SteamParticle>())
             .take(count)
             .map(bytemuck::pod_read_unaligned::<SteamParticle>)
-            .filter(|p| p.color[3] >= 0.05 && p.color[0] > 0.5)
+            // Quiet vapor should still be lit and drawn at 2-4% opacity.
+            // Exclude opaque snow and geothermal soot from this vapor check.
+            .filter(|p| {
+                p.animation[1] == 1.0
+                    && (0.02..=0.04).contains(&p.color[3])
+                    && p.color[0] > 0.5
+            })
             .count()
     }
 

@@ -9,6 +9,7 @@ pub mod panel;
 pub mod panel_context;
 pub mod performance;
 pub mod radial_menu;
+pub mod reset_settings;
 pub mod settings;
 pub mod tab_viewer;
 pub mod toast;

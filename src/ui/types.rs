@@ -1133,6 +1133,22 @@ pub struct GlobalUiState {
     #[serde(default)]
     pub tutorial: TutorialState,
 
+    /// Once-per-scene introduction to the reset safety net.
+    #[serde(default)]
+    pub reset_intro_seen: [bool; 2],
+
+    #[serde(default)]
+    pub main_scene_quick_start_seen: bool,
+
+    #[serde(skip)]
+    pub show_settings_reset_dialog: bool,
+
+    #[serde(skip)]
+    pub reset_scene_settings_requested: bool,
+
+    #[serde(skip)]
+    pub settings_reset_error: Option<String>,
+
     /// Whether the low FPS warning dialog is shown
     #[serde(skip)]
     pub show_low_fps_dialog: bool,
@@ -1242,6 +1258,11 @@ impl Default for GlobalUiState {
             selected_theme: UiTheme::default(),
             custom_theme: CustomThemePalette::default(),
             tutorial: TutorialState::default(),
+            reset_intro_seen: [false; 2],
+            main_scene_quick_start_seen: false,
+            show_settings_reset_dialog: false,
+            reset_scene_settings_requested: false,
+            settings_reset_error: None,
             show_low_fps_dialog: false,
             suppress_low_fps_dialog: false,
             show_reset_dialog: false,
@@ -1259,6 +1280,45 @@ impl Default for GlobalUiState {
 }
 
 impl GlobalUiState {
+    /// Restore only preferences owned by the active scene. World size/capacity
+    /// controls are pending values; the live world is not resized or recreated.
+    pub fn restore_scene_settings(&mut self) {
+        let mut defaults = Self::load_embedded_default();
+        let mode = self.current_mode;
+        self.scene_configs.insert(mode, defaults.scene_configs.remove(&mode).unwrap());
+        if mode == SimulationMode::Gpu {
+            self.world_settings = defaults.world_settings;
+            self.fluid_settings = defaults.fluid_settings;
+            macro_rules! reset { ($($field:ident),* $(,)?) => { $(self.$field = defaults.$field;)* }; }
+            reset!(occlusion_bias, occlusion_mip_override, occlusion_min_screen_size,
+                occlusion_min_distance, occlusion_enabled, frustum_enabled,
+                gpu_readbacks_enabled, gpu_timing_enabled, field_reports_enabled,
+                gpu_headless_mode, gpu_headless_auto_speed, gpu_headless_target_fps,
+                gpu_headless_min_speed, gpu_headless_max_speed, gpu_headless_auto_status,
+                lod_scale_factor, lod_threshold_low, lod_threshold_medium,
+                lod_threshold_high, lod_debug_colors, show_advanced_options);
+        } else {
+            self.adhesion_expansion_active = false;
+        }
+        self.hide_ui = false;
+        self.pending_close_panel = None;
+        self.show_settings_reset_dialog = false;
+        self.reset_scene_settings_requested = false;
+        self.settings_reset_error = None;
+    }
+
+    pub fn reset_intro_index(&self) -> usize {
+        match self.current_mode {
+            SimulationMode::Preview => 0,
+            SimulationMode::Gpu => 1,
+        }
+    }
+
+    /// Appearance controls in the main scene require Advanced Options.
+    pub fn cosmetic_options_visible(&self) -> bool {
+        self.current_mode != SimulationMode::Gpu || self.show_advanced_options
+    }
+
     /// Clamp persisted values too, so invalid settings cannot stall or uncap rendering.
     pub fn desktop_frame_interval(&self) -> std::time::Duration {
         std::time::Duration::from_secs_f64(1.0 / f64::from(self.desktop_render_fps.clamp(30, 120)))

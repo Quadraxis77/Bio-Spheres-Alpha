@@ -153,10 +153,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let geothermal_source = geo.w > 0.10;
     let underwater_stack = geothermal_source && water_density[idx] > 0.35;
     let open_air_stack = geothermal_source && water_density[idx] <= 0.12;
-    let animated_seed = hash_u32(idx + u32(params.time * 17.0));
-    let soot_seed = animated_seed;
+    // Keep emitter selection and offsets stable. Re-rolling these seeds every
+    // 60-90 ms made the plumes flicker and jump even with stationary fluid.
+    let soot_seed = hash_u32(idx ^ 0x37b91a4du);
     let soot_keep = (soot_seed & 3u) == 0u;
-    let vapor_seed = hash_u32(idx + u32(params.time * 11.0) + 0x6d2b79f5u);
+    let vapor_seed = hash_u32(idx ^ 0x6d2b79f5u);
     let vapor_keep = (vapor_seed & 7u) == 0u;
 
     // Render steam (3) as soft wispy particles, snow (4) as small opaque
@@ -191,14 +192,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         particle_kind = 2.0;
         // Visual-only open-air vent vapor: sparse short-lived wisps that rise
         // out of the geothermal glow field without creating simulation steam.
-        let phase = random_float(vapor_seed + 13u);
+        let phase = fract(params.time * 0.09 + random_float(vapor_seed + 13u));
         let plume_up = anti_gravity_dir(world_pos);
         let side_seed = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(plume_up.y) < 0.92);
         let plume_right = normalize(cross(side_seed, plume_up));
         let plume_forward = normalize(cross(plume_up, plume_right));
         let rise = phase * params.cell_size * 5.5;
         let spread = params.cell_size * mix(0.35, 1.45, phase);
-        let swirl_angle = random_float(vapor_seed + 19u) * 6.2831853 + params.time * mix(0.65, 1.25, random_float(vapor_seed + 23u));
+        let swirl_angle = random_float(vapor_seed + 19u) * 6.2831853 + params.time * mix(0.15, 0.3, random_float(vapor_seed + 23u));
         let radius = spread * random_float(vapor_seed + 29u);
         let lateral = (plume_right * cos(swirl_angle) + plume_forward * sin(swirl_angle)) * radius;
         let jitter_angle = random_float(vapor_seed + 31u) * 6.2831853;
@@ -208,7 +209,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         particle.size = params.cell_size * mix(1.2, 3.2, phase);
         let fade = sin(phase * 3.14159265);
         let brightness = clamp(max(light, 0.42) + length(geo.xyz) * 0.025, 0.35, 1.1);
-        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * brightness, 0.025 * fade);
+        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * brightness, 0.012 * fade);
     } else if underwater_stack && soot_keep {
         particle_kind = 3.0;
         // Underwater thermal soot: dark mineral flecks that catch a little of
@@ -218,20 +219,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             random_float(soot_seed + 17u) - 0.5,
             random_float(soot_seed + 23u) - 0.5
         ) * params.cell_size * 0.85;
-        particle.position = world_pos + soot_jitter;
+        let soot_phase = params.time * 0.35 + random_float(soot_seed + 29u) * 6.2831853;
+        particle.position = world_pos + soot_jitter + anti_gravity_dir(world_pos) *
+            (sin(soot_phase) * params.cell_size * 0.12);
         particle.size = params.cell_size * mix(0.35, 0.9, random_float(soot_seed + 31u));
         let glow_lift = clamp(length(geo.xyz) * 0.08, 0.0, 0.22);
         let soot_color = vec3<f32>(0.025, 0.020, 0.016) + geo.xyz * glow_lift;
-        particle.color = vec4<f32>(soot_color, 0.16);
+        particle.color = vec4<f32>(soot_color, 0.10);
     } else if fluid_type == 4u {
         // Snow: small, round, opaque white flakes
+        particle_kind = 0.0;
         particle.size = params.cell_size * 0.6;
         particle.color = vec4<f32>(vec3<f32>(1.0, 1.0, 1.0) * light, 0.9);
     } else {
-        particle.size = params.cell_size * 1.5;  // Slightly larger than voxel
-        // Sparse temperate evaporation must be visible without requiring a
-        // dense boiling cloud. The old 1% opacity erased isolated wisps in VR.
-        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * light, 0.08);
+        particle.size = params.cell_size * 1.8;
+        // Faint overlapping wisps rather than a field of bright circular dots.
+        particle.color = vec4<f32>(vec3<f32>(0.9, 0.9, 0.95) * light, 0.025);
 
         // Gentle per-particle drift, independent of the underlying voxel's
         // own timing. Regular steam is re-extracted fresh from live voxel
@@ -246,11 +249,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let drift_side_seed = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(drift_up.y) < 0.92);
         let drift_side = normalize(cross(drift_side_seed, drift_up));
         let drift_fwd = normalize(cross(drift_up, drift_side));
-        let drift_freq = mix(0.5, 1.3, random_float(drift_seed + 1u));
+        let drift_freq = mix(0.2, 0.5, random_float(drift_seed + 1u));
         let drift_phase = random_float(drift_seed + 2u) * 6.2831853;
         let drift_angle = random_float(drift_seed + 3u) * 6.2831853
-            + params.time * mix(0.3, 0.7, random_float(drift_seed + 4u));
-        let drift_amp = params.cell_size * mix(0.12, 0.32, random_float(drift_seed + 5u));
+            + params.time * mix(0.1, 0.25, random_float(drift_seed + 4u));
+        let drift_amp = params.cell_size * mix(0.04, 0.12, random_float(drift_seed + 5u));
         let lateral_drift = (drift_side * cos(drift_angle) + drift_fwd * sin(drift_angle))
             * drift_amp * sin(params.time * drift_freq + drift_phase);
         let vertical_bob = drift_up * params.cell_size * 0.15

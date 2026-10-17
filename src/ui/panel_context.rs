@@ -950,8 +950,102 @@ impl GenomeEditorState {
         self.apply_sun_orbit() || self.sun_orbit_angle != old_angle
     }
 
-    /// Create a new genome editor state with default values.
+    /// Create editor state using saved preferences, falling back to initial defaults.
     pub fn new() -> Self {
+        Self::with_saved_settings(true)
+    }
+
+    /// Initial settings, independent of any player configuration files.
+    pub fn factory_defaults() -> Self {
+        Self::with_saved_settings(false)
+    }
+
+    /// Reset active-scene controls without touching live world data, editor
+    /// selection, playback position, tool state, or settings shared by both scenes.
+    pub fn reset_scene_settings(&mut self, mode: SimulationMode) {
+        let defaults = Self::factory_defaults();
+        macro_rules! reset { ($($field:ident),* $(,)?) => { $(self.$field = defaults.$field;)* }; }
+        if mode == SimulationMode::Preview {
+            reset!(qball_snapping, enable_snapping);
+        } else {
+            reset!(
+                cave_density, cave_scale, cave_octaves,
+                cave_persistence, cave_threshold, cave_smoothness,
+                cave_seed, cave_resolution, cave_isolated_chunk_cull_volume,
+                cave_mesh_smoothing_iterations, cave_mesh_smoothing_factor, cave_mesh_smooth_normals,
+                cave_flat_ground_enabled, geothermal_enabled, geothermal_count,
+                geothermal_placement_mode, geothermal_lower_hemisphere, geothermal_length,
+                geothermal_width, geothermal_depth, geothermal_back_margin,
+                geothermal_top_margin,
+                fluid_continuous_spawn, fluid_static_water_world,
+                geothermal_heat_output, geothermal_heat_radius, geothermal_glow_strength,
+                geothermal_glow_radius, geothermal_glow_color, water_light_attenuation,
+                cave_appearance, cave_rock_dark_color, cave_rock_cool_color,
+                cave_rock_warm_color, cave_rock_pale_color, cave_rock_layer_scale,
+                cave_rock_warp_strength, cave_rock_fine_band_strength, cave_rock_cool_mottle_strength,
+                cave_rock_grain_strength, cave_rock_patch_contrast, cave_rock_seam_darkening,
+                cave_rock_wall_line_strength, cave_rock_min_color, cave_rock_max_color,
+                cave_rock_ambient_strength, cave_rock_diffuse_strength, cave_rock_specular_strength,
+                cave_rock_specular_power, cave_rock_texture_scale, cave_rock_coarse_frequency,
+                cave_rock_fine_frequency, cave_rock_seam_frequency, cave_rock_fine_noise_scale,
+                cave_rock_fine_noise_strength, cave_rock_seam_noise_scale, cave_rock_seam_noise_strength,
+                cave_rock_coarse_band_low, cave_rock_coarse_band_high, cave_rock_fine_band_low,
+                cave_rock_fine_band_high, cave_rock_seam_low, cave_rock_seam_high,
+                cave_rock_geometry_conform, cave_rock_parallax_depth, cave_layered_shale_visuals,
+                cave_lava_tube_visuals, fluid_gravity, fluid_gravity_x,
+                fluid_gravity_y, fluid_gravity_z, fluid_vorticity_epsilon,
+                fluid_pressure_iterations, fluid_lateral_flow_probabilities, nutrient_density,
+                nutrient_epoch_duration, nutrient_epoch_spacing, nutrient_spawn_end,
+                nutrient_despawn_start, fluid_show_voxel_grid, fluid_show_solid_only,
+                fluid_show_wireframe, fluid_color_mode, temp_display_fahrenheit,
+                fluid_water_percent, fluid_lava_percent, fluid_steam_percent,
+                selected_fluid_type, fluid_show_test_voxels, fluid_show_mesh,
+                fluid_iso_level, fluid_ambient, fluid_diffuse,
+                fluid_specular, fluid_shininess, fluid_fresnel,
+                fluid_fresnel_power, fluid_reflection, fluid_reflection_brightness,
+                fluid_alpha, fluid_rim, fluid_wave_height,
+                fluid_wave_speed, fluid_noise_scale, fluid_noise_octaves,
+                fluid_noise_lacunarity, fluid_noise_persistence, fluid_waterline_alpha,
+                light_dir, show_volumetric_fog, fog_density,
+                fog_steps, light_color, light_intensity,
+                fog_color, fog_scattering_anisotropy, fog_absorption,
+                fog_height_density, fog_height_falloff, fog_water_wave_strength,
+                fog_water_wave_scale, fog_smooth_light_field, fog_composite_blur,
+                light_field_max_steps, light_field_step_size, light_field_absorption_solid,
+                light_field_absorption_cell, light_field_ambient_floor, photocyte_mass_per_second,
+                photocyte_min_light_threshold, luminocyte_bloom_enabled, luminocyte_bloom_radius,
+                luminocyte_ray_tracing, show_dof, dof_focal_distance,
+                dof_focal_range, dof_max_blur_radius, dof_blur_strength,
+                pp_contrast, pp_adapt_enabled, pp_adapt_speed,
+                pp_adapt_min, pp_adapt_max, show_sun,
+                sun_color, sun_angular_radius, sun_intensity,
+                sun_rotation_enabled, sun_rotation_axis, sun_orbit_angle,
+                sun_rotation_speed, orbit_ring_opacity, show_orbit_ring,
+                sun_cycle_enabled, sun_cycle_min, sun_cycle_max,
+                sun_cycle_period, sun_night_ratio, shadow_enabled,
+                shadow_strength, shadow_quality, caustic_intensity,
+                caustic_scale, caustic_speed, show_organism_skins,
+                show_moss, moss_growth_rate, moss_erosion_rate,
+                moss_decay_rate, moss_min_light, moss_nutrient_per_moss,
+                moss_consume_rate, moss_wetness_evaporation, moss_parallax_depth,
+                moss_scale, moss_noise_type, moss_noise_frequency,
+                moss_noise_lacunarity, moss_height_sharpness_low, moss_height_sharpness_high,
+                moss_bump_strength, moss_color_dark, moss_color_bright,
+                moss_water_radius, show_boulders, boulder_target_count,
+                boulder_initial_moss, boulder_radius, boulder_size_gate,
+                boulder_spawn_interval, boulder_buoyancy, boulder_radius_min,
+                boulder_radius_max, boulder_moss_min, boulder_moss_max,
+                skin_radius_scale, skin_iso_level, skin_base_color,
+                skin_alpha, skin_sss_strength, skin_rim_strength,
+            );
+            self.cave_params_dirty = true;
+            self.light_params_dirty = true;
+            self.fluid_mesh_params_dirty = true;
+            self.moss_params_dirty = true;
+        }
+    }
+
+    fn with_saved_settings(use_saved: bool) -> Self {
         let (
             cave_density,
             cave_scale,
@@ -1047,7 +1141,7 @@ impl GenomeEditorState {
             boulder_radius_max,
             boulder_moss_min,
             boulder_moss_max,
-        ) = Self::load_cave_settings();
+        ) = Self::load_cave_settings(use_saved);
 
         let (
             fluid_gravity,
@@ -1065,7 +1159,7 @@ impl GenomeEditorState {
             nutrient_epoch_spacing,
             nutrient_spawn_end,
             nutrient_despawn_start,
-        ) = Self::load_fluid_settings();
+        ) = Self::load_fluid_settings(use_saved);
 
         let (
             light_dir,
@@ -1123,7 +1217,7 @@ impl GenomeEditorState {
             pp_adapt_speed,
             pp_adapt_min,
             pp_adapt_max,
-        ) = Self::load_light_settings();
+        ) = Self::load_light_settings(use_saved);
 
         let (
             fluid_iso_level,
@@ -1142,10 +1236,14 @@ impl GenomeEditorState {
             fluid_noise_octaves,
             fluid_noise_lacunarity,
             fluid_noise_persistence,
-        ) = Self::load_fluid_render_settings();
+        ) = Self::load_fluid_render_settings(use_saved);
 
-        let (cell_type_visuals, cell_outline_width) =
-            crate::cell::types::CellTypeVisualsStore::load();
+        let (cell_type_visuals, cell_outline_width) = if use_saved {
+            crate::cell::types::CellTypeVisualsStore::load()
+        } else {
+            let defaults = crate::cell::types::CellTypeVisualsStore::bundled_defaults();
+            (defaults.visuals, defaults.cell_outline_width)
+        };
 
         let state = Self {
             renaming_mode: None,
@@ -1457,6 +1555,22 @@ impl GenomeEditorState {
         state
     }
 
+    /// Save only preferences owned by this scene, reporting any failure.
+    pub fn save_scene_settings_checked(&self, mode: SimulationMode) -> Result<(), String> {
+        if mode == SimulationMode::Preview { return Ok(()); }
+        let results = [
+            ("caves", self.try_save_cave_settings()),
+            ("fluid", self.try_save_fluid_settings()),
+            ("fluid appearance", self.try_save_fluid_render_settings()),
+            ("lighting", self.try_save_light_settings()),
+            ("sun", self.try_save_sun_settings()),
+        ];
+        let errors: Vec<_> = results.into_iter().filter_map(|(name, result)| {
+            result.err().map(|error| format!("{name}: {error}"))
+        }).collect();
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    }
+
     /// Update orbit ring opacity — driven purely by the show_orbit_ring toggle.
     pub fn update_orbit_ring_opacity(&mut self, _wall_dt: f32) {
         self.orbit_ring_opacity = if self.show_orbit_ring { 1.0 } else { 0.0 };
@@ -1479,17 +1593,28 @@ impl GenomeEditorState {
 
     /// Save cell type visuals to disk.
     pub fn save_cell_type_visuals(&self) {
-        if let Err(e) = crate::cell::types::CellTypeVisualsStore::save(
-            &self.cell_type_visuals,
-            self.cell_outline_width,
-        ) {
+        if let Err(e) = self.try_save_cell_type_visuals() {
             log::error!("Failed to save cell type visuals: {}", e);
         }
     }
 
+    fn try_save_cell_type_visuals(&self) -> Result<(), Box<dyn std::error::Error>> {
+        crate::cell::types::CellTypeVisualsStore::save(
+            &self.cell_type_visuals,
+            self.cell_outline_width,
+        )?;
+        Ok(())
+    }
+
     /// Save cave settings to disk.
     pub fn save_cave_settings(&self) {
-        if let Err(e) = Self::save_cave_settings_to_file(
+        if let Err(e) = self.try_save_cave_settings() {
+            log::error!("Failed to save cave settings: {}", e);
+        }
+    }
+
+    fn try_save_cave_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::save_cave_settings_to_file(
             self.cave_density,
             self.cave_scale,
             self.cave_octaves,
@@ -1584,14 +1709,19 @@ impl GenomeEditorState {
             self.boulder_radius_max,
             self.boulder_moss_min,
             self.boulder_moss_max,
-        ) {
-            log::error!("Failed to save cave settings: {}", e);
-        }
+        )?;
+        Ok(())
     }
 
     /// Save fluid settings to disk.
     pub fn save_fluid_settings(&self) {
-        if let Err(e) = Self::save_fluid_settings_to_file(
+        if let Err(e) = self.try_save_fluid_settings() {
+            log::error!("Failed to save fluid settings: {}", e);
+        }
+    }
+
+    fn try_save_fluid_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::save_fluid_settings_to_file(
             self.fluid_gravity,
             self.fluid_gravity_x,
             self.fluid_gravity_y,
@@ -1607,9 +1737,8 @@ impl GenomeEditorState {
             self.nutrient_epoch_spacing,
             self.nutrient_spawn_end,
             self.nutrient_despawn_start,
-        ) {
-            log::error!("Failed to save fluid settings: {}", e);
-        }
+        )?;
+        Ok(())
     }
 
     fn save_cave_settings_to_file(
@@ -1971,7 +2100,7 @@ impl GenomeEditorState {
 
     /// Load cave settings from disk, or return defaults if file doesn't exist.
     #[allow(clippy::type_complexity)]
-    pub fn load_cave_settings() -> (
+    fn load_cave_settings(use_saved: bool) -> (
         f32,
         f32,
         u32,
@@ -2508,10 +2637,13 @@ impl GenomeEditorState {
             20_000.0
         }
 
-        let path = crate::app_dirs::config_file("cave_settings.ron");
+        let path = use_saved.then(|| crate::app_dirs::config_file("cave_settings.ron"));
 
-        if path.exists() {
-            match std::fs::read_to_string(&path) {
+        let contents = path.filter(|path| path.exists())
+            .map(std::fs::read_to_string)
+            .unwrap_or_else(|| Ok(include_str!("../../assets/defaults/main-scene/cave_settings.ron").to_owned()));
+        {
+            match contents {
                 Ok(contents) => match ron::from_str::<CaveSettings>(&contents) {
                     Ok(settings) => {
                         let current_visuals = CaveAppearanceVisualSettings {
@@ -2664,6 +2796,8 @@ impl GenomeEditorState {
                 }
             }
         }
+
+        if use_saved { return Self::load_cave_settings(false); }
 
         // Return defaults
         (
@@ -2836,7 +2970,13 @@ impl GenomeEditorState {
 
     /// Save light settings to disk.
     pub fn save_light_settings(&self) {
-        if let Err(e) = Self::save_light_settings_to_file(
+        if let Err(e) = self.try_save_light_settings() {
+            log::error!("Failed to save light settings: {}", e);
+        }
+    }
+
+    fn try_save_light_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::save_light_settings_to_file(
             self.light_dir,
             self.show_volumetric_fog,
             self.fog_density,
@@ -2897,9 +3037,8 @@ impl GenomeEditorState {
             self.pp_adapt_speed,
             self.pp_adapt_min,
             self.pp_adapt_max,
-        ) {
-            log::warn!("Failed to save light settings: {}", e);
-        }
+        )?;
+        Ok(())
     }
 
     fn save_light_settings_to_file(
@@ -3098,7 +3237,7 @@ impl GenomeEditorState {
 
     /// Load light settings from disk, or return defaults if file doesn't exist.
     #[allow(clippy::type_complexity)]
-    pub fn load_light_settings() -> (
+    fn load_light_settings(use_saved: bool) -> (
         [f32; 3],
         bool,
         f32,
@@ -3339,10 +3478,13 @@ impl GenomeEditorState {
             8.0
         }
 
-        let path = crate::app_dirs::config_file("light_settings.ron");
+        let path = use_saved.then(|| crate::app_dirs::config_file("light_settings.ron"));
 
-        if path.exists() {
-            match std::fs::read_to_string(&path) {
+        let contents = path.filter(|path| path.exists())
+            .map(std::fs::read_to_string)
+            .unwrap_or_else(|| Ok(include_str!("../../assets/defaults/main-scene/light_settings.ron").to_owned()));
+        {
+            match contents {
                 Ok(contents) => {
                     match ron::from_str::<LightSettings>(&contents) {
                         Ok(s) => {
@@ -3420,6 +3562,8 @@ impl GenomeEditorState {
             }
         }
 
+        if use_saved { return Self::load_light_settings(false); }
+
         // Return defaults
         (
             [-0.057902984, 0.00000004363805, -0.9983222],
@@ -3481,7 +3625,7 @@ impl GenomeEditorState {
     }
 
     /// Load fluid settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_settings() -> (
+    fn load_fluid_settings(use_saved: bool) -> (
         f32,
         bool,
         bool,
@@ -3545,10 +3689,13 @@ impl GenomeEditorState {
             0.6
         }
 
-        let path = crate::app_dirs::config_file("fluid_settings.ron");
+        let path = use_saved.then(|| crate::app_dirs::config_file("fluid_settings.ron"));
 
-        if path.exists() {
-            match std::fs::read_to_string(&path) {
+        let contents = path.filter(|path| path.exists())
+            .map(std::fs::read_to_string)
+            .unwrap_or_else(|| Ok(include_str!("../../assets/defaults/main-scene/fluid_settings.ron").to_owned()));
+        {
+            match contents {
                 Ok(contents) => match ron::from_str::<FluidSettings>(&contents) {
                     Ok(settings) => {
                         return (
@@ -3579,6 +3726,8 @@ impl GenomeEditorState {
             }
         }
 
+        if use_saved { return Self::load_fluid_settings(false); }
+
         // Return defaults
         (
             9.8,
@@ -3601,6 +3750,12 @@ impl GenomeEditorState {
 
     /// Save sun settings to disk.
     pub fn save_sun_settings(&self) {
+        if let Err(e) = self.try_save_sun_settings() {
+            log::error!("Failed to save sun settings: {}", e);
+        }
+    }
+
+    fn try_save_sun_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct SunSettings {
             show_sun: bool,
@@ -3625,20 +3780,19 @@ impl GenomeEditorState {
         };
 
         let path = crate::app_dirs::config_file("sun_settings.ron");
-        match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
-            Ok(contents) => {
-                if let Err(e) = std::fs::write(path, contents) {
-                    log::warn!("Failed to save sun settings: {}", e);
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to serialize sun settings: {}", e);
-            }
-        }
+        let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
+        std::fs::write(path, contents)?;
+        Ok(())
     }
 
     /// Save fluid render settings to disk.
     pub fn save_fluid_render_settings(&self) {
+        if let Err(e) = self.try_save_fluid_render_settings() {
+            log::error!("Failed to save fluid render settings: {}", e);
+        }
+    }
+
+    fn try_save_fluid_render_settings(&self) -> Result<(), Box<dyn std::error::Error>> {
         #[derive(serde::Serialize)]
         struct FluidRenderSettings {
             iso_level: f32,
@@ -3679,20 +3833,13 @@ impl GenomeEditorState {
         };
 
         let path = crate::app_dirs::config_file("fluid_render_settings.ron");
-        match ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()) {
-            Ok(contents) => {
-                if let Err(e) = std::fs::write(path, contents) {
-                    log::warn!("Failed to save fluid render settings: {}", e);
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to serialize fluid render settings: {}", e);
-            }
-        }
+        let contents = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())?;
+        std::fs::write(path, contents)?;
+        Ok(())
     }
 
     /// Load fluid render settings from disk, or return defaults if file doesn't exist.
-    pub fn load_fluid_render_settings() -> (
+    fn load_fluid_render_settings(use_saved: bool) -> (
         f32,
         f32,
         f32,
@@ -3753,10 +3900,13 @@ impl GenomeEditorState {
             }
         }
 
-        let path = crate::app_dirs::config_file("fluid_render_settings.ron");
+        let path = use_saved.then(|| crate::app_dirs::config_file("fluid_render_settings.ron"));
 
-        if path.exists() {
-            match std::fs::read_to_string(&path) {
+        let contents = path.filter(|path| path.exists())
+            .map(std::fs::read_to_string)
+            .unwrap_or_else(|| Ok(include_str!("../../assets/defaults/main-scene/fluid_render_settings.ron").to_owned()));
+        {
+            match contents {
                 Ok(contents) => match ron::from_str::<FluidRenderSettings>(&contents) {
                     Ok(s) => {
                         return (
@@ -3793,6 +3943,8 @@ impl GenomeEditorState {
                 }
             }
         }
+
+        if use_saved { return Self::load_fluid_render_settings(false); }
 
         let d = FluidRenderSettings::default();
         (

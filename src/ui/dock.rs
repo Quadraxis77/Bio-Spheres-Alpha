@@ -317,6 +317,13 @@ impl DockManager {
         }
     }
 
+    /// Save only the active scene's layout, reporting any failure.
+    pub fn save_current_checked(&self) -> Result<(), String> {
+        let state = self.scene_trees.get(&self.current_mode).expect("current layout");
+        Self::save_to_file(&Self::dock_file_path(self.current_mode), state)
+            .map_err(|error| format!("{} layout: {error}", self.current_mode.display_name()))
+    }
+
     /// Save all scene layouts to disk.
     pub fn save_all(&self) {
         for (mode, state) in &self.scene_trees {
@@ -466,6 +473,24 @@ pub fn create_default_gpu_layout() -> DockState<Panel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_restores_only_the_current_layout() {
+        for mode in SimulationMode::all() {
+            let other = if *mode == SimulationMode::Gpu { SimulationMode::Preview } else { SimulationMode::Gpu };
+            let mut manager = DockManager::new();
+            manager.switch_mode(*mode);
+            for scene in SimulationMode::all() {
+                manager.scene_trees.insert(*scene, DockState::new(vec![Panel::ThemeEditor]));
+            }
+            let other_before = ron::to_string(&manager.scene_trees[&other]).unwrap();
+            manager.reset_current_to_default();
+            assert_eq!(manager.current_mode(), *mode);
+            assert_eq!(ron::to_string(&manager.scene_trees[mode]).unwrap(),
+                ron::to_string(&DockManager::load_default_layout(*mode)).unwrap());
+            assert_eq!(ron::to_string(&manager.scene_trees[&other]).unwrap(), other_before);
+        }
+    }
 
     #[test]
     fn test_dock_manager_creation() {

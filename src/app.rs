@@ -3546,6 +3546,64 @@ impl App {
         self.window.request_redraw();
     }
 
+    fn restore_current_scene_settings(&mut self) {
+        let mode = self.scene_manager.current_mode();
+        self.ui.state.restore_scene_settings();
+        self.editor_state.reset_scene_settings(mode);
+        self.dock_manager.reset_current_to_default();
+
+        // Restore this camera's controls, retaining its position and view.
+        let defaults = if mode == crate::ui::SimulationMode::Gpu {
+            crate::ui::camera::CameraController::new_for_gpu_scene()
+        } else {
+            crate::ui::camera::CameraController::new_for_preview_scene()
+        };
+        let camera = self.scene_manager.active_scene_mut().camera_mut();
+        camera.move_speed = defaults.move_speed;
+        camera.mouse_sensitivity = defaults.mouse_sensitivity;
+        camera.enable_spring = defaults.enable_spring;
+
+        if mode == crate::ui::SimulationMode::Gpu {
+            if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+                // Update parameters on existing systems; never recreate scenes or clear buffers.
+                scene.show_moss = self.editor_state.show_moss;
+                if let Some(moss) = scene.moss_system.as_mut() {
+                    moss.growth_rate = self.editor_state.moss_growth_rate;
+                    moss.min_light = self.editor_state.moss_min_light;
+                    moss.water_radius = self.editor_state.moss_water_radius;
+                    moss.decay_rate = self.editor_state.moss_decay_rate;
+                    moss.erosion_rate = self.editor_state.moss_erosion_rate;
+                    moss.wetness_evaporation = self.editor_state.moss_wetness_evaporation;
+                    moss.graze_cooldown = self.editor_state.moss_consume_rate;
+                    moss.nutrient_per_moss = self.editor_state.moss_nutrient_per_moss;
+                }
+                if let Some(boulders) = scene.boulder_system.as_mut() {
+                    boulders.buoyancy_dirty = true;
+                }
+            }
+        }
+
+        let mut errors = Vec::new();
+        if let Err(error) = self.editor_state.save_scene_settings_checked(mode) {
+            errors.push(error);
+        }
+        if let Err(error) = self.dock_manager.save_current_checked() {
+            errors.push(error);
+        }
+        if let Err(error) = self.ui.state.save() {
+            errors.push(format!("UI preferences: {error}"));
+        }
+        self.ui.mark_ui_state_dirty();
+        if errors.is_empty() {
+            self.ui.toasts.push(crate::ui::toast::Toast::success(format!(
+                "{} settings and layout restored.", mode.display_name(),
+            )));
+        } else {
+            log::error!("Scene settings reset could not be fully saved: {}", errors.join("; "));
+            self.ui.state.settings_reset_error = Some(errors.join("; "));
+        }
+    }
+
     fn save_persistent_settings(&mut self) {
         crate::ui::control_usage::flush(&self.ui.ctx);
         #[cfg(feature = "vr")]
@@ -5677,6 +5735,11 @@ impl App {
                 self.queue.submit(std::iter::once(encoder.finish()));
                 log::info!("Water fill toggled off; cleared fluid field");
             }
+        }
+
+        if self.ui.state.reset_scene_settings_requested {
+            self.restore_current_scene_settings();
+            scene_request = crate::ui::panel_context::SceneModeRequest::None;
         }
 
         // Handle scene mode requests from UI panels

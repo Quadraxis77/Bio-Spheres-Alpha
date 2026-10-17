@@ -77,6 +77,18 @@ pub enum Panel {
 }
 
 impl Panel {
+    /// Panels whose controls only change presentation, rather than simulation.
+    pub fn is_cosmetic(&self) -> bool {
+        matches!(
+            self,
+            Self::ThemeEditor
+                | Self::GizmoSettings
+                | Self::RenderingControls
+                | Self::LightingSettings
+                | Self::CellTypeVisuals
+        )
+    }
+
     /// Check if this panel is available in the given simulation mode.
     ///
     /// Some panels are only relevant for certain modes:
