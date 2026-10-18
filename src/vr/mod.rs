@@ -8,8 +8,12 @@ mod activity;
 mod controllers;
 pub mod controls;
 pub mod dial;
+mod existing_graphics;
+pub(crate) use existing_graphics::{create_desktop_instance, request_desktop_device};
 mod fade;
 mod frame_wait;
+mod gpu_access;
+pub(crate) use gpu_access::GpuAccess;
 pub mod input;
 mod inspector;
 mod locomotion;
@@ -119,6 +123,7 @@ pub struct VrGraphics {
 
 // Vulkan handles are values owned by the thread-safe wgpu objects above, not
 // pointers to Rust data. Reconstruct the FFI binding only at session creation.
+#[derive(Clone, Copy)]
 struct VulkanBinding {
     instance: u64,
     physical_device: u64,
@@ -129,11 +134,16 @@ struct VulkanBinding {
 
 impl VrBootstrap {
     pub fn new() -> VrResult<Self> {
-        runtime::connect(Self::connect_runtime)
+        runtime::connect(|| Self::connect_runtime(false))
     }
 
-    fn connect_runtime() -> VrResult<Self> {
-        let (instance, refresh_rate_supported) = create_instance()?;
+    /// Attach OpenXR to a running renderer without replacing its GPU device.
+    pub(crate) fn for_existing_device() -> VrResult<Self> {
+        runtime::connect(|| Self::connect_runtime(true))
+    }
+
+    fn connect_runtime(existing_device: bool) -> VrResult<Self> {
+        let (instance, refresh_rate_supported) = create_instance(existing_device)?;
         let properties = instance
             .properties()
             .map_err(|e| format!("OpenXR runtime properties: {e}"))?;
@@ -155,19 +165,25 @@ impl VrBootstrap {
     }
 }
 
-fn create_instance() -> VrResult<(xr::Instance, bool)> {
+fn create_instance(existing_device: bool) -> VrResult<(xr::Instance, bool)> {
     let entry = xr::Entry::linked(&()).map_err(|e| format!("OpenXR loader: {e}"))?;
     let supported = entry
         .enumerate_extensions()
         .map_err(|e| format!("OpenXR extensions: {e}"))?;
-    if !supported.khr_vulkan_enable2 {
+    if existing_device && !supported.khr_vulkan_enable {
+        return Err("The OpenXR runtime cannot attach to an existing Vulkan device".into());
+    }
+    if !existing_device && !supported.khr_vulkan_enable2 {
         return Err(
             "The active OpenXR runtime does not support Vulkan graphics (XR_KHR_vulkan_enable2)."
                 .into(),
         );
     }
     let mut extensions = xr::ExtensionSet::default();
-    extensions.khr_vulkan_enable2 = true;
+    // enable2 requires runtime-created Vulkan handles. The original Vulkan
+    // extension supports attaching an already-running, compatible renderer.
+    extensions.khr_vulkan_enable = existing_device;
+    extensions.khr_vulkan_enable2 = !existing_device;
     extensions.fb_display_refresh_rate = supported.fb_display_refresh_rate;
     extensions.ext_user_presence = supported.ext_user_presence;
     extensions.meta_touch_controller_plus = supported.meta_touch_controller_plus;
@@ -533,6 +549,7 @@ pub struct VrState {
     wheel_pose: Option<xr::Posef>,
     frame_stream: Arc<Mutex<xr::FrameStream<xr::Vulkan>>>,
     frame_waiter: frame_wait::FrameWait,
+    gpu_access: GpuAccess,
     session_epoch: u64,
     local: xr::Space,
     view_space: xr::Space,
@@ -571,20 +588,59 @@ impl VrState {
         ui_width: u32,
         ui_height: u32,
     ) -> VrResult<Self> {
-        // SAFETY: binding names the exact instance/device/queue owned by graphics.
+        Self::new_with_binding(
+            bootstrap,
+            &graphics.device,
+            &graphics.queue,
+            graphics.binding,
+            formats,
+            ui_width,
+            ui_height,
+            GpuAccess::default(),
+        )
+    }
+
+    pub(crate) fn on_existing_device(
+        bootstrap: VrBootstrap,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        ui_width: u32,
+        ui_height: u32,
+        gpu_access: GpuAccess,
+    ) -> VrResult<Self> {
+        let binding = existing_graphics::validate_binding(&bootstrap, device)?;
+        // Keep the running pipelines' exact color format, including sRGB.
+        Self::new_with_binding(
+            bootstrap, device, queue, binding, &[format], ui_width, ui_height, gpu_access,
+        )
+    }
+
+    fn new_with_binding(
+        bootstrap: VrBootstrap,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        binding: VulkanBinding,
+        formats: &[wgpu::TextureFormat],
+        ui_width: u32,
+        ui_height: u32,
+        gpu_access: GpuAccess,
+    ) -> VrResult<Self> {
+        // SAFETY: the validated binding names the exact handles kept alive by device/queue.
         let (session, frame_waiter, frame_stream) = unsafe {
             bootstrap.instance.create_session::<xr::Vulkan>(
                 bootstrap.system,
                 &xr::vulkan::SessionCreateInfo {
-                    instance: graphics.binding.instance as _,
-                    physical_device: graphics.binding.physical_device as _,
-                    device: graphics.binding.device as _,
-                    queue_family_index: graphics.binding.queue_family_index,
-                    queue_index: graphics.binding.queue_index,
+                    instance: binding.instance as _,
+                    physical_device: binding.physical_device as _,
+                    device: binding.device as _,
+                    queue_family_index: binding.queue_family_index,
+                    queue_index: binding.queue_index,
                 },
             )
         }
         .map_err(|e| format!("OpenXR session: {e}"))?;
+        log::info!("OpenXR session created on the rendering device");
         let runtime_formats = session
             .enumerate_swapchain_formats()
             .map_err(|e| format!("OpenXR formats: {e}"))?;
@@ -622,18 +678,18 @@ impl VrState {
             .map(|v| v.recommended_image_rect_height)
             .max()
             .unwrap();
-        let eyes = RuntimeSwapchain::new(&session, &graphics.device, format, width, height, 2)?;
+        let eyes = RuntimeSwapchain::new(&session, device, format, width, height, 2)?;
         let (ui_width, ui_height, ui_pixel_scale) = supersampled_dimensions(
             ui_width,
             ui_height,
-            graphics.device.limits().max_texture_dimension_2d,
+            device.limits().max_texture_dimension_2d,
         );
         log::info!("OpenXR UI resolution: {ui_width} x {ui_height} ({ui_pixel_scale:.2}x)");
-        let ui = RuntimeSwapchain::new(&session, &graphics.device, format, ui_width, ui_height, 2)?;
+        let ui = RuntimeSwapchain::new(&session, device, format, ui_width, ui_height, 2)?;
         let (wheel_width, wheel_height, wheel_pixel_scale) = supersampled_dimensions(
             controls::WHEEL_PIXELS,
             controls::WHEEL_PIXELS,
-            graphics.device.limits().max_texture_dimension_2d,
+            device.limits().max_texture_dimension_2d,
         );
         let local = session
             .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
@@ -666,7 +722,7 @@ impl VrState {
         Ok(Self {
             wheel: RuntimeSwapchain::new(
                 &session,
-                &graphics.device,
+                device,
                 format,
                 wheel_width,
                 wheel_height,
@@ -674,21 +730,21 @@ impl VrState {
             )?,
             wheel_pixel_scale,
             wheel_ctx: egui::Context::default(),
-            wheel_renderer: egui_wgpu::Renderer::new(&graphics.device, format, Default::default()),
+            wheel_renderer: egui_wgpu::Renderer::new(device, format, Default::default()),
             wheel_pose: None,
             actions,
-            mirror: mirror::Mirror::new(&graphics.device, format),
-            fade: fade::Fade::new(&graphics.device, format),
+            mirror: mirror::Mirror::new(device, format),
+            fade: fade::Fade::new(device, format),
             controller_renderer: controllers::Controllers::new(
-                &graphics.device,
-                &graphics.queue,
+                device,
+                queue,
                 format,
                 (width / 2).max(1),
                 (height / 2).max(1),
             ),
             hands: RuntimeSwapchain::new(
                 &session,
-                &graphics.device,
+                device,
                 format,
                 (width / 2).max(1),
                 (height / 2).max(1),
@@ -704,17 +760,19 @@ impl VrState {
             frame_waiter: frame_wait::FrameWait::new(
                 frame_waiter,
                 frame_stream.clone(),
-                graphics.queue.clone(),
-                graphics.device.clone(),
+                queue.clone(),
+                device.clone(),
+                gpu_access.clone(),
             ),
+            gpu_access,
             frame_stream,
             session_epoch: 0,
             local,
             view_space,
             session,
             instance: bootstrap.instance,
-            device: graphics.device.clone(),
-            queue: graphics.queue.clone(),
+            device: device.clone(),
+            queue: queue.clone(),
             running: false,
             focused: false,
             visible: false,
@@ -725,7 +783,7 @@ impl VrState {
             frame: None,
             views: vec![],
             ui_anchor: panel::PanelAnchor::default(),
-            screen_surface: surface::Surface::new(&graphics.device, format),
+            screen_surface: surface::Surface::new(device, format),
             ui_projected: false,
             ui_space_change: None,
             immersive: false,
@@ -761,6 +819,9 @@ impl VrState {
     }
     pub fn ui_pixel_scale(&self) -> f32 {
         self.ui_pixel_scale
+    }
+    pub(crate) fn gpu_access(&self) -> GpuAccess {
+        self.gpu_access.clone()
     }
     pub fn running(&self) -> bool {
         self.running
@@ -931,10 +992,12 @@ impl VrState {
         if !self.running || self.exiting {
             return Ok(());
         }
-        let Some(frame) = self
-            .frame_waiter
-            .poll(self.session_epoch, self.headset_active())?
-        else {
+        let waited = if self.user_present == Some(false) {
+            self.frame_waiter.drain(self.session_epoch)?
+        } else {
+            self.frame_waiter.poll(self.session_epoch, self.headset_active())?
+        };
+        let Some(frame) = waited else {
             return Ok(());
         };
         // Refresh activity independently of headset_active so a sleeping
@@ -1365,7 +1428,10 @@ impl VrState {
             .and(end)?;
         // Start waiting for the next headset frame immediately so the runtime
         // wait overlaps app work instead of blocking at the next render entry.
-        self.frame_waiter.request(self.session_epoch)
+        if self.user_present != Some(false) {
+            self.frame_waiter.request(self.session_epoch)?;
+        }
+        Ok(())
     }
 
     pub fn recenter_panel(&mut self) {
@@ -1635,6 +1701,11 @@ impl VrState {
 
 impl Drop for VrState {
     fn drop(&mut self) {
+        // A renderer panic may already mean the device is lost. Do not submit
+        // or poll it again during unwinding and trigger a second panic.
+        if std::thread::panicking() {
+            return;
+        }
         let _ = self.end_frame();
         if self.running {
             let _ = self.session.request_exit();
@@ -1652,7 +1723,7 @@ pub fn runtime_info() -> VrResult<String> {
 }
 
 fn runtime_info_current() -> VrResult<String> {
-    let (instance, refresh) = create_instance()?;
+    let (instance, refresh) = create_instance(false)?;
     let properties = instance
         .properties()
         .map_err(|e| format!("OpenXR runtime properties: {e}"))?;

@@ -180,13 +180,13 @@ pub struct App {
     #[cfg(feature = "vr")]
     vr_reset_request: Option<crate::ui::panel_context::SceneModeRequest>,
     #[cfg(feature = "vr")]
-    vr_probe: Option<
-        std::sync::mpsc::Receiver<
-            crate::vr::VrResult<(crate::vr::VrBootstrap, crate::vr::VrGraphics)>,
-        >,
-    >,
+    vr_probe: Option<std::sync::mpsc::Receiver<crate::vr::VrResult<crate::vr::VrBootstrap>>>,
     #[cfg(feature = "vr")]
     vr_probe_next: std::time::Instant,
+    #[cfg(feature = "vr")]
+    vr_connection_error: Option<String>,
+    #[cfg(feature = "vr")]
+    vr_gpu_access: crate::vr::GpuAccess,
     #[cfg(feature = "vr")]
     vr_was_presenting: bool,
     /// Prevents system sleep while focused or while an unpaused simulation runs.
@@ -243,7 +243,7 @@ pub struct App {
     // panics with "Trying to destroy a SurfaceAcquireSemaphores that is still
     // in use by a SurfaceTexture".
     surface: wgpu::Surface<'static>,
-    graphics_instance: wgpu::Instance,
+    _graphics_instance: wgpu::Instance,
     device: wgpu::Device,
     /// Current high-level application phase (main menu vs in-game).
     app_phase: AppPhase,
@@ -385,10 +385,6 @@ impl App {
         if self.vr.is_some() || std::env::args().any(|arg| arg == "--no-vr") {
             return;
         }
-        // Keep device changes outside screenshots, captures, and deferred GPU work.
-        if self.deferred_action.is_some() || self.editor_state.gif_capture.is_some() {
-            return;
-        }
         let now = std::time::Instant::now();
         if let Some(probe) = &self.vr_probe {
             let result = match probe.try_recv() {
@@ -398,9 +394,19 @@ impl App {
             };
             self.vr_probe = None;
             self.vr_probe_next = now + std::time::Duration::from_secs(2);
-            match result.and_then(|(bootstrap, graphics)| self.attach_headset(bootstrap, graphics))
-            {
-                Ok(()) => log::info!("Automatic VR headset connection ready"),
+            match result {
+                Ok(bootstrap) => match self.attach_headset(bootstrap) {
+                    Ok(()) => {
+                        self.vr_connection_error = None;
+                        log::info!("Automatic VR headset connection ready");
+                    }
+                    Err(error) => {
+                        if self.vr_connection_error.as_ref() != Some(&error) {
+                            log::warn!("Headset detected but VR attachment failed: {error}");
+                            self.vr_connection_error = Some(error);
+                        }
+                    }
+                },
                 Err(error) => log::debug!("Automatic VR detection: {error}"),
             }
         } else if now >= self.vr_probe_next {
@@ -409,11 +415,7 @@ impl App {
             std::thread::Builder::new()
                 .name("VR headset detection".into())
                 .spawn(move || {
-                    let result = crate::vr::VrBootstrap::new().and_then(|bootstrap| {
-                        bootstrap
-                            .create_graphics()
-                            .map(|graphics| (bootstrap, graphics))
-                    });
+                    let result = crate::vr::VrBootstrap::for_existing_device();
                     let _ = sender.send(result);
                 })
                 .expect("VR headset detection thread");
@@ -421,105 +423,21 @@ impl App {
     }
 
     #[cfg(feature = "vr")]
-    fn attach_headset(
-        &mut self,
-        bootstrap: crate::vr::VrBootstrap,
-        graphics: crate::vr::VrGraphics,
-    ) -> Result<(), String> {
-        let surface = graphics
-            .instance
-            .create_surface(self.window.clone())
-            .map_err(|e| e.to_string())?;
-        if !graphics.adapter.is_surface_supported(&surface) {
-            return Err("The headset GPU cannot present to this desktop window".into());
-        }
-        let caps = surface.get_capabilities(&graphics.adapter);
-        let vr = crate::vr::VrState::new(
+    fn attach_headset(&mut self, bootstrap: crate::vr::VrBootstrap) -> Result<(), String> {
+        // A headset is another view of the running scene. Do not change devices,
+        // reload snapshots, regenerate terrain, or replace the desktop surface.
+        let vr = crate::vr::VrState::on_existing_device(
             bootstrap,
-            &graphics,
-            &caps.formats,
-            self.config.width,
-            self.config.height,
-        )?;
-        let mut config = self.config.clone();
-        config.format = vr.format();
-        config.present_mode = wgpu::PresentMode::AutoNoVsync;
-        config.alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
-            wgpu::CompositeAlphaMode::Opaque
-        } else {
-            caps.alpha_modes[0]
-        };
-        // Construct replacements before touching the active desktop state.
-        let scene_manager = self.scene_manager.recreate_on_device(
             &self.device,
             &self.queue,
-            &graphics.device,
-            &graphics.queue,
-            &config,
-            &self.editor_state,
+            self.config.format,
+            self.config.width,
+            self.config.height,
+            self.vr_gpu_access.clone(),
         )?;
-        let mut renderer =
-            self.ui
-                .renderer_on_device(&graphics.device, &graphics.queue, config.format);
-        let menu = self.main_menu_scene.as_ref().map(|menu| {
-            menu.recreate_on_device(&graphics.device, &graphics.queue, &config, &mut renderer)
-        });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(std::time::Duration::from_secs(10)),
-            })
-            .map_err(|e| e.to_string())?;
-        Self::handoff_surface(
-            &mut self.surface,
-            surface,
-            &graphics.device,
-            &config,
-            &self.graphics_instance,
-            &self.device,
-            &self.config,
-            self.window.clone(),
-        )?;
-        self.vr_capture_target = None;
-        self.scene_manager = scene_manager;
-        self.main_menu_scene = menu;
-        self.ui.renderer = renderer;
-        self.bug_report_gpu = Some(graphics.adapter.get_info());
-        self.graphics_instance = graphics.instance;
-        self.device = graphics.device;
-        self.queue = graphics.queue;
-        self.config = config;
         self.vr = Some(vr);
         self.last_render_time = std::time::Instant::now();
         self.next_frame_time = self.last_render_time;
-        Ok(())
-    }
-
-    #[cfg(feature = "vr")]
-    fn handoff_surface(
-        current: &mut wgpu::Surface<'static>,
-        replacement: wgpu::Surface<'static>,
-        device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
-        old_instance: &wgpu::Instance,
-        old_device: &wgpu::Device,
-        old_config: &wgpu::SurfaceConfiguration,
-        window: Arc<Window>,
-    ) -> Result<(), String> {
-        // A Windows HWND can own only one configured native swapchain. Merely
-        // creating the replacement surface is safe; configuring it before the
-        // previous surface is dropped produces "Native window is in use".
-        drop(std::mem::replace(current, replacement));
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
-        current.configure(device, config);
-        if let Some(error) = pollster::block_on(device.pop_error_scope()) {
-            let restored = old_instance
-                .create_surface(window)
-                .map_err(|e| e.to_string())?;
-            drop(std::mem::replace(current, restored));
-            current.configure(old_device, old_config);
-            return Err(format!("VR desktop swapchain handoff: {error}"));
-        }
         Ok(())
     }
 
@@ -1544,6 +1462,10 @@ impl App {
             #[cfg(feature = "vr")]
             vr_probe_next: std::time::Instant::now(),
             #[cfg(feature = "vr")]
+            vr_connection_error: None,
+            #[cfg(feature = "vr")]
+            vr_gpu_access: Default::default(),
+            #[cfg(feature = "vr")]
             vr_was_presenting: false,
             sleep_inhibitor,
             window_focused,
@@ -1577,7 +1499,7 @@ impl App {
             app_cursor_icon: CursorIcon::Default,
             device,
             surface,
-            graphics_instance,
+            _graphics_instance: graphics_instance,
             app_phase: AppPhase::MainMenu,
             main_scene_load_pending: false,
             main_menu_scene: Some(main_menu_scene),
@@ -4345,6 +4267,15 @@ impl App {
     }
 
     fn render(&mut self) {
+        // An idle OpenXR submission shares the native Vulkan queue. Yield a
+        // frame instead of racing it or blocking the window event loop.
+        #[cfg(feature = "vr")]
+        let gpu_access = self.vr_gpu_access.clone();
+        #[cfg(feature = "vr")]
+        let Some(_gpu) = gpu_access.try_lock() else {
+            self.next_frame_time = std::time::Instant::now() + std::time::Duration::from_millis(2);
+            return;
+        };
         self.bug_reporter.poll();
         self.sync_sleep_inhibitor();
         #[cfg(feature = "vr")]
@@ -6949,6 +6880,19 @@ struct AppState {
     app: Option<App>,
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        #[cfg(feature = "vr")]
+        if !std::thread::panicking() {
+            let gpu_access = self.vr_gpu_access.clone();
+            let _gpu = gpu_access.lock();
+            // Release VR before the application's graphics resources, and keep
+            // teardown from overlapping a pending native idle submission.
+            self.vr.take();
+        }
+    }
+}
+
 impl ApplicationHandler for AppState {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.app.is_some() {
@@ -7075,10 +7019,21 @@ impl ApplicationHandler for AppState {
             }
         };
         // Initialize wgpu
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance_descriptor = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
-        });
+        };
+        #[cfg(feature = "vr")]
+        let instance = if !std::env::args().any(|arg| arg == "--no-vr") {
+            crate::vr::create_desktop_instance(&instance_descriptor).unwrap_or_else(|error| {
+                log::warn!("Vulkan headset support unavailable: {error}");
+                wgpu::Instance::new(&instance_descriptor)
+            })
+        } else {
+            wgpu::Instance::new(&instance_descriptor)
+        };
+        #[cfg(not(feature = "vr"))]
+        let instance = wgpu::Instance::new(&instance_descriptor);
 
         #[cfg(feature = "vr")]
         let instance = vr_graphics
@@ -7094,6 +7049,25 @@ impl ApplicationHandler for AppState {
             force_fallback_adapter: false,
         }))
         .unwrap();
+
+        #[cfg(feature = "vr")]
+        let adapter = if !std::env::args().any(|arg| arg == "--no-vr")
+            && adapter.get_info().backend != wgpu::Backend::Vulkan
+        {
+            let mut candidates: Vec<_> = instance
+                .enumerate_adapters(wgpu::Backends::VULKAN)
+                .into_iter()
+                .filter(|a| a.is_surface_supported(&surface))
+                .collect();
+            candidates.sort_by_key(|a| match a.get_info().device_type {
+                wgpu::DeviceType::DiscreteGpu => 0,
+                wgpu::DeviceType::IntegratedGpu => 1,
+                _ => 2,
+            });
+            candidates.into_iter().next().unwrap_or(adapter)
+        } else {
+            adapter
+        };
 
         // wgpu 27 exposes ray queries through Vulkan. A platform's default
         // backend (notably DX12) may omit them even on ray-tracing hardware.
@@ -7212,7 +7186,16 @@ impl ApplicationHandler for AppState {
                     .required_limits
                     .using_acceleration_structure_values(adapter.limits());
             }
-            let requested_device = pollster::block_on(adapter.request_device(&device_descriptor));
+            let request_device = |descriptor: &wgpu::DeviceDescriptor<'_>| {
+                #[cfg(feature = "vr")]
+                if !std::env::args().any(|arg| arg == "--no-vr")
+                    && adapter_info.backend == wgpu::Backend::Vulkan
+                {
+                    return crate::vr::request_desktop_device(&adapter, descriptor);
+                }
+                pollster::block_on(adapter.request_device(descriptor)).map_err(|e| e.to_string())
+            };
+            let requested_device = request_device(&device_descriptor);
             match requested_device {
                 Ok(pair) => pair,
                 Err(error) if hardware_ray_queries => {
@@ -7226,7 +7209,7 @@ impl ApplicationHandler for AppState {
                     device_descriptor.required_limits = device_descriptor
                         .required_limits
                         .using_acceleration_structure_values(wgpu::Limits::default());
-                    pollster::block_on(adapter.request_device(&device_descriptor))
+                    request_device(&device_descriptor)
                         .expect("Failed to create fallback wgpu device")
                 }
                 Err(error) => panic!("Failed to create wgpu device: {error}"),
@@ -7365,6 +7348,9 @@ impl ApplicationHandler for AppState {
 
         #[cfg(feature = "vr")]
         if let Some(app) = &mut self.app {
+            if let Some(vr) = &vr_state {
+                app.vr_gpu_access = vr.gpu_access();
+            }
             app.vr = vr_state;
         }
     }
@@ -7385,6 +7371,12 @@ impl ApplicationHandler for AppState {
             return;
         }
 
+        // Resize/close/input actions can touch GPU resources too. Redraw takes
+        // its own guard in render(), so do not acquire it twice.
+        #[cfg(feature = "vr")]
+        let gpu_access = app.vr_gpu_access.clone();
+        #[cfg(feature = "vr")]
+        let _gpu = (!matches!(event, WindowEvent::RedrawRequested)).then(|| gpu_access.lock());
         if !app.handle_event(&event) {
             event_loop.exit();
         }
@@ -7394,6 +7386,8 @@ impl ApplicationHandler for AppState {
         if let Some(app) = &mut self.app {
             #[cfg(feature = "vr")]
             if app.vr.as_ref().is_some_and(|vr| vr.should_exit()) {
+                let gpu_access = app.vr_gpu_access.clone();
+                let _gpu = gpu_access.lock();
                 app.vr = None;
                 app.vr_probe_next = std::time::Instant::now() + std::time::Duration::from_secs(2);
             }
@@ -7539,93 +7533,3 @@ mod bug_report_ui_tests;
 #[cfg(test)]
 #[path = "main_scene_loading_ui_tests.rs"]
 mod main_scene_loading_ui_tests;
-
-#[cfg(all(test, feature = "vr", target_os = "windows"))]
-mod vr_tests {
-    use super::*;
-    use winit::platform::windows::EventLoopBuilderExtWindows;
-
-    #[test]
-    #[allow(deprecated)]
-    fn desktop_to_vr_surface_handoff_releases_the_native_window_first() {
-        let mut builder = EventLoop::builder();
-        builder.with_any_thread(true);
-        let event_loop = builder.build().unwrap();
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_visible(false)
-                        .with_inner_size(winit::dpi::PhysicalSize::new(64, 64)),
-                )
-                .unwrap(),
-        );
-        let create = || {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::VULKAN,
-                ..Default::default()
-            });
-            let surface = instance.create_surface(window.clone()).unwrap();
-            let adapter =
-                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    compatible_surface: Some(&surface),
-                    ..Default::default()
-                }))
-                .unwrap();
-            let (device, queue) =
-                pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-            let config = surface.get_default_config(&adapter, 64, 64).unwrap();
-            (instance, surface, device, queue, config)
-        };
-        let (old_instance, mut current, old_device, old_queue, old_config) = create();
-        current.configure(&old_device, &old_config);
-        let old_frame = current.get_current_texture().unwrap();
-        old_frame.present();
-        old_device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .unwrap();
-        let (_instance, replacement, device, queue, config) = create();
-        App::handoff_surface(
-            &mut current,
-            replacement,
-            &device,
-            &config,
-            &old_instance,
-            &old_device,
-            &old_config,
-            window,
-        )
-        .unwrap();
-        let frame = current.get_current_texture().unwrap();
-        let view = frame.texture.create_view(&Default::default());
-        let mut encoder = device.create_command_encoder(&Default::default());
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLUE),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-        }
-        queue.submit([encoder.finish()]);
-        frame.present();
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .unwrap();
-        drop(view);
-        drop(current);
-        drop(old_queue);
-    }
-}

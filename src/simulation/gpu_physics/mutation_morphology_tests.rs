@@ -420,6 +420,202 @@ fn gpu_body_plan_mutations_develop_connected_squares_cubes_and_branches() {
 }
 
 #[test]
+fn body_plans_coordinate_long_programs_and_keep_unexpressed_modes_mutable() {
+    let mut fixture = mutation_fixture(10);
+    // Six modes form one connected program; four have independent self-routes.
+    // All ten must stay eligible, regardless of current expression.
+    let source_routes = [
+        [1i32, 0],
+        [0, 2],
+        [3, 3],
+        [4, 4],
+        [5, 5],
+        [0, 0],
+        [6, 6],
+        [7, 7],
+        [8, 8],
+        [9, 9],
+    ];
+    fixture.queue.write_buffer(
+        &fixture.buffers[10],
+        0,
+        bytemuck::cast_slice(&source_routes),
+    );
+    fixture
+        .queue
+        .write_buffer(&fixture.buffers[11], 0, bytemuck::cast_slice(&[2u32; 10]));
+    for index in 0..5 {
+        let value = match index {
+            0 => [0.0f32, 2.0, 250.0, 1.0],
+            1 => [1.5, 1.0, 0.0, 1.0],
+            2 => [5.0, 0.65, -1.0, 0.0],
+            3 => [0.0; 4],
+            _ => [20.0, -1.0, -1.0, 0.0],
+        };
+        fixture.queue.write_buffer(
+            &fixture.buffers[index],
+            0,
+            bytemuck::cast_slice(&[value; 10]),
+        );
+    }
+    for buffer in &fixture.buffers[5..10] {
+        fixture.queue.write_buffer(
+            buffer,
+            0,
+            bytemuck::cast_slice(&[[0.0f32, 0.0, 0.0, 1.0]; 10]),
+        );
+    }
+    let mut latent_seen = [false; 4];
+    for pattern in 0..3 {
+        fixture.queue.write_buffer(
+            &fixture.genomes,
+            0,
+            bytemuck::cast_slice(&[0u32; CELLS as usize]),
+        );
+        fixture.queue.write_buffer(
+            &fixture.modes,
+            0,
+            bytemuck::cast_slice(&[0u32; CELLS as usize]),
+        );
+        fixture.mutate(
+            MutationParamEntry {
+                buffer_id: buffer_id::GENOME_MODE_DATA,
+                element_offset: pattern,
+                data_type: data_type::BODY_PLAN,
+                weight: 1.0,
+                min_delta: 0.0,
+                max_delta: 0.0,
+                min_value: 0.0,
+                max_value: 0.0,
+            },
+            pattern,
+        );
+        let ids: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.genomes,
+            0,
+            u64::from(CELLS) * 4,
+        );
+        let mut applied = 0;
+        let mut developed = 0;
+        for id in ids.into_iter().filter(|&id| id != 0) {
+            applied += 1;
+            let meta: Vec<u32> = read(
+                &fixture.device,
+                &fixture.queue,
+                &fixture.system.genome_meta_buffer,
+                u64::from(id) * 16,
+                16,
+            );
+            assert_eq!(meta[0], 10);
+            let base = meta[1];
+            let props = |index: usize| -> Vec<[f32; 4]> {
+                read(
+                    &fixture.device,
+                    &fixture.queue,
+                    &fixture.buffers[index],
+                    u64::from(base) * 16,
+                    160,
+                )
+            };
+            let p2 = props(2);
+            let rotations: Vec<_> = (5..10).map(props).collect();
+            let routes: Vec<[i32; 2]> = read(
+                &fixture.device,
+                &fixture.queue,
+                &fixture.buffers[10],
+                u64::from(base) * 8,
+                80,
+            );
+            let flags: Vec<Vec<u32>> = [12, 13, 14, 30, 31]
+                .iter()
+                .map(|&index| {
+                    read(
+                        &fixture.device,
+                        &fixture.queue,
+                        &fixture.buffers[index],
+                        u64::from(base) * 4,
+                        40,
+                    )
+                })
+                .collect();
+            let cycle_changed = p2[0][1] == 0.5;
+            let independent: Vec<_> = (6..10).filter(|&index| p2[index][1] == 0.5).collect();
+            assert_eq!(
+                independent.len(),
+                usize::from(!cycle_changed),
+                "one selected graph component changes at a time"
+            );
+            for &index in &independent {
+                latent_seen[index - 6] = true;
+            }
+            let mut offspring = Genome::default();
+            for index in 0..10 {
+                let mode = &mut offspring.modes[index];
+                mode.max_splits = p2[index][0] as i32;
+                mode.split_ratio = p2[index][1];
+                mode.child_a.mode_number = routes[index][0] - base as i32;
+                mode.child_b.mode_number = routes[index][1] - base as i32;
+                assert_eq!(
+                    [mode.child_a.mode_number, mode.child_b.mode_number],
+                    source_routes[index],
+                    "structural geometry must preserve the developmental loops"
+                );
+                mode.child_a.orientation = Quat::from_array(rotations[0][index]);
+                mode.child_b.orientation = Quat::from_array(rotations[1][index]);
+                mode.child_a_after_split_orientation = Quat::from_array(rotations[2][index]);
+                mode.child_b_after_split_orientation = Quat::from_array(rotations[3][index]);
+                mode.parent_make_adhesion = flags[0][index] != 0;
+                mode.child_a.keep_adhesion = flags[1][index] != 0;
+                mode.child_b.keep_adhesion = flags[2][index] != 0;
+                mode.child_a_after_split_keep_adhesion = flags[3][index] != 0;
+                mode.child_b_after_split_keep_adhesion = flags[4][index] != 0;
+                let changed = if index < 6 {
+                    cycle_changed
+                } else {
+                    independent.contains(&index)
+                };
+                if changed {
+                    assert_eq!(mode.split_ratio, 0.5);
+                    if index < 6 {
+                        for rotation in &rotations {
+                            assert_eq!(
+                                rotation[index], rotation[0],
+                                "a selected cycle must keep coherent turns across every mode"
+                            );
+                        }
+                    }
+                } else {
+                    assert_eq!(
+                        mode.split_ratio, 0.65,
+                        "unselected programs keep their geometry"
+                    );
+                    for rotation in &rotations {
+                        assert_eq!(rotation[index], [0.0, 0.0, 0.0, 1.0]);
+                    }
+                }
+            }
+            // Inspect all mutants, then actually develop several independent
+            // variants of each operator beyond a simple two-neighbor chain.
+            if cycle_changed && developed < 4 {
+                assert_structure(&offspring, pattern);
+                developed += 1;
+            }
+        }
+        assert!(applied >= 8, "must exercise many independent selections");
+        assert_eq!(
+            developed, 4,
+            "must develop multiple variants of each selected cycle"
+        );
+    }
+    assert!(
+        latent_seen.into_iter().all(|seen| seen),
+        "all unexpressed modes must remain eligible for structural mutation"
+    );
+}
+
+#[test]
 fn repeated_radiation_keeps_development_cycles_and_updates_newborn_settings() {
     let mut fixture = mutation_fixture(3);
     let p0 = [
@@ -650,8 +846,19 @@ fn singleton_append_reserves_space_for_both_cycle_partner_and_new_mode() {
             u64::from(meta[1]) * 8,
             24,
         );
-        assert_eq!(routes[0][0], meta[1] as i32 + 1);
-        assert!(routes[1].contains(&(meta[1] as i32)));
+        let local_routes: Vec<[i32; 2]> = routes
+            .iter()
+            .map(|children| children.map(|child| child - meta[1] as i32))
+            .collect();
+        assert_eq!(
+            reachable_modes(&local_routes, 0).len(),
+            3,
+            "the new mode must be connected to the selected singleton program"
+        );
+        assert!(
+            reachable_modes(&local_routes, 1).contains(&0),
+            "the development cycle must still return"
+        );
         assert!(routes
             .iter()
             .flatten()
@@ -1320,4 +1527,169 @@ fn established_cycle_partners_can_still_release_unbonded_offspring() {
             "established downstream release behavior must remain evolvable"
         );
     }
+}
+
+fn reachable_modes(routes: &[[i32; 2]], start: usize) -> std::collections::HashSet<usize> {
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![start];
+    while let Some(mode) = pending.pop() {
+        if !seen.insert(mode) {
+            continue;
+        }
+        for &child in &routes[mode] {
+            assert!((0..routes.len() as i32).contains(&child));
+            if !seen.contains(&(child as usize)) {
+                pending.push(child as usize);
+            }
+        }
+    }
+    seen
+}
+
+#[test]
+fn cycle_maintenance_preserves_long_return_paths_across_the_full_mode_range() {
+    let count = crate::genome::MAX_MODES;
+    assert!(
+        count <= 128,
+        "WGSL traversal must cover every supported mode"
+    );
+    let mut fixture = mutation_fixture(count);
+    let source: Vec<[i32; 2]> = (0..count)
+        .map(|mode| [((mode + 1) % count) as i32; 2])
+        .collect();
+    fixture
+        .queue
+        .write_buffer(&fixture.buffers[10], 0, bytemuck::cast_slice(&source));
+    fixture.queue.write_buffer(
+        &fixture.buffers[11],
+        0,
+        bytemuck::cast_slice(&vec![2u32; count]),
+    );
+    fixture.mutate(
+        MutationParamEntry {
+            buffer_id: buffer_id::MODE_VISUALS,
+            element_offset: 0,
+            data_type: data_type::CONTINUOUS_F32,
+            weight: 1.0,
+            min_delta: 0.01,
+            max_delta: 0.01,
+            min_value: 0.0,
+            max_value: 1.0,
+        },
+        0,
+    );
+    let ids: Vec<u32> = read(
+        &fixture.device,
+        &fixture.queue,
+        &fixture.genomes,
+        0,
+        u64::from(CELLS) * 4,
+    );
+    assert!(ids.iter().filter(|&&id| id != 0).count() >= 8);
+    for id in ids.into_iter().filter(|&id| id != 0).take(8) {
+        let meta: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.system.genome_meta_buffer,
+            u64::from(id) * 16,
+            16,
+        );
+        let routes: Vec<[i32; 2]> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.buffers[10],
+            u64::from(meta[1]) * 8,
+            count as u64 * 8,
+        );
+        let local: Vec<_> = routes
+            .iter()
+            .map(|children| children.map(|child| child - meta[1] as i32))
+            .collect();
+        assert_eq!(
+            local, source,
+            "existing long loops must survive unrelated mutation without a two-mode shortcut"
+        );
+        assert_eq!(reachable_modes(&local, 0).len(), count);
+    }
+}
+
+#[test]
+fn chain_extensions_can_recruit_unexpressed_modes_without_losing_the_existing_cycle() {
+    let mut fixture = mutation_fixture(10);
+    let source: Vec<[i32; 2]> = (0..10)
+        .map(|mode| match mode {
+            0 => [1, 0],
+            1 => [0, 1],
+            _ => [mode; 2],
+        })
+        .collect();
+    fixture
+        .queue
+        .write_buffer(&fixture.buffers[10], 0, bytemuck::cast_slice(&source));
+    fixture
+        .queue
+        .write_buffer(&fixture.buffers[11], 0, bytemuck::cast_slice(&[2u32; 10]));
+    let mut expanded = 0;
+    for frame in 0..8 {
+        fixture.queue.write_buffer(
+            &fixture.genomes,
+            0,
+            bytemuck::cast_slice(&[0u32; CELLS as usize]),
+        );
+        fixture.queue.write_buffer(
+            &fixture.modes,
+            0,
+            bytemuck::cast_slice(&[0u32; CELLS as usize]),
+        );
+        fixture.mutate(
+            MutationParamEntry {
+                buffer_id: buffer_id::CHILD_MODE_INDICES,
+                element_offset: 0,
+                data_type: data_type::CHAIN_EXTEND,
+                weight: 1.0,
+                min_delta: 0.0,
+                max_delta: 0.0,
+                min_value: 0.0,
+                max_value: 0.0,
+            },
+            frame,
+        );
+        let ids: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.genomes,
+            0,
+            u64::from(CELLS) * 4,
+        );
+        for id in ids.into_iter().filter(|&id| id != 0) {
+            let meta: Vec<u32> = read(
+                &fixture.device,
+                &fixture.queue,
+                &fixture.system.genome_meta_buffer,
+                u64::from(id) * 16,
+                16,
+            );
+            let routes: Vec<[i32; 2]> = read(
+                &fixture.device,
+                &fixture.queue,
+                &fixture.buffers[10],
+                u64::from(meta[1]) * 8,
+                80,
+            );
+            let local: Vec<_> = routes
+                .iter()
+                .map(|children| children.map(|child| child - meta[1] as i32))
+                .collect();
+            let expressed = reachable_modes(&local, 0);
+            if expressed.contains(&1) && expressed.len() > 2 {
+                assert!(expressed.iter().any(|&mode| mode >= 2));
+                assert!(
+                    reachable_modes(&local, 1).contains(&0),
+                    "extended programs must still return through the cycle"
+                );
+                expanded += 1;
+            }
+        }
+    }
+    assert!(expanded >= 4, "explicit graph mutations must be able to recruit previously unexpressed modes without erasing the existing program; observed {expanded}");
 }

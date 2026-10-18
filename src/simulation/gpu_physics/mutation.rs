@@ -108,9 +108,8 @@ pub mod data_type {
     /// T.child_b -> L. This cross-connects two separate loop structures, making them
     /// share a convergence point and creating the branching interconnected topology.
     pub const LOOP_MERGE: u32 = 7;
-    /// Append a dormant mode to the tail of the genome.
-    /// The new mode inherits cell type and basic params from the last mode and is
-    /// self-referencing (dormant). Future CHAIN_EXTEND/LOOP_BRANCH mutations wire it in.
+    /// Append storage for a new mode and splice it into a randomly selected
+    /// inherited mode's child route, retaining the former destination.
     pub const MODE_APPEND: u32 = 10;
     /// Remove the last mode from the genome if no other mode references it.
     /// If the last mode is wired into the developmental graph, the operation is a no-op.
@@ -133,7 +132,7 @@ pub mod data_type {
     ///   ~10% -> 15 deg fine (small rotations around each axis)
     /// element_offset encodes which vec4 sub-buffer (0=v0, 4=v1, 8=v2, 12=v3, 16=v4).
     pub const QUAT_SNAP: u32 = 9;
-    /// Coordinated geometry and adhesion on a mode and its immediate children.
+    /// Coordinated geometry and adhesion through a selected division program.
     /// element_offset: 0 = planar lattice, 1 = cubic lattice, 2 = side branch.
     /// Keeps the developmental graph and cell types, including reusable sequences.
     pub const BODY_PLAN: u32 = 12;
@@ -1936,8 +1935,7 @@ impl MutationSystem {
                 data_type: data_type::SIGNAL_WIRE,
             },
             // -- Structural mutations: MODE_APPEND and MODE_TRIM -------------------
-            // Equal weight so genome length is a random walk, naturally selected by
-            // whether appended modes ever get wired into the developmental graph.
+            // Append introduces a route insertion; trim removes unreferenced modes.
             // Structural changes should be much rarer than ordinary mutations to
             // existing modes; most evolution should tune behavior before changing
             // genome shape.

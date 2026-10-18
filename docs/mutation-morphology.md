@@ -13,8 +13,12 @@ The normal GPU mutation table includes three coordinated body-plan operators:
 | Cubic lattice | Identical 120-degree body-diagonal turns on both children | Splits cycle through three perpendicular axes, allowing cubic structures. |
 | Side branch | One quarter-turn child around X or Y, one straight child | Perpendicular inheritance duplicates bonds into junctions and branching meshes. |
 
-Each operator changes a selected mode and its immediate child modes. The
-mutation pipeline also maintains the intentional initial-mode development cycle
+Each operator selects from every inherited mode, including modes not currently
+expressed. It coordinates that selected mode's connected program through normal
+and final-split division routes. This keeps a multi-mode cycle's split geometry
+consistent without changing its routing or cell types. Other disconnected
+programs remain independently mutable. The mutation pipeline also maintains
+the intentional initial-mode development cycle
 described below. A single-mode parent receives a partner before the selected
 operator runs, so coordinated geometry can include that partner.
 
@@ -52,11 +56,19 @@ Population-level persistence and adaptive benefit remain unmeasured.
 Mutated genomes maintain a route from their initial mode through a partner and
 back to the initial mode. This is an intentional part of reproduction and
 regrowth. A one-mode genome gains a second mode when the mode limit permits it.
-An existing non-initial child is preferred as the partner, and the other child
-slots remain available for branching. When a cycle is newly constructed, both
-ends create and retain sibling adhesions so growth can form a connected body.
-Established cycle partners retain their downstream release choices. An explicit append mutation reserves its
-own additional slot after any seeded partner.
+An existing non-initial child is preferred as the entry. Any existing normal
+division path back to the initial mode satisfies the cycle requirement,
+including long loops. Maintenance preserves intermediate modes instead of
+forcing a two-mode shortcut. When a return must be added, it uses a reachable
+self-reference when possible so a newly extended chain remains connected. When
+a cycle is newly constructed, both ends create and retain sibling adhesions so
+growth can form a connected body. Established cycle partners retain their
+downstream release choices. An explicit append mutation reserves its own
+additional slot after any seeded partner. It splices the new mode into either child route of a randomly selected
+inherited mode, retaining the route's previous destination through the new mode.
+Storage order does not determine the attachment point. Selection includes both
+expressed and unexpressed modes; subsequent graph mutations can connect either
+program to the rest of development.
 
 Mode transitions reset split counters. Max Splits therefore limits divisions
 within a mode; it is not a lifetime limit for a lineage following a cycle.
@@ -88,3 +100,17 @@ normal and subtle mutation modes. Geometry tests develop the actual mutated
 cycles through the division executor. The default-lineage regression starts
 from the actual ten-mode default, includes descendants with 32 inherited splits,
 and checks connected multicellular growth with nutrients supplied.
+
+## Mode recruitment and graph preservation
+
+Unexpressed modes are part of the evolving genome. They remain eligible for
+geometry, cell-type, physiology, and graph mutations. Chain extension can bring
+such a mode into a currently expressed program, and cycle maintenance preserves
+that new route while maintaining a return path. Geometry changes in unexpressed
+programs can therefore become expressed after later routing mutations.
+
+The GPU regressions cover selection of currently unexpressed modes, recruitment
+by chain extension, preservation of loops up to the supported 128-mode limit,
+and connected square/cube/branch development through multi-mode programs.
+Mutation family budgets, radiation protection, and the subtle-mutation setting
+are unchanged. These checks do not measure long-run ecological selection.

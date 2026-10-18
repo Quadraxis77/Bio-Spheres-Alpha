@@ -965,23 +965,35 @@ fn ensure_initial_development_cycle(dst_base: u32, new_genome_id: u32, cell_id: 
     child_mode_indices_buf[initial_abs] = initial_children;
 
     let cycle_abs = u32(cycle_abs_i);
-    var cycle_children = child_mode_indices_buf[cycle_abs];
-    let cycle_a_returns = cycle_children.x == initial_abs_i;
-    let cycle_b_returns = cycle_children.y == initial_abs_i;
-
-    // The partner needs at least one normal route back to the initial mode.
-    // Preserve its other child slot for body-plan branching or reproductive
-    // release behavior.
-    if (!cycle_a_returns && !cycle_b_returns) {
-        cycle_children.x = initial_abs_i;
-        child_mode_indices_buf[cycle_abs] = cycle_children;
+    let reachable = division_reachable_modes(cycle_abs, dst_base, mode_count, false);
+    let has_return_path = (reachable[initial_local / 32u] & (1u << (initial_local % 32u))) != 0u;
+    var return_abs = cycle_abs;
+    if (!has_return_path) {
+        // Preserve new branches/chain extensions. Add the required return at a
+        // reachable self-reference when possible instead of replacing the
+        // partner's child_a and collapsing the program to a two-mode loop.
+        var return_component = 0u;
+        for (var offset = 0u; offset < min(mode_count, 128u); offset++) {
+            let local = (cycle_abs - dst_base + offset) % mode_count;
+            if ((reachable[local / 32u] & (1u << (local % 32u))) == 0u) { continue; }
+            let candidate_abs = dst_base + local;
+            let candidate_children = child_mode_indices_buf[candidate_abs];
+            if (candidate_children.x == i32(candidate_abs) || candidate_children.y == i32(candidate_abs)) {
+                return_abs = candidate_abs;
+                return_component = select(1u, 0u, candidate_children.x == i32(candidate_abs));
+                break;
+            }
+        }
+        var return_children = child_mode_indices_buf[return_abs];
+        return_children[return_component] = initial_abs_i;
+        child_mode_indices_buf[return_abs] = return_children;
     }
 
     // A newly bootstrapped cycle needs adhesive divisions at both ends.
     // Default modes otherwise return to the initial mode by shedding detached
     // cells, producing colonies of tiny fragments instead of a connected body.
     // Established cycles keep their downstream release/adhesion choices.
-    if (creates_initial_route || (!cycle_a_returns && !cycle_b_returns)) {
+    if (creates_initial_route || !has_return_path) {
         parent_make_adhesion_flags[cycle_abs] = 1u;
         child_a_keep_adhesion_flags[cycle_abs] = 1u;
         child_b_keep_adhesion_flags[cycle_abs] = 1u;
@@ -990,6 +1002,13 @@ fn ensure_initial_development_cycle(dst_base: u32, new_genome_id: u32, cell_id: 
         var cycle_p4 = mode_properties_v4[cycle_abs];
         cycle_p4.x = max(cycle_p4.x, 2.0);
         mode_properties_v4[cycle_abs] = cycle_p4;
+        if (!has_return_path && return_abs != cycle_abs) {
+            parent_make_adhesion_flags[return_abs] = 1u;
+            child_a_keep_adhesion_flags[return_abs] = 1u;
+            child_b_keep_adhesion_flags[return_abs] = 1u;
+            child_a_after_split_keep_adhesion_flags[return_abs] = 1u;
+            child_b_after_split_keep_adhesion_flags[return_abs] = 1u;
+        }
     }
 
     // Germination must be adhesive: a free initial-mode egg divides into a
@@ -1228,6 +1247,48 @@ fn mutate_listener_response(mode_abs: u32, listener: u32, cell_id: u32, salt: u3
 // Apply mutation to a single parameter in the cloned genome
 // ============================================================
 
+// Traverse graph connectivity without inferring which modes are intended to
+// be expressed. A return path can pass through any number of intermediate modes.
+fn division_reachable_modes(mode_abs: u32, dst_base: u32, mode_count: u32, include_final_routes: bool) -> vec4<u32> {
+    // Four words cover genome::MAX_MODES (128), with no recursion or large queue.
+    let local_start = mode_abs - dst_base;
+    if (local_start >= min(mode_count, 128u)) { return vec4<u32>(0u); }
+    var pending_modes = vec4<u32>(0u);
+    var visited_modes = vec4<u32>(0u);
+    pending_modes[local_start / 32u] = 1u << (local_start % 32u);
+    for (var visited = 0u; visited < min(mode_count, 128u); visited++) {
+        var local = 0xFFFFFFFFu;
+        for (var word = 0u; word < 4u; word++) {
+            if (pending_modes[word] != 0u) {
+                let bit = firstTrailingBit(pending_modes[word]);
+                local = word * 32u + bit;
+                pending_modes[word] &= ~(1u << bit);
+                break;
+            }
+        }
+        if (local == 0xFFFFFFFFu) { break; }
+        visited_modes[local / 32u] |= 1u << (local % 32u);
+        let m = dst_base + local;
+        let children = child_mode_indices_buf[m];
+        let final_routes = mode_properties_v4[m];
+        let targets = array<i32, 4>(children.x, children.y,
+            select(-1, i32(final_routes.y), include_final_routes),
+            select(-1, i32(final_routes.z), include_final_routes));
+        for (var edge = 0u; edge < 4u; edge++) {
+            let target_mode = targets[edge];
+            if (target_mode < i32(dst_base) || target_mode >= i32(dst_base + mode_count)) { continue; }
+            let target_local = u32(target_mode) - dst_base;
+            if (target_local >= 128u) { continue; }
+            let word = target_local / 32u;
+            let mask = 1u << (target_local % 32u);
+            if ((visited_modes[word] & mask) == 0u) {
+                pending_modes[word] |= mask;
+            }
+        }
+    }
+    return visited_modes;
+}
+
 // A graph loop alone is not a physical lattice. The same perpendicular turn
 // must reach both daughters, with balanced Zone C inheritance and retained bonds.
 // See morphology-recipes.md MR-001 and procedural-creature-generation-morphology.md.
@@ -1258,16 +1319,12 @@ fn mutate_body_plan(mode_abs: u32, dst_base: u32, mode_count: u32, pattern: u32,
         turn_b = turn_a;
     }
 
-    // Coordinate one local developmental neighborhood. Preserve routing,
-    // division limits, specialization, and distant anatomy.
-    let children = child_mode_indices_buf[mode_abs];
-    let targets = array<i32, 3>(i32(mode_abs), children.x, children.y);
-    for (var i = 0u; i < 3u; i++) {
-        let target_mode = targets[i];
-        if (target_mode < i32(dst_base) || target_mode >= i32(dst_base + mode_count)) { continue; }
-        if (i > 0u && target_mode == targets[0]) { continue; }
-        if (i == 2u && target_mode == targets[1]) { continue; }
-        let m = u32(target_mode);
+    // Coordinate the selected program through its division routes. Selection
+    // still includes every mode, including programs not currently expressed.
+    let affected_modes = division_reachable_modes(mode_abs, dst_base, mode_count, true);
+    for (var local = 0u; local < min(mode_count, 128u); local++) {
+        if ((affected_modes[local / 32u] & (1u << (local % 32u))) == 0u) { continue; }
+        let m = dst_base + local;
         genome_mode_data_v4[m] = identity;
         genome_mode_data_v0[m] = turn_a;
         genome_mode_data_v1[m] = turn_b;
@@ -1988,23 +2045,22 @@ fn apply_mutation(
         }
 
         // buffer_id 14: structural genome mutations (MODE_APPEND = 10, MODE_TRIM = 11)
-        // These operate on the tail of the genome rather than a randomly-selected mode.
-        // mode_abs is unused here - we always act on the last mode slot.
+        // Storage is appended/trimmed at the tail; append routing uses the selected mode.
         case 14u: {
             if (entry.data_type == 10u) {
-                // MODE_APPEND: add a dormant mode at the end of the genome.
+                // MODE_APPEND: add a mode and splice it into a selected route.
                 //
                 // The new mode inherits basic physics, receives a differentiated
-                // cell type, and is wired as a bud from the previous tail. This
+                // cell type, and is wired from a randomly selected mode. This
                 // makes early mode growth immediately visible instead of adding
                 // dormant modes that require several later routing mutations.
                 if (mode_count >= mutation_params.max_modes_per_genome) { return MUTATION_NOOP; }
 
-                let last_abs  = dst_base + mode_count - 1u;
+                let last_abs  = mode_abs; // all inherited modes are eligible anchors
                 let new_abs   = dst_base + mode_count;
                 let new_abs_i = i32(new_abs);
 
-                // Inherit basic physics from last mode, but choose a useful
+                // Inherit basic physics from selected mode, but choose a useful
                 // differentiated type instead of cloning the same role forever.
                 let inherited_cell_type = mode_cell_types[last_abs];
                 let new_cell_type = registered_biological_cell_type(cell_id, salt_base + 910u, inherited_cell_type);
@@ -2016,21 +2072,19 @@ fn apply_mutation(
                 mode_properties_v3[new_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
                 mode_properties_v4[new_abs] = vec4<f32>(20.0, -1.0, -1.0, 0.0); // max_adhesions=20
 
-                // Self-referencing children (chain endpoint)
-                child_mode_indices_buf[new_abs] = vec2<i32>(new_abs_i, new_abs_i);
+                // Insert into either child route and retain its previous
+                // destination through the new mode. This also works when both
+                // child slots are occupied; storage order is not graph topology.
+                let component = rng_u32(cell_id, salt_base + 915u) & 1u;
+                var anchor_indices = child_mode_indices_buf[last_abs];
+                let previous_child = anchor_indices[component];
+                let previous_valid = previous_child >= i32(dst_base) && previous_child < i32(dst_base + mode_count);
+                child_mode_indices_buf[new_abs] = vec2<i32>(
+                    select(i32(last_abs), previous_child, previous_valid), new_abs_i);
+                anchor_indices[component] = new_abs_i;
+                child_mode_indices_buf[last_abs] = anchor_indices;
 
-                // Sprout from the previous tail so appended modes participate
-                // immediately. Prefer child_b so child_a can preserve the main
-                // self-renewing chain in simple genomes.
-                var tail_indices = child_mode_indices_buf[last_abs];
-                if (mode_count == 1u || tail_indices.y == i32(last_abs)) {
-                    tail_indices.y = new_abs_i;
-                } else if (tail_indices.x == i32(last_abs)) {
-                    tail_indices.x = new_abs_i;
-                }
-                child_mode_indices_buf[last_abs] = tail_indices;
-
-                // Inherit adhesion settings from last mode
+                // Inherit adhesion settings from the selected mode
                 adhesion_settings_v0[new_abs] = adhesion_settings_v0[last_abs];
                 adhesion_settings_v1[new_abs] = adhesion_settings_v1[last_abs];
                 adhesion_settings_v2[new_abs] = adhesion_settings_v2[last_abs];
@@ -2046,8 +2100,10 @@ fn apply_mutation(
                 parent_make_adhesion_flags[new_abs]  = 1u;
                 child_a_keep_adhesion_flags[new_abs] = 1u;
                 child_b_keep_adhesion_flags[new_abs] = 1u;
+                child_a_after_split_keep_adhesion_flags[new_abs] = 1u;
+                child_b_after_split_keep_adhesion_flags[new_abs] = 1u;
 
-                // Inherit color from last mode with a small random tint
+                // Inherit color from the selected mode with a small random tint
                 var c = mode_colors[last_abs];
                 c[0] = clamp(c[0] + (rng_f32(cell_id, salt_base + 900u) - 0.5) * 0.15, 0.0, 1.0);
                 c[1] = clamp(c[1] + (rng_f32(cell_id, salt_base + 901u) - 0.5) * 0.15, 0.0, 1.0);

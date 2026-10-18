@@ -160,8 +160,6 @@ pub struct UiSystem {
     pub winit_state: egui_winit::State,
     /// egui-wgpu renderer
     pub renderer: egui_wgpu::Renderer,
-    #[cfg(feature = "vr")]
-    texture_images: std::collections::HashMap<egui::TextureId, egui::epaint::ImageDelta>,
     /// Global UI state
     pub state: GlobalUiState,
     /// Viewport rectangle for mouse filtering (set during rendering)
@@ -300,8 +298,6 @@ impl UiSystem {
             ctx,
             winit_state,
             renderer,
-            #[cfg(feature = "vr")]
-            texture_images: Default::default(),
             state,
             viewport_rect: None,
             native_ui_hidden: false,
@@ -2943,23 +2939,6 @@ impl UiSystem {
 
         // Process texture updates
         for (id, image_delta) in &output.textures_delta.set {
-            #[cfg(feature = "vr")]
-            if let Some([x, y]) = image_delta.pos {
-                if let Some(full) = self.texture_images.get_mut(id) {
-                    let egui::ImageData::Color(image) = &mut full.image;
-                    let egui::ImageData::Color(patch) = &image_delta.image;
-                    let image = std::sync::Arc::make_mut(image);
-                    for row in 0..patch.height() {
-                        let offset = (y + row) * image.width() + x;
-                        image.pixels[offset..offset + patch.width()].copy_from_slice(
-                            &patch.pixels[row * patch.width()..(row + 1) * patch.width()],
-                        );
-                    }
-                    full.options = image_delta.options;
-                }
-            } else {
-                self.texture_images.insert(*id, image_delta.clone());
-            }
             self.renderer
                 .update_texture(device, queue, *id, image_delta);
         }
@@ -3000,24 +2979,8 @@ impl UiSystem {
 
         // Free textures that are no longer needed
         for id in &output.textures_delta.free {
-            #[cfg(feature = "vr")]
-            self.texture_images.remove(id);
             self.renderer.free_texture(id);
         }
-    }
-
-    #[cfg(feature = "vr")]
-    pub(crate) fn renderer_on_device(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) -> egui_wgpu::Renderer {
-        let mut renderer = egui_wgpu::Renderer::new(device, format, Default::default());
-        for (id, image) in &self.texture_images {
-            renderer.update_texture(device, queue, *id, image);
-        }
-        renderer
     }
 
     /// Get the egui context for rendering UI.
