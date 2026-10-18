@@ -13,18 +13,19 @@ The normal GPU mutation table includes three coordinated body-plan operators:
 | Cubic lattice | Identical 120-degree body-diagonal turns on both children | Splits cycle through three perpendicular axes, allowing cubic structures. |
 | Side branch | One quarter-turn child around X or Y, one straight child | Perpendicular inheritance duplicates bonds into junctions and branching meshes. |
 
-Each operator changes a selected mode and its immediate child modes. It keeps
-their routing and cell types, so existing shared anatomical sequences remain
-available. Single-mode genomes remain single-mode. Other modes retain their
-existing settings.
+Each operator changes a selected mode and its immediate child modes. The
+mutation pipeline also maintains the intentional initial-mode development cycle
+described below. A single-mode parent receives a partner before the selected
+operator runs, so coordinated geometry can include that partner.
 
 These mutations set Split Ratio to 0.5, enable Make Adhesion and both Keep
 Adhesion flags, and coordinate the separate final-split rotations and keep flags.
 They reset the local parent split rotation so it does not cancel the new child
 turns. Connection capacity is raised to at least 12 to accommodate intermediate
-divisions. Geometry mutations preserve Max Splits, division intervals, nutrient
-thresholds, and signal gates. A terminal mode stays terminal; a lattice can grow
-only as far as its existing division program permits.
+divisions. Geometry operators work alongside the standard evolved-genome
+rules: split limits remain bounded per mode, and the initial development cycle
+can renew growth by changing modes. Division timing, nutrient thresholds, and
+signal gates are also subject to the germination rules below.
 
 The three operators share the existing orientation/body-plan family with the
 five independent quaternion snaps. At default weights, together they account
@@ -41,34 +42,49 @@ Longer developmental programs can combine changed and unchanged geometry.
 `mutation_morphology_tests.rs` exercises the actual GPU mutation path, including
 single-mode genomes, and develops the resulting geometry using the division
 executor. It checks square/cube connectivity, connected branch junctions, unit
-rotations, bounded split counts, in-genome routes, final-split adhesion retention, source preservation,
-and exclusion from subtle mutations. The fixture supplies nutrients and a
+rotations, bounded split counts, in-genome routes, final-split adhesion retention,
+source preservation, and exclusion from subtle mutations. The fixture supplies nutrients and a
 Phagocyte-only gene pool to isolate construction from ecology and specialization.
 Population-level persistence and adaptive benefit remain unmeasured.
 
-## Mutation fidelity and explosive growth
+## Intentional development cycles
 
-Radiation used to run a whole-genome growth rewrite before and after each
-selected mutation. It forced a root/partner cycle, raised terminal split limits,
-shortened root division intervals, cleared root signal gates and final-split
-routes, and replaced Stemocyte programs. Mode transitions reset split counters,
-so those injected cycles defeated finite split limits. Even color mutations
-could therefore restart growth in otherwise terminal tissue.
-Resetting split counters on a real mode switch is intended behavior and remains
-unchanged. Authored cycles and cycles produced by an explicit graph mutation
-remain valid; the fault was adding cycles during unrelated mutations.
+Mutated genomes maintain a route from their initial mode through a partner and
+back to the initial mode. This is an intentional part of reproduction and
+regrowth. A one-mode genome gains a second mode when the mode limit permits it.
+An existing non-initial child is preferred as the partner, and the other child
+slots remain available for branching. When a cycle is newly constructed, both
+ends create and retain sibling adhesions so growth can form a connected body.
+Established cycle partners retain their downstream release choices. An explicit append mutation reserves its
+own additional slot after any seeded partner.
 
-That automatic rewrite has been removed. A mutation applies its selected
-operator, preserving other developmental instructions. Cell-type initialization
-also preserves division timing, nutrient thresholds, and split limits.
-The changed newborn immediately refreshes its cached division and metabolic
-settings from its mutated mode, retaining its birth time and split count.
-Trimming refuses to remove the newborn's active mode or a referenced mode.
-Stemocyte differentiation targets are remapped into the cloned genome while
-their negative remain/apoptosis outcomes and delay settings are preserved.
+Mode transitions reset split counters. Max Splits therefore limits divisions
+within a mode; it is not a lifetime limit for a lineage following a cycle.
+Evolved modes use split limits from 2 through 5 so newborns can continue their
+development. Player-authored source genomes are cloned before these rules run.
 
-The regression tests repeatedly mutate the same lineages and check terminal,
-one-split, and unlimited modes, root gates, final-split routes, Stemocyte routing,
-and immediate runtime parameter updates. Existing genomes containing growth
-cycles introduced by the old behavior are not automatically reconstructed;
-retest from an original genome to evaluate the corrected mutation behavior.
+The initial mode must be able to germinate as a free egg. It keeps adhesive
+children, uses a 1-8 second division interval and a split mass of 1.2-2.0, and
+has no minimum-adhesion requirement. Initial-mode signal gates, signal routing,
+and final-split route overrides are cleared so they do not bypass germination.
+Downstream modes retain those tools. Stemocytes receive self-renewing division
+routes and developmental-channel differentiation targets within the clone.
+All mutated modes retain the one-second division-interval floor.
+
+These rules run before and after the selected mutation to maintain the cycle
+when routing, the initial mode, or the mode count changes. The changed newborn
+immediately refreshes its cached division and metabolic settings from its final
+mode, retaining its birth time and usable split progress. If a mutation lowers
+a previously viable split budget below the inherited count, that count restarts
+at zero. This lets old default lineages enter their newly bounded development
+cycle instead of immediately becoming sterile. Unmutated cells and already
+exhausted finite programs retain their counts. Trimming refuses to remove the
+newborn's active mode or a referenced mode.
+
+Regression tests check cycle seeding, return paths across repeated mutations,
+Stemocyte renewal, source preservation, append allocation without overlapping
+mode ranges, immediate runtime settings, and the division-interval floor in
+normal and subtle mutation modes. Geometry tests develop the actual mutated
+cycles through the division executor. The default-lineage regression starts
+from the actual ten-mode default, includes descendants with 32 inherited splits,
+and checks connected multicellular growth with nutrients supplied.

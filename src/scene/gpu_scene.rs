@@ -31,6 +31,10 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
+#[cfg(test)]
+#[path = "feeding_reset_tests.rs"]
+mod feeding_reset_tests;
+
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES: usize = 256;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32: u32 = DIVISION_AUDIO_PLAYBACK_CANDIDATES as u32;
 /// Number of staging buffers in the division-audio readback pool. Measured GPU
@@ -2459,7 +2463,7 @@ impl GpuScene {
             ]);
         }
 
-        // Create nutrient bind group (can be cached as these buffers don't change)
+        // Cache until fluid installation/transfer invalidates these buffer bindings.
         if self.phagocyte_nutrient_bind_group.is_none() {
             self.phagocyte_nutrient_bind_group =
                 Some(consumption_system.create_nutrient_bind_group(
@@ -5978,6 +5982,11 @@ impl GpuScene {
         self.env_camera_bind_group_rain_splash = None;
         self.env_camera_bind_group_nutrient = None;
 
+        // Fluid transfer skips initialize_fluid_simulator, which normally
+        // installs feeding. The new scene needs its own pipeline and bindings
+        // to its newly allocated cells, even when the water buffers are reused.
+        self.initialize_phagocyte_consumption(device);
+
         self.initialize_steam_particle_renderer(device, surface_format);
         self.initialize_water_particle_renderer(device, surface_format);
         self.initialize_rain_splash_particle_renderer(device, surface_format);
@@ -5991,6 +6000,10 @@ impl GpuScene {
 
     /// Initialize the phagocyte nutrient consumption system
     fn initialize_phagocyte_consumption(&mut self, device: &wgpu::Device) {
+        // Called when fluid resources are installed or transferred. Reuse the
+        // pipeline, but rebuild bindings for the active fluid and cell buffers.
+        self.phagocyte_nutrient_bind_group = None;
+        self.phagocyte_physics_bind_groups = None;
         if self.phagocyte_consumption.is_some() {
             return;
         }
@@ -7666,6 +7679,7 @@ impl GpuScene {
                 &self.gpu_triple_buffers.nutrient_gain_rates,
                 &self.gpu_triple_buffers.max_cell_sizes,
                 &self.gpu_triple_buffers.stiffnesses,
+                &self.gpu_triple_buffers.split_counts,
                 &self.gpu_triple_buffers.mode_properties_v0,
                 &self.gpu_triple_buffers.mode_properties_v1,
                 &self.gpu_triple_buffers.mode_properties_v2,

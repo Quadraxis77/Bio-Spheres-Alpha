@@ -478,6 +478,7 @@ impl MutationSystem {
                 Self::storage_rw_entry(8), // per-cell nutrient gain
                 Self::storage_rw_entry(9), // per-cell max size
                 Self::storage_rw_entry(10), // per-cell stiffness
+                Self::storage_rw_entry(11), // inherited division count
             ],
         });
 
@@ -2720,6 +2721,7 @@ impl MutationSystem {
         cell_nutrient_gain_rates: &wgpu::Buffer,
         cell_max_sizes: &wgpu::Buffer,
         cell_stiffnesses: &wgpu::Buffer,
+        cell_split_counts: &wgpu::Buffer,
         mode_properties_v0: &wgpu::Buffer,
         mode_properties_v1: &wgpu::Buffer,
         mode_properties_v2: &wgpu::Buffer,
@@ -2842,6 +2844,10 @@ impl MutationSystem {
                 wgpu::BindGroupEntry {
                     binding: 10,
                     resource: cell_stiffnesses.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: cell_split_counts.as_entire_binding(),
                 },
             ],
         }));

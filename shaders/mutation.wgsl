@@ -172,6 +172,8 @@ var<storage, read_write> cell_nutrient_gain_rates: array<f32>;
 var<storage, read_write> cell_max_sizes: array<f32>;
 @group(1) @binding(10)
 var<storage, read_write> cell_stiffnesses: array<f32>;
+@group(1) @binding(11)
+var<storage, read_write> cell_split_counts: array<u32>;
 
 // Group 2: Genome mode buffers (read_write for cloning + mutation)
 // mode_properties split into 5 vec4 sub-buffers (16 bytes/mode each)
@@ -324,6 +326,7 @@ const FAMILY_GENOME_STRUCTURE: u32 = 6u;
 const FAMILY_VISUAL: u32 = 7u;
 
 const CELL_TYPE_MAX_REGISTERED: u32 = 19u;
+const MAX_EVOLVED_SPLITS: f32 = 5.0;
 
 // ============================================================
 // Hash-based PRNG (PCG-style)
@@ -781,6 +784,268 @@ fn registered_biological_cell_type(cell_id: u32, salt: u32, current_type: u32) -
     return 0u;
 }
 
+fn seed_stemocyte_chain_program(mode_abs: u32, dst_base: u32, mode_count: u32, cell_id: u32, salt: u32) {
+    if (mode_cell_types[mode_abs] != 19u || mode_count == 0u) { return; }
+
+    let genome_begin_i = i32(dst_base);
+    let genome_end_i = i32(dst_base + mode_count);
+    let mode_abs_i = i32(mode_abs);
+    var target_abs_i = mode_abs_i;
+
+    // Prefer an existing non-Stemocyte child as the differentiation target. This
+    // lets established body plans keep their first specialized branch.
+    let children = child_mode_indices_buf[mode_abs];
+    let child_a_valid = children.x >= genome_begin_i && children.x < genome_end_i;
+    let child_b_valid = children.y >= genome_begin_i && children.y < genome_end_i;
+    if (child_a_valid && children.x != mode_abs_i && mode_cell_types[u32(children.x)] != 19u) {
+        target_abs_i = children.x;
+    } else if (child_b_valid && children.y != mode_abs_i && mode_cell_types[u32(children.y)] != 19u) {
+        target_abs_i = children.y;
+    } else if (mode_count > 1u) {
+        // Fall back to any other mode, avoiding Stemocyte targets when possible.
+        let start = rng_u32(cell_id, salt + 11u) % mode_count;
+        for (var i = 0u; i < mode_count; i++) {
+            let candidate_abs = dst_base + ((start + i) % mode_count);
+            if (candidate_abs != mode_abs && mode_cell_types[candidate_abs] != 19u) {
+                target_abs_i = i32(candidate_abs);
+                break;
+            }
+        }
+        if (target_abs_i == mode_abs_i) {
+            target_abs_i = i32(dst_base + ((start + 1u) % mode_count));
+        }
+    }
+
+    // Make normal division self-renewing so Stemocytes can form chains. Signal
+    // response handles differentiation; division routing keeps the progenitor pool.
+    child_mode_indices_buf[mode_abs] = vec2<i32>(mode_abs_i, mode_abs_i);
+    parent_make_adhesion_flags[mode_abs] = 1u;
+    child_a_keep_adhesion_flags[mode_abs] = 1u;
+    child_b_keep_adhesion_flags[mode_abs] = 1u;
+    child_a_after_split_keep_adhesion_flags[mode_abs] = 1u;
+    child_b_after_split_keep_adhesion_flags[mode_abs] = 1u;
+
+    var p0 = mode_properties_v0[mode_abs];
+    p0.w = clamp(p0.w, 1.0, 4.0);
+    mode_properties_v0[mode_abs] = p0;
+
+    var p1 = mode_properties_v1[mode_abs];
+    p1.x = clamp(p1.x, 1.2, 1.8);
+    mode_properties_v1[mode_abs] = p1;
+
+    var p2 = mode_properties_v2[mode_abs];
+    p2.x = max(p2.x, 3.0);
+    mode_properties_v2[mode_abs] = p2;
+
+    var p3 = mode_properties_v3[mode_abs];
+    p3.w = 0.0;
+    mode_properties_v3[mode_abs] = p3;
+
+    // Channel 8 is the default developmental channel. Stemocytes emit it and
+    // read it, so bonded chains develop a signal gradient without requiring a
+    // separate Oculocyte/Cognocyte bootstrap.
+    mode_properties_v9[mode_abs] = vec4<f32>(8.0, 1.0, -1.0, f32(target_abs_i));
+    mode_properties_v10[mode_abs] = vec4<f32>(f32(target_abs_i), f32(target_abs_i), f32(target_abs_i), 4096.0);
+    mode_properties_v11[mode_abs] = vec4<f32>(0.12, 0.32, 0.58, 0.82);
+    regulation_params_buf[mode_abs] = vec4<u32>(8u, bitcast<u32>(1536.0), 4u, 0u);
+}
+
+fn sanitize_evolved_mode(mode_abs: u32, mode_count: u32) {
+    var p0 = mode_properties_v0[mode_abs];
+    p0.w = max(p0.w, 1.0);
+    mode_properties_v0[mode_abs] = p0;
+    var p2 = mode_properties_v2[mode_abs];
+    // Player genomes may use -1 or large max_splits, but GPU-mutated genomes
+    // must not inherit runaway reproductive settings.
+    if (p2.x < 0.0 || p2.x > MAX_EVOLVED_SPLITS) {
+        p2.x = MAX_EVOLVED_SPLITS;
+    }
+    // Mutated children inherit their parent's split count at birth. A max_splits
+    // value of 0 or 1 can therefore create a newborn singleton that is already
+    // reproductively exhausted. Keep evolved modes capable of at least one
+    // follow-up split, then rely on the global cap above to prevent runaway growth.
+    p2.x = max(p2.x, 2.0);
+    mode_properties_v2[mode_abs] = p2;
+
+    // Adhesion viability is enforced only on the initial-mode germination path
+    // below. Non-initial modes must remain free to release initial-mode egg cells.
+}
+
+fn ensure_initial_development_cycle(dst_base: u32, new_genome_id: u32, cell_id: u32, salt: u32) {
+    var mode_count = genome_meta[new_genome_id].x;
+    if (mode_count == 0u) { return; }
+
+    let initial_local = min(genome_meta[new_genome_id].z, mode_count - 1u);
+    let initial_abs = dst_base + initial_local;
+
+    // A one-mode genome cannot express "initial -> other -> initial", so promote
+    // it to a two-mode cycle. The caller reserves this extra slot for singleton
+    // parents before cloning.
+    if (mode_count == 1u && mode_count < mutation_params.max_modes_per_genome) {
+        let cycle_abs = dst_base + 1u;
+        mode_count = 2u;
+        genome_meta[new_genome_id].x = mode_count;
+
+        mode_cell_types[cycle_abs] = registered_biological_cell_type(
+            cell_id,
+            salt + 31u,
+            mode_cell_types[initial_abs]
+        );
+        if (mode_cell_types[cycle_abs] == 0u) {
+            mode_cell_types[cycle_abs] = 2u;
+        }
+
+        child_mode_indices_buf[cycle_abs] = vec2<i32>(i32(cycle_abs));
+        mode_properties_v0[cycle_abs] = mode_properties_v0[initial_abs];
+        mode_properties_v1[cycle_abs] = mode_properties_v1[initial_abs];
+        mode_properties_v2[cycle_abs] = vec4<f32>(2.0, 0.5, -1.0, 0.5);
+        mode_properties_v3[cycle_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        mode_properties_v4[cycle_abs] = vec4<f32>(20.0, -1.0, -1.0, 0.0);
+
+        genome_mode_data_v0[cycle_abs] = snap_quaternion(cell_id, salt + 40u);
+        genome_mode_data_v1[cycle_abs] = snap_quaternion(cell_id, salt + 41u);
+        genome_mode_data_v2[cycle_abs] = snap_quaternion(cell_id, salt + 42u);
+        genome_mode_data_v3[cycle_abs] = snap_quaternion(cell_id, salt + 43u);
+        genome_mode_data_v4[cycle_abs] = snap_quaternion(cell_id, salt + 44u);
+
+        adhesion_settings_v0[cycle_abs] = adhesion_settings_v0[initial_abs];
+        adhesion_settings_v1[cycle_abs] = adhesion_settings_v1[initial_abs];
+        adhesion_settings_v2[cycle_abs] = adhesion_settings_v2[initial_abs];
+        mode_colors[cycle_abs] = mode_colors[initial_abs];
+        mode_emissive[cycle_abs] = mode_emissive[initial_abs];
+
+        signal_settings_v0[cycle_abs] = vec4<f32>(-1.0, 1.0, 0.0, -1.0);
+        signal_settings_v1[cycle_abs] = vec4<f32>(1.0, 0.0, -1.0, 1.0);
+        signal_settings_v2[cycle_abs] = vec4<f32>(-1.0, -1.0, -1.0, 1.0);
+        signal_settings_v3[cycle_abs] = vec4<f32>(-1.0, -1.0, -1.0, 1.0);
+        signal_settings_v4[cycle_abs] = vec4<f32>(-1.0, 0.0, 0.0, 0.0);
+        regulation_params_buf[cycle_abs] = vec4<u32>(0xFFFFFFFFu, 0u, 1u, 0u);
+        mode_properties_v9[cycle_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        mode_properties_v10[cycle_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        mode_properties_v11[cycle_abs] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        mode_properties_v5[cycle_abs] = vec4<f32>(0.0);
+        mode_properties_v7[cycle_abs] = vec4<f32>(0.0);
+        mode_properties_v14[cycle_abs] = vec4<f32>(0.0);
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u] = 0u;
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u + 1u] = 0xFFFFFFFFu;
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u + 2u] = bitcast<u32>(1.0);
+        glueocyte_cell_adhesion_flags[cycle_abs * 4u + 3u] = 0u;
+        glueocyte_env_adhesion_flags[cycle_abs] = 0u;
+        oculocyte_params_buf[cycle_abs] = vec4<u32>(1u, 0u, 0u, 0u);
+
+        specialize_mode_cell_type(cycle_abs, mode_cell_types[cycle_abs]);
+    }
+
+    if (mode_count < 2u) { return; }
+
+    let initial_abs_i = i32(initial_abs);
+    let genome_begin_i = i32(dst_base);
+    let genome_end_i = i32(dst_base + mode_count);
+
+    var initial_children = child_mode_indices_buf[initial_abs];
+    let child_a_in_genome = initial_children.x >= genome_begin_i && initial_children.x < genome_end_i;
+    let child_b_in_genome = initial_children.y >= genome_begin_i && initial_children.y < genome_end_i;
+    let child_a_is_other = child_a_in_genome && u32(initial_children.x - genome_begin_i) != initial_local;
+    let child_b_is_other = child_b_in_genome && u32(initial_children.y - genome_begin_i) != initial_local;
+    let creates_initial_route = !child_a_is_other && !child_b_is_other;
+
+    // Prefer an existing non-initial child as the germination entry so complex
+    // body plans keep their authored or evolved first branch. Only synthesize
+    // one edge when the initial mode would otherwise self-loop.
+    var cycle_abs_i = initial_children.x;
+    if (child_a_is_other) {
+        cycle_abs_i = initial_children.x;
+    } else if (child_b_is_other) {
+        cycle_abs_i = initial_children.y;
+    } else {
+        let fallback_local = select(0u, 1u, initial_local == 0u);
+        cycle_abs_i = i32(dst_base + fallback_local);
+        initial_children.x = cycle_abs_i;
+    }
+    child_mode_indices_buf[initial_abs] = initial_children;
+
+    let cycle_abs = u32(cycle_abs_i);
+    var cycle_children = child_mode_indices_buf[cycle_abs];
+    let cycle_a_returns = cycle_children.x == initial_abs_i;
+    let cycle_b_returns = cycle_children.y == initial_abs_i;
+
+    // The partner needs at least one normal route back to the initial mode.
+    // Preserve its other child slot for body-plan branching or reproductive
+    // release behavior.
+    if (!cycle_a_returns && !cycle_b_returns) {
+        cycle_children.x = initial_abs_i;
+        child_mode_indices_buf[cycle_abs] = cycle_children;
+    }
+
+    // A newly bootstrapped cycle needs adhesive divisions at both ends.
+    // Default modes otherwise return to the initial mode by shedding detached
+    // cells, producing colonies of tiny fragments instead of a connected body.
+    // Established cycles keep their downstream release/adhesion choices.
+    if (creates_initial_route || (!cycle_a_returns && !cycle_b_returns)) {
+        parent_make_adhesion_flags[cycle_abs] = 1u;
+        child_a_keep_adhesion_flags[cycle_abs] = 1u;
+        child_b_keep_adhesion_flags[cycle_abs] = 1u;
+        child_a_after_split_keep_adhesion_flags[cycle_abs] = 1u;
+        child_b_after_split_keep_adhesion_flags[cycle_abs] = 1u;
+        var cycle_p4 = mode_properties_v4[cycle_abs];
+        cycle_p4.x = max(cycle_p4.x, 2.0);
+        mode_properties_v4[cycle_abs] = cycle_p4;
+    }
+
+    // Germination must be adhesive: a free initial-mode egg divides into a
+    // connected multicellular body instead of two isolated cells.
+    parent_make_adhesion_flags[initial_abs] = 1u;
+    child_a_keep_adhesion_flags[initial_abs] = 1u;
+    child_b_keep_adhesion_flags[initial_abs] = 1u;
+    child_a_after_split_keep_adhesion_flags[initial_abs] = 1u;
+    child_b_after_split_keep_adhesion_flags[initial_abs] = 1u;
+
+    // Keep the egg mode permissive enough to germinate when released as a
+    // single free cell. Other modes may still evolve stricter structural gates.
+    if (mode_cell_types[initial_abs] == 13u) {
+        mode_cell_types[initial_abs] = 2u;
+        specialize_mode_cell_type(initial_abs, mode_cell_types[initial_abs]);
+    }
+
+    var initial_p0 = mode_properties_v0[initial_abs];
+    initial_p0.w = clamp(initial_p0.w, 1.0, 8.0); // split_interval
+    mode_properties_v0[initial_abs] = initial_p0;
+
+    var initial_p1 = mode_properties_v1[initial_abs];
+    initial_p1.x = clamp(initial_p1.x, 1.2, 2.0); // split_mass -> threshold <= 100
+    mode_properties_v1[initial_abs] = initial_p1;
+
+    var initial_p3 = mode_properties_v3[initial_abs];
+    initial_p3.w = 0.0; // no min_adhesions requirement for a free egg
+    mode_properties_v3[initial_abs] = initial_p3;
+
+    var initial_p4 = mode_properties_v4[initial_abs];
+    initial_p4.x = max(initial_p4.x, 2.0); // room for sibling + one inherited bond
+    initial_p4.y = -1.0;
+    initial_p4.z = -1.0;
+    mode_properties_v4[initial_abs] = initial_p4;
+
+    // Initial-mode germination must not be bypassed by signal-gated division,
+    // apoptosis, signal child routing, mode switching, or after-split overrides.
+    // Downstream modes keep those tools for variable body plans and reproduction.
+    signal_settings_v0[initial_abs] = vec4<f32>(-1.0, 1.0, 0.0, -1.0);
+    signal_settings_v1[initial_abs] = vec4<f32>(1.0, 0.0, -1.0, 1.0);
+    signal_settings_v2[initial_abs] = vec4<f32>(-1.0, -1.0, -1.0, 1.0);
+    signal_settings_v3[initial_abs] = vec4<f32>(-1.0, -1.0, -1.0, 1.0);
+    signal_settings_v4[initial_abs] = vec4<f32>(-1.0, 0.0, 0.0, 0.0);
+}
+
+fn sanitize_evolved_genome(dst_base: u32, new_genome_id: u32, cell_id: u32, salt: u32) {
+    ensure_initial_development_cycle(dst_base, new_genome_id, cell_id, salt);
+    let mode_count = genome_meta[new_genome_id].x;
+    for (var m = 0u; m < mode_count; m++) {
+        let mode_abs = dst_base + m;
+        sanitize_evolved_mode(mode_abs, mode_count);
+        seed_stemocyte_chain_program(mode_abs, dst_base, mode_count, cell_id, salt + 211u + m);
+    }
+    ensure_initial_development_cycle(dst_base, new_genome_id, cell_id, salt + 101u);
+}
+
 fn specialize_mode_cell_type(mode_abs: u32, cell_type: u32) {
     mode_cell_types[mode_abs] = clamp(cell_type, 1u, CELL_TYPE_MAX_REGISTERED);
 
@@ -1026,21 +1291,23 @@ fn mutate_body_plan(mode_abs: u32, dst_base: u32, mode_count: u32, pattern: u32,
 
 fn apply_mutation(
     dst_base: u32,      // destination genome's base mode offset
-    mode_count: u32,     // number of modes in this genome
+    source_mode_count: u32, // modes inherited from the parent
     cell_id: u32,        // for RNG
     salt_base: u32,      // salt offset for RNG chain
     new_genome_id: u32,  // allocated genome id (needed for genome_meta mutations)
     param_idx: u32,      // pre-selected vulnerability table entry
     live_mode_local: u32, // the newborn's current mode must survive trimming
 ) -> u32 {  // returns param_entry_idx for logging
-    // Pick which mode to mutate
-    let mode_local = rng_u32(cell_id, salt_base + 100u) % mode_count;
+    // Keep mutation selection on inherited modes; a seeded partner must not
+    // dilute the chance of changing the newborn's original program.
+    let mode_local = rng_u32(cell_id, salt_base + 100u) % source_mode_count;
+    let mode_count = genome_meta[new_genome_id].x;
     let mode_abs = dst_base + mode_local;
 
     let entry = vulnerability_table[param_idx];
 
     // Graph operations needing a distinct partner cannot run on singleton
-    // genomes. Do not synthesize a cycle or evaluate a modulo-zero target.
+    // genomes when no partner can be seeded (for example at the mode limit).
     if (entry.buffer_id == 2u && entry.data_type >= 4u && entry.data_type <= 7u && mode_count < 2u) {
         return MUTATION_NOOP;
     }
@@ -1945,7 +2212,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let appends_mode = selected_entry.buffer_id == 14u
                     && selected_entry.data_type == 10u
                     && parent_mode_count < mutation_params.max_modes_per_genome;
-    let reserved_mode_count = parent_mode_count + select(0u, 1u, appends_mode);
+    // A one-mode parent needs a partner for its intentional development cycle.
+    // Explicit append mutations need their own slot after the seeded partner.
+    let seeds_cycle = parent_mode_count == 1u && mutation_params.max_modes_per_genome > 1u;
+    let seeded_mode_count = parent_mode_count + select(0u, 1u, seeds_cycle);
+    let reserved_mode_count = seeded_mode_count + select(0u, 1u, appends_mode && seeded_mode_count < mutation_params.max_modes_per_genome);
 
     let new_genome_id = allocate_genome_slot();
     if (new_genome_id == 0xFFFFFFFFu) {
@@ -2008,6 +2279,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Clone all mode data from parent to new genome
     clone_genome_modes(parent_base_offset, new_base_offset, parent_mode_count);
+    sanitize_evolved_genome(new_base_offset, new_genome_id, candidate_idx, 500u);
 
     // Apply one mutation
     let applied_param_idx = apply_mutation(new_base_offset, parent_mode_count, candidate_idx, 0u, new_genome_id, param_idx, local_parent_mode);
@@ -2020,6 +2292,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let applied_family = mutation_family(vulnerability_table[applied_param_idx]);
     atomicAdd(&mutation_log_count[TELEMETRY_APPLIED_BASE + min(applied_family, 7u)], 1u);
+
+    // Mutation may change routing or the initial mode. Restore the reproductive
+    // cycle before publishing the clone and refreshing the newborn's caches.
+    sanitize_evolved_genome(new_base_offset, new_genome_id, candidate_idx, 600u);
 
     // Update cell's genome_id
     genome_ids[cell_idx] = new_genome_id;
@@ -2053,7 +2329,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let p2 = mode_properties_v2[final_mode];
         cell_split_intervals[cell_idx] = p0.w;
         cell_split_nutrient_thresholds[cell_idx] = (p1.x - 1.0) * 100.0;
-        cell_max_splits[cell_idx] = select(u32(p2.x), 0xFFFFFFFFu, p2.x < 0.0);
+        let previous_max_splits = cell_max_splits[cell_idx];
+        let new_max_splits = select(u32(p2.x), 0xFFFFFFFFu, p2.x < 0.0);
+        let inherited_splits = cell_split_counts[cell_idx];
+        // Default lineages can accumulate many splits under an unlimited mode.
+        // A newly bounded mutation must not make a previously viable newborn
+        // sterile before it can enter its development cycle. Preserve usable
+        // progress and already exhausted finite programs.
+        if (inherited_splits >= new_max_splits && inherited_splits < previous_max_splits) {
+            cell_split_counts[cell_idx] = 0u;
+        }
+        cell_max_splits[cell_idx] = new_max_splits;
         cell_nutrient_gain_rates[cell_idx] = p0.x;
         cell_max_sizes[cell_idx] = p0.y;
         cell_stiffnesses[cell_idx] = p0.z;

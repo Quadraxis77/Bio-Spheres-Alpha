@@ -29,6 +29,7 @@ fn type_mutation_probability_survives_repeated_dense_birth_batches() {
     let modes = storage(u64::from(CAPACITY) * 4);
     let types = storage(u64::from(CAPACITY) * 4);
     let count = storage(4);
+    let split_counts = storage(u64::from(CAPACITY) * 4);
     let runtime: Vec<_> = (0..6).map(|_| storage(u64::from(CAPACITY) * 4)).collect();
     queue.write_buffer(&count, 0, bytemuck::bytes_of(&CAPACITY));
     queue.write_buffer(
@@ -72,6 +73,7 @@ fn type_mutation_probability_survives_repeated_dense_birth_batches() {
         &runtime[3],
         &runtime[4],
         &runtime[5],
+        &split_counts,
         &buffers[0],
         &buffers[1],
         &buffers[2],

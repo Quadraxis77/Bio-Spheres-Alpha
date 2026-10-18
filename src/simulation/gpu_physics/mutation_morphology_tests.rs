@@ -112,6 +112,7 @@ struct MutationFixture {
     _types: wgpu::Buffer,
     buffers: Vec<wgpu::Buffer>,
     runtime: Vec<wgpu::Buffer>,
+    split_counts: wgpu::Buffer,
 }
 
 impl MutationFixture {
@@ -157,6 +158,7 @@ fn mutation_fixture(source_mode_count: usize) -> MutationFixture {
     let genomes = storage(u64::from(CELLS) * 4);
     let modes = storage(u64::from(CELLS) * 4);
     let types = storage(u64::from(CELLS) * 4);
+    let split_counts = storage(u64::from(CELLS) * 4);
     let runtime: Vec<_> = (0..6).map(|_| storage(u64::from(CELLS) * 4)).collect();
     let buffers: Vec<_> = (0..41).map(|_| storage(u64::from(MODES) * 16)).collect();
     let mut parent = Genome::default();
@@ -190,6 +192,7 @@ fn mutation_fixture(source_mode_count: usize) -> MutationFixture {
         &runtime[3],
         &runtime[4],
         &runtime[5],
+        &split_counts,
         &buffers[0],
         &buffers[1],
         &buffers[2],
@@ -252,6 +255,7 @@ fn mutation_fixture(source_mode_count: usize) -> MutationFixture {
         _types: types,
         buffers,
         runtime,
+        split_counts,
     }
 }
 
@@ -312,22 +316,40 @@ fn gpu_body_plan_mutations_develop_connected_squares_cubes_and_branches() {
                 16,
             );
             assert_eq!(
-                meta[0], 1,
-                "geometry mutations must not synthesize a developmental cycle"
+                meta[0], 2,
+                "single-mode mutation must seed its intentional development partner"
             );
             let base = meta[1];
             let vecs = |index: usize| -> Vec<[f32; 4]> {
-                read(&device, &queue, &buffers[index], u64::from(base) * 16, 16)
+                read(
+                    &device,
+                    &queue,
+                    &buffers[index],
+                    u64::from(base) * 16,
+                    u64::from(meta[0]) * 16,
+                )
             };
             let p2 = vecs(2);
             let p4 = vecs(4);
             let rotations: Vec<_> = (5..10).map(vecs).collect();
-            let routes: Vec<[i32; 2]> = read(&device, &queue, &buffers[10], u64::from(base) * 8, 8);
-            let cell_types: Vec<u32> = read(&device, &queue, &buffers[11], u64::from(base) * 4, 4);
+            let routes: Vec<[i32; 2]> = read(
+                &device,
+                &queue,
+                &buffers[10],
+                u64::from(base) * 8,
+                u64::from(meta[0]) * 8,
+            );
+            let cell_types: Vec<u32> = read(
+                &device,
+                &queue,
+                &buffers[11],
+                u64::from(base) * 4,
+                u64::from(meta[0]) * 4,
+            );
             let mut offspring = Genome::default();
             offspring.initial_mode = 0;
-            offspring.modes = vec![ModeSettings::default(); 1];
-            for m in 0..1 {
+            offspring.modes = vec![ModeSettings::default(); meta[0] as usize];
+            for m in 0..meta[0] as usize {
                 let mode = &mut offspring.modes[m];
                 assert_eq!(cell_types[m], 2);
                 mode.cell_type = cell_types[m] as i32;
@@ -335,7 +357,7 @@ fn gpu_body_plan_mutations_develop_connected_squares_cubes_and_branches() {
                 mode.split_ratio = p2[m][1];
                 mode.max_adhesions = p4[m][0] as i32;
                 assert_eq!(mode.split_ratio, 0.5);
-                assert_eq!(mode.max_splits, 3, "geometry must preserve division limits");
+                assert_eq!(mode.max_splits, if m == 0 { 3 } else { 2 });
                 assert!(mode.max_adhesions >= 12);
                 assert_eq!(rotations[4][m], [0.0, 0.0, 0.0, 1.0]);
                 mode.child_a.orientation = Quat::from_array(rotations[0][m]);
@@ -344,11 +366,21 @@ fn gpu_body_plan_mutations_develop_connected_squares_cubes_and_branches() {
                 mode.child_b_after_split_orientation = Quat::from_array(rotations[3][m]);
                 mode.child_a.mode_number = routes[m][0] - base as i32;
                 mode.child_b.mode_number = routes[m][1] - base as i32;
-                assert_eq!(mode.child_a.mode_number, 0);
-                assert_eq!(mode.child_b.mode_number, 0);
+                assert!((0..meta[0] as i32).contains(&mode.child_a.mode_number));
+                assert!((0..meta[0] as i32).contains(&mode.child_b.mode_number));
+                if m == 0 {
+                    assert_eq!(mode.child_a.mode_number, 1);
+                } else {
+                    assert_eq!(mode.child_a.mode_number, 0);
+                }
                 for index in [12, 13, 14, 30, 31] {
-                    let flags: Vec<u32> =
-                        read(&device, &queue, &buffers[index], u64::from(base) * 4, 4);
+                    let flags: Vec<u32> = read(
+                        &device,
+                        &queue,
+                        &buffers[index],
+                        u64::from(base) * 4,
+                        u64::from(meta[0]) * 4,
+                    );
                     assert_eq!(flags[m], 1);
                 }
                 mode.parent_make_adhesion = true;
@@ -388,82 +420,59 @@ fn gpu_body_plan_mutations_develop_connected_squares_cubes_and_branches() {
 }
 
 #[test]
-fn repeated_radiation_preserves_division_programs_and_updates_newborn_settings() {
+fn repeated_radiation_keeps_development_cycles_and_updates_newborn_settings() {
     let mut fixture = mutation_fixture(3);
     let p0 = [
         [0.1f32, 1.2, 250.0, 60.0],
         [0.2, 1.3, 300.0, 12.0],
         [0.3, 1.4, 350.0, 9.0],
     ];
-    let p1 = [
-        [2.01f32, 1.0, 0.0, 1.0],
-        [1.5, 1.0, 0.0, 1.0],
-        [2.01, 1.0, 0.0, 1.0],
-    ];
     let p2 = [
         [0.0f32, 0.65, -1.0, 0.0],
         [1.0, 0.65, -1.0, 0.0],
         [-1.0, 0.65, -1.0, 0.0],
     ];
-    let p3 = [[0.0f32, 0.0, 0.0, 3.0]; 3];
-    let p4 = [
-        [7.0f32, 1.0, -1.0, 0.0],
-        [8.0, 2.0, -1.0, 0.0],
-        [9.0, 0.0, -1.0, 0.0],
-    ];
-    for (index, values) in [p0, p1, p2, p3, p4].iter().enumerate() {
-        fixture
-            .queue
-            .write_buffer(&fixture.buffers[index], 0, bytemuck::cast_slice(values));
-    }
-    fixture.queue.write_buffer(
-        &fixture.buffers[10],
-        0,
-        bytemuck::cast_slice(&[[0i32, 0], [1, 1], [2, 2]]),
-    );
+    fixture
+        .queue
+        .write_buffer(&fixture.buffers[0], 0, bytemuck::cast_slice(&p0));
+    fixture
+        .queue
+        .write_buffer(&fixture.buffers[2], 0, bytemuck::cast_slice(&p2));
     fixture.queue.write_buffer(
         &fixture.buffers[11],
         0,
         bytemuck::cast_slice(&[2u32, 2, 19]),
     );
     fixture.queue.write_buffer(
-        &fixture.buffers[32],
-        32,
-        bytemuck::cast_slice(&[8.0f32, 1.0, -1.0, 1.0]),
+        &fixture.buffers[10],
+        0,
+        bytemuck::cast_slice(&[[0i32; 2], [1; 2], [2; 2]]),
+    );
+    // A released initial cell must be able to germinate despite inherited gates.
+    fixture.queue.write_buffer(
+        &fixture.buffers[3],
+        0,
+        bytemuck::cast_slice(&[[0.0f32, 0.0, 0.0, 3.0]; 3]),
     );
     fixture.queue.write_buffer(
-        &fixture.buffers[33],
-        32,
-        bytemuck::cast_slice(&[0.0f32, -2.0, -1.0, 2.0]),
+        &fixture.buffers[24],
+        0,
+        bytemuck::cast_slice(&[[8.0f32, 200.0, 0.0, -1.0]; 3]),
     );
-    let gate = [[8.0f32, 200.0, 0.0, -1.0]; 3];
-    fixture
-        .queue
-        .write_buffer(&fixture.buffers[24], 0, bytemuck::cast_slice(&gate));
     let local_modes: Vec<u32> = (0..CELLS).map(|cell| cell % 3).collect();
     fixture
         .queue
         .write_buffer(&fixture.modes, 0, bytemuck::cast_slice(&local_modes));
     let mut previous_ids = vec![0u32; CELLS as usize];
-    // Repeated mutations of the same lineages used to repair terminal cells,
-    // replace Stemocyte programs, and inject counter-resetting root cycles.
-    for step in 0..18 {
-        let (buffer_id, element_offset, data_type) = match step {
-            16 => {
-                fixture.system.set_cell_type_gene_pool_mask(1 << 4);
-                (buffer_id::MODE_CELL_TYPES, 0, data_type::INTEGER)
-            }
-            17 => (buffer_id::GENOME_MODE_DATA, 1, data_type::BODY_PLAN),
-            _ => (buffer_id::MODE_VISUALS, 0xFF, data_type::CONTINUOUS_F32),
-        };
+    for step in 0..12 {
         fixture.mutate(
             MutationParamEntry {
-                buffer_id,
-                element_offset,
-                data_type,
+                buffer_id: buffer_id::MODE_VISUALS,
+                element_offset: 0,
+                data_type: data_type::CONTINUOUS_F32,
                 weight: 1.0,
-                min_delta: 0.0,
-                max_delta: 0.0,
+                min_delta: 0.01,
+                max_delta: 0.01,
                 min_value: 0.0,
                 max_value: 1.0,
             },
@@ -473,6 +482,13 @@ fn repeated_radiation_preserves_division_programs_and_updates_newborn_settings()
             &fixture.device,
             &fixture.queue,
             &fixture.genomes,
+            0,
+            u64::from(CELLS) * 4,
+        );
+        let active_modes: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.modes,
             0,
             u64::from(CELLS) * 4,
         );
@@ -494,26 +510,8 @@ fn repeated_radiation_preserves_division_programs_and_updates_newborn_settings()
             .enumerate()
             .filter(|&(cell, id)| *id != previous_ids[cell])
             .collect();
-        assert!(
-            !changed.is_empty(),
-            "the regression must actually apply radiation"
-        );
-        for &(cell, _) in &changed {
-            let local = local_modes[cell] as usize;
-            assert_eq!(f32::from_bits(caches[0][cell]), p0[local][3]);
-            assert_eq!(
-                f32::from_bits(caches[1][cell]),
-                (p1[local][0] - 1.0) * 100.0
-            );
-            assert_eq!(
-                caches[2][cell],
-                if local == 2 { u32::MAX } else { local as u32 }
-            );
-            assert_eq!(f32::from_bits(caches[3][cell]), p0[local][0]);
-            assert_eq!(f32::from_bits(caches[5][cell]), p0[local][2]);
-        }
-        // Inspect entire programs, including modes other than the newborn's mode.
-        for &(_, &id) in changed.iter().take(3) {
+        assert!(!changed.is_empty(), "must exercise actual GPU radiation");
+        for &(cell, &id) in changed.iter().take(6) {
             let meta: Vec<u32> = read(
                 &fixture.device,
                 &fixture.queue,
@@ -521,7 +519,7 @@ fn repeated_radiation_preserves_division_programs_and_updates_newborn_settings()
                 u64::from(id) * 16,
                 16,
             );
-            assert_eq!(meta[0], 3, "radiation must not insert a germination mode");
+            assert_eq!(meta[0], 3);
             let base = meta[1];
             let props = |index: usize| -> Vec<[f32; 4]> {
                 read(
@@ -532,27 +530,6 @@ fn repeated_radiation_preserves_division_programs_and_updates_newborn_settings()
                     48,
                 )
             };
-            let actual0 = props(0);
-            let actual1 = props(1);
-            let actual2 = props(2);
-            let actual4 = props(4);
-            let actual_types: Vec<u32> = read(
-                &fixture.device,
-                &fixture.queue,
-                &fixture.buffers[11],
-                u64::from(base) * 4,
-                12,
-            );
-            if actual_types[2] == 19 {
-                assert_eq!(props(32)[2], [8.0, 1.0, -1.0, base as f32 + 1.0]);
-                assert_eq!(props(33)[2], [base as f32, -2.0, -1.0, 2.0]);
-            }
-            assert_eq!(props(3), p3);
-            assert_eq!(
-                props(24),
-                gate,
-                "division gates must survive unrelated mutations"
-            );
             let routes: Vec<[i32; 2]> = read(
                 &fixture.device,
                 &fixture.queue,
@@ -560,18 +537,59 @@ fn repeated_radiation_preserves_division_programs_and_updates_newborn_settings()
                 u64::from(base) * 8,
                 24,
             );
-            for mode in 0..3 {
-                assert_eq!(actual0[mode][3], p0[mode][3]);
-                assert_eq!(actual1[mode][0], p1[mode][0]);
-                assert_eq!(actual2[mode][0], p2[mode][0]);
-                assert_eq!(actual4[mode][1] - base as f32, p4[mode][1]);
-                assert_eq!(actual4[mode][2], -1.0);
-                assert_eq!(routes[mode], [base as i32 + mode as i32; 2]);
+            // The initial mode's established partner remains the return path.
+            assert_eq!(routes[0][0], base as i32 + 1);
+            assert!(routes[1].contains(&(base as i32)));
+            for children in &routes {
+                assert!(children
+                    .iter()
+                    .all(|&child| (base as i32..(base + 3) as i32).contains(&child)));
+            }
+            let actual0 = props(0);
+            let actual1 = props(1);
+            let actual2 = props(2);
+            assert_eq!(actual0[0][3], 8.0);
+            assert_eq!(actual0[1][3], 12.0);
+            assert_eq!(actual0[2][3], 4.0);
+            assert_eq!(
+                actual2.iter().map(|p| p[0]).collect::<Vec<_>>(),
+                vec![2.0, 2.0, 5.0]
+            );
+            assert_eq!(props(3)[0][3], 0.0);
+            assert_eq!(props(24)[0][0], -1.0);
+            assert_eq!(props(24)[1][0], 8.0, "downstream gates remain available");
+            for index in [12, 13, 14, 30, 31] {
+                let flags: Vec<u32> = read(
+                    &fixture.device,
+                    &fixture.queue,
+                    &fixture.buffers[index],
+                    u64::from(base) * 4,
+                    4,
+                );
+                assert_eq!(flags[0], 1, "initial germination must retain adhesion");
+            }
+            // A Stemocyte retains self-renewing division with in-genome fates.
+            assert_eq!(routes[2], [base as i32 + 2; 2]);
+            let v9 = props(32)[2];
+            let v10 = props(33)[2];
+            for target in [v9[3], v10[0], v10[1], v10[2]] {
+                assert!((base as f32..(base + 3) as f32).contains(&target));
+            }
+            let local = (active_modes[cell] - base) as usize;
+            assert_eq!(f32::from_bits(caches[0][cell]), actual0[local][3]);
+            assert_eq!(
+                f32::from_bits(caches[1][cell]),
+                (actual1[local][0] - 1.0) * 100.0
+            );
+            assert_eq!(caches[2][cell], actual2[local][0] as u32);
+            for (cache, component) in [(3, 0), (4, 1), (5, 2)] {
+                assert_eq!(
+                    f32::from_bits(caches[cache][cell]),
+                    actual0[local][component]
+                );
             }
         }
         previous_ids = ids;
-        // Collection normally snapshots each newborn's current genome before
-        // mutation. Repeat that exact relationship for the next exposure.
         let candidates: Vec<[u32; 2]> = previous_ids
             .iter()
             .enumerate()
@@ -581,6 +599,70 @@ fn repeated_radiation_preserves_division_programs_and_updates_newborn_settings()
             &fixture.system.mutation_candidates_buffer,
             0,
             bytemuck::cast_slice(&candidates),
+        );
+    }
+    // Seeding and germination modify the clone, never the authored source.
+    let source: Vec<[f32; 4]> = read(&fixture.device, &fixture.queue, &fixture.buffers[0], 0, 48);
+    assert_eq!(source, p0);
+}
+
+#[test]
+fn singleton_append_reserves_space_for_both_cycle_partner_and_new_mode() {
+    let mut fixture = mutation_fixture(1);
+    fixture.mutate(
+        MutationParamEntry {
+            buffer_id: buffer_id::GENOME_STRUCTURE,
+            element_offset: 0,
+            data_type: data_type::MODE_APPEND,
+            weight: 1.0,
+            min_delta: 0.0,
+            max_delta: 0.0,
+            min_value: 0.0,
+            max_value: 0.0,
+        },
+        0,
+    );
+    let ids: Vec<u32> = read(
+        &fixture.device,
+        &fixture.queue,
+        &fixture.genomes,
+        0,
+        u64::from(CELLS) * 4,
+    );
+    let mut ranges = Vec::new();
+    for id in ids.into_iter().filter(|&id| id != 0) {
+        let meta: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.system.genome_meta_buffer,
+            u64::from(id) * 16,
+            16,
+        );
+        assert_eq!(
+            meta[0], 3,
+            "the seeded partner and explicit appended mode need separate slots"
+        );
+        ranges.push(meta[1]..meta[1] + meta[0]);
+        let routes: Vec<[i32; 2]> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.buffers[10],
+            u64::from(meta[1]) * 8,
+            24,
+        );
+        assert_eq!(routes[0][0], meta[1] as i32 + 1);
+        assert!(routes[1].contains(&(meta[1] as i32)));
+        assert!(routes
+            .iter()
+            .flatten()
+            .all(|&child| ranges.last().unwrap().contains(&(child as u32))));
+    }
+    assert!(ranges.len() > 8);
+    ranges.sort_by_key(|range| range.start);
+    for pair in ranges.windows(2) {
+        assert!(
+            pair[0].end <= pair[1].start,
+            "mutation mode allocations must not overlap"
         );
     }
 }
@@ -722,12 +804,33 @@ fn division_parameter_mutations_refresh_the_active_cells_cache_immediately() {
             u64::from(CELLS) * 4,
         );
         assert!(ids.iter().any(|&id| id != 0));
-        let expected = match offset {
-            4 => ((value - 1.0) * 100.0).to_bits(),
-            8 => value as u32,
-            _ => value.to_bits(),
-        };
+        let active_modes: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.modes,
+            0,
+            u64::from(CELLS) * 4,
+        );
         for (cell, &id) in ids.iter().enumerate().filter(|&(_, &id)| id != 0) {
+            let mode = active_modes[cell];
+            let properties: Vec<[f32; 4]> = read(
+                &fixture.device,
+                &fixture.queue,
+                &fixture.buffers[if offset == 8 {
+                    2
+                } else if offset == 4 {
+                    1
+                } else {
+                    0
+                }],
+                u64::from(mode) * 16,
+                16,
+            );
+            let expected = match offset {
+                4 => ((properties[0][0] - 1.0) * 100.0).to_bits(),
+                8 => properties[0][0] as u32,
+                _ => properties[0][3].to_bits(),
+            };
             assert_eq!(
                 actual[cell], expected,
                 "genome {id} has stale runtime parameters"
@@ -752,12 +855,12 @@ fn trimming_preserves_live_modes_and_developmental_references() {
         // Each of these references independently makes the tail indispensable.
         fixture.queue.write_buffer(
             &fixture.buffers[4],
-            0,
+            16,
             bytemuck::cast_slice(&[2.0f32, if step == 1 { 2.0 } else { -1.0 }, -1.0, 0.0]),
         );
         fixture.queue.write_buffer(
             &fixture.buffers[28],
-            0,
+            16,
             bytemuck::cast_slice(&[if step == 2 { 2.0f32 } else { -1.0 }, 0.0, 0.0, 0.0]),
         );
         if step == 3 {
@@ -765,9 +868,9 @@ fn trimming_preserves_live_modes_and_developmental_references() {
                 .queue
                 .write_buffer(&fixture.buffers[11], 4, bytemuck::bytes_of(&19u32));
             fixture.queue.write_buffer(
-                &fixture.buffers[32],
+                &fixture.buffers[26],
                 16,
-                bytemuck::cast_slice(&[8.0f32, 0.0, 2.0, -1.0]),
+                bytemuck::cast_slice(&[2.0f32, -1.0, -1.0, 1.0]),
             );
         }
         fixture.mutate(
@@ -849,5 +952,372 @@ fn authored_mode_cycles_still_reset_split_counts() {
                 assert_eq!(state.split_counts[cell], if cycle { 0 } else { 1 });
             }
         }
+    }
+}
+
+#[test]
+fn old_default_lineages_can_mutate_into_connected_multicellular_growth() {
+    use crate::cell::division::division_step;
+    use crate::scene::preview_state::InitialState;
+    use crate::simulation::physics_config::PhysicsConfig;
+
+    let source = Genome::default();
+    let mut fixture = mutation_fixture(source.modes.len());
+    fixture
+        .system
+        .sync_genome_metadata(&fixture.queue, &[source.clone()]);
+    // Upload the actual default's division program, rather than the deliberately
+    // adhesive, low-count source used by the isolated geometry tests.
+    let properties: Vec<Vec<[f32; 4]>> = (0..5)
+        .map(|index| {
+            source
+                .modes
+                .iter()
+                .map(|mode| match index {
+                    0 => [
+                        mode.nutrient_gain_rate,
+                        mode.max_cell_size,
+                        mode.membrane_stiffness,
+                        mode.split_interval,
+                    ],
+                    1 => [
+                        mode.split_mass,
+                        mode.nutrient_priority,
+                        mode.swim_force,
+                        1.0,
+                    ],
+                    2 => [mode.max_splits as f32, mode.split_ratio, -1.0, 0.0],
+                    3 => [0.0, 0.0, 0.0, mode.min_adhesions as f32],
+                    _ => [
+                        mode.max_adhesions as f32,
+                        mode.mode_a_after_splits as f32,
+                        mode.mode_b_after_splits as f32,
+                        0.0,
+                    ],
+                })
+                .collect()
+        })
+        .collect();
+    for (index, values) in properties.iter().enumerate() {
+        fixture
+            .queue
+            .write_buffer(&fixture.buffers[index], 0, bytemuck::cast_slice(values));
+    }
+    for (index, flag) in [(12, 0), (13, 1), (14, 1), (30, 1), (31, 1)] {
+        fixture.queue.write_buffer(
+            &fixture.buffers[index],
+            0,
+            bytemuck::cast_slice(&vec![flag as u32; source.modes.len()]),
+        );
+    }
+    let routes: Vec<_> = source
+        .modes
+        .iter()
+        .map(|mode| [mode.child_a.mode_number, mode.child_b.mode_number])
+        .collect();
+    fixture
+        .queue
+        .write_buffer(&fixture.buffers[10], 0, bytemuck::cast_slice(&routes));
+    fixture.queue.write_buffer(
+        &fixture.buffers[11],
+        0,
+        bytemuck::cast_slice(&vec![2u32; source.modes.len()]),
+    );
+    for buffer in &fixture.buffers[5..10] {
+        fixture.queue.write_buffer(
+            buffer,
+            0,
+            bytemuck::cast_slice(&vec![[0.0f32, 0.0, 0.0, 1.0]; source.modes.len()]),
+        );
+    }
+    let old_counts: Vec<u32> = (0..CELLS)
+        .map(|cell| [0, 1, 4, 5, 7, 32][cell as usize % 6])
+        .collect();
+    fixture
+        .queue
+        .write_buffer(&fixture.split_counts, 0, bytemuck::cast_slice(&old_counts));
+    fixture.queue.write_buffer(
+        &fixture.runtime[2],
+        0,
+        bytemuck::cast_slice(&vec![u32::MAX; CELLS as usize]),
+    );
+    fixture.mutate(
+        MutationParamEntry {
+            buffer_id: buffer_id::MODE_VISUALS,
+            element_offset: 0,
+            data_type: data_type::CONTINUOUS_F32,
+            weight: 1.0,
+            min_delta: 0.01,
+            max_delta: 0.01,
+            min_value: 0.0,
+            max_value: 1.0,
+        },
+        0,
+    );
+    let ids: Vec<u32> = read(
+        &fixture.device,
+        &fixture.queue,
+        &fixture.genomes,
+        0,
+        u64::from(CELLS) * 4,
+    );
+    let counts: Vec<u32> = read(
+        &fixture.device,
+        &fixture.queue,
+        &fixture.split_counts,
+        0,
+        u64::from(CELLS) * 4,
+    );
+    let caps: Vec<u32> = read(
+        &fixture.device,
+        &fixture.queue,
+        &fixture.runtime[2],
+        0,
+        u64::from(CELLS) * 4,
+    );
+    let mut developed = 0;
+    for (cell, &id) in ids.iter().enumerate() {
+        if id == 0 {
+            assert_eq!(
+                counts[cell], old_counts[cell],
+                "unmutated cells keep their history"
+            );
+            continue;
+        }
+        assert!(counts[cell] < caps[cell],
+            "default descendant with {} inherited splits is sterile after mutation: count={}, cap={}",
+            old_counts[cell], counts[cell], caps[cell]);
+        if old_counts[cell] < caps[cell] {
+            assert_eq!(
+                counts[cell], old_counts[cell],
+                "a usable split budget must not reset"
+            );
+        }
+        if old_counts[cell] < 5 || developed >= 4 {
+            continue;
+        }
+        let meta: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.system.genome_meta_buffer,
+            u64::from(id) * 16,
+            16,
+        );
+        let base = meta[1];
+        let props = |index: usize| -> Vec<[f32; 4]> {
+            read(
+                &fixture.device,
+                &fixture.queue,
+                &fixture.buffers[index],
+                u64::from(base) * 16,
+                u64::from(meta[0]) * 16,
+            )
+        };
+        let p0 = props(0);
+        let p1 = props(1);
+        let p2 = props(2);
+        let p3 = props(3);
+        let p4 = props(4);
+        let routes: Vec<[i32; 2]> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.buffers[10],
+            u64::from(base) * 8,
+            u64::from(meta[0]) * 8,
+        );
+        let flags: Vec<Vec<u32>> = [12, 13, 14, 30, 31]
+            .iter()
+            .map(|&index| {
+                read(
+                    &fixture.device,
+                    &fixture.queue,
+                    &fixture.buffers[index],
+                    u64::from(base) * 4,
+                    u64::from(meta[0]) * 4,
+                )
+            })
+            .collect();
+        let mut mutant = source.clone();
+        for (index, mode) in mutant.modes.iter_mut().enumerate() {
+            mode.split_interval = p0[index][3];
+            mode.split_mass = p1[index][0];
+            mode.max_splits = p2[index][0] as i32;
+            mode.min_adhesions = p3[index][3] as i32;
+            mode.max_adhesions = p4[index][0] as i32;
+            mode.mode_a_after_splits = p4[index][1] as i32;
+            mode.mode_b_after_splits = p4[index][2] as i32;
+            mode.child_a.mode_number = routes[index][0] - base as i32;
+            mode.child_b.mode_number = routes[index][1] - base as i32;
+            mode.parent_make_adhesion = flags[0][index] != 0;
+            mode.child_a.keep_adhesion = flags[1][index] != 0;
+            mode.child_b.keep_adhesion = flags[2][index] != 0;
+            mode.child_a_after_split_keep_adhesion = flags[3][index] != 0;
+            mode.child_b_after_split_keep_adhesion = flags[4][index] != 0;
+        }
+        let mut state =
+            InitialState::from_genome(&mutant, 128, &PhysicsConfig::default()).to_canonical_state();
+        state.split_counts[0] = counts[cell] as i32;
+        for generation in 1..=8 {
+            for index in 0..state.cell_count {
+                state.nutrients[index] = 200.0;
+            }
+            division_step(&mut state, &mutant, generation as f32 * 10.0, 128, 42);
+        }
+        assert!(
+            state.cell_count >= 8,
+            "mutants must actually develop beyond a pair"
+        );
+        let mut components: Vec<_> = (0..state.cell_count).collect();
+        for _ in 0..state.cell_count {
+            for bond in 0..state.adhesion_connections.active_count {
+                if state.adhesion_connections.is_active[bond] == 0 {
+                    continue;
+                }
+                let a = state.adhesion_connections.cell_a_index[bond] as usize;
+                let b = state.adhesion_connections.cell_b_index[bond] as usize;
+                let component = components[a].min(components[b]);
+                components[a] = component;
+                components[b] = component;
+            }
+        }
+        let largest = (0..state.cell_count)
+            .map(|label| components.iter().filter(|&&c| c == label).count())
+            .max()
+            .unwrap();
+        assert!(
+            largest >= 4,
+            "default mutant only formed a {largest}-cell body despite {} cells",
+            state.cell_count
+        );
+        developed += 1;
+    }
+    assert_eq!(
+        developed, 4,
+        "must test several independently mutated older cells"
+    );
+}
+
+#[test]
+fn mutation_rebases_only_newly_exhausted_split_budgets() {
+    let mut fixture = mutation_fixture(1);
+    for (frame, (previous_cap, count, new_cap, expected)) in [
+        (u32::MAX, 32u32, 5u32, 0u32),
+        (10, 7, 5, 0),
+        (5, 3, 5, 3),
+        (5, 5, 5, 5),
+        (2, 1, 2, 1),
+        (2, 2, 2, 2),
+        (5, 5, 2, 5),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for buffer in [&fixture.genomes, &fixture.modes] {
+            fixture.queue.write_buffer(
+                buffer,
+                0,
+                bytemuck::cast_slice(&vec![0u32; CELLS as usize]),
+            );
+        }
+        fixture.queue.write_buffer(
+            &fixture.runtime[2],
+            0,
+            bytemuck::cast_slice(&vec![previous_cap; CELLS as usize]),
+        );
+        fixture.queue.write_buffer(
+            &fixture.split_counts,
+            0,
+            bytemuck::cast_slice(&vec![count; CELLS as usize]),
+        );
+        fixture.mutate(
+            MutationParamEntry {
+                buffer_id: buffer_id::MODE_PROPERTIES,
+                element_offset: 8,
+                data_type: data_type::CONTINUOUS_F32,
+                weight: 1.0,
+                min_delta: 0.0,
+                max_delta: 0.0,
+                min_value: new_cap as f32,
+                max_value: new_cap as f32,
+            },
+            frame as u32,
+        );
+        let ids: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.genomes,
+            0,
+            u64::from(CELLS) * 4,
+        );
+        let counts: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.split_counts,
+            0,
+            u64::from(CELLS) * 4,
+        );
+        let caps: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.runtime[2],
+            0,
+            u64::from(CELLS) * 4,
+        );
+        assert!(ids.iter().any(|&id| id != 0));
+        for (cell, &id) in ids.iter().enumerate() {
+            assert_eq!(counts[cell], if id == 0 { count } else { expected });
+            assert_eq!(caps[cell], if id == 0 { previous_cap } else { new_cap });
+        }
+    }
+}
+
+#[test]
+fn established_cycle_partners_can_still_release_unbonded_offspring() {
+    let mut fixture = mutation_fixture(2);
+    fixture.queue.write_buffer(
+        &fixture.buffers[10],
+        0,
+        bytemuck::cast_slice(&[[1i32, 0], [0, 1]]),
+    );
+    fixture.mutate(
+        MutationParamEntry {
+            buffer_id: buffer_id::MODE_VISUALS,
+            element_offset: 0,
+            data_type: data_type::CONTINUOUS_F32,
+            weight: 1.0,
+            min_delta: 0.01,
+            max_delta: 0.01,
+            min_value: 0.0,
+            max_value: 1.0,
+        },
+        0,
+    );
+    let ids: Vec<u32> = read(
+        &fixture.device,
+        &fixture.queue,
+        &fixture.genomes,
+        0,
+        u64::from(CELLS) * 4,
+    );
+    assert!(ids.iter().any(|&id| id != 0));
+    for id in ids.into_iter().filter(|&id| id != 0) {
+        let meta: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.system.genome_meta_buffer,
+            u64::from(id) * 16,
+            16,
+        );
+        let flags: Vec<u32> = read(
+            &fixture.device,
+            &fixture.queue,
+            &fixture.buffers[12],
+            u64::from(meta[1] + 1) * 4,
+            4,
+        );
+        assert_eq!(
+            flags[0], 0,
+            "established downstream release behavior must remain evolvable"
+        );
     }
 }
