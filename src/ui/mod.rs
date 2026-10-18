@@ -4,6 +4,7 @@ mod cpu_usage;
 pub mod dock;
 pub mod genome_browser;
 pub mod inspection;
+pub mod menu_visibility;
 mod native_input;
 pub mod panel;
 pub mod panel_context;

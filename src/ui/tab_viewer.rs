@@ -27,6 +27,10 @@ use crate::ui::widgets::{modes_buttons, modes_list_items, quaternion_ball};
 mod scene_settings;
 
 #[cfg(test)]
+#[path = "menu_visibility_ui_tests.rs"]
+mod menu_visibility_ui_tests;
+
+#[cfg(test)]
 #[path = "sun_orbit_slider_tests.rs"]
 mod sun_orbit_slider_tests;
 
@@ -98,8 +102,8 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             return;
         }
         // Saved and floating panels must obey the same visibility rule as menus.
-        if tab.is_cosmetic() && !self.state.cosmetic_options_visible() {
-            ui.label("Enable Advanced Options to edit appearance settings.");
+        if !self.state.menu_access().allows_panel(*tab) {
+            ui.label("Enable the required settings level to access this panel.");
             return;
         }
         let usage_ctx = ui.ctx().clone();
@@ -132,7 +136,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             Panel::CaveSystem => render_cave_system(ui, self.context, self.state),
             Panel::FluidSettings => {
                 render_fluid_settings(ui, self.context, self.state);
-                if self.state.cosmetic_options_visible() {
+                if self.state.menu_access().allows(193) {
                     render_organism_skin_settings(ui, self.context, &mut self.state.fluid_settings.organism_skin);
                 }
             }
@@ -247,6 +251,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
         _surface: SurfaceIndex,
         _node: NodeIndex,
     ) {
+        if !self.state.menu_access().allows(19) { return; }
         let panel_name = format!("{:?}", tab);
         let is_locked = self.state.is_panel_locked(&panel_name);
 
@@ -1298,6 +1303,7 @@ fn severity_color(severity: FieldReportSeverity) -> egui::Color32 {
 fn render_headless_section(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
     state.gpu_headless_mode = true;
 
+    let access = state.menu_access();
     let p = palette();
     let headless_speed_cap = crate::ui::types::GPU_HEADLESS_MAX_SIM_SPEED;
 
@@ -1397,106 +1403,108 @@ fn render_headless_section(ui: &mut Ui, context: &mut PanelContext, state: &mut 
             });
 
         ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Simulation speed")
-                    .size(12.0)
-                    .color(p.text_secondary),
-            );
-            sim_speed = sim_speed.clamp(0.1, headless_speed_cap);
-            let speed_resp = ui.add(
-                egui::Slider::new(&mut sim_speed, 0.1..=headless_speed_cap)
-                    .logarithmic(true)
-                    .suffix("x"),
-            );
-            if speed_resp.changed() {
-                state.gpu_headless_auto_speed = false;
-                *context.scene_request = SceneModeRequest::SetSpeed(sim_speed);
-            }
-        });
-
-        ui.horizontal(|ui| {
-            for speed in [1.0_f32, 2.0, 5.0, 10.0] {
-                if ui.button(format!("{:.0}x", speed)).clicked() {
+        if access.allows(390) {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Simulation speed")
+                        .size(12.0)
+                        .color(p.text_secondary),
+                );
+                sim_speed = sim_speed.clamp(0.1, headless_speed_cap);
+                let speed_resp = ui.add(
+                    egui::Slider::new(&mut sim_speed, 0.1..=headless_speed_cap)
+                        .logarithmic(true)
+                        .suffix("x"),
+                );
+                if speed_resp.changed() {
                     state.gpu_headless_auto_speed = false;
-                    *context.scene_request = SceneModeRequest::SetSpeed(speed);
+                    *context.scene_request = SceneModeRequest::SetSpeed(sim_speed);
                 }
-            }
+            });
+
+            ui.horizontal(|ui| {
+                for speed in [1.0_f32, 2.0, 5.0, 10.0] {
+                    if ui.button(format!("{:.0}x", speed)).clicked() {
+                        state.gpu_headless_auto_speed = false;
+                        *context.scene_request = SceneModeRequest::SetSpeed(speed);
+                    }
+                }
+                ui.add_space(6.0);
+                if ui.button("Adaptive").clicked() {
+                    state.gpu_headless_auto_speed = true;
+                    state.gpu_headless_target_fps = 30.0;
+                }
+                if ui.button("Fast Forward").clicked() {
+                    state.gpu_headless_auto_speed = true;
+                    state.gpu_headless_target_fps = 30.0;
+                    *context.scene_request = SceneModeRequest::SetSpeed(
+                        state.gpu_headless_max_speed.min(headless_speed_cap),
+                    );
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
             ui.add_space(6.0);
-            if ui.button("Adaptive").clicked() {
-                state.gpu_headless_auto_speed = true;
-                state.gpu_headless_target_fps = 30.0;
-            }
-            if ui.button("Fast Forward").clicked() {
-                state.gpu_headless_auto_speed = true;
-                state.gpu_headless_target_fps = 30.0;
-                *context.scene_request = SceneModeRequest::SetSpeed(
-                    state.gpu_headless_max_speed.min(headless_speed_cap),
+
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.gpu_headless_auto_speed, "Auto target FPS");
+                ui.add(
+                    egui::Slider::new(&mut state.gpu_headless_target_fps, 15.0..=60.0).suffix(" FPS"),
                 );
-            }
-        });
+                ui.label(
+                    egui::RichText::new(state.gpu_headless_auto_status.display_name()).color(
+                        if state.gpu_headless_auto_speed {
+                            p.accent_secondary
+                        } else {
+                            p.text_dim
+                        },
+                    ),
+                );
+            });
 
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Auto bounds")
+                        .size(12.0)
+                        .color(p.text_secondary),
+                );
+                ui.add(
+                    egui::Slider::new(&mut state.gpu_headless_min_speed, 0.1..=headless_speed_cap)
+                        .logarithmic(true)
+                        .prefix("min ")
+                        .suffix("x"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut state.gpu_headless_max_speed, 0.1..=headless_speed_cap)
+                        .logarithmic(true)
+                        .prefix("max ")
+                        .suffix("x"),
+                );
+                state.gpu_headless_min_speed =
+                    state.gpu_headless_min_speed.clamp(0.1, headless_speed_cap);
+                state.gpu_headless_max_speed =
+                    state.gpu_headless_max_speed.clamp(0.1, headless_speed_cap);
+                if state.gpu_headless_min_speed > state.gpu_headless_max_speed {
+                    std::mem::swap(
+                        &mut state.gpu_headless_min_speed,
+                        &mut state.gpu_headless_max_speed,
+                    );
+                }
+            });
 
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut state.gpu_headless_auto_speed, "Auto target FPS");
-            ui.add(
-                egui::Slider::new(&mut state.gpu_headless_target_fps, 15.0..=60.0).suffix(" FPS"),
-            );
-            ui.label(
-                egui::RichText::new(state.gpu_headless_auto_status.display_name()).color(
-                    if state.gpu_headless_auto_speed {
-                        p.accent_secondary
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU telemetry");
+                ui.label(
+                    egui::RichText::new(if state.gpu_readbacks_enabled {
+                        "culling and climate statistics enabled"
                     } else {
-                        p.text_dim
-                    },
-                ),
-            );
-        });
-
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("Auto bounds")
-                    .size(12.0)
-                    .color(p.text_secondary),
-            );
-            ui.add(
-                egui::Slider::new(&mut state.gpu_headless_min_speed, 0.1..=headless_speed_cap)
-                    .logarithmic(true)
-                    .prefix("min ")
-                    .suffix("x"),
-            );
-            ui.add(
-                egui::Slider::new(&mut state.gpu_headless_max_speed, 0.1..=headless_speed_cap)
-                    .logarithmic(true)
-                    .prefix("max ")
-                    .suffix("x"),
-            );
-            state.gpu_headless_min_speed =
-                state.gpu_headless_min_speed.clamp(0.1, headless_speed_cap);
-            state.gpu_headless_max_speed =
-                state.gpu_headless_max_speed.clamp(0.1, headless_speed_cap);
-            if state.gpu_headless_min_speed > state.gpu_headless_max_speed {
-                std::mem::swap(
-                    &mut state.gpu_headless_min_speed,
-                    &mut state.gpu_headless_max_speed,
+                        "reduced CPU/GPU synchronization"
+                    })
+                    .color(p.text_dim),
                 );
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU telemetry");
-            ui.label(
-                egui::RichText::new(if state.gpu_readbacks_enabled {
-                    "culling and climate statistics enabled"
-                } else {
-                    "reduced CPU/GPU synchronization"
-                })
-                .color(p.text_dim),
-            );
-        });
+            });
+        }
     });
 }
 
@@ -3509,6 +3517,7 @@ fn render_genome_editor(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the PerformanceMonitor panel.
 fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    let access = state.menu_access();
     let perf = context.performance;
     if let Some(hz) = perf.vr_refresh_hz() {
         ui.label(format!(
@@ -3521,28 +3530,34 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
         ui.add_space(4.0);
     }
 
-    // GPU Readbacks toggle at the top
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU Telemetry")
-            .on_hover_text("Read culling and climate statistics at a reduced rate. Cell counts, active camera follow, audio and explicit inspection remain available; GPU timing has its own switch.");
-        ui.checkbox(&mut state.gpu_timing_enabled, "GPU Frame Timing")
-            .on_hover_text("Measure per-segment GPU frame time with timestamp queries. Disable to remove timestamp query and readback overhead");
-    });
-    ui.add_space(4.0);
+    if access.allows(383) {
+        // GPU Readbacks toggle at the top
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut state.gpu_readbacks_enabled, "GPU Telemetry")
+                .on_hover_text("Read culling and climate statistics at a reduced rate. Cell counts, active camera follow, audio and explicit inspection remain available; GPU timing has its own switch.");
+            ui.checkbox(&mut state.gpu_timing_enabled, "GPU Frame Timing")
+                .on_hover_text("Measure per-segment GPU frame time with timestamp queries. Disable to remove timestamp query and readback overhead");
+        });
+        ui.add_space(4.0);
 
+
+    }
     // Culling section (GPU mode only)
     if context.current_mode == crate::ui::types::SimulationMode::Gpu {
         section_header(ui, "GPU RENDERING");
 
-        // Culling toggles
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut state.frustum_enabled, "Frustum")
-                .on_hover_text("Discard cells outside the camera frustum");
-            ui.checkbox(&mut state.occlusion_enabled, "Occlusion")
-                .on_hover_text("Discard cells hidden behind other geometry (requires Hi-Z)");
-        });
-        ui.add_space(4.0);
+        if access.allows(385) {
+            // Culling toggles
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut state.frustum_enabled, "Frustum")
+                    .on_hover_text("Discard cells outside the camera frustum");
+                ui.checkbox(&mut state.occlusion_enabled, "Occlusion")
+                    .on_hover_text("Discard cells hidden behind other geometry (requires Hi-Z)");
+            });
+            ui.add_space(4.0);
 
+
+        }
         let (total, visible, frustum_culled, occluded) = perf.culling_stats();
 
         egui::Grid::new("gpu_stats_grid")
@@ -3609,50 +3624,50 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
                 }
             });
 
-        if state.cosmetic_options_visible() {
-        ui.add_space(6.0);
-        section_header(ui, "LOD");
-        egui::Grid::new("lod_grid")
-            .num_columns(2)
-            .spacing([8.0, 4.0])
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new("Scale")
-                        .size(11.0)
-                        .color(palette().text_secondary),
-                )
-                .on_hover_text(
-                    "Higher keeps cells at full detail from farther away",
-                );
-                ui.add(
-                    egui::Slider::new(&mut state.lod_scale_factor, 50.0..=2000.0).fixed_decimals(0),
-                );
-                ui.end_row();
-                ui.label(
-                    egui::RichText::new("Full Detail")
-                        .size(11.0)
-                        .color(palette().text_secondary),
-                )
-                .on_hover_text(
-                    "Screen-size threshold for switching from a shadowed basic sphere to full procedural detail",
-                );
-                ui.add(
-                    egui::Slider::new(&mut state.lod_threshold_low, 1.0..=1000.0).fixed_decimals(0),
-                );
-                ui.end_row();
-                ui.label(
-                    egui::RichText::new("Debug Colors")
-                        .size(11.0)
-                        .color(palette().text_secondary),
-                )
-                .on_hover_text(
-                    "Tint cells by LOD level: red=basic sphere, green=full detail",
-                );
-                ui.checkbox(&mut state.lod_debug_colors, "");
-                ui.end_row();
-            });
+        if access.allows(387) {
+            ui.add_space(6.0);
+            section_header(ui, "LOD");
+            egui::Grid::new("lod_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Scale")
+                            .size(11.0)
+                            .color(palette().text_secondary),
+                    )
+                    .on_hover_text(
+                        "Higher keeps cells at full detail from farther away",
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut state.lod_scale_factor, 50.0..=2000.0).fixed_decimals(0),
+                    );
+                    ui.end_row();
+                    ui.label(
+                        egui::RichText::new("Full Detail")
+                            .size(11.0)
+                            .color(palette().text_secondary),
+                    )
+                    .on_hover_text(
+                        "Screen-size threshold for switching from a shadowed basic sphere to full procedural detail",
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut state.lod_threshold_low, 1.0..=1000.0).fixed_decimals(0),
+                    );
+                    ui.end_row();
+                    ui.label(
+                        egui::RichText::new("Debug Colors")
+                            .size(11.0)
+                            .color(palette().text_secondary),
+                    )
+                    .on_hover_text(
+                        "Tint cells by LOD level: red=basic sphere, green=full detail",
+                    );
+                    ui.checkbox(&mut state.lod_debug_colors, "");
+                    ui.end_row();
+                });
 
-        ui.add_space(6.0);
+            ui.add_space(6.0);
         }
     }
 
@@ -3990,6 +4005,7 @@ fn render_performance_monitor(ui: &mut Ui, context: &mut PanelContext, state: &m
 }
 
 fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiState) {
+    let access = state.menu_access();
     ui.separator();
 
     // Check if we're in GPU mode
@@ -4107,12 +4123,15 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                 .changed();
 
             ui.add_space(4.0);
-            ui.label("Scale:")
-                .on_hover_text("Size of the cave features. Higher values create larger, more open chambers; lower values create tighter, more intricate passages");
-            params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut scale, 50.0..=300.0))
-                .changed();
+            if access.allows(60) {
+                ui.label("Scale:")
+                    .on_hover_text("Size of the cave features. Higher values create larger, more open chambers; lower values create tighter, more intricate passages");
+                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut scale, 50.0..=300.0))
+                    .changed();
 
-            if state.show_advanced_options {
+
+            }
+            if access.allows(61) {
                 ui.add_space(4.0);
                 ui.label("Octaves:")
                     .on_hover_text("Number of noise layers combined to generate the cave shape. More octaves add finer detail and rougher surfaces");
@@ -4195,536 +4214,539 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             ui.add_space(10.0);
             ui.separator();
-            if state.cosmetic_options_visible() {
-            ui.heading("Appearance");
-            ui.add_space(5.0);
+            if access.allows(69) {
+                ui.heading("Appearance");
+                ui.add_space(5.0);
 
-            ui.label("Preset:")
-                .on_hover_text("Named cave appearance preset. More appearances can be added here without changing the rest of the panel");
-            let previous_cave_appearance = cave_appearance;
-            egui::ComboBox::from_id_salt("cave_appearance")
-                .selected_text(match cave_appearance {
-                    1 => "Lava Tubes",
-                    _ => "Layered Shale",
-                })
-                .show_ui(ui, |ui| {
-                    params_changed |= ui
-                        .selectable_value(&mut cave_appearance, 0, "Layered Shale")
-                        .changed();
-                    params_changed |= ui
-                        .selectable_value(&mut cave_appearance, 1, "Lava Tubes")
-                        .changed();
-                });
-            if cave_appearance != previous_cave_appearance {
-                let previous_visuals = CaveAppearanceVisualSettings {
-                    dark_color: cave_rock_dark_color,
-                    cool_color: cave_rock_cool_color,
-                    warm_color: cave_rock_warm_color,
-                    pale_color: cave_rock_pale_color,
-                    layer_scale: cave_rock_layer_scale,
-                    warp_strength: cave_rock_warp_strength,
-                    fine_band_strength: cave_rock_fine_band_strength,
-                    cool_mottle_strength: cave_rock_cool_mottle_strength,
-                    grain_strength: cave_rock_grain_strength,
-                    patch_contrast: cave_rock_patch_contrast,
-                    seam_darkening: cave_rock_seam_darkening,
-                    wall_line_strength: cave_rock_wall_line_strength,
-                    min_color: cave_rock_min_color,
-                    max_color: cave_rock_max_color,
-                    ambient_strength: cave_rock_ambient_strength,
-                    diffuse_strength: cave_rock_diffuse_strength,
-                    specular_strength: cave_rock_specular_strength,
-                    specular_power: cave_rock_specular_power,
-                    texture_scale: cave_rock_texture_scale,
-                    coarse_frequency: cave_rock_coarse_frequency,
-                    fine_frequency: cave_rock_fine_frequency,
-                    seam_frequency: cave_rock_seam_frequency,
-                    fine_noise_scale: cave_rock_fine_noise_scale,
-                    fine_noise_strength: cave_rock_fine_noise_strength,
-                    seam_noise_scale: cave_rock_seam_noise_scale,
-                    seam_noise_strength: cave_rock_seam_noise_strength,
-                    coarse_band_low: cave_rock_coarse_band_low,
-                    coarse_band_high: cave_rock_coarse_band_high,
-                    fine_band_low: cave_rock_fine_band_low,
-                    fine_band_high: cave_rock_fine_band_high,
-                    seam_low: cave_rock_seam_low,
-                    seam_high: cave_rock_seam_high,
-                    geometry_conform: cave_rock_geometry_conform,
-                    parallax_depth: cave_rock_parallax_depth,
-                };
-                if previous_cave_appearance == 1 {
-                    context.editor_state.cave_lava_tube_visuals = previous_visuals;
-                } else {
-                    context.editor_state.cave_layered_shale_visuals = previous_visuals;
+                ui.label("Preset:")
+                    .on_hover_text("Named cave appearance preset. More appearances can be added here without changing the rest of the panel");
+                let previous_cave_appearance = cave_appearance;
+                egui::ComboBox::from_id_salt("cave_appearance")
+                    .selected_text(match cave_appearance {
+                        1 => "Lava Tubes",
+                        _ => "Layered Shale",
+                    })
+                    .show_ui(ui, |ui| {
+                        params_changed |= ui
+                            .selectable_value(&mut cave_appearance, 0, "Layered Shale")
+                            .changed();
+                        params_changed |= ui
+                            .selectable_value(&mut cave_appearance, 1, "Lava Tubes")
+                            .changed();
+                    });
+                if cave_appearance != previous_cave_appearance {
+                    let previous_visuals = CaveAppearanceVisualSettings {
+                        dark_color: cave_rock_dark_color,
+                        cool_color: cave_rock_cool_color,
+                        warm_color: cave_rock_warm_color,
+                        pale_color: cave_rock_pale_color,
+                        layer_scale: cave_rock_layer_scale,
+                        warp_strength: cave_rock_warp_strength,
+                        fine_band_strength: cave_rock_fine_band_strength,
+                        cool_mottle_strength: cave_rock_cool_mottle_strength,
+                        grain_strength: cave_rock_grain_strength,
+                        patch_contrast: cave_rock_patch_contrast,
+                        seam_darkening: cave_rock_seam_darkening,
+                        wall_line_strength: cave_rock_wall_line_strength,
+                        min_color: cave_rock_min_color,
+                        max_color: cave_rock_max_color,
+                        ambient_strength: cave_rock_ambient_strength,
+                        diffuse_strength: cave_rock_diffuse_strength,
+                        specular_strength: cave_rock_specular_strength,
+                        specular_power: cave_rock_specular_power,
+                        texture_scale: cave_rock_texture_scale,
+                        coarse_frequency: cave_rock_coarse_frequency,
+                        fine_frequency: cave_rock_fine_frequency,
+                        seam_frequency: cave_rock_seam_frequency,
+                        fine_noise_scale: cave_rock_fine_noise_scale,
+                        fine_noise_strength: cave_rock_fine_noise_strength,
+                        seam_noise_scale: cave_rock_seam_noise_scale,
+                        seam_noise_strength: cave_rock_seam_noise_strength,
+                        coarse_band_low: cave_rock_coarse_band_low,
+                        coarse_band_high: cave_rock_coarse_band_high,
+                        fine_band_low: cave_rock_fine_band_low,
+                        fine_band_high: cave_rock_fine_band_high,
+                        seam_low: cave_rock_seam_low,
+                        seam_high: cave_rock_seam_high,
+                        geometry_conform: cave_rock_geometry_conform,
+                        parallax_depth: cave_rock_parallax_depth,
+                    };
+                    if previous_cave_appearance == 1 {
+                        context.editor_state.cave_lava_tube_visuals = previous_visuals;
+                    } else {
+                        context.editor_state.cave_layered_shale_visuals = previous_visuals;
+                    }
+
+                    let selected_visuals = if cave_appearance == 1 {
+                        context.editor_state.cave_lava_tube_visuals
+                    } else {
+                        context.editor_state.cave_layered_shale_visuals
+                    };
+                    cave_rock_dark_color = selected_visuals.dark_color;
+                    cave_rock_cool_color = selected_visuals.cool_color;
+                    cave_rock_warm_color = selected_visuals.warm_color;
+                    cave_rock_pale_color = selected_visuals.pale_color;
+                    cave_rock_layer_scale = selected_visuals.layer_scale;
+                    cave_rock_warp_strength = selected_visuals.warp_strength;
+                    cave_rock_fine_band_strength = selected_visuals.fine_band_strength;
+                    cave_rock_cool_mottle_strength = selected_visuals.cool_mottle_strength;
+                    cave_rock_grain_strength = selected_visuals.grain_strength;
+                    cave_rock_patch_contrast = selected_visuals.patch_contrast;
+                    cave_rock_seam_darkening = selected_visuals.seam_darkening;
+                    cave_rock_wall_line_strength = selected_visuals.wall_line_strength;
+                    cave_rock_min_color = selected_visuals.min_color;
+                    cave_rock_max_color = selected_visuals.max_color;
+                    cave_rock_ambient_strength = selected_visuals.ambient_strength;
+                    cave_rock_diffuse_strength = selected_visuals.diffuse_strength;
+                    cave_rock_specular_strength = selected_visuals.specular_strength;
+                    cave_rock_specular_power = selected_visuals.specular_power;
+                    cave_rock_texture_scale = selected_visuals.texture_scale;
+                    cave_rock_coarse_frequency = selected_visuals.coarse_frequency;
+                    cave_rock_fine_frequency = selected_visuals.fine_frequency;
+                    cave_rock_seam_frequency = selected_visuals.seam_frequency;
+                    cave_rock_fine_noise_scale = selected_visuals.fine_noise_scale;
+                    cave_rock_fine_noise_strength = selected_visuals.fine_noise_strength;
+                    cave_rock_seam_noise_scale = selected_visuals.seam_noise_scale;
+                    cave_rock_seam_noise_strength = selected_visuals.seam_noise_strength;
+                    cave_rock_coarse_band_low = selected_visuals.coarse_band_low;
+                    cave_rock_coarse_band_high = selected_visuals.coarse_band_high;
+                    cave_rock_fine_band_low = selected_visuals.fine_band_low;
+                    cave_rock_fine_band_high = selected_visuals.fine_band_high;
+                    cave_rock_seam_low = selected_visuals.seam_low;
+                    cave_rock_seam_high = selected_visuals.seam_high;
+                    cave_rock_geometry_conform = selected_visuals.geometry_conform;
+                    cave_rock_parallax_depth = selected_visuals.parallax_depth;
+                    params_changed = true;
                 }
 
-                let selected_visuals = if cave_appearance == 1 {
-                    context.editor_state.cave_lava_tube_visuals
-                } else {
-                    context.editor_state.cave_layered_shale_visuals
-                };
-                cave_rock_dark_color = selected_visuals.dark_color;
-                cave_rock_cool_color = selected_visuals.cool_color;
-                cave_rock_warm_color = selected_visuals.warm_color;
-                cave_rock_pale_color = selected_visuals.pale_color;
-                cave_rock_layer_scale = selected_visuals.layer_scale;
-                cave_rock_warp_strength = selected_visuals.warp_strength;
-                cave_rock_fine_band_strength = selected_visuals.fine_band_strength;
-                cave_rock_cool_mottle_strength = selected_visuals.cool_mottle_strength;
-                cave_rock_grain_strength = selected_visuals.grain_strength;
-                cave_rock_patch_contrast = selected_visuals.patch_contrast;
-                cave_rock_seam_darkening = selected_visuals.seam_darkening;
-                cave_rock_wall_line_strength = selected_visuals.wall_line_strength;
-                cave_rock_min_color = selected_visuals.min_color;
-                cave_rock_max_color = selected_visuals.max_color;
-                cave_rock_ambient_strength = selected_visuals.ambient_strength;
-                cave_rock_diffuse_strength = selected_visuals.diffuse_strength;
-                cave_rock_specular_strength = selected_visuals.specular_strength;
-                cave_rock_specular_power = selected_visuals.specular_power;
-                cave_rock_texture_scale = selected_visuals.texture_scale;
-                cave_rock_coarse_frequency = selected_visuals.coarse_frequency;
-                cave_rock_fine_frequency = selected_visuals.fine_frequency;
-                cave_rock_seam_frequency = selected_visuals.seam_frequency;
-                cave_rock_fine_noise_scale = selected_visuals.fine_noise_scale;
-                cave_rock_fine_noise_strength = selected_visuals.fine_noise_strength;
-                cave_rock_seam_noise_scale = selected_visuals.seam_noise_scale;
-                cave_rock_seam_noise_strength = selected_visuals.seam_noise_strength;
-                cave_rock_coarse_band_low = selected_visuals.coarse_band_low;
-                cave_rock_coarse_band_high = selected_visuals.coarse_band_high;
-                cave_rock_fine_band_low = selected_visuals.fine_band_low;
-                cave_rock_fine_band_high = selected_visuals.fine_band_high;
-                cave_rock_seam_low = selected_visuals.seam_low;
-                cave_rock_seam_high = selected_visuals.seam_high;
-                cave_rock_geometry_conform = selected_visuals.geometry_conform;
-                cave_rock_parallax_depth = selected_visuals.parallax_depth;
-                params_changed = true;
-            }
-
-            ui.add_space(4.0);
-            let lava_tubes_selected = cave_appearance == 1;
-            ui.label(if lava_tubes_selected {
-                "Lava Tube Colors"
-            } else {
-                "Rock Colors"
-            });
-            ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected {
-                    "Basalt:"
-                } else {
-                    "Dark:"
-                });
-                params_changed |= ui
-                    .color_edit_button_rgb(&mut cave_rock_dark_color)
-                    .on_hover_text(if lava_tubes_selected {
-                        "Glassy black basalt base color"
-                    } else {
-                        "Dark base rock tone"
-                    })
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected {
-                    "Glass:"
-                } else {
-                    "Cool:"
-                });
-                params_changed |= ui
-                    .color_edit_button_rgb(&mut cave_rock_cool_color)
-                    .on_hover_text(if lava_tubes_selected {
-                        "Blue-black cooled glass tone blended through the lava skin"
-                    } else {
-                        "Cool mottled slate tone blended through the wall texture"
-                    })
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected {
-                    "Iron:"
-                } else {
-                    "Warm:"
-                });
-                params_changed |= ui
-                    .color_edit_button_rgb(&mut cave_rock_warm_color)
-                    .on_hover_text(if lava_tubes_selected {
-                        "Oxidized iron tone for blistered patches"
-                    } else {
-                        "Warm shale tone used by the broad sediment layers"
-                    })
-                    .changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label(if lava_tubes_selected { "Ash:" } else { "Pale:" });
-                params_changed |= ui
-                    .color_edit_button_rgb(&mut cave_rock_pale_color)
-                    .on_hover_text(if lava_tubes_selected {
-                        "Dry ash and mineral dust color for deposits and worn shelves"
-                    } else {
-                        "Light silt tone used by fine strata highlights"
-                    })
-                    .changed();
-            });
-
-            if state.show_advanced_options {
                 ui.add_space(4.0);
-                ui.label(if lava_tubes_selected {
-                    "Lava Flow"
-                } else {
-                    "Layering"
-                });
-                ui.label(if lava_tubes_selected {
-                    "Flow Scale:"
-                } else {
-                    "Layer Scale:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "World-space scale of the directional lava-flow coordinate"
-                } else {
-                    "Vertical frequency of the sediment layer pattern"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_layer_scale, 0.0..=0.2))
-                    .changed();
-                ui.label("Warp:").on_hover_text(if lava_tubes_selected {
-                    "How much procedural noise bends and sags the lava flow"
-                } else {
-                    "How much procedural noise bends the sediment bands"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Plate Variation:"
-                } else {
-                    "Fine Bands:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Strength of ash-gray variation across cooled basalt plates"
-                } else {
-                    "Strength of the pale fine-layer highlights"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_fine_band_strength,
-                        0.0..=1.0,
-                    ))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Blistering:"
-                } else {
-                    "Cool Mottle:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Coverage of oxidized blister patches in the cooled lava skin"
-                } else {
-                    "Amount of cool slate color variation"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_cool_mottle_strength,
-                        0.0..=1.0,
-                    ))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Glass Grain:"
-                } else {
-                    "Grain:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Brightness variation in the glassy basalt surface"
-                } else {
-                    "Brightness variation from the triplanar rock grain"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_grain_strength, 0.0..=0.25))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Ash Deposits:"
-                } else {
-                    "Patch Contrast:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Amount of pale ash and mineral dust collected on lower surfaces"
-                } else {
-                    "Large mottled light and dark patch contrast"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_patch_contrast, 0.0..=0.5))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Seam Darkness:"
-                } else {
-                    "Seam Darkening:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Darkness of cooled contraction cracks between basalt plates"
-                } else {
-                    "Darkness of narrow sediment seams"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_darkening, 0.0..=1.0))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Shelf Scuffs:"
-                } else {
-                    "Wall Lines:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Strength of pale abrasion marks along tube-wall shelves and rub zones"
-                } else {
-                    "How strongly steep walls keep crisp sediment lines"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_wall_line_strength,
-                        0.0..=1.0,
-                    ))
-                    .changed();
+                let lava_tubes_selected = cave_appearance == 1;
+                if access.allows(70) {
+                    ui.label(if lava_tubes_selected {
+                        "Lava Tube Colors"
+                    } else {
+                        "Rock Colors"
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(if lava_tubes_selected {
+                            "Basalt:"
+                        } else {
+                            "Dark:"
+                        });
+                        params_changed |= ui
+                            .color_edit_button_rgb(&mut cave_rock_dark_color)
+                            .on_hover_text(if lava_tubes_selected {
+                                "Glassy black basalt base color"
+                            } else {
+                                "Dark base rock tone"
+                            })
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(if lava_tubes_selected {
+                            "Glass:"
+                        } else {
+                            "Cool:"
+                        });
+                        params_changed |= ui
+                            .color_edit_button_rgb(&mut cave_rock_cool_color)
+                            .on_hover_text(if lava_tubes_selected {
+                                "Blue-black cooled glass tone blended through the lava skin"
+                            } else {
+                                "Cool mottled slate tone blended through the wall texture"
+                            })
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(if lava_tubes_selected {
+                            "Iron:"
+                        } else {
+                            "Warm:"
+                        });
+                        params_changed |= ui
+                            .color_edit_button_rgb(&mut cave_rock_warm_color)
+                            .on_hover_text(if lava_tubes_selected {
+                                "Oxidized iron tone for blistered patches"
+                            } else {
+                                "Warm shale tone used by the broad sediment layers"
+                            })
+                            .changed();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(if lava_tubes_selected { "Ash:" } else { "Pale:" });
+                        params_changed |= ui
+                            .color_edit_button_rgb(&mut cave_rock_pale_color)
+                            .on_hover_text(if lava_tubes_selected {
+                                "Dry ash and mineral dust color for deposits and worn shelves"
+                            } else {
+                                "Light silt tone used by fine strata highlights"
+                            })
+                            .changed();
+                    });
 
-                ui.add_space(4.0);
-                ui.label(if lava_tubes_selected {
-                    "Tube Pattern"
-                } else {
-                    "Pattern Layout"
-                });
-                ui.label("Texture Scale:")
-                    .on_hover_text(if lava_tubes_selected {
-                        "Scale of the glassy surface noise. Higher values create finer cooled-lava grain"
-                    } else {
-                        "Scale of the triplanar rock grain. Higher values create finer, denser surface texture"
-                    });
-                params_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut cave_rock_texture_scale, 0.005..=0.2)
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.label("Conform:")
-                    .on_hover_text(if lava_tubes_selected {
-                        "Used by other rock presets; Lava Tubes derives flow from the tube radius and surface direction"
-                    } else {
-                        "Blends strata from world-horizontal height lines toward lines that follow the local cave surface normal"
-                    });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_geometry_conform,
-                        0.0..=1.0,
-                    ))
-                    .changed();
-                ui.label("Relief:")
-                    .on_hover_text(if lava_tubes_selected {
-                        "Stable shading depth for the cooled lava grain and rope ridges"
-                    } else {
-                        "Stable shading depth for the rock grain and strata. This adds surface relief without sliding the pattern toward the camera"
-                    });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_parallax_depth, 0.0..=4.0))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Plate Size:"
-                } else {
-                    "Major Lines:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Density of polygonal cooling plates. Higher values create smaller basalt plates"
-                } else {
-                    "Density of broad sediment bands"
-                });
-                params_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut cave_rock_coarse_frequency, 0.5..=32.0)
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Surface Breakup:"
-                } else {
-                    "Fine Lines:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Secondary breakup used by subtle glass and plate variation"
-                } else {
-                    "Density of thin pale sediment lines"
-                });
-                params_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut cave_rock_fine_frequency, 1.0..=96.0)
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Crack Density:"
-                } else {
-                    "Seam Lines:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Density of cooled contraction cracks between basalt plates"
-                } else {
-                    "Density of dark seam lines"
-                });
-                params_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut cave_rock_seam_frequency, 1.0..=64.0)
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Flow Noise Scale:"
-                } else {
-                    "Fine Warp Scale:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Spatial scale of lava-flow distortion and glass grain"
-                } else {
-                    "Spatial scale of distortion on fine lines"
-                });
-                params_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut cave_rock_fine_noise_scale, 0.005..=0.2)
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Flow Warp:"
-                } else {
-                    "Fine Warp:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "How strongly the cooled lava flow bends and swirls"
-                } else {
-                    "How strongly fine lines bend and ripple"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_fine_noise_strength,
-                        0.0..=12.0,
-                    ))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Crack Noise Scale:"
-                } else {
-                    "Seam Warp Scale:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Spatial scale of distortion on cooled contraction cracks"
-                } else {
-                    "Spatial scale of distortion on dark seams"
-                });
-                params_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut cave_rock_seam_noise_scale, 0.005..=0.2)
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Crack Warp:"
-                } else {
-                    "Seam Warp:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "How strongly contraction cracks bend and break"
-                } else {
-                    "How strongly seam lines bend and break"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_seam_noise_strength,
-                        0.0..=12.0,
-                    ))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Plate Low:"
-                } else {
-                    "Major Low:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Reserved for shale bands; Lava Tubes uses crack thickness controls below"
-                } else {
-                    "Lower smoothstep edge for broad sediment bands"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_coarse_band_low,
-                        -1.0..=1.0,
-                    ))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Plate High:"
-                } else {
-                    "Major High:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Reserved for shale bands; Lava Tubes uses crack thickness controls below"
-                } else {
-                    "Upper smoothstep edge for broad sediment bands"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_coarse_band_high,
-                        -1.0..=1.0,
-                    ))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Blister Low:"
-                } else {
-                    "Fine Low:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Lower smoothstep edge for oxidized blister coverage"
-                } else {
-                    "Lower smoothstep edge for pale fine-line coverage"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_fine_band_low, -1.0..=1.0))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Blister High:"
-                } else {
-                    "Fine High:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Upper smoothstep edge for oxidized blister coverage"
-                } else {
-                    "Upper smoothstep edge for pale fine-line coverage"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_fine_band_high, -1.0..=1.0))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Crack Thin:"
-                } else {
-                    "Seam Low:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Lower edge for cooled contraction crack thickness"
-                } else {
-                    "Lower edge for dark seam thickness"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_low, 0.0..=1.0))
-                    .changed();
-                ui.label(if lava_tubes_selected {
-                    "Crack Thick:"
-                } else {
-                    "Seam High:"
-                })
-                .on_hover_text(if lava_tubes_selected {
-                    "Upper edge for cooled contraction crack thickness"
-                } else {
-                    "Upper edge for dark seam thickness"
-                });
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_high, 0.0..=1.0))
-                    .changed();
 
-                ui.add_space(4.0);
-                ui.label("Lighting");
-                ui.label("Ambient:");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_ambient_strength,
-                        0.0..=0.5,
-                    ))
-                    .changed();
-                ui.label("Diffuse:");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_diffuse_strength,
-                        0.0..=2.0,
-                    ))
-                    .changed();
-                ui.label("Specular:");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut cave_rock_specular_strength,
-                        0.0..=2.0,
-                    ))
-                    .changed();
-                ui.label("Spec Power:");
-                params_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut cave_rock_specular_power, 1.0..=128.0)
-                            .logarithmic(true),
-                    )
-                    .changed();
-                ui.label("Min Tone:");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_min_color, 0.0..=0.25))
-                    .changed();
-                ui.label("Max Tone:");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_max_color, 0.25..=1.0))
-                    .changed();
-            }
+                }
+                if access.allows(74) {
+                    ui.add_space(4.0);
+                    ui.label(if lava_tubes_selected {
+                        "Lava Flow"
+                    } else {
+                        "Layering"
+                    });
+                    ui.label(if lava_tubes_selected {
+                        "Flow Scale:"
+                    } else {
+                        "Layer Scale:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "World-space scale of the directional lava-flow coordinate"
+                    } else {
+                        "Vertical frequency of the sediment layer pattern"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_layer_scale, 0.0..=0.2))
+                        .changed();
+                    ui.label("Warp:").on_hover_text(if lava_tubes_selected {
+                        "How much procedural noise bends and sags the lava flow"
+                    } else {
+                        "How much procedural noise bends the sediment bands"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_warp_strength, 0.0..=4.0))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Plate Variation:"
+                    } else {
+                        "Fine Bands:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Strength of ash-gray variation across cooled basalt plates"
+                    } else {
+                        "Strength of the pale fine-layer highlights"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_fine_band_strength,
+                            0.0..=1.0,
+                        ))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Blistering:"
+                    } else {
+                        "Cool Mottle:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Coverage of oxidized blister patches in the cooled lava skin"
+                    } else {
+                        "Amount of cool slate color variation"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_cool_mottle_strength,
+                            0.0..=1.0,
+                        ))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Glass Grain:"
+                    } else {
+                        "Grain:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Brightness variation in the glassy basalt surface"
+                    } else {
+                        "Brightness variation from the triplanar rock grain"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_grain_strength, 0.0..=0.25))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Ash Deposits:"
+                    } else {
+                        "Patch Contrast:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Amount of pale ash and mineral dust collected on lower surfaces"
+                    } else {
+                        "Large mottled light and dark patch contrast"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_patch_contrast, 0.0..=0.5))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Seam Darkness:"
+                    } else {
+                        "Seam Darkening:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Darkness of cooled contraction cracks between basalt plates"
+                    } else {
+                        "Darkness of narrow sediment seams"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_darkening, 0.0..=1.0))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Shelf Scuffs:"
+                    } else {
+                        "Wall Lines:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Strength of pale abrasion marks along tube-wall shelves and rub zones"
+                    } else {
+                        "How strongly steep walls keep crisp sediment lines"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_wall_line_strength,
+                            0.0..=1.0,
+                        ))
+                        .changed();
+
+                    ui.add_space(4.0);
+                    ui.label(if lava_tubes_selected {
+                        "Tube Pattern"
+                    } else {
+                        "Pattern Layout"
+                    });
+                    ui.label("Texture Scale:")
+                        .on_hover_text(if lava_tubes_selected {
+                            "Scale of the glassy surface noise. Higher values create finer cooled-lava grain"
+                        } else {
+                            "Scale of the triplanar rock grain. Higher values create finer, denser surface texture"
+                        });
+                    params_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut cave_rock_texture_scale, 0.005..=0.2)
+                                .logarithmic(true),
+                        )
+                        .changed();
+                    ui.label("Conform:")
+                        .on_hover_text(if lava_tubes_selected {
+                            "Used by other rock presets; Lava Tubes derives flow from the tube radius and surface direction"
+                        } else {
+                            "Blends strata from world-horizontal height lines toward lines that follow the local cave surface normal"
+                        });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_geometry_conform,
+                            0.0..=1.0,
+                        ))
+                        .changed();
+                    ui.label("Relief:")
+                        .on_hover_text(if lava_tubes_selected {
+                            "Stable shading depth for the cooled lava grain and rope ridges"
+                        } else {
+                            "Stable shading depth for the rock grain and strata. This adds surface relief without sliding the pattern toward the camera"
+                        });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_parallax_depth, 0.0..=4.0))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Plate Size:"
+                    } else {
+                        "Major Lines:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Density of polygonal cooling plates. Higher values create smaller basalt plates"
+                    } else {
+                        "Density of broad sediment bands"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut cave_rock_coarse_frequency, 0.5..=32.0)
+                                .logarithmic(true),
+                        )
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Surface Breakup:"
+                    } else {
+                        "Fine Lines:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Secondary breakup used by subtle glass and plate variation"
+                    } else {
+                        "Density of thin pale sediment lines"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut cave_rock_fine_frequency, 1.0..=96.0)
+                                .logarithmic(true),
+                        )
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Crack Density:"
+                    } else {
+                        "Seam Lines:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Density of cooled contraction cracks between basalt plates"
+                    } else {
+                        "Density of dark seam lines"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut cave_rock_seam_frequency, 1.0..=64.0)
+                                .logarithmic(true),
+                        )
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Flow Noise Scale:"
+                    } else {
+                        "Fine Warp Scale:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Spatial scale of lava-flow distortion and glass grain"
+                    } else {
+                        "Spatial scale of distortion on fine lines"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut cave_rock_fine_noise_scale, 0.005..=0.2)
+                                .logarithmic(true),
+                        )
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Flow Warp:"
+                    } else {
+                        "Fine Warp:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "How strongly the cooled lava flow bends and swirls"
+                    } else {
+                        "How strongly fine lines bend and ripple"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_fine_noise_strength,
+                            0.0..=12.0,
+                        ))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Crack Noise Scale:"
+                    } else {
+                        "Seam Warp Scale:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Spatial scale of distortion on cooled contraction cracks"
+                    } else {
+                        "Spatial scale of distortion on dark seams"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut cave_rock_seam_noise_scale, 0.005..=0.2)
+                                .logarithmic(true),
+                        )
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Crack Warp:"
+                    } else {
+                        "Seam Warp:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "How strongly contraction cracks bend and break"
+                    } else {
+                        "How strongly seam lines bend and break"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_seam_noise_strength,
+                            0.0..=12.0,
+                        ))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Plate Low:"
+                    } else {
+                        "Major Low:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Reserved for shale bands; Lava Tubes uses crack thickness controls below"
+                    } else {
+                        "Lower smoothstep edge for broad sediment bands"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_coarse_band_low,
+                            -1.0..=1.0,
+                        ))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Plate High:"
+                    } else {
+                        "Major High:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Reserved for shale bands; Lava Tubes uses crack thickness controls below"
+                    } else {
+                        "Upper smoothstep edge for broad sediment bands"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_coarse_band_high,
+                            -1.0..=1.0,
+                        ))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Blister Low:"
+                    } else {
+                        "Fine Low:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Lower smoothstep edge for oxidized blister coverage"
+                    } else {
+                        "Lower smoothstep edge for pale fine-line coverage"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_fine_band_low, -1.0..=1.0))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Blister High:"
+                    } else {
+                        "Fine High:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Upper smoothstep edge for oxidized blister coverage"
+                    } else {
+                        "Upper smoothstep edge for pale fine-line coverage"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_fine_band_high, -1.0..=1.0))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Crack Thin:"
+                    } else {
+                        "Seam Low:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Lower edge for cooled contraction crack thickness"
+                    } else {
+                        "Lower edge for dark seam thickness"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_low, 0.0..=1.0))
+                        .changed();
+                    ui.label(if lava_tubes_selected {
+                        "Crack Thick:"
+                    } else {
+                        "Seam High:"
+                    })
+                    .on_hover_text(if lava_tubes_selected {
+                        "Upper edge for cooled contraction crack thickness"
+                    } else {
+                        "Upper edge for dark seam thickness"
+                    });
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_seam_high, 0.0..=1.0))
+                        .changed();
+
+                    ui.add_space(4.0);
+                    ui.label("Lighting");
+                    ui.label("Ambient:");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_ambient_strength,
+                            0.0..=0.5,
+                        ))
+                        .changed();
+                    ui.label("Diffuse:");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_diffuse_strength,
+                            0.0..=2.0,
+                        ))
+                        .changed();
+                    ui.label("Specular:");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut cave_rock_specular_strength,
+                            0.0..=2.0,
+                        ))
+                        .changed();
+                    ui.label("Spec Power:");
+                    params_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut cave_rock_specular_power, 1.0..=128.0)
+                                .logarithmic(true),
+                        )
+                        .changed();
+                    ui.label("Min Tone:");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_min_color, 0.0..=0.25))
+                        .changed();
+                    ui.label("Max Tone:");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut cave_rock_max_color, 0.25..=1.0))
+                        .changed();
+                }
 
             }
             ui.add_space(10.0);
@@ -4771,78 +4793,81 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
                     .changed();
 
                 ui.add_space(6.0);
-                ui.label("Shape");
-                ui.add_space(2.0);
+                if access.allows(108) {
+                    ui.label("Shape");
+                    ui.add_space(2.0);
 
-                ui.label("Length:").on_hover_text(
-                    "How far each smoke stack footprint runs along the sphere boundary, in voxels",
-                );
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_length, 1.0..=32.0))
-                    .changed();
-
-                ui.label("Width:")
-                    .on_hover_text("Approximate radius of the chimney. The base flares wider and conforms to the sphere boundary");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_width, 1.0..=10.0))
-                    .changed();
-
-                ui.label("Depth:")
-                    .on_hover_text("Height of the hollow smoke-stack chimney rising inward from a closed, flared base. Glow is placed deep in the shaft so it peeks out through the opening");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_depth, 1.0..=20.0))
-                    .changed();
-
-                if state.show_advanced_options {
-                    ui.label("Back Margin:")
-                        .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks use the sphere surface instead of cave wall thickness");
-                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_back_margin, 0.0..=20.0))
+                    ui.label("Length:").on_hover_text(
+                        "How far each smoke stack footprint runs along the sphere boundary, in voxels",
+                    );
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_length, 1.0..=32.0))
                         .changed();
 
-                    ui.label("Top Margin:")
-                        .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks are independent of gravity direction");
-                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_top_margin, 0.0..=12.0))
+                    ui.label("Width:")
+                        .on_hover_text("Approximate radius of the chimney. The base flares wider and conforms to the sphere boundary");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_width, 1.0..=10.0))
+                        .changed();
+
+                    ui.label("Depth:")
+                        .on_hover_text("Height of the hollow smoke-stack chimney rising inward from a closed, flared base. Glow is placed deep in the shaft so it peeks out through the opening");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_depth, 1.0..=20.0))
+                        .changed();
+
+                    if access.allows(111) {
+                        ui.label("Back Margin:")
+                            .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks use the sphere surface instead of cave wall thickness");
+                        params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_back_margin, 0.0..=20.0))
+                            .changed();
+
+                        ui.label("Top Margin:")
+                            .on_hover_text("Reserved for future placement filtering. Boundary smoke stacks are independent of gravity direction");
+                        params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_top_margin, 0.0..=12.0))
+                            .changed();
+                    }
+
+                    ui.add_space(6.0);
+                    ui.label("Heat");
+                    ui.add_space(2.0);
+
+                    ui.label("Heat Output:").on_hover_text(
+                        "Directional heat injected inward from the vent plume, in degrees Celsius",
+                    );
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0).suffix(" C"))
+                        .changed();
+
+                    ui.label("Heat Radius:")
+                        .on_hover_text("Distance and spread of the baked inward heat plume, in voxels");
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
+                        .changed();
+
+                    ui.add_space(6.0);
+                    ui.label("Glow");
+                    ui.add_space(2.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Color:");
+                        params_changed |= ui
+                            .color_edit_button_rgb(&mut geothermal_glow_color)
+                            .on_hover_text("RGB glow emitted from the smoke stack footprint into the local light field")
+                            .changed();
+                    });
+
+                    ui.label("Glow Strength:").on_hover_text(
+                        "Brightness of the colored glow injected into the local light field",
+                    );
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_glow_strength, 0.0..=8.0))
+                        .changed();
+
+                    ui.label("Glow Radius:").on_hover_text(
+                        "Radius of the baked colored glow around the lowest crevice point, in voxels",
+                    );
+                    params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_glow_radius, 1.0..=32.0))
                         .changed();
                 }
 
-                ui.add_space(6.0);
-                ui.label("Heat");
-                ui.add_space(2.0);
-
-                ui.label("Heat Output:").on_hover_text(
-                    "Directional heat injected inward from the vent plume, in degrees Celsius",
-                );
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_heat_output, 0.0..=120.0).suffix(" C"))
-                    .changed();
-
-                ui.label("Heat Radius:")
-                    .on_hover_text("Distance and spread of the baked inward heat plume, in voxels");
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_heat_radius, 1.0..=32.0))
-                    .changed();
-
-                ui.add_space(6.0);
-                ui.label("Glow");
-                ui.add_space(2.0);
-
-                ui.horizontal(|ui| {
-                    ui.label("Color:");
-                    params_changed |= ui
-                        .color_edit_button_rgb(&mut geothermal_glow_color)
-                        .on_hover_text("RGB glow emitted from the smoke stack footprint into the local light field")
-                        .changed();
-                });
-
-                ui.label("Glow Strength:").on_hover_text(
-                    "Brightness of the colored glow injected into the local light field",
-                );
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_glow_strength, 0.0..=8.0))
-                    .changed();
-
-                ui.label("Glow Radius:").on_hover_text(
-                    "Radius of the baked colored glow around the lowest crevice point, in voxels",
-                );
-                params_changed |= scene_settings::slider_control(ui,egui::Slider::new(&mut geothermal_glow_radius, 1.0..=32.0))
-                    .changed();
             }
 
-            if state.show_advanced_options {
+            if access.allows(119) {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.label(format!("Triangle Count: {}", params.triangle_count));
@@ -4935,293 +4960,296 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
     // ============================================================
     ui.add_space(10.0);
     ui.separator();
-    ui.heading("🌿 Moss");
-    ui.add_space(5.0);
+    if access.allows(118) {
+        ui.heading("🌿 Moss");
+        ui.add_space(5.0);
 
-    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-        // Enable/disable toggle
-        let mut show_moss = gpu_scene.show_moss;
-        let mut moss_changed = false;
-        if ui.checkbox(&mut show_moss, "Enable Moss").changed() {
-            if show_moss {
-                gpu_scene.show_moss = true;
-            } else {
-                gpu_scene.disable_moss();
+        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+            // Enable/disable toggle
+            let mut show_moss = gpu_scene.show_moss;
+            let mut moss_changed = false;
+            if ui.checkbox(&mut show_moss, "Enable Moss").changed() {
+                if show_moss {
+                    gpu_scene.show_moss = true;
+                } else {
+                    gpu_scene.disable_moss();
+                }
+                context.editor_state.show_moss = show_moss;
+                moss_changed = true;
             }
-            context.editor_state.show_moss = show_moss;
-            moss_changed = true;
-        }
 
-        if show_moss {
-            if let Some(ref mut moss) = gpu_scene.moss_system {
-                ui.add_space(5.0);
-                ui.label("Growth & Spread");
-                ui.add_space(3.0);
-
-                ui.label("Growth Rate:")
-                    .on_hover_text("How quickly moss spreads to adjacent voxels per second. Logarithmic scale — small values create slow, patchy growth; large values fill surfaces rapidly");
-                if scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
-                            .logarithmic(true),
-                    )
-                    .changed()
-                {
-                    moss.growth_rate = context.editor_state.moss_growth_rate;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Min Light Level:")
-                    .on_hover_text("Minimum light intensity required for moss to grow in a voxel. Moss won't grow in completely dark areas below this threshold");
-                if scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut context.editor_state.moss_min_light,
-                        0.0..=0.5,
-                    ))
-                    .changed()
-                {
-                    moss.min_light = context.editor_state.moss_min_light;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Water Radius (voxels):")
-                    .on_hover_text("Radius around water voxels where moss can grow. Moss requires proximity to water — larger values allow moss to grow further from water sources");
-                if scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut context.editor_state.moss_water_radius,
-                        2.0..=50.0,
-                    ))
-                    .changed()
-                {
-                    moss.water_radius = context.editor_state.moss_water_radius;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Decay Rate:")
-                    .on_hover_text("How quickly moss dies when conditions are unfavorable (too dark or too dry). Logarithmic scale");
-                if scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
-                            .logarithmic(true),
-                    )
-                    .changed()
-                {
-                    moss.decay_rate = context.editor_state.moss_decay_rate;
-                    moss_changed = true;
-                }
-
-                ui.add_space(8.0);
-                ui.label("Erosion");
-                ui.add_space(3.0);
-
-                ui.label("Water Erosion Rate:")
-                    .on_hover_text("How much flowing water erodes moss. Higher values cause moss to be washed away more quickly by water currents");
-                if scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut context.editor_state.moss_erosion_rate,
-                        0.0..=2.0,
-                    ))
-                    .changed()
-                {
-                    moss.erosion_rate = context.editor_state.moss_erosion_rate;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Wetness Evaporation:")
-                    .on_hover_text("How quickly surface wetness dries out. Higher values mean moss dries faster and needs more frequent water contact to survive");
-                if scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.moss_wetness_evaporation,
-                            0.001..=0.2,
-                        )
-                        .logarithmic(true),
-                    )
-                    .changed()
-                {
-                    moss.wetness_evaporation = context.editor_state.moss_wetness_evaporation;
-                    moss_changed = true;
-                }
-
-                ui.add_space(8.0);
-                ui.label("Consumption (Phagocytes)");
-                ui.add_space(3.0);
-
-                ui.label("Graze Cooldown:")
-                    .on_hover_text("Seconds a phagocyte must wait before it can graze the same moss voxel again. Prevents a single cell from instantly consuming all nearby moss");
-                if scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut context.editor_state.moss_consume_rate,
-                        1.0..=30.0,
-                    ))
-                    .changed()
-                {
-                    moss.graze_cooldown = context.editor_state.moss_consume_rate;
-                    moss_changed = true;
-                }
-
-                ui.add_space(2.0);
-                ui.label("Nutrients per Moss:")
-                    .on_hover_text("How many nutrients a phagocyte gains from grazing one moss voxel. Higher values make moss a richer food source");
-                if scene_settings::slider_control(ui,egui::Slider::new(
-                        &mut context.editor_state.moss_nutrient_per_moss,
-                        1.0..=200.0,
-                    ))
-                    .changed()
-                {
-                    moss.nutrient_per_moss = context.editor_state.moss_nutrient_per_moss;
-                    moss_changed = true;
-                }
-
-                if state.show_advanced_options {
-                    ui.add_space(8.0);
-                    ui.label("Appearance");
+            if show_moss {
+                if let Some(ref mut moss) = gpu_scene.moss_system {
+                    ui.add_space(5.0);
+                    ui.label("Growth & Spread");
                     ui.add_space(3.0);
 
-                    ui.label("Texture Scale:")
-                        .on_hover_text("UV scale of the moss texture on cave surfaces. Smaller values = larger texture tiles; larger values = finer, more detailed texture");
-                    if scene_settings::slider_control(ui,egui::Slider::new(
-                            &mut context.editor_state.moss_scale,
-                            0.02..=0.5,
-                        ))
+                    ui.label("Growth Rate:")
+                        .on_hover_text("How quickly moss spreads to adjacent voxels per second. Logarithmic scale — small values create slow, patchy growth; large values fill surfaces rapidly");
+                    if scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.moss_growth_rate, 0.001..=1.0)
+                                .logarithmic(true),
+                        )
                         .changed()
                     {
-                        context.editor_state.light_params_dirty = true;
+                        moss.growth_rate = context.editor_state.moss_growth_rate;
                         moss_changed = true;
                     }
 
                     ui.add_space(2.0);
-                    ui.label("Parallax Depth:")
-                        .on_hover_text("Strength of the parallax occlusion mapping effect on moss. Higher values make the moss appear to have more 3D depth and volume");
+                    ui.label("Min Light Level:")
+                        .on_hover_text("Minimum light intensity required for moss to grow in a voxel. Moss won't grow in completely dark areas below this threshold");
                     if scene_settings::slider_control(ui,egui::Slider::new(
-                            &mut context.editor_state.moss_parallax_depth,
-                            0.0..=0.3,
+                            &mut context.editor_state.moss_min_light,
+                            0.0..=0.5,
                         ))
                         .changed()
                     {
-                        context.editor_state.light_params_dirty = true;
-                        moss_changed = true;
-                    }
-
-                    ui.add_space(5.0);
-                    ui.label("Noise Type:");
-                    let noise_labels = ["Value Noise", "Worley (Cellular)", "Ridged"];
-                    let mut noise_type = context.editor_state.moss_noise_type as usize;
-                    egui::ComboBox::from_id_salt("moss_noise_type")
-                        .selected_text(noise_labels[noise_type.min(2)])
-                        .show_ui(ui, |ui| {
-                            for (i, label) in noise_labels.iter().enumerate() {
-                                if ui.selectable_value(&mut noise_type, i, *label).changed() {
-                                    context.editor_state.moss_noise_type = noise_type as u32;
-                                    context.editor_state.light_params_dirty = true;
-                                }
-                            }
-                        });
-                    if noise_type as u32 != context.editor_state.moss_noise_type {
-                        context.editor_state.moss_noise_type = noise_type as u32;
-                        context.editor_state.light_params_dirty = true;
+                        moss.min_light = context.editor_state.moss_min_light;
                         moss_changed = true;
                     }
 
                     ui.add_space(2.0);
-                    ui.label("Noise Frequency:");
+                    ui.label("Water Radius (voxels):")
+                        .on_hover_text("Radius around water voxels where moss can grow. Moss requires proximity to water — larger values allow moss to grow further from water sources");
+                    if scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut context.editor_state.moss_water_radius,
+                            2.0..=50.0,
+                        ))
+                        .changed()
+                    {
+                        moss.water_radius = context.editor_state.moss_water_radius;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(2.0);
+                    ui.label("Decay Rate:")
+                        .on_hover_text("How quickly moss dies when conditions are unfavorable (too dark or too dry). Logarithmic scale");
+                    if scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.moss_decay_rate, 0.001..=0.5)
+                                .logarithmic(true),
+                        )
+                        .changed()
+                    {
+                        moss.decay_rate = context.editor_state.moss_decay_rate;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(8.0);
+                    ui.label("Erosion");
+                    ui.add_space(3.0);
+
+                    ui.label("Water Erosion Rate:")
+                        .on_hover_text("How much flowing water erodes moss. Higher values cause moss to be washed away more quickly by water currents");
+                    if scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut context.editor_state.moss_erosion_rate,
+                            0.0..=2.0,
+                        ))
+                        .changed()
+                    {
+                        moss.erosion_rate = context.editor_state.moss_erosion_rate;
+                        moss_changed = true;
+                    }
+
+                    ui.add_space(2.0);
+                    ui.label("Wetness Evaporation:")
+                        .on_hover_text("How quickly surface wetness dries out. Higher values mean moss dries faster and needs more frequent water contact to survive");
                     if scene_settings::slider_control(ui,
                             egui::Slider::new(
-                                &mut context.editor_state.moss_noise_frequency,
-                                4.0..=80.0,
+                                &mut context.editor_state.moss_wetness_evaporation,
+                                0.001..=0.2,
                             )
                             .logarithmic(true),
                         )
                         .changed()
                     {
-                        context.editor_state.light_params_dirty = true;
+                        moss.wetness_evaporation = context.editor_state.moss_wetness_evaporation;
                         moss_changed = true;
                     }
 
-                    ui.add_space(2.0);
-                    ui.label("Noise Lacunarity:");
-                    if scene_settings::slider_control(ui,egui::Slider::new(
-                            &mut context.editor_state.moss_noise_lacunarity,
-                            1.5..=5.0,
-                        ))
-                        .changed()
-                    {
-                        context.editor_state.light_params_dirty = true;
-                        moss_changed = true;
-                    }
-
-                    ui.add_space(2.0);
-                    ui.label("Height Sharpness (low):");
-                    if scene_settings::slider_control(ui,egui::Slider::new(
-                            &mut context.editor_state.moss_height_sharpness_low,
-                            0.0..=0.5,
-                        ))
-                        .changed()
-                    {
-                        context.editor_state.light_params_dirty = true;
-                        moss_changed = true;
-                    }
-
-                    ui.add_space(2.0);
-                    ui.label("Height Sharpness (high):");
-                    if scene_settings::slider_control(ui,egui::Slider::new(
-                            &mut context.editor_state.moss_height_sharpness_high,
-                            0.3..=1.0,
-                        ))
-                        .changed()
-                    {
-                        context.editor_state.light_params_dirty = true;
-                        moss_changed = true;
-                    }
-
-                    ui.add_space(2.0);
-                    ui.label("Bump Strength:");
-                    if scene_settings::slider_control(ui,egui::Slider::new(
-                            &mut context.editor_state.moss_bump_strength,
-                            0.0..=15.0,
-                        ))
-                        .changed()
-                    {
-                        context.editor_state.light_params_dirty = true;
-                        moss_changed = true;
-                    }
-
-                    ui.add_space(5.0);
-                    ui.label("Colors");
+                    ui.add_space(8.0);
+                    ui.label("Consumption (Phagocytes)");
                     ui.add_space(3.0);
 
-                    ui.horizontal(|ui| {
-                        ui.label("Dark (base):");
-                        let mut color = context.editor_state.moss_color_dark;
-                        if ui.color_edit_button_rgb(&mut color).changed() {
-                            context.editor_state.moss_color_dark = color;
-                            context.editor_state.light_params_dirty = true;
-                            moss_changed = true;
-                        }
-                    });
+                    ui.label("Graze Cooldown:")
+                        .on_hover_text("Seconds a phagocyte must wait before it can graze the same moss voxel again. Prevents a single cell from instantly consuming all nearby moss");
+                    if scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut context.editor_state.moss_consume_rate,
+                            1.0..=30.0,
+                        ))
+                        .changed()
+                    {
+                        moss.graze_cooldown = context.editor_state.moss_consume_rate;
+                        moss_changed = true;
+                    }
 
-                    ui.horizontal(|ui| {
-                        ui.label("Bright (tips):");
-                        let mut color = context.editor_state.moss_color_bright;
-                        if ui.color_edit_button_rgb(&mut color).changed() {
-                            context.editor_state.moss_color_bright = color;
+                    ui.add_space(2.0);
+                    ui.label("Nutrients per Moss:")
+                        .on_hover_text("How many nutrients a phagocyte gains from grazing one moss voxel. Higher values make moss a richer food source");
+                    if scene_settings::slider_control(ui,egui::Slider::new(
+                            &mut context.editor_state.moss_nutrient_per_moss,
+                            1.0..=200.0,
+                        ))
+                        .changed()
+                    {
+                        moss.nutrient_per_moss = context.editor_state.moss_nutrient_per_moss;
+                        moss_changed = true;
+                    }
+
+                    if access.allows(127) {
+                        ui.add_space(8.0);
+                        ui.label("Appearance");
+                        ui.add_space(3.0);
+
+                        ui.label("Texture Scale:")
+                            .on_hover_text("UV scale of the moss texture on cave surfaces. Smaller values = larger texture tiles; larger values = finer, more detailed texture");
+                        if scene_settings::slider_control(ui,egui::Slider::new(
+                                &mut context.editor_state.moss_scale,
+                                0.02..=0.5,
+                            ))
+                            .changed()
+                        {
                             context.editor_state.light_params_dirty = true;
                             moss_changed = true;
                         }
-                    });
-                } // end advanced moss appearance
-            } else {
-                ui.add_space(5.0);
-                ui.label("Moss system not yet initialized.");
-                ui.label("Requires fluid simulation and light field.");
+
+                        ui.add_space(2.0);
+                        ui.label("Parallax Depth:")
+                            .on_hover_text("Strength of the parallax occlusion mapping effect on moss. Higher values make the moss appear to have more 3D depth and volume");
+                        if scene_settings::slider_control(ui,egui::Slider::new(
+                                &mut context.editor_state.moss_parallax_depth,
+                                0.0..=0.3,
+                            ))
+                            .changed()
+                        {
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+
+                        ui.add_space(5.0);
+                        ui.label("Noise Type:");
+                        let noise_labels = ["Value Noise", "Worley (Cellular)", "Ridged"];
+                        let mut noise_type = context.editor_state.moss_noise_type as usize;
+                        egui::ComboBox::from_id_salt("moss_noise_type")
+                            .selected_text(noise_labels[noise_type.min(2)])
+                            .show_ui(ui, |ui| {
+                                for (i, label) in noise_labels.iter().enumerate() {
+                                    if ui.selectable_value(&mut noise_type, i, *label).changed() {
+                                        context.editor_state.moss_noise_type = noise_type as u32;
+                                        context.editor_state.light_params_dirty = true;
+                                    }
+                                }
+                            });
+                        if noise_type as u32 != context.editor_state.moss_noise_type {
+                            context.editor_state.moss_noise_type = noise_type as u32;
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+
+                        ui.add_space(2.0);
+                        ui.label("Noise Frequency:");
+                        if scene_settings::slider_control(ui,
+                                egui::Slider::new(
+                                    &mut context.editor_state.moss_noise_frequency,
+                                    4.0..=80.0,
+                                )
+                                .logarithmic(true),
+                            )
+                            .changed()
+                        {
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+
+                        ui.add_space(2.0);
+                        ui.label("Noise Lacunarity:");
+                        if scene_settings::slider_control(ui,egui::Slider::new(
+                                &mut context.editor_state.moss_noise_lacunarity,
+                                1.5..=5.0,
+                            ))
+                            .changed()
+                        {
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+
+                        ui.add_space(2.0);
+                        ui.label("Height Sharpness (low):");
+                        if scene_settings::slider_control(ui,egui::Slider::new(
+                                &mut context.editor_state.moss_height_sharpness_low,
+                                0.0..=0.5,
+                            ))
+                            .changed()
+                        {
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+
+                        ui.add_space(2.0);
+                        ui.label("Height Sharpness (high):");
+                        if scene_settings::slider_control(ui,egui::Slider::new(
+                                &mut context.editor_state.moss_height_sharpness_high,
+                                0.3..=1.0,
+                            ))
+                            .changed()
+                        {
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+
+                        ui.add_space(2.0);
+                        ui.label("Bump Strength:");
+                        if scene_settings::slider_control(ui,egui::Slider::new(
+                                &mut context.editor_state.moss_bump_strength,
+                                0.0..=15.0,
+                            ))
+                            .changed()
+                        {
+                            context.editor_state.light_params_dirty = true;
+                            moss_changed = true;
+                        }
+
+                        ui.add_space(5.0);
+                        ui.label("Colors");
+                        ui.add_space(3.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label("Dark (base):");
+                            let mut color = context.editor_state.moss_color_dark;
+                            if ui.color_edit_button_rgb(&mut color).changed() {
+                                context.editor_state.moss_color_dark = color;
+                                context.editor_state.light_params_dirty = true;
+                                moss_changed = true;
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Bright (tips):");
+                            let mut color = context.editor_state.moss_color_bright;
+                            if ui.color_edit_button_rgb(&mut color).changed() {
+                                context.editor_state.moss_color_bright = color;
+                                context.editor_state.light_params_dirty = true;
+                                moss_changed = true;
+                            }
+                        });
+                    } // end advanced moss appearance
+                } else {
+                    ui.add_space(5.0);
+                    ui.label("Moss system not yet initialized.");
+                    ui.label("Requires fluid simulation and light field.");
+                }
+            }
+
+            if moss_changed {
+                context.editor_state.save_cave_settings();
             }
         }
 
-        if moss_changed {
-            context.editor_state.save_cave_settings();
-        }
-    }
+        // -- Boulder Section ------------------------------------------------------
+        ui.add_space(10.0);
+        ui.separator();
 
-    // -- Boulder Section ------------------------------------------------------
-    ui.add_space(10.0);
-    ui.separator();
+    }
     ui.heading("🪨 Mossrocks");
     ui.add_space(5.0);
 
@@ -5254,62 +5282,65 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
             ui.add_space(3.0);
 
-            // Spawn frequency
-            let mut interval = gpu_scene.boulder_spawn_interval;
-            ui.label("Approx. Spawn Interval (seconds):")
-                .on_hover_text("Average time between new mossrock spawns. Logarithmic scale — small values spawn rocks rapidly; large values create rare spawns");
-            if scene_settings::slider_control(ui,egui::Slider::new(&mut interval, 0.5..=60.0).logarithmic(true))
-                .changed()
-            {
-                gpu_scene.boulder_spawn_interval = interval;
-                if let Some(ref mut bs) = gpu_scene.boulder_system {
-                    bs.spawn_interval = interval;
+            if access.allows(139) {
+                // Spawn frequency
+                let mut interval = gpu_scene.boulder_spawn_interval;
+                ui.label("Approx. Spawn Interval (seconds):")
+                    .on_hover_text("Average time between new mossrock spawns. Logarithmic scale — small values spawn rocks rapidly; large values create rare spawns");
+                if scene_settings::slider_control(ui,egui::Slider::new(&mut interval, 0.5..=60.0).logarithmic(true))
+                    .changed()
+                {
+                    gpu_scene.boulder_spawn_interval = interval;
+                    if let Some(ref mut bs) = gpu_scene.boulder_system {
+                        bs.spawn_interval = interval;
+                    }
+                    boulder_changed = true;
                 }
-                boulder_changed = true;
+
+                ui.add_space(5.0);
+                ui.label("Radius Range:");
+                ui.horizontal(|ui| {
+                    ui.label("Min");
+                    let mut rmin = gpu_scene.boulder_radius_min;
+                    let rmax_cur = gpu_scene.boulder_radius_max;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut rmin)
+                                .range(0.5..=rmax_cur - 0.5)
+                                .speed(0.1)
+                                .suffix(" u"),
+                        )
+                        .changed()
+                    {
+                        gpu_scene.boulder_radius_min = rmin;
+                        if let Some(ref mut bs) = gpu_scene.boulder_system {
+                            bs.radius_min = rmin;
+                        }
+                        boulder_changed = true;
+                    }
+                    ui.label("–  Max");
+                    let mut rmax = gpu_scene.boulder_radius_max;
+                    let rmin_cur = gpu_scene.boulder_radius_min;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut rmax)
+                                .range(rmin_cur + 0.5..=30.0)
+                                .speed(0.1)
+                                .suffix(" u"),
+                        )
+                        .changed()
+                    {
+                        gpu_scene.boulder_radius_max = rmax;
+                        if let Some(ref mut bs) = gpu_scene.boulder_system {
+                            bs.radius_max = rmax;
+                        }
+                        boulder_changed = true;
+                    }
+                });
+
+
             }
-
-            ui.add_space(5.0);
-            ui.label("Radius Range:");
-            ui.horizontal(|ui| {
-                ui.label("Min");
-                let mut rmin = gpu_scene.boulder_radius_min;
-                let rmax_cur = gpu_scene.boulder_radius_max;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut rmin)
-                            .range(0.5..=rmax_cur - 0.5)
-                            .speed(0.1)
-                            .suffix(" u"),
-                    )
-                    .changed()
-                {
-                    gpu_scene.boulder_radius_min = rmin;
-                    if let Some(ref mut bs) = gpu_scene.boulder_system {
-                        bs.radius_min = rmin;
-                    }
-                    boulder_changed = true;
-                }
-                ui.label("–  Max");
-                let mut rmax = gpu_scene.boulder_radius_max;
-                let rmin_cur = gpu_scene.boulder_radius_min;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut rmax)
-                            .range(rmin_cur + 0.5..=30.0)
-                            .speed(0.1)
-                            .suffix(" u"),
-                    )
-                    .changed()
-                {
-                    gpu_scene.boulder_radius_max = rmax;
-                    if let Some(ref mut bs) = gpu_scene.boulder_system {
-                        bs.radius_max = rmax;
-                    }
-                    boulder_changed = true;
-                }
-            });
-
-            if state.show_advanced_options {
+            if access.allows(142) {
                 ui.add_space(3.0);
                 ui.label("Moss Store Range (nutrients):");
                 ui.horizontal(|ui| {
@@ -5429,6 +5460,7 @@ fn render_cave_system(ui: &mut Ui, context: &mut PanelContext, state: &GlobalUiS
 
 /// Render the Fluid Settings panel for fluid simulation controls and visualization.
 fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    let access = state.menu_access();
     // Check if we're in GPU mode
     if !context.is_gpu_mode() {
         return;
@@ -5496,55 +5528,58 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     );
     ui.add_space(4.0);
 
-    let static_water_active = context.editor_state.fluid_static_water_world;
-    let static_label = if static_water_active {
-        "▣  Static Water World: ON"
-    } else {
-        "▣  Static Water World: OFF"
-    };
-    let static_fill = if static_water_active {
-        egui::Color32::from_rgba_unmultiplied(
-            p.accent_primary.r(),
-            p.accent_primary.g(),
-            p.accent_primary.b(),
-            40,
-        )
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    let static_stroke = if static_water_active {
-        p.accent_primary
-    } else {
-        p.border_normal
-    };
-    if ui
-        .add(
-            egui::Button::new(
-                egui::RichText::new(static_label).color(if static_water_active {
-                    p.accent_primary
-                } else {
-                    p.text_secondary
-                }),
+    if access.allows(192) {
+        let static_water_active = context.editor_state.fluid_static_water_world;
+        let static_label = if static_water_active {
+            "▣  Static Water World: ON"
+        } else {
+            "▣  Static Water World: OFF"
+        };
+        let static_fill = if static_water_active {
+            egui::Color32::from_rgba_unmultiplied(
+                p.accent_primary.r(),
+                p.accent_primary.g(),
+                p.accent_primary.b(),
+                40,
             )
-            .fill(static_fill)
-            .stroke(egui::Stroke::new(1.0, static_stroke)),
-        )
-        .on_hover_text(
-            "Fill all in-bounds non-solid space with water and skip dynamic fluid/weather physics",
-        )
-        .clicked()
-    {
-        context.editor_state.request_toggle_static_water = true;
-    }
-    ui.label(
-        egui::RichText::new(
-            "Creates an aquatic world without moving water simulation. Cell buoyancy and water detection still use the filled water field.",
-        )
-        .small()
-        .color(p.text_dim),
-    );
-    ui.add_space(4.0);
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        let static_stroke = if static_water_active {
+            p.accent_primary
+        } else {
+            p.border_normal
+        };
+        if ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(static_label).color(if static_water_active {
+                        p.accent_primary
+                    } else {
+                        p.text_secondary
+                    }),
+                )
+                .fill(static_fill)
+                .stroke(egui::Stroke::new(1.0, static_stroke)),
+            )
+            .on_hover_text(
+                "Fill all in-bounds non-solid space with water and skip dynamic fluid/weather physics",
+            )
+            .clicked()
+        {
+            context.editor_state.request_toggle_static_water = true;
+        }
+        ui.label(
+            egui::RichText::new(
+                "Creates an aquatic world without moving water simulation. Cell buoyancy and water detection still use the filled water field.",
+            )
+            .small()
+            .color(p.text_dim),
+        );
+        ui.add_space(4.0);
 
+
+    }
     // === Nutrients ===
     ui.separator();
     ui.heading("Nutrients");
@@ -5565,47 +5600,50 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         context.editor_state.save_fluid_settings();
     }
 
-    ui.label("Epoch Duration:")
-        .on_hover_text("Total length of one nutrient spawn cycle in seconds. Nutrients spawn during the first part of the epoch and despawn during the last part");
-    if scene_settings::slider_control(ui,
-            egui::Slider::new(
-                &mut context.editor_state.nutrient_epoch_duration,
-                2.0..=30.0,
-            )
-            .step_by(0.5)
-            .fixed_decimals(1)
-            .suffix("s"),
-        )
-        .changed()
-    {
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.nutrient_epoch_duration = context.editor_state.nutrient_epoch_duration;
-        }
-        context.editor_state.save_fluid_settings();
-    }
-
-    ui.label("Epoch Spacing:")
-        .on_hover_text("Gap between consecutive nutrient epochs in seconds. Longer spacing creates feast-and-famine cycles that drive organism behavior");
-    if scene_settings::slider_control(ui,
-            egui::Slider::new(&mut context.editor_state.nutrient_epoch_spacing, 1.0..=30.0)
+    if access.allows(147) {
+        ui.label("Epoch Duration:")
+            .on_hover_text("Total length of one nutrient spawn cycle in seconds. Nutrients spawn during the first part of the epoch and despawn during the last part");
+        if scene_settings::slider_control(ui,
+                egui::Slider::new(
+                    &mut context.editor_state.nutrient_epoch_duration,
+                    2.0..=30.0,
+                )
                 .step_by(0.5)
                 .fixed_decimals(1)
                 .suffix("s"),
-        )
-        .changed()
-    {
-        // Clamp spacing to not exceed duration
-        context.editor_state.nutrient_epoch_spacing = context
-            .editor_state
-            .nutrient_epoch_spacing
-            .min(context.editor_state.nutrient_epoch_duration);
-        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-            gpu_scene.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing;
+            )
+            .changed()
+        {
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.nutrient_epoch_duration = context.editor_state.nutrient_epoch_duration;
+            }
+            context.editor_state.save_fluid_settings();
         }
-        context.editor_state.save_fluid_settings();
-    }
 
-    if state.show_advanced_options {
+        ui.label("Epoch Spacing:")
+            .on_hover_text("Gap between consecutive nutrient epochs in seconds. Longer spacing creates feast-and-famine cycles that drive organism behavior");
+        if scene_settings::slider_control(ui,
+                egui::Slider::new(&mut context.editor_state.nutrient_epoch_spacing, 1.0..=30.0)
+                    .step_by(0.5)
+                    .fixed_decimals(1)
+                    .suffix("s"),
+            )
+            .changed()
+        {
+            // Clamp spacing to not exceed duration
+            context.editor_state.nutrient_epoch_spacing = context
+                .editor_state
+                .nutrient_epoch_spacing
+                .min(context.editor_state.nutrient_epoch_duration);
+            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                gpu_scene.nutrient_epoch_spacing = context.editor_state.nutrient_epoch_spacing;
+            }
+            context.editor_state.save_fluid_settings();
+        }
+
+
+    }
+    if access.allows(149) {
         ui.label("Spawn Ramp:")
             .on_hover_text("Fraction of the epoch duration over which nutrients gradually appear. 0.1 = nutrients appear quickly at the start; 0.9 = nutrients trickle in slowly over most of the epoch");
         if scene_settings::slider_control(ui,
@@ -5655,499 +5693,508 @@ fn render_fluid_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     // Surface pressure control for radial fluid mode
     ui.separator();
-    ui.heading("Fluid Physics");
+    if access.allows(151) {
+        ui.heading("Fluid Physics");
 
-    // Only show surface pressure when gravity mode is radial (advanced only)
-    if state.show_advanced_options && state.world_settings.gravity_mode == 3 {
-        ui.label("Surface Pressure:")
-            .on_hover_text("Tangential smoothing strength for radial fluid mode. Higher values push fluid toward the world surface more aggressively, creating a more uniform water layer");
-        if scene_settings::slider_control(ui,egui::Slider::new(
-                &mut state.fluid_settings.surface_pressure,
-                0.0..=1.0,
-            ))
-            .changed()
-        {
-            // Apply to GPU scene
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.set_surface_pressure(state.fluid_settings.surface_pressure);
-            }
-        }
-        ui.label(
-            egui::RichText::new("Tangential smoothing strength for radial fluid mode").small(),
-        );
-    }
-
-    // Climate: humidity, freeze/melt, and snow tunables - advanced only
-    if state.show_advanced_options {
-        ui.add_space(4.0);
-        ui.label("Humidity Diffusion Rate:")
-            .on_hover_text("How quickly atmospheric humidity spreads between voxels each tick");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(
-                    &mut state.fluid_settings.climate.humidity_diffusion_rate,
+        // Only show surface pressure when gravity mode is radial (advanced only)
+        if access.allows(151) && state.world_settings.gravity_mode == 3 {
+            ui.label("Surface Pressure:")
+                .on_hover_text("Tangential smoothing strength for radial fluid mode. Higher values push fluid toward the world surface more aggressively, creating a more uniform water layer");
+            if scene_settings::slider_control(ui,egui::Slider::new(
+                    &mut state.fluid_settings.surface_pressure,
                     0.0..=1.0,
+                ))
+                .changed()
+            {
+                // Apply to GPU scene
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.set_surface_pressure(state.fluid_settings.surface_pressure);
+                }
+            }
+            ui.label(
+                egui::RichText::new("Tangential smoothing strength for radial fluid mode").small(),
+            );
+        }
+
+        // Climate: humidity, freeze/melt, and snow tunables - advanced only
+        if access.allows(152) {
+            ui.add_space(4.0);
+            ui.label("Humidity Diffusion Rate:")
+                .on_hover_text("How quickly atmospheric humidity spreads between voxels each tick");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(
+                        &mut state.fluid_settings.climate.humidity_diffusion_rate,
+                        0.0..=1.0,
+                    )
+                    .step_by(0.01)
+                    .fixed_decimals(2),
                 )
-                .step_by(0.01)
-                .fixed_decimals(2),
-            )
-            .changed()
-        {
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.humidity_diffusion_rate =
-                    state.fluid_settings.climate.humidity_diffusion_rate;
+                .changed()
+            {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.humidity_diffusion_rate =
+                        state.fluid_settings.climate.humidity_diffusion_rate;
+                }
             }
-        }
 
-        ui.label("Freeze Rate:").on_hover_text(
-            "How quickly sustained cold accumulates freeze debt, converting water to ice",
-        );
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut state.fluid_settings.climate.freeze_rate, 0.0..=5.0)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.freeze_rate = state.fluid_settings.climate.freeze_rate;
-            }
-        }
-
-        ui.label("Melt Rate:").on_hover_text(
-            "How quickly sustained warmth accumulates melt debt, converting ice to water",
-        );
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut state.fluid_settings.climate.melt_rate, 0.0..=5.0)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.melt_rate = state.fluid_settings.climate.melt_rate;
-            }
-        }
-
-        ui.label("Snow Melt Rate:").on_hover_text(
-            "How quickly sustained warmth accumulates melt debt, converting snow to water",
-        );
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut state.fluid_settings.climate.snow_melt_rate, 0.0..=5.0)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.snow_melt_rate = state.fluid_settings.climate.snow_melt_rate;
-            }
-        }
-
-        ui.label("Snow Compaction Rate:")
-            .on_hover_text("How quickly sustained cold packs snow down into ice (debt units per tick per degree below freezing)");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(
-                    &mut state.fluid_settings.climate.snow_compact_rate,
-                    0.0..=5.0,
+            ui.label("Freeze Rate:").on_hover_text(
+                "How quickly sustained cold accumulates freeze debt, converting water to ice",
+            );
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut state.fluid_settings.climate.freeze_rate, 0.0..=5.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
                 )
-                .step_by(0.05)
-                .fixed_decimals(2),
-            )
-            .changed()
-        {
-            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                gpu_scene.snow_compact_rate = state.fluid_settings.climate.snow_compact_rate;
+                .changed()
+            {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.freeze_rate = state.fluid_settings.climate.freeze_rate;
+                }
+            }
+
+            ui.label("Melt Rate:").on_hover_text(
+                "How quickly sustained warmth accumulates melt debt, converting ice to water",
+            );
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut state.fluid_settings.climate.melt_rate, 0.0..=5.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.melt_rate = state.fluid_settings.climate.melt_rate;
+                }
+            }
+
+            ui.label("Snow Melt Rate:").on_hover_text(
+                "How quickly sustained warmth accumulates melt debt, converting snow to water",
+            );
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut state.fluid_settings.climate.snow_melt_rate, 0.0..=5.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.snow_melt_rate = state.fluid_settings.climate.snow_melt_rate;
+                }
+            }
+
+            ui.label("Snow Compaction Rate:")
+                .on_hover_text("How quickly sustained cold packs snow down into ice (debt units per tick per degree below freezing)");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(
+                        &mut state.fluid_settings.climate.snow_compact_rate,
+                        0.0..=5.0,
+                    )
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+                )
+                .changed()
+            {
+                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                    gpu_scene.snow_compact_rate = state.fluid_settings.climate.snow_compact_rate;
+                }
             }
         }
+
+        // Lateral flow probability - advanced only
+        if access.allows(157) {
+            let selected_fluid_type = context.editor_state.selected_fluid_type;
+
+            if selected_fluid_type > 0 && selected_fluid_type <= 3 {
+                let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
+                let mut changed = false;
+
+                ui.add_space(4.0);
+                ui.label("Lateral Flow Probability:")
+                    .on_hover_text("Probability that a fluid voxel moves sideways each step. Higher values create more horizontal spreading and mixing");
+                if scene_settings::slider_control(ui,
+                        egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
+                            .step_by(0.01)
+                            .fixed_decimals(2),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+
+                if changed {
+                    context.editor_state.fluid_lateral_flow_probabilities = probabilities;
+                    context.editor_state.save_fluid_settings();
+                }
+            }
+        } // end advanced fluid physics
+
+
     }
+    // Condensation and vaporization are now purely a consequence of local
+    // temperature and contact with air (see thermal model in fluid_sim.wgsl) -
+    // no manual probability controls needed.
 
-    // Lateral flow probability - advanced only
-    if state.show_advanced_options {
-        let selected_fluid_type = context.editor_state.selected_fluid_type;
 
-        if selected_fluid_type > 0 && selected_fluid_type <= 3 {
-            let mut probabilities = context.editor_state.fluid_lateral_flow_probabilities;
-            let mut changed = false;
+
+    if access.allows(158) {
+        // === Ice Appearance ===
+        // Written to fluid_settings.ice (persisted with the UI state); app.rs
+        // pushes the values into the ice render params uniform every frame.
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Ice Appearance");
+        ui.add_space(4.0);
+        {
+            let advanced = access.allows(165);
+            let ice = &mut state.fluid_settings.ice;
+
+            ui.label("Facet Size:")
+                .on_hover_text("Size of each crystal face in world units. Faces are irregular Voronoi regions, independent of mesh tessellation");
+            let mut facet_size = 1.0 / ice.facet_scale.max(0.001);
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut facet_size, 1.0..=200.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .logarithmic(true),
+                )
+                .changed()
+            {
+                ice.facet_scale = 1.0 / facet_size.max(1.0);
+            }
 
             ui.add_space(4.0);
-            ui.label("Lateral Flow Probability:")
-                .on_hover_text("Probability that a fluid voxel moves sideways each step. Higher values create more horizontal spreading and mixing");
+            ui.label("Facet Depth:")
+                .on_hover_text("How far vertices are displaced onto each flat crystal facet plane. 0 = smooth ice (no displacement), higher = deeper, more angular faceting");
+            scene_settings::slider_control(ui,
+                egui::Slider::new(&mut ice.displacement_strength, 0.0..=2.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            );
+
+            ui.add_space(4.0);
+            ui.label("Facet Shading:")
+                .on_hover_text("How much the flat facet normals affect diffuse shading. Low = facets only show as glints; high = each face shades as its own patch (patchwork look)");
+            scene_settings::slider_control(ui,
+                egui::Slider::new(&mut ice.facet_diffuse, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            );
+
+            ui.add_space(4.0);
+            ui.label("Glint Intensity:")
+                .on_hover_text("Brightness of the per-face specular sparkle");
+            scene_settings::slider_control(ui,
+                egui::Slider::new(&mut ice.glint_strength, 0.0..=3.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2),
+            );
+
+            ui.add_space(4.0);
+            ui.label("Opacity:")
+                .on_hover_text("Base opacity of the ice body. Grazing angles always read more solid. At 1.00, ice is rendered fully opaque (no transparency blending).");
+            scene_settings::slider_control(ui,
+                egui::Slider::new(&mut ice.alpha, 0.2..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
+            );
+
+            ui.horizontal(|ui| {
+                ui.label("Surface Color");
+                ui.color_edit_button_rgb(&mut ice.surface_color);
+                ui.label("Deep Color");
+                ui.color_edit_button_rgb(&mut ice.deep_color);
+            });
+
+            if advanced {
+                ui.add_space(4.0);
+                ui.label("Glint Sharpness:").on_hover_text(
+                    "Blinn-Phong exponent for the facet glints. Higher = tighter, sharper sparkles",
+                );
+                scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut ice.glint_shininess, 4.0..=256.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .logarithmic(true),
+                );
+
+                ui.add_space(4.0);
+                ui.label("Reflection:")
+                    .on_hover_text("Fresnel-weighted environment reflection mix at grazing angles");
+                scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut ice.fresnel_reflection, 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                );
+
+                ui.add_space(4.0);
+                ui.label("Reflection Brightness:")
+                    .on_hover_text("Brightness multiplier for the reflected environment");
+                scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut ice.reflection_brightness, 0.0..=4.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                );
+            }
+        }
+
+        // === Water Surface Lighting & Reflection ===
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Water Surface Lighting");
+        ui.add_space(4.0);
+
+        if access.allows(168) {
+            ui.label("Ambient:")
+                .on_hover_text("Minimum light level on the water surface regardless of light direction. Higher values brighten the water in shadowed areas");
             if scene_settings::slider_control(ui,
-                    egui::Slider::new(&mut probabilities[selected_fluid_type as usize], 0.0..=1.0)
+                    egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
                         .step_by(0.01)
                         .fixed_decimals(2),
                 )
                 .changed()
             {
-                changed = true;
+                context.editor_state.save_fluid_render_settings();
             }
 
-            if changed {
-                context.editor_state.fluid_lateral_flow_probabilities = probabilities;
-                context.editor_state.save_fluid_settings();
+            ui.add_space(4.0);
+            ui.label("Diffuse:")
+                .on_hover_text("Strength of the diffuse (Lambertian) lighting on the water surface. Higher values make the water respond more strongly to the light direction");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
             }
-        }
-    } // end advanced fluid physics
 
-    // Condensation and vaporization are now purely a consequence of local
-    // temperature and contact with air (see thermal model in fluid_sim.wgsl) -
-    // no manual probability controls needed.
+            ui.add_space(4.0);
+            ui.label("Specular:")
+                .on_hover_text("Strength of the specular highlight (glint) on the water surface. Higher values create a brighter, more mirror-like reflection of the light source");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
 
-    if !state.cosmetic_options_visible() { return; }
+            ui.add_space(4.0);
+            ui.label("Shininess:")
+                .on_hover_text("Sharpness of the specular highlight. Low values = broad, soft glint. High values = tight, sharp glint like polished glass");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .logarithmic(true),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
 
-    // === Ice Appearance ===
-    // Written to fluid_settings.ice (persisted with the UI state); app.rs
-    // pushes the values into the ice render params uniform every frame.
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Ice Appearance");
-    ui.add_space(4.0);
-    {
-        let advanced = state.show_advanced_options;
-        let ice = &mut state.fluid_settings.ice;
+            ui.add_space(4.0);
+            ui.label("Rim Light:")
+                .on_hover_text("Backlit glow around the edges of the water surface. Creates a halo effect when the light is behind the water");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
 
-        ui.label("Facet Size:")
-            .on_hover_text("Size of each crystal face in world units. Faces are irregular Voronoi regions, independent of mesh tessellation");
-        let mut facet_size = 1.0 / ice.facet_scale.max(0.001);
+            ui.add_space(4.0);
+        } // end advanced water surface lighting
+
+        ui.label("Alpha (Transparency):")
+            .on_hover_text("Overall transparency of the water surface. 0 = fully transparent (invisible); 1 = fully opaque");
         if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut facet_size, 1.0..=200.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0)
-                    .logarithmic(true),
+                egui::Slider::new(&mut context.editor_state.fluid_alpha, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2),
             )
             .changed()
         {
-            ice.facet_scale = 1.0 / facet_size.max(1.0);
+            context.editor_state.save_fluid_render_settings();
         }
 
-        ui.add_space(4.0);
-        ui.label("Facet Depth:")
-            .on_hover_text("How far vertices are displaced onto each flat crystal facet plane. 0 = smooth ice (no displacement), higher = deeper, more angular faceting");
-        scene_settings::slider_control(ui,
-            egui::Slider::new(&mut ice.displacement_strength, 0.0..=2.0)
-                .step_by(0.05)
-                .fixed_decimals(2),
-        );
 
-        ui.add_space(4.0);
-        ui.label("Facet Shading:")
-            .on_hover_text("How much the flat facet normals affect diffuse shading. Low = facets only show as glints; high = each face shades as its own patch (patchwork look)");
-        scene_settings::slider_control(ui,
-            egui::Slider::new(&mut ice.facet_diffuse, 0.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2),
-        );
-
-        ui.add_space(4.0);
-        ui.label("Glint Intensity:")
-            .on_hover_text("Brightness of the per-face specular sparkle");
-        scene_settings::slider_control(ui,
-            egui::Slider::new(&mut ice.glint_strength, 0.0..=3.0)
-                .step_by(0.05)
-                .fixed_decimals(2),
-        );
-
-        ui.add_space(4.0);
-        ui.label("Opacity:")
-            .on_hover_text("Base opacity of the ice body. Grazing angles always read more solid. At 1.00, ice is rendered fully opaque (no transparency blending).");
-        scene_settings::slider_control(ui,
-            egui::Slider::new(&mut ice.alpha, 0.2..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2),
-        );
-
-        ui.horizontal(|ui| {
-            ui.label("Surface Color");
-            ui.color_edit_button_rgb(&mut ice.surface_color);
-            ui.label("Deep Color");
-            ui.color_edit_button_rgb(&mut ice.deep_color);
-        });
-
-        if advanced {
+    }
+    if access.allows(185) {
+        ui.add_space(8.0);
+        ui.separator();
+        if access.allows(174) {
+            ui.heading("Cubemap Reflection");
             ui.add_space(4.0);
-            ui.label("Glint Sharpness:").on_hover_text(
-                "Blinn-Phong exponent for the facet glints. Higher = tighter, sharper sparkles",
-            );
-            scene_settings::slider_control(ui,
-                egui::Slider::new(&mut ice.glint_shininess, 4.0..=256.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0)
-                    .logarithmic(true),
-            );
+
+            ui.label("Fresnel Strength:")
+                .on_hover_text("How strongly the Fresnel effect controls reflection intensity. Higher values make the water more reflective at grazing angles");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
 
             ui.add_space(4.0);
-            ui.label("Reflection:")
-                .on_hover_text("Fresnel-weighted environment reflection mix at grazing angles");
-            scene_settings::slider_control(ui,
-                egui::Slider::new(&mut ice.fresnel_reflection, 0.0..=1.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
+            ui.label("Fresnel Power:")
+                .on_hover_text("Sharpness of the Fresnel transition. Higher values make the reflection appear only at very shallow angles; lower values spread it across more of the surface");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
+                        .step_by(0.1)
+                        .fixed_decimals(1),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(4.0);
+            ui.label("Reflection Intensity:").on_hover_text(
+                "Overall strength of the cubemap/environment reflection on the water surface",
             );
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
 
             ui.add_space(4.0);
             ui.label("Reflection Brightness:")
-                .on_hover_text("Brightness multiplier for the reflected environment");
-            scene_settings::slider_control(ui,
-                egui::Slider::new(&mut ice.reflection_brightness, 0.0..=4.0)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
-            );
-        }
-    }
-
-    // === Water Surface Lighting & Reflection ===
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Water Surface Lighting");
-    ui.add_space(4.0);
-
-    if state.show_advanced_options {
-        ui.label("Ambient:")
-            .on_hover_text("Minimum light level on the water surface regardless of light direction. Higher values brighten the water in shadowed areas");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_ambient, 0.0..=1.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Diffuse:")
-            .on_hover_text("Strength of the diffuse (Lambertian) lighting on the water surface. Higher values make the water respond more strongly to the light direction");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_diffuse, 0.0..=1.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Specular:")
-            .on_hover_text("Strength of the specular highlight (glint) on the water surface. Higher values create a brighter, more mirror-like reflection of the light source");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_specular, 0.0..=2.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Shininess:")
-            .on_hover_text("Sharpness of the specular highlight. Low values = broad, soft glint. High values = tight, sharp glint like polished glass");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_shininess, 1.0..=256.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0)
-                    .logarithmic(true),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Rim Light:")
-            .on_hover_text("Backlit glow around the edges of the water surface. Creates a halo effect when the light is behind the water");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_rim, 0.0..=2.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-    } // end advanced water surface lighting
-
-    ui.label("Alpha (Transparency):")
-        .on_hover_text("Overall transparency of the water surface. 0 = fully transparent (invisible); 1 = fully opaque");
-    if scene_settings::slider_control(ui,
-            egui::Slider::new(&mut context.editor_state.fluid_alpha, 0.0..=1.0)
-                .step_by(0.01)
-                .fixed_decimals(2),
-        )
-        .changed()
-    {
-        context.editor_state.save_fluid_render_settings();
-    }
-
-    if state.show_advanced_options {
-        ui.add_space(8.0);
-        ui.separator();
-        ui.heading("Cubemap Reflection");
-        ui.add_space(4.0);
-
-        ui.label("Fresnel Strength:")
-            .on_hover_text("How strongly the Fresnel effect controls reflection intensity. Higher values make the water more reflective at grazing angles");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_fresnel, 0.0..=2.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Fresnel Power:")
-            .on_hover_text("Sharpness of the Fresnel transition. Higher values make the reflection appear only at very shallow angles; lower values spread it across more of the surface");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_fresnel_power, 0.5..=10.0)
-                    .step_by(0.1)
+                .on_hover_text("Brightness multiplier applied to the reflected environment. Higher values make the reflection appear brighter and more vivid");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(
+                        &mut context.editor_state.fluid_reflection_brightness,
+                        1.0..=50.0,
+                    )
+                    .step_by(0.5)
                     .fixed_decimals(1),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Reflection Intensity:").on_hover_text(
-            "Overall strength of the cubemap/environment reflection on the water surface",
-        );
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_reflection, 0.0..=2.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Reflection Brightness:")
-            .on_hover_text("Brightness multiplier applied to the reflected environment. Higher values make the reflection appear brighter and more vivid");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(
-                    &mut context.editor_state.fluid_reflection_brightness,
-                    1.0..=50.0,
                 )
-                .step_by(0.5)
-                .fixed_decimals(1),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(4.0);
+            ui.label("Below-Waterline Opacity:")
+                .on_hover_text("Transparency of faces below the water surface (sides and bottom). Set low to see inside the sphere");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_waterline_alpha, 0.0..=1.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            // === Water Surface Waves ===
+            ui.add_space(8.0);
+            ui.separator();
+            ui.heading("Water Surface Waves");
+            ui.add_space(4.0);
+
+            ui.label("Wave Height:")
+                .on_hover_text("Amplitude of the animated wave displacement on the water surface. 0 = flat water; higher values create more dramatic waves");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.fluid_mesh_params_dirty = true;
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(4.0);
+            ui.label("Wave Speed:")
+                .on_hover_text("How fast the wave pattern animates across the water surface");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.fluid_mesh_params_dirty = true;
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(4.0);
+            ui.label("Noise Scale (lower = larger waves):")
+                .on_hover_text("Spatial frequency of the wave noise pattern. Lower values create large, rolling waves; higher values create small, choppy ripples");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
+                        .step_by(0.01)
+                        .fixed_decimals(2)
+                        .logarithmic(true),
+                )
+                .changed()
+            {
+                context.editor_state.fluid_mesh_params_dirty = true;
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(4.0);
+            ui.label("Octaves:")
+                .on_hover_text("Number of noise layers combined for the wave pattern. More octaves add finer detail to the waves");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0),
+                )
+                .changed()
+            {
+                context.editor_state.fluid_mesh_params_dirty = true;
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(4.0);
+            ui.label("Lacunarity (freq per octave):")
+                .on_hover_text("How much the frequency increases with each successive noise octave. Higher values create more varied, complex wave patterns");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
+                        .step_by(0.1)
+                        .fixed_decimals(1),
+                )
+                .changed()
+            {
+                context.editor_state.fluid_mesh_params_dirty = true;
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(4.0);
+            ui.label("Persistence (amp per octave):")
+                .on_hover_text("How much the amplitude decreases with each successive noise octave. Lower values make higher octaves contribute less, creating smoother waves");
+            if scene_settings::slider_control(ui,
+                    egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
+                        .step_by(0.05)
+                        .fixed_decimals(2),
+                )
+                .changed()
+            {
+                context.editor_state.fluid_mesh_params_dirty = true;
+                context.editor_state.save_fluid_render_settings();
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+
         }
-
-        ui.add_space(4.0);
-        ui.label("Below-Waterline Opacity:")
-            .on_hover_text("Transparency of faces below the water surface (sides and bottom). Set low to see inside the sphere");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_waterline_alpha, 0.0..=1.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        // === Water Surface Waves ===
-        ui.add_space(8.0);
-        ui.separator();
-        ui.heading("Water Surface Waves");
-        ui.add_space(4.0);
-
-        ui.label("Wave Height:")
-            .on_hover_text("Amplitude of the animated wave displacement on the water surface. 0 = flat water; higher values create more dramatic waves");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_wave_height, 0.0..=5.0)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.fluid_mesh_params_dirty = true;
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Wave Speed:")
-            .on_hover_text("How fast the wave pattern animates across the water surface");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_wave_speed, 0.0..=5.0)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.fluid_mesh_params_dirty = true;
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Noise Scale (lower = larger waves):")
-            .on_hover_text("Spatial frequency of the wave noise pattern. Lower values create large, rolling waves; higher values create small, choppy ripples");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_noise_scale, 0.01..=20.0)
-                    .step_by(0.01)
-                    .fixed_decimals(2)
-                    .logarithmic(true),
-            )
-            .changed()
-        {
-            context.editor_state.fluid_mesh_params_dirty = true;
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Octaves:")
-            .on_hover_text("Number of noise layers combined for the wave pattern. More octaves add finer detail to the waves");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_noise_octaves, 1.0..=6.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0),
-            )
-            .changed()
-        {
-            context.editor_state.fluid_mesh_params_dirty = true;
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Lacunarity (freq per octave):")
-            .on_hover_text("How much the frequency increases with each successive noise octave. Higher values create more varied, complex wave patterns");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_noise_lacunarity, 1.0..=4.0)
-                    .step_by(0.1)
-                    .fixed_decimals(1),
-            )
-            .changed()
-        {
-            context.editor_state.fluid_mesh_params_dirty = true;
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(4.0);
-        ui.label("Persistence (amp per octave):")
-            .on_hover_text("How much the amplitude decreases with each successive noise octave. Lower values make higher octaves contribute less, creating smoother waves");
-        if scene_settings::slider_control(ui,
-                egui::Slider::new(&mut context.editor_state.fluid_noise_persistence, 0.1..=1.0)
-                    .step_by(0.05)
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            context.editor_state.fluid_mesh_params_dirty = true;
-            context.editor_state.save_fluid_render_settings();
-        }
-
-        ui.add_space(8.0);
-        ui.separator();
         ui.heading("Underwater Light");
         ui.add_space(4.0);
         ui.label("Sunlight Attenuation:")
@@ -6615,6 +6662,7 @@ fn render_light_settings_organized(
     context: &mut PanelContext,
     state: &mut GlobalUiState,
 ) {
+    let access = state.menu_access();
 
     if !context.is_gpu_mode() {
         ui.label("Lighting settings are only available in GPU mode.");
@@ -6642,7 +6690,7 @@ fn render_light_settings_organized(
         .open((!state.main_scene_quick_start_seen).then_some(true))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if state.cosmetic_options_visible() {
+                if access.allows(207) {
                     sun_changed |= ui.checkbox(&mut context.editor_state.show_sun, "Sun Disc")
                         .on_hover_text("Render the visible sun disc in the sky.").changed();
                 }
@@ -6653,7 +6701,7 @@ fn render_light_settings_organized(
                     context.editor_state.capture_sun_orbit_angle();
                 }
                 changed |= orbit_toggle.changed();
-                if state.cosmetic_options_visible() && context.editor_state.sun_rotation_enabled {
+                if access.allows(209) && context.editor_state.sun_rotation_enabled {
                     changed |= ui
                         .checkbox(&mut context.editor_state.show_orbit_ring, "Show Ring")
                         .on_hover_text("Keep the orbit path ring visible in the scene.")
@@ -6677,16 +6725,16 @@ fn render_light_settings_organized(
                 brightness_response.scroll_to_me(Some(egui::Align::Center));
             }
 
-            if state.cosmetic_options_visible() {
-            ui.horizontal(|ui| {
-                ui.label("Tint");
-                if ui
-                    .color_edit_button_rgb(&mut context.editor_state.sun_color)
-                    .changed()
-                {
-                    sun_changed = true;
-                }
-            });
+            if access.allows(211) {
+                ui.horizontal(|ui| {
+                    ui.label("Tint");
+                    if ui
+                        .color_edit_button_rgb(&mut context.editor_state.sun_color)
+                        .changed()
+                    {
+                        sun_changed = true;
+                    }
+                });
             }
 
             ui.add_space(4.0);
@@ -6716,7 +6764,7 @@ fn render_light_settings_organized(
                     changed = true;
                 }
 
-                if state.show_advanced_options {
+                if access.allows(214) {
                     let (mut orbit_pitch, mut orbit_yaw) =
                         light_dir_to_pitch_yaw(context.editor_state.sun_rotation_axis);
                     let mut orbit_changed = false;
@@ -6728,14 +6776,17 @@ fn render_light_settings_organized(
                         )
                         .on_hover_text("Tilt of the orbit plane. 0° = equatorial, 90° = polar.")
                         .changed();
-                    ui.label("Path Yaw");
-                    orbit_changed |= scene_settings::slider_control(ui,
-                            egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
-                                .suffix("°")
-                                .fixed_decimals(0),
-                        )
-                        .on_hover_text("Compass direction the orbit tilts toward.")
-                        .changed();
+                    if access.allows(215) {
+                        ui.label("Path Yaw");
+                        orbit_changed |= scene_settings::slider_control(ui,
+                                egui::Slider::new(&mut orbit_yaw, -180.0..=180.0)
+                                    .suffix("°")
+                                    .fixed_decimals(0),
+                            )
+                            .on_hover_text("Compass direction the orbit tilts toward.")
+                            .changed();
+
+                    }
                     if orbit_changed {
                         context.editor_state.sun_rotation_axis =
                             pitch_yaw_to_light_dir(orbit_pitch, orbit_yaw);
@@ -6743,11 +6794,11 @@ fn render_light_settings_organized(
                         changed = true;
                     }
                 }
-            } else {
+            } else if access.allows(216) {
                 changed |= render_sun_direction_control(ui, &mut context.editor_state.light_dir);
             }
 
-            if state.show_advanced_options && context.editor_state.show_sun {
+            if access.allows(217) && context.editor_state.show_sun {
                 ui.add_space(4.0);
                 ui.label("Disc Size");
                 sun_changed |= scene_settings::slider_control(ui,
@@ -6792,24 +6843,27 @@ fn render_light_settings_organized(
             // Climate response speed lives here because the day/night cycle
             // is what drives temperature swings. Edits the persisted climate
             // setting (app.rs syncs it into the scene each frame).
-            ui.label("Thermal Inertia (0-5)");
-            if scene_settings::slider_control(ui,
-                    egui::Slider::new(
-                        &mut state.fluid_settings.climate.thermal_inertia,
-                        0.0..=5.0,
+            if access.allows(220) {
+                ui.label("Thermal Inertia (0-5)");
+                if scene_settings::slider_control(ui,
+                        egui::Slider::new(
+                            &mut state.fluid_settings.climate.thermal_inertia,
+                            0.0..=5.0,
+                        )
+                        .step_by(0.1)
+                        .fixed_decimals(1),
                     )
-                    .step_by(0.1)
-                    .fixed_decimals(1),
-                )
-                .on_hover_text("Controls heat storage and freeze/melt delay. At 4, air responds in about 4 seconds, water 71 seconds, ice 93 seconds, and exposed rock 33 seconds. Water slowly follows average air temperature and settles a little cooler. Sustained freezing air can form ice; warm air gradually melts it. Lower values react faster; 5 stores heat longer.")
-                .changed()
-            {
-                changed = true;
-                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                    gpu_scene.thermal_inertia = state.fluid_settings.climate.thermal_inertia;
+                    .on_hover_text("Controls heat storage and freeze/melt delay. At 4, air responds in about 4 seconds, water 71 seconds, ice 93 seconds, and exposed rock 33 seconds. Water slowly follows average air temperature and settles a little cooler. Sustained freezing air can form ice; warm air gradually melts it. Lower values react faster; 5 stores heat longer.")
+                    .changed()
+                {
+                    changed = true;
+                    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                        gpu_scene.thermal_inertia = state.fluid_settings.climate.thermal_inertia;
+                    }
                 }
-            }
 
+
+            }
             ui.add_space(6.0);
             changed |= ui
                 .checkbox(&mut context.editor_state.sun_cycle_enabled, "Seasonal Cycle")
@@ -6836,313 +6890,312 @@ fn render_light_settings_organized(
             }
         });
 
-    egui::CollapsingHeader::new("Luminocyte Lighting")
-        .default_open(true)
-        .show(ui, |ui| {
-            let emission = context.scene_manager.gpu_scene()
-                .and_then(|scene| scene.light_field_system.as_ref())
-                .map(|light| &light.luminocyte_emission);
-            let supported = emission.is_some_and(|e| e.hardware_ray_tracing_supported());
-            // Show the effective choice without overwriting a saved preference
-            // when settings are opened on a machine without ray-query support.
-            let mut enabled = supported && context.editor_state.luminocyte_ray_tracing;
-            let response = ui.add_enabled(supported,
-                egui::Checkbox::new(&mut enabled, "Hardware Ray Tracing"))
-                .on_hover_text("On: hardware rays test cave voxel boxes. Off: voxel ray marching tests the same cave mask. Both use the same lighting grid and falloff, so appearance is usually similar. Neither traces the detailed cave surface or cell shadows.")
-                .on_disabled_hover_text("Hardware ray tracing is unavailable on the active graphics device. Your GPU, driver, and graphics backend must support ray queries. Luminocyte lighting uses voxel ray marching instead.");
-            if response.changed() {
-                context.editor_state.luminocyte_ray_tracing = enabled;
-                if let Some(emission) = emission {
-                    emission.set_hardware_ray_tracing_enabled(enabled);
+    if access.allows(224) {
+        egui::CollapsingHeader::new("Luminocyte Lighting")
+            .default_open(true)
+            .show(ui, |ui| {
+                let emission = context.scene_manager.gpu_scene()
+                    .and_then(|scene| scene.light_field_system.as_ref())
+                    .map(|light| &light.luminocyte_emission);
+                let supported = emission.is_some_and(|e| e.hardware_ray_tracing_supported());
+                // Show the effective choice without overwriting a saved preference
+                // when settings are opened on a machine without ray-query support.
+                let mut enabled = supported && context.editor_state.luminocyte_ray_tracing;
+                let response = ui.add_enabled(supported,
+                    egui::Checkbox::new(&mut enabled, "Hardware Ray Tracing"))
+                    .on_hover_text("On: hardware rays test cave voxel boxes. Off: voxel ray marching tests the same cave mask. Both use the same lighting grid and falloff, so appearance is usually similar. Neither traces the detailed cave surface or cell shadows.")
+                    .on_disabled_hover_text("Hardware ray tracing is unavailable on the active graphics device. Your GPU, driver, and graphics backend must support ray queries. Luminocyte lighting uses voxel ray marching instead.");
+                if response.changed() {
+                    context.editor_state.luminocyte_ray_tracing = enabled;
+                    if let Some(emission) = emission {
+                        emission.set_hardware_ray_tracing_enabled(enabled);
+                    }
+                    changed = true;
                 }
-                changed = true;
-            }
-            let active = emission.is_some_and(|e| e.hardware_ray_tracing_active());
-            ui.weak(if active {
-                "Lighting type: Hardware ray tracing (cave voxels)"
-            } else if enabled {
-                "Lighting type: Voxel ray marching (hardware geometry pending or unavailable)"
-            } else {
-                "Lighting type: Voxel ray marching"
+                let active = emission.is_some_and(|e| e.hardware_ray_tracing_active());
+                ui.weak(if active {
+                    "Lighting type: Hardware ray tracing (cave voxels)"
+                } else if enabled {
+                    "Lighting type: Voxel ray marching (hardware geometry pending or unavailable)"
+                } else {
+                    "Lighting type: Voxel ray marching"
+                });
+                ui.weak("Visible underwater haze uses the Volumetric Fog setting below.");
             });
-            ui.weak("Visible underwater haze uses the Volumetric Fog setting below.");
-        });
 
+
+    }
     // Everything below is rendering/engine tuning the player doesn't touch
     // during normal play - gated behind Advanced to keep the panel focused on
     // sun brightness, day/night cycles, timing, and color.
-    if !state.show_advanced_options {
-        if changed || sun_changed {
-            apply_light_panel_changes(context, sun_changed);
-        }
-        ui.add_space(10.0);
-        return;
-    }
-
-    ui.separator();
-
-    egui::CollapsingHeader::new("Surfaces & Shadows")
-        .default_open(true)
-        .show(ui, |ui| {
-            let mut shadow_changed = false;
-            shadow_changed |= ui
-                .checkbox(&mut context.editor_state.shadow_enabled, "Surface Shadows")
-                .on_hover_text("Use the light field to shade cave walls, cells, and surfaces.")
-                .changed();
-            ui.add_enabled_ui(context.editor_state.shadow_enabled, |ui| {
-                ui.label("Strength");
-                shadow_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
+    if access.allows(225) {
+        egui::CollapsingHeader::new("Surfaces & Shadows")
+            .default_open(true)
+            .show(ui, |ui| {
+                let mut shadow_changed = false;
+                shadow_changed |= ui
+                    .checkbox(&mut context.editor_state.shadow_enabled, "Surface Shadows")
+                    .on_hover_text("Use the light field to shade cave walls, cells, and surfaces.")
                     .changed();
-                ui.label("Quality");
-                shadow_changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .on_hover_text("Higher values reduce banding but increase sampling cost.")
-                    .changed();
-            });
-
-            if shadow_changed {
-                changed = true;
-                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                    if let Some(ref mut light_field) = gpu_scene.light_field_system {
-                        light_field.set_shadow_enabled(context.editor_state.shadow_enabled);
-                        light_field.set_shadow_strength(context.editor_state.shadow_strength);
-                        light_field.set_shadow_quality(context.editor_state.shadow_quality);
-                    }
-                }
-            }
-
-            if state.show_advanced_options {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Light Field").strong());
-                let mut steps = context.editor_state.light_field_max_steps as i32;
-                ui.label("Ray Steps");
-                if scene_settings::slider_control(ui,egui::Slider::new(&mut steps, 1..=256))
-                    .on_hover_text("More steps improve shadow accuracy but cost more GPU time.")
-                    .changed()
-                {
-                    context.editor_state.light_field_max_steps = steps as u32;
-                    changed = true;
-                }
-                ui.label("Step Size");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.light_field_step_size,
-                            0.5..=4.0,
+                ui.add_enabled_ui(context.editor_state.shadow_enabled, |ui| {
+                    ui.label("Strength");
+                    shadow_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.shadow_strength, 0.0..=1.0)
+                                .step_by(0.01)
+                                .fixed_decimals(2),
                         )
-                        .step_by(0.1)
-                        .fixed_decimals(1),
-                    )
-                    .changed();
-                ui.label("Rock Absorption");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.light_field_absorption_solid,
-                            0.1..=20.0,
+                        .changed();
+                    ui.label("Quality");
+                    shadow_changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.shadow_quality, 0.0..=1.0)
+                                .step_by(0.01)
+                                .fixed_decimals(2),
                         )
-                        .step_by(0.1)
-                        .fixed_decimals(1),
-                    )
-                    .changed();
-                ui.label("Cell Absorption");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.light_field_absorption_cell,
-                            0.0..=5.0,
-                        )
-                        .step_by(0.05)
-                        .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Ambient Floor");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.light_field_ambient_floor,
-                            0.0..=0.2,
-                        )
-                        .step_by(0.005)
-                        .fixed_decimals(3),
-                    )
-                    .changed();
-            }
-        });
-
-    ui.separator();
-
-    egui::CollapsingHeader::new("Volumetric Fog")
-        .default_open(true)
-        .show(ui, |ui| {
-            changed |= ui
-                .checkbox(&mut context.editor_state.show_volumetric_fog, "Enabled")
-                .on_hover_text("Render volumetric haze, light shafts, and luminocyte halos.")
-                .changed();
-
-            ui.add_enabled_ui(context.editor_state.show_volumetric_fog, |ui| {
-                ui.label("Density");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Glow");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.light_intensity, 0.0..=20.0)
-                            .step_by(0.1)
-                            .fixed_decimals(1),
-                    )
-                    .on_hover_text("Brightness of fog scattering from sun and luminocytes.")
-                    .changed();
-                ui.label("Directionality");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.fog_scattering_anisotropy,
-                            0.0..=0.95,
-                        )
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                    )
-                    .on_hover_text(
-                        "How strongly fog scatters light toward the viewer (god-ray sharpness).",
-                    )
-                    .changed();
-                ui.label("Absorption");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-
-                ui.horizontal(|ui| {
-                    ui.label("Ambient Color");
-                    if ui
-                        .color_edit_button_rgb(&mut context.editor_state.fog_color)
-                        .changed()
-                    {
-                        changed = true;
-                    }
+                        .on_hover_text("Higher values reduce banding but increase sampling cost.")
+                        .changed();
                 });
 
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Height Fog").strong());
-                ui.label("Bottom Density");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
-                            .step_by(0.01)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Falloff");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.fog_height_falloff,
-                            0.001..=0.1,
-                        )
-                        .step_by(0.001)
-                        .fixed_decimals(3),
-                    )
-                    .changed();
-
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Quality").strong());
-                let mut fsteps = context.editor_state.fog_steps as i32;
-                ui.label("Steps");
-                if scene_settings::slider_control(ui,egui::Slider::new(&mut fsteps, 8..=128))
-                    .changed()
-                {
-                    context.editor_state.fog_steps = fsteps as u32;
+                if shadow_changed {
                     changed = true;
-                }
-                changed |= ui
-                    .checkbox(
-                        &mut context.editor_state.fog_smooth_light_field,
-                        "Smooth Voxels",
-                    )
-                    .on_hover_text("Trilinear light-field sampling for fog.")
-                    .changed();
-                ui.label("Blur");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.fog_composite_blur, 0.25..=4.0)
-                            .step_by(0.25)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new("Water Distortion").strong());
-                ui.label("Strength");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.fog_water_wave_strength,
-                            0.0..=2.0,
-                        )
-                        .step_by(0.05)
-                        .fixed_decimals(2),
-                    )
-                    .changed();
-                ui.label("Scale");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.fog_water_wave_scale,
-                            0.01..=1.0,
-                        )
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                    )
-                    .changed();
-            });
-        });
-
-    ui.separator();
-
-    egui::CollapsingHeader::new("Luminocyte Glow")
-        .default_open(true)
-        .show(ui, |ui| {
-            changed |= ui
-                .checkbox(
-                    &mut context.editor_state.luminocyte_bloom_enabled,
-                    "Enabled",
-                )
-                .on_hover_text("Screen-space bloom halo around glowing luminocytes.")
-                .changed();
-
-            ui.add_enabled_ui(context.editor_state.luminocyte_bloom_enabled, |ui| {
-                ui.label("Halo Radius");
-                changed |= scene_settings::slider_control(ui,
-                        egui::Slider::new(
-                            &mut context.editor_state.luminocyte_bloom_radius,
-                            0.02..=0.8,
-                        )
-                        .step_by(0.01)
-                        .fixed_decimals(2),
-                    )
-                    .on_hover_text(
-                        "Halo size as a fraction of screen height. Larger = bigger glow.",
-                    )
-                    .changed();
-            });
-
-            if changed {
-                if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                    if let Some(ref mut bloom) = gpu_scene.luminocyte_bloom {
-                        bloom.bloom_radius = if context.editor_state.luminocyte_bloom_enabled {
-                            context.editor_state.luminocyte_bloom_radius
-                        } else {
-                            0.0
-                        };
+                    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                        if let Some(ref mut light_field) = gpu_scene.light_field_system {
+                            light_field.set_shadow_enabled(context.editor_state.shadow_enabled);
+                            light_field.set_shadow_strength(context.editor_state.shadow_strength);
+                            light_field.set_shadow_quality(context.editor_state.shadow_quality);
+                        }
                     }
                 }
-            }
-        });
 
-    if state.show_advanced_options {
+                if access.allows(228) {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Light Field").strong());
+                    let mut steps = context.editor_state.light_field_max_steps as i32;
+                    ui.label("Ray Steps");
+                    if scene_settings::slider_control(ui,egui::Slider::new(&mut steps, 1..=256))
+                        .on_hover_text("More steps improve shadow accuracy but cost more GPU time.")
+                        .changed()
+                    {
+                        context.editor_state.light_field_max_steps = steps as u32;
+                        changed = true;
+                    }
+                    ui.label("Step Size");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.light_field_step_size,
+                                0.5..=4.0,
+                            )
+                            .step_by(0.1)
+                            .fixed_decimals(1),
+                        )
+                        .changed();
+                    ui.label("Rock Absorption");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.light_field_absorption_solid,
+                                0.1..=20.0,
+                            )
+                            .step_by(0.1)
+                            .fixed_decimals(1),
+                        )
+                        .changed();
+                    ui.label("Cell Absorption");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.light_field_absorption_cell,
+                                0.0..=5.0,
+                            )
+                            .step_by(0.05)
+                            .fixed_decimals(2),
+                        )
+                        .changed();
+                    ui.label("Ambient Floor");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.light_field_ambient_floor,
+                                0.0..=0.2,
+                            )
+                            .step_by(0.005)
+                            .fixed_decimals(3),
+                        )
+                        .changed();
+                }
+            });
+
+        ui.separator();
+
+        egui::CollapsingHeader::new("Volumetric Fog")
+            .default_open(true)
+            .show(ui, |ui| {
+                changed |= ui
+                    .checkbox(&mut context.editor_state.show_volumetric_fog, "Enabled")
+                    .on_hover_text("Render volumetric haze, light shafts, and luminocyte halos.")
+                    .changed();
+
+                ui.add_enabled_ui(context.editor_state.show_volumetric_fog, |ui| {
+                    ui.label("Density");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.fog_density, 0.0..=2.0)
+                                .step_by(0.01)
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+                    ui.label("Glow");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.light_intensity, 0.0..=20.0)
+                                .step_by(0.1)
+                                .fixed_decimals(1),
+                        )
+                        .on_hover_text("Brightness of fog scattering from sun and luminocytes.")
+                        .changed();
+                    ui.label("Directionality");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.fog_scattering_anisotropy,
+                                0.0..=0.95,
+                            )
+                            .step_by(0.01)
+                            .fixed_decimals(2),
+                        )
+                        .on_hover_text(
+                            "How strongly fog scatters light toward the viewer (god-ray sharpness).",
+                        )
+                        .changed();
+                    ui.label("Absorption");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.fog_absorption, 0.0..=2.0)
+                                .step_by(0.01)
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+
+                    ui.horizontal(|ui| {
+                        ui.label("Ambient Color");
+                        if ui
+                            .color_edit_button_rgb(&mut context.editor_state.fog_color)
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    });
+
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Height Fog").strong());
+                    ui.label("Bottom Density");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.fog_height_density, 0.0..=2.0)
+                                .step_by(0.01)
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+                    ui.label("Falloff");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.fog_height_falloff,
+                                0.001..=0.1,
+                            )
+                            .step_by(0.001)
+                            .fixed_decimals(3),
+                        )
+                        .changed();
+
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Quality").strong());
+                    let mut fsteps = context.editor_state.fog_steps as i32;
+                    ui.label("Steps");
+                    if scene_settings::slider_control(ui,egui::Slider::new(&mut fsteps, 8..=128))
+                        .changed()
+                    {
+                        context.editor_state.fog_steps = fsteps as u32;
+                        changed = true;
+                    }
+                    changed |= ui
+                        .checkbox(
+                            &mut context.editor_state.fog_smooth_light_field,
+                            "Smooth Voxels",
+                        )
+                        .on_hover_text("Trilinear light-field sampling for fog.")
+                        .changed();
+                    ui.label("Blur");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.fog_composite_blur, 0.25..=4.0)
+                                .step_by(0.25)
+                                .fixed_decimals(2),
+                        )
+                        .changed();
+
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Water Distortion").strong());
+                    ui.label("Strength");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.fog_water_wave_strength,
+                                0.0..=2.0,
+                            )
+                            .step_by(0.05)
+                            .fixed_decimals(2),
+                        )
+                        .changed();
+                    ui.label("Scale");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.fog_water_wave_scale,
+                                0.01..=1.0,
+                            )
+                            .step_by(0.01)
+                            .fixed_decimals(2),
+                        )
+                        .changed();
+                });
+            });
+
+        ui.separator();
+
+
+    }
+    if access.allows(246) {
+        egui::CollapsingHeader::new("Luminocyte Glow")
+            .default_open(true)
+            .show(ui, |ui| {
+                changed |= ui
+                    .checkbox(
+                        &mut context.editor_state.luminocyte_bloom_enabled,
+                        "Enabled",
+                    )
+                    .on_hover_text("Screen-space bloom halo around glowing luminocytes.")
+                    .changed();
+
+                ui.add_enabled_ui(context.editor_state.luminocyte_bloom_enabled, |ui| {
+                    ui.label("Halo Radius");
+                    changed |= scene_settings::slider_control(ui,
+                            egui::Slider::new(
+                                &mut context.editor_state.luminocyte_bloom_radius,
+                                0.02..=0.8,
+                            )
+                            .step_by(0.01)
+                            .fixed_decimals(2),
+                        )
+                        .on_hover_text(
+                            "Halo size as a fraction of screen height. Larger = bigger glow.",
+                        )
+                        .changed();
+                });
+
+                if changed {
+                    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                        if let Some(ref mut bloom) = gpu_scene.luminocyte_bloom {
+                            bloom.bloom_radius = if context.editor_state.luminocyte_bloom_enabled {
+                                context.editor_state.luminocyte_bloom_radius
+                            } else {
+                                0.0
+                            };
+                        }
+                    }
+                }
+            });
+
+
+    }
+    if access.allows(248) {
         ui.separator();
 
         egui::CollapsingHeader::new("Camera Response")
@@ -7154,192 +7207,198 @@ fn render_light_settings_organized(
                     .changed();
 
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Contrast & Eye Adaptation").strong());
+                if access.allows(249) {
+                    ui.label(egui::RichText::new("Contrast & Eye Adaptation").strong());
 
-                ui.label("Contrast").on_hover_text(
-                    "Midpoint contrast. Values above 1 separate lights and darks; 1 is neutral.",
-                );
-                let contrast_changed = scene_settings::slider_control(ui,
-                        egui::Slider::new(&mut context.editor_state.pp_contrast, 0.25..=4.0)
-                            .step_by(0.05)
-                            .fixed_decimals(2),
-                    )
-                    .changed();
-                if contrast_changed {
-                    changed = true;
-                    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                        if let Some(pp) = gpu_scene.post_process.as_mut() {
-                            pp.contrast = context.editor_state.pp_contrast;
-                        }
-                    }
-                }
-
-                let adapt_enabled_changed = ui
-                    .checkbox(&mut context.editor_state.pp_adapt_enabled, "Eye Adaptation")
-                    .on_hover_text(
-                        "Camera gradually adjusts exposure between bright and dark areas.",
-                    )
-                    .changed();
-                if adapt_enabled_changed {
-                    changed = true;
-                    if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                        if let Some(pp) = gpu_scene.post_process.as_mut() {
-                            pp.adapt_enabled = context.editor_state.pp_adapt_enabled;
-                        }
-                    }
-                }
-
-                if context.editor_state.pp_adapt_enabled {
-                    ui.add_space(4.0);
-                    ui.label("Adapt Speed");
-                    let adapt_speed_changed = scene_settings::slider_control(ui,
-                            egui::Slider::new(&mut context.editor_state.pp_adapt_speed, 0.01..=0.4)
-                                .step_by(0.01)
-                                .fixed_decimals(2),
-                        )
-                        .changed();
-                    if adapt_speed_changed {
-                        changed = true;
-                        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                            if let Some(pp) = gpu_scene.post_process.as_mut() {
-                                pp.adapt_speed = context.editor_state.pp_adapt_speed;
-                            }
-                        }
-                    }
-                    ui.label("Min Exposure");
-                    let adapt_min_changed = scene_settings::slider_control(ui,
-                            egui::Slider::new(&mut context.editor_state.pp_adapt_min, 0.05..=2.0)
+                    ui.label("Contrast").on_hover_text(
+                        "Midpoint contrast. Values above 1 separate lights and darks; 1 is neutral.",
+                    );
+                    let contrast_changed = scene_settings::slider_control(ui,
+                            egui::Slider::new(&mut context.editor_state.pp_contrast, 0.25..=4.0)
                                 .step_by(0.05)
                                 .fixed_decimals(2),
                         )
                         .changed();
-                    if adapt_min_changed {
+                    if contrast_changed {
                         changed = true;
                         if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
                             if let Some(pp) = gpu_scene.post_process.as_mut() {
-                                pp.adapt_min = context.editor_state.pp_adapt_min;
+                                pp.contrast = context.editor_state.pp_contrast;
                             }
                         }
                     }
-                    ui.label("Max Exposure");
-                    let adapt_max_changed = scene_settings::slider_control(ui,
-                            egui::Slider::new(&mut context.editor_state.pp_adapt_max, 1.0..=20.0)
+
+                    let adapt_enabled_changed = ui
+                        .checkbox(&mut context.editor_state.pp_adapt_enabled, "Eye Adaptation")
+                        .on_hover_text(
+                            "Camera gradually adjusts exposure between bright and dark areas.",
+                        )
+                        .changed();
+                    if adapt_enabled_changed {
+                        changed = true;
+                        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                            if let Some(pp) = gpu_scene.post_process.as_mut() {
+                                pp.adapt_enabled = context.editor_state.pp_adapt_enabled;
+                            }
+                        }
+                    }
+
+                    if context.editor_state.pp_adapt_enabled {
+                        ui.add_space(4.0);
+                        ui.label("Adapt Speed");
+                        let adapt_speed_changed = scene_settings::slider_control(ui,
+                                egui::Slider::new(&mut context.editor_state.pp_adapt_speed, 0.01..=0.4)
+                                    .step_by(0.01)
+                                    .fixed_decimals(2),
+                            )
+                            .changed();
+                        if adapt_speed_changed {
+                            changed = true;
+                            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                                if let Some(pp) = gpu_scene.post_process.as_mut() {
+                                    pp.adapt_speed = context.editor_state.pp_adapt_speed;
+                                }
+                            }
+                        }
+                        ui.label("Min Exposure");
+                        let adapt_min_changed = scene_settings::slider_control(ui,
+                                egui::Slider::new(&mut context.editor_state.pp_adapt_min, 0.05..=2.0)
+                                    .step_by(0.05)
+                                    .fixed_decimals(2),
+                            )
+                            .changed();
+                        if adapt_min_changed {
+                            changed = true;
+                            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                                if let Some(pp) = gpu_scene.post_process.as_mut() {
+                                    pp.adapt_min = context.editor_state.pp_adapt_min;
+                                }
+                            }
+                        }
+                        ui.label("Max Exposure");
+                        let adapt_max_changed = scene_settings::slider_control(ui,
+                                egui::Slider::new(&mut context.editor_state.pp_adapt_max, 1.0..=20.0)
+                                    .step_by(0.5)
+                                    .fixed_decimals(1),
+                            )
+                            .changed();
+                        if adapt_max_changed {
+                            changed = true;
+                            if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
+                                if let Some(pp) = gpu_scene.post_process.as_mut() {
+                                    pp.adapt_max = context.editor_state.pp_adapt_max;
+                                }
+                            }
+                        }
+                    }
+
+                    if context.editor_state.show_dof {
+                        ui.add_space(6.0);
+                        ui.label("Focal Distance");
+                        changed |= scene_settings::slider_control(ui,
+                                egui::Slider::new(
+                                    &mut context.editor_state.dof_focal_distance,
+                                    5.0..=500.0,
+                                )
+                                .step_by(1.0)
+                                .fixed_decimals(0),
+                            )
+                            .changed();
+                        ui.label("Focal Range");
+                        changed |= scene_settings::slider_control(ui,
+                                egui::Slider::new(
+                                    &mut context.editor_state.dof_focal_range,
+                                    1.0..=200.0,
+                                )
+                                .step_by(1.0)
+                                .fixed_decimals(0),
+                            )
+                            .changed();
+                        ui.label("Max Blur");
+                        changed |= scene_settings::slider_control(ui,
+                                egui::Slider::new(
+                                    &mut context.editor_state.dof_max_blur_radius,
+                                    1.0..=24.0,
+                                )
                                 .step_by(0.5)
                                 .fixed_decimals(1),
-                        )
-                        .changed();
-                    if adapt_max_changed {
-                        changed = true;
-                        if let Some(gpu_scene) = context.scene_manager.gpu_scene_mut() {
-                            if let Some(pp) = gpu_scene.post_process.as_mut() {
-                                pp.adapt_max = context.editor_state.pp_adapt_max;
-                            }
-                        }
+                            )
+                            .changed();
+                        ui.label("Blur Strength");
+                        changed |= scene_settings::slider_control(ui,
+                                egui::Slider::new(
+                                    &mut context.editor_state.dof_blur_strength,
+                                    0.0..=3.0,
+                                )
+                                .step_by(0.05)
+                                .fixed_decimals(2),
+                            )
+                            .changed();
                     }
-                }
 
-                if context.editor_state.show_dof {
-                    ui.add_space(6.0);
-                    ui.label("Focal Distance");
-                    changed |= scene_settings::slider_control(ui,
-                            egui::Slider::new(
-                                &mut context.editor_state.dof_focal_distance,
-                                5.0..=500.0,
-                            )
-                            .step_by(1.0)
-                            .fixed_decimals(0),
-                        )
-                        .changed();
-                    ui.label("Focal Range");
-                    changed |= scene_settings::slider_control(ui,
-                            egui::Slider::new(
-                                &mut context.editor_state.dof_focal_range,
-                                1.0..=200.0,
-                            )
-                            .step_by(1.0)
-                            .fixed_decimals(0),
-                        )
-                        .changed();
-                    ui.label("Max Blur");
-                    changed |= scene_settings::slider_control(ui,
-                            egui::Slider::new(
-                                &mut context.editor_state.dof_max_blur_radius,
-                                1.0..=24.0,
-                            )
-                            .step_by(0.5)
-                            .fixed_decimals(1),
-                        )
-                        .changed();
-                    ui.label("Blur Strength");
-                    changed |= scene_settings::slider_control(ui,
-                            egui::Slider::new(
-                                &mut context.editor_state.dof_blur_strength,
-                                0.0..=3.0,
-                            )
-                            .step_by(0.05)
-                            .fixed_decimals(2),
-                        )
-                        .changed();
                 }
             });
     }
 
-    // Performance section
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("Performance");
-    ui.add_space(4.0);
+    if access.allows(258) {
+        // Performance section
+        ui.add_space(8.0);
+        ui.separator();
+        ui.heading("Performance");
+        ui.add_space(4.0);
 
-    // Read current values first; closures capture them by copy, write-back happens after.
-    let mut lf_interval = state.world_settings.light_field_update_interval;
-    let mut phz = state.world_settings.physics_hz;
-    let mut max_steps = state.world_settings.max_physics_steps_per_frame;
+        // Read current values first; closures capture them by copy, write-back happens after.
+        let mut lf_interval = state.world_settings.light_field_update_interval;
+        let mut phz = state.world_settings.physics_hz;
+        let mut max_steps = state.world_settings.max_physics_steps_per_frame;
 
-    ui.label("Light Field Interval:")
-        .on_hover_text("Recompute the shadow/light voxel grid every N render frames. 1 = every frame (best quality). /2 /4 /8 = progressively cheaper with minor shadow lag on fast-moving organisms.");
-    ui.horizontal(|ui| {
-        for &n in &[1u32, 2, 4, 8] {
-            let label = if n == 1 {
-                "Every".to_owned()
-            } else {
-                format!("/{n}")
-            };
-            if ui.selectable_label(lf_interval == n, label).clicked() {
-                lf_interval = n;
+        ui.label("Light Field Interval:")
+            .on_hover_text("Recompute the shadow/light voxel grid every N render frames. 1 = every frame (best quality). /2 /4 /8 = progressively cheaper with minor shadow lag on fast-moving organisms.");
+        ui.horizontal(|ui| {
+            for &n in &[1u32, 2, 4, 8] {
+                let label = if n == 1 {
+                    "Every".to_owned()
+                } else {
+                    format!("/{n}")
+                };
+                if ui.selectable_label(lf_interval == n, label).clicked() {
+                    lf_interval = n;
+                }
             }
-        }
-    });
-    ui.label(egui::RichText::new("Every = full quality  /2 /4 /8 = progressively cheaper").small());
+        });
+        ui.label(egui::RichText::new("Every = full quality  /2 /4 /8 = progressively cheaper").small());
 
-    ui.add_space(6.0);
+        ui.add_space(6.0);
 
-    ui.label("Physics Rate:")
-        .on_hover_text("Fixed timestep frequency. Lower Hz = cheaper but coarser integration; affects cell growth timing and spring stiffness. 64 Hz is the default.");
-    ui.horizontal(|ui| {
-        for &hz in &[32u32, 48, 64] {
-            if ui.selectable_label(phz == hz, format!("{hz} Hz")).clicked() {
-                phz = hz;
+        ui.label("Physics Rate:")
+            .on_hover_text("Fixed timestep frequency. Lower Hz = cheaper but coarser integration; affects cell growth timing and spring stiffness. 64 Hz is the default.");
+        ui.horizontal(|ui| {
+            for &hz in &[32u32, 48, 64] {
+                if ui.selectable_label(phz == hz, format!("{hz} Hz")).clicked() {
+                    phz = hz;
+                }
             }
-        }
-    });
-    ui.label(egui::RichText::new("Lower Hz = faster but coarser simulation").small());
+        });
+        ui.label(egui::RichText::new("Lower Hz = faster but coarser simulation").small());
 
-    ui.add_space(6.0);
+        ui.add_space(6.0);
 
-    ui.label("Max Steps / Frame:")
-        .on_hover_text("Maximum physics steps per render frame at 1x speed. Lower = better frame times at high simulation speeds; higher = simulation keeps up during fast-forward.");
-    scene_settings::slider_control(ui,egui::Slider::new(&mut max_steps, 1..=16));
-    ui.label(
-        egui::RichText::new(
-            "Caps physics budget per frame (lower = smoother, may slow sim at high speed)",
-        )
-        .small(),
-    );
+        ui.label("Max Steps / Frame:")
+            .on_hover_text("Maximum physics steps per render frame at 1x speed. Lower = better frame times at high simulation speeds; higher = simulation keeps up during fast-forward.");
+        scene_settings::slider_control(ui,egui::Slider::new(&mut max_steps, 1..=16));
+        ui.label(
+            egui::RichText::new(
+                "Caps physics budget per frame (lower = smoother, may slow sim at high speed)",
+            )
+            .small(),
+        );
 
-    state.world_settings.light_field_update_interval = lf_interval;
-    state.world_settings.physics_hz = phz;
-    state.world_settings.max_physics_steps_per_frame = max_steps;
+        state.world_settings.light_field_update_interval = lf_interval;
+        state.world_settings.physics_hz = phz;
+        state.world_settings.max_physics_steps_per_frame = max_steps;
 
+
+    }
     if changed || sun_changed {
         apply_light_panel_changes(context, sun_changed);
     }
@@ -7963,6 +8022,7 @@ fn render_time_scrubber(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Theme presets replace the per-color interface editor.
 fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mut GlobalUiState) {
+    let access = ui_state.menu_access();
     ui.heading("Camera");
     ui.separator();
 
@@ -7970,57 +8030,60 @@ fn render_camera_settings(ui: &mut Ui, context: &mut PanelContext, ui_state: &mu
     ui.label(format!("Mode: {:?}", camera.mode));
     ui.label(format!("Distance: {:.1}", camera.distance));
 
-    ui.label("Base Movement Speed:")
-        .on_hover_text("Base movement speed shared by both FreeFly speed settings");
-    scene_settings::slider_control(ui,egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
-    ui.label("Speed 1:").on_hover_text(
-        "Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed while flying",
-    );
-    let sprint_response = scene_settings::slider_control(ui,
-        egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 0.05..=20.0)
-            .custom_formatter(|value, _| format!("{value:.1}x")),
-    );
-    let mut sprint_multiplier_changed = sprint_response.changed();
-    if sprint_response.double_clicked() {
-        ui_state.camera_sprint_multiplier = 6.0;
-        sprint_multiplier_changed = true;
+    if access.allows(275) {
+        ui.label("Base Movement Speed:")
+            .on_hover_text("Base movement speed shared by both FreeFly speed settings");
+        scene_settings::slider_control(ui,egui::Slider::new(&mut camera.move_speed, 1.0..=50.0).logarithmic(true));
+        ui.label("Speed 1:").on_hover_text(
+            "Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed while flying",
+        );
+        let sprint_response = scene_settings::slider_control(ui,
+            egui::Slider::new(&mut ui_state.camera_sprint_multiplier, 0.05..=20.0)
+                .custom_formatter(|value, _| format!("{value:.1}x")),
+        );
+        let mut sprint_multiplier_changed = sprint_response.changed();
+        if sprint_response.double_clicked() {
+            ui_state.camera_sprint_multiplier = 6.0;
+            sprint_multiplier_changed = true;
+        }
+        if sprint_multiplier_changed {
+            camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
+        }
+        ui.label("Speed 2:")
+            .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
+        let alternate_response = scene_settings::slider_control(ui,
+            egui::Slider::new(&mut ui_state.camera_alternate_speed_multiplier, 0.05..=20.0)
+                .logarithmic(true)
+                .custom_formatter(|value, _| format!("{value:.2}x")),
+        );
+        if alternate_response.double_clicked() {
+            ui_state.camera_alternate_speed_multiplier = 1.0;
+        }
+        if alternate_response.changed() || alternate_response.double_clicked() {
+            camera.alternate_speed_multiplier = ui_state.camera_alternate_speed_multiplier;
+        }
+        ui.label("Zoom Speed:")
+            .on_hover_text("How fast scrolling zooms the camera in Orbit mode");
+        let zoom_response = scene_settings::slider_control(ui,
+            egui::Slider::new(&mut ui_state.camera_scroll_sensitivity, 0.01..=2.0)
+                .logarithmic(true)
+                .custom_formatter(|value, _| format!("{value:.2}x")),
+        );
+        let mut scroll_sensitivity_changed = zoom_response.changed();
+        if zoom_response.double_clicked() {
+            ui_state.camera_scroll_sensitivity = 0.2;
+            scroll_sensitivity_changed = true;
+        }
+        if scroll_sensitivity_changed {
+            camera.zoom_speed = ui_state.camera_scroll_sensitivity;
+        }
+        ui.label("Mouse Sensitivity:")
+            .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
+        scene_settings::slider_control(ui,egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01).logarithmic(true));
+        ui.checkbox(&mut camera.enable_spring, "Enable Spring")
+            .on_hover_text("Adds a spring/lag to camera movement for a smoother cinematic feel. Disable for instant, precise camera control");
     }
-    if sprint_multiplier_changed {
-        camera.sprint_multiplier = ui_state.camera_sprint_multiplier;
-    }
-    ui.label("Speed 2:")
-        .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
-    let alternate_response = scene_settings::slider_control(ui,
-        egui::Slider::new(&mut ui_state.camera_alternate_speed_multiplier, 0.05..=20.0)
-            .logarithmic(true)
-            .custom_formatter(|value, _| format!("{value:.2}x")),
-    );
-    if alternate_response.double_clicked() {
-        ui_state.camera_alternate_speed_multiplier = 1.0;
-    }
-    if alternate_response.changed() || alternate_response.double_clicked() {
-        camera.alternate_speed_multiplier = ui_state.camera_alternate_speed_multiplier;
-    }
-    ui.label("Zoom Speed:")
-        .on_hover_text("How fast scrolling zooms the camera in Orbit mode");
-    let zoom_response = scene_settings::slider_control(ui,
-        egui::Slider::new(&mut ui_state.camera_scroll_sensitivity, 0.01..=2.0)
-            .logarithmic(true)
-            .custom_formatter(|value, _| format!("{value:.2}x")),
-    );
-    let mut scroll_sensitivity_changed = zoom_response.changed();
-    if zoom_response.double_clicked() {
-        ui_state.camera_scroll_sensitivity = 0.2;
-        scroll_sensitivity_changed = true;
-    }
-    if scroll_sensitivity_changed {
-        camera.zoom_speed = ui_state.camera_scroll_sensitivity;
-    }
-    ui.label("Mouse Sensitivity:")
-        .on_hover_text("How much the camera rotates per pixel of mouse movement. Lower values give finer control; higher values feel more responsive");
-    scene_settings::slider_control(ui,egui::Slider::new(&mut camera.mouse_sensitivity, 0.001..=0.01).logarithmic(true));
-    ui.checkbox(&mut camera.enable_spring, "Enable Spring")
-        .on_hover_text("Adds a spring/lag to camera movement for a smoother cinematic feel. Disable for instant, precise camera control");
+
 }
 
 fn render_theme_editor(ui: &mut Ui, state: &mut GlobalUiState) {
@@ -13247,6 +13310,7 @@ fn render_mode_graph(ui: &mut Ui, context: &mut PanelContext) {
 
 /// Render the Help panel showing context-specific controls and shortcuts.
 fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut GlobalUiState) {
+    let access = state.menu_access();
     // Set slider width to fill the panel, leaving room for value + suffix labels.
     // Use a more conservative margin (80px) to account for suffixes like " units", "k", "x".
 
@@ -13256,14 +13320,18 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
         return;
     }
 
-    let world = &mut state.world_settings;
+    let radius = context.scene_manager.gpu_scene().map(|scene| scene.config.sphere_radius)
+        .unwrap_or(state.world_settings.world_radius);
+    let capacity = context.gpu_capacity().unwrap_or(state.world_settings.cell_capacity);
+    render_world_controls(ui, &mut state.world_settings, access, radius, capacity);
+}
+
+fn render_world_controls(ui: &mut Ui, world: &mut crate::ui::types::WorldSettings,
+    access: crate::ui::menu_visibility::MenuAccess, current_world_radius: f32, current_capacity: u32) {
+
 
     // World Radius slider (top, reset-gated)
-    let current_world_radius = context
-        .scene_manager
-        .gpu_scene()
-        .map(|s| s.config.sphere_radius)
-        .unwrap_or(world.world_radius);
+
 
     ui.label("World Radius:")
         .on_hover_text("Radius of the spherical world boundary in simulation units. Cells are confined within this sphere. ⚠ Changing this requires a scene reset to take effect");
@@ -13276,7 +13344,7 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     }
 
     ui.add_space(8.0);
-    let current_capacity = context.gpu_capacity().unwrap_or(world.cell_capacity);
+
     let capacity_k = world.cell_capacity / 1000;
 
     ui.label("Cell Capacity:")
@@ -13334,71 +13402,77 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
 
     ui.add_space(8.0);
 
-    // Global velocity damping
-    ui.label("Velocity Damping:")
-        .on_hover_text("Multiplier applied to cell velocity each frame. 1.0 = no drag (cells coast forever). 0.8 = heavy drag (cells slow down quickly). Lower values create a more viscous environment");
-    scene_settings::slider_control(ui,egui::Slider::new(
-        &mut world.acceleration_damping,
-        0.8..=1.0,
-    ));
-    ui.label(
-        egui::RichText::new(
-            "Global drag on cell movement (lower = more drag, higher = less damping)",
-        )
-        .small(),
-    );
-
-    if state.show_advanced_options {
-        ui.add_space(8.0);
-
-        // Adhesion constraint solver iterations
-        ui.label("Constraint Iterations:")
-            .on_hover_text("Number of extra adhesion solver passes per physics step. More iterations = stiffer, more accurate joints but higher GPU cost. 0 = single pass (fast, slightly springy). 8–16 = rigid joints");
-        scene_settings::slider_control(ui,egui::Slider::new(&mut world.constraint_iterations, 0..=16));
-        ui.label(
-            egui::RichText::new(
-                "Extra adhesion solver passes (higher = stiffer joints, more GPU cost)",
-            )
-            .small(),
-        );
-
-        ui.add_space(8.0);
-
-        // Water viscosity
-        ui.label("Water Viscosity:")
-            .on_hover_text("Additional drag applied to cells that are inside water voxels. 0 = water has no effect on movement. 1 = maximum resistance — cells move very slowly through water");
-        scene_settings::slider_control(ui,egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
-        ui.label(
-            egui::RichText::new(
-                "Drag applied to cells moving through water (0 = off, higher = thicker fluid)",
-            )
-            .small(),
-        );
-    } // end advanced physics
-
-    ui.add_space(12.0);
-
-    // Biology section
-    ui.heading("Biology");
-    ui.separator();
-
-    ui.checkbox(&mut world.solo_metabolism_enabled, "Solo cell metabolism penalty")
-        .on_hover_text("Isolated cells (with few or no adhesion bonds) burn nutrients faster, making single-cell survival harder and favoring multicellular organisms");
-    ui.label(egui::RichText::new("Cells with fewer adhesion connections burn nutrients faster, favoring multicellular organisms").small());
-
-    if world.solo_metabolism_enabled {
-        ui.add_space(4.0);
-        ui.label("Metabolism Multiplier:")
-            .on_hover_text("How much faster solo cells (0 connections) burn nutrients compared to connected cells. Gradient: 1 connection = partial penalty, 3+ connections = normal rate");
+    if access.allows(264) {
+        // Global velocity damping
+        ui.label("Velocity Damping:")
+            .on_hover_text("Multiplier applied to cell velocity each frame. 1.0 = no drag (cells coast forever). 0.8 = heavy drag (cells slow down quickly). Lower values create a more viscous environment");
         scene_settings::slider_control(ui,egui::Slider::new(
-            &mut world.solo_metabolism_multiplier,
-            1.5..=10.0,
+            &mut world.acceleration_damping,
+            0.8..=1.0,
         ));
-        ui.label(egui::RichText::new("Solo cells (0 connections) drain at this rate. Gradient: 1 conn = partial, 3+ = normal").small());
-    }
+        ui.label(
+            egui::RichText::new(
+                "Global drag on cell movement (lower = more drag, higher = less damping)",
+            )
+            .small(),
+        );
 
+        if access.allows(265) {
+            ui.add_space(8.0);
+
+            // Adhesion constraint solver iterations
+            ui.label("Constraint Iterations:")
+                .on_hover_text("Number of extra adhesion solver passes per physics step. More iterations = stiffer, more accurate joints but higher GPU cost. 0 = single pass (fast, slightly springy). 8–16 = rigid joints");
+            scene_settings::slider_control(ui,egui::Slider::new(&mut world.constraint_iterations, 0..=16));
+            ui.label(
+                egui::RichText::new(
+                    "Extra adhesion solver passes (higher = stiffer joints, more GPU cost)",
+                )
+                .small(),
+            );
+
+            ui.add_space(8.0);
+
+            // Water viscosity
+            ui.label("Water Viscosity:")
+                .on_hover_text("Additional drag applied to cells that are inside water voxels. 0 = water has no effect on movement. 1 = maximum resistance — cells move very slowly through water");
+            scene_settings::slider_control(ui,egui::Slider::new(&mut world.water_viscosity, 0.0..=1.0));
+            ui.label(
+                egui::RichText::new(
+                    "Drag applied to cells moving through water (0 = off, higher = thicker fluid)",
+                )
+                .small(),
+            );
+        } // end advanced physics
+
+
+    }
     ui.add_space(12.0);
 
+    if access.allows(268) {
+        // Biology section
+        ui.heading("Biology");
+        ui.separator();
+
+        ui.checkbox(&mut world.solo_metabolism_enabled, "Solo cell metabolism penalty")
+            .on_hover_text("Isolated cells (with few or no adhesion bonds) burn nutrients faster, making single-cell survival harder and favoring multicellular organisms");
+        ui.label(egui::RichText::new("Cells with fewer adhesion connections burn nutrients faster, favoring multicellular organisms").small());
+
+        if world.solo_metabolism_enabled {
+            ui.add_space(4.0);
+            ui.label("Metabolism Multiplier:")
+                .on_hover_text("How much faster solo cells (0 connections) burn nutrients compared to connected cells. Gradient: 1 connection = partial penalty, 3+ connections = normal rate");
+            scene_settings::slider_control(ui,egui::Slider::new(
+                &mut world.solo_metabolism_multiplier,
+                1.5..=10.0,
+            ));
+            ui.label(egui::RichText::new("Solo cells (0 connections) drain at this rate. Gradient: 1 conn = partial, 3+ = normal").small());
+        }
+
+        ui.add_space(12.0);
+
+
+    }
     // Mutation section
     ui.heading("Mutation");
     ui.separator();
@@ -13461,9 +13535,12 @@ fn render_world_settings(ui: &mut Ui, context: &mut PanelContext, state: &mut Gl
     ui.label(egui::RichText::new("Probability each child mutates during division (0 = off, logarithmic scale for fine control)").small());
 
     ui.add_space(4.0);
-    ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
-        .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
+    if access.allows(271) {
+        ui.checkbox(&mut world.subtle_mutations, "Subtle mutations")
+            .on_hover_text("When checked, mutations make small color nudges instead of full re-rolls");
 
+
+    }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label("Gene Pool:")

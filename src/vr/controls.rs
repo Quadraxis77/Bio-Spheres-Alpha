@@ -2,7 +2,7 @@
 use super::dial::{Dial, Target};
 use super::input::{position, rotation, VrInput};
 use super::locomotion::Gravity;
-use crate::ui::{camera::CameraController, radial_menu::RadialTool};
+use crate::ui::{camera::CameraController, menu_visibility::MenuAccess, radial_menu::RadialTool};
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 use openxr as xr;
 
@@ -47,6 +47,7 @@ pub enum Choice {
     ResetEverything,
     Orbit,
     FullUi,
+    Advanced,
     Simulation,
     GenomeEditor,
     MainMenu,
@@ -91,13 +92,14 @@ enum Page {
     Screen,
     Reset,
 }
-const HOME: [Choice; 9] = [
+const HOME: [Choice; 10] = [
     Choice::Pause,
     Choice::SimSpeed,
     Choice::ResetScene,
     Choice::Scenes,
     Choice::World,
     Choice::Navigation,
+    Choice::Advanced,
     Choice::FullUi,
     Choice::MainMenu,
     Choice::CellDetails,
@@ -149,6 +151,7 @@ impl Choice {
             Self::ResetEverything => "Cells + water",
             Self::Orbit => "Grab scene",
             Self::FullUi => "All settings",
+            Self::Advanced => "Advanced Options",
             Self::Simulation => "Simulation",
             Self::GenomeEditor => "Genome editor",
             Self::MainMenu => "Main menu",
@@ -275,6 +278,7 @@ impl Choice {
 
 pub struct Controls {
     pub context: WheelContext,
+    menu_access: MenuAccess,
     page: Page,
     pub menu_pose: Option<xr::Posef>,
     gravity: Gravity,
@@ -346,6 +350,7 @@ impl Default for Controls {
     fn default() -> Self {
         Self {
             context: WheelContext::Gpu,
+            menu_access: MenuAccess::default(),
             page: Page::Home,
             menu_pose: None,
             gravity: Gravity::default(),
@@ -397,7 +402,10 @@ impl Default for Controls {
 impl Controls {
     /// A successful cell pick opens the inspector on the existing left-hand
     /// surface. Refresh its readings without reopening it every frame.
-    pub fn sync_cell_inspection(&mut self, inspected: &mut crate::ui::inspection::Inspection) -> bool {
+    pub fn sync_cell_inspection(
+        &mut self,
+        inspected: &mut crate::ui::inspection::Inspection,
+    ) -> bool {
         self.cell_info.data = inspected.data;
         self.cell_info.dead = inspected.dead;
         self.cell_info.loadable = inspected.genome.is_some();
@@ -486,6 +494,9 @@ impl Controls {
         }
     }
     pub fn open_choice_slider(&mut self, choice: Choice, value: f32, min: f32, max: f32) {
+        if !self.enabled(choice) {
+            return;
+        }
         let log = matches!(
             choice,
             Choice::MoveSpeed | Choice::TurnThreshold | Choice::SimSpeed
@@ -602,6 +613,29 @@ impl Controls {
     pub fn set_gravity(&mut self, strength: f32, mode: u32) {
         self.gravity = Gravity::new(strength, mode);
     }
+    /// Share the desktop policy; opening All settings must not bypass F11.
+    pub fn set_menu_access(&mut self, access: MenuAccess) -> bool {
+        if self.menu_access == access {
+            return false;
+        }
+        self.menu_access = access;
+        if self.adjustment.is_some_and(|choice| !self.enabled(choice)) {
+            self.adjustment = None;
+        }
+        let stale_dial = self.dial.as_ref().is_some_and(|dial| match dial.target {
+            Target::Choice(choice) => !self.enabled(choice),
+            // The originating full-UI widget may have disappeared.
+            Target::Ui(_) => true,
+        });
+        if stale_dial {
+            self.dial = None;
+        }
+        self.hovered = None;
+        self.pressed_button = None;
+        // A changing ring must never select a newly moved item under a held trigger.
+        self.trigger_consumed |= self.trigger;
+        true
+    }
     pub fn set_context(&mut self, context: WheelContext) {
         if self.context != context {
             let held = (self.menus, self.trigger, self.trigger_consumed);
@@ -643,6 +677,28 @@ impl Controls {
         }
     }
     fn enabled(&self, choice: Choice) -> bool {
+        let item = match choice {
+            Choice::Scenes | Choice::Simulation | Choice::GenomeEditor | Choice::MainMenu => {
+                Some(1)
+            }
+            Choice::Advanced => Some(25),
+            Choice::Water => Some(27),
+            Choice::StaticWater => Some(28),
+            Choice::Floor => Some(29),
+            Choice::CellDetails => Some(33),
+            Choice::Brightness => Some(210),
+            Choice::SunPosition => Some(212),
+            Choice::Gravity => Some(263),
+            Choice::Nutrients => Some(146),
+            Choice::SimSpeed => Some(390),
+            _ => None,
+        };
+        if item.is_some_and(|item| !self.menu_access.allows(item)) {
+            return false;
+        }
+        if choice == Choice::MainMenu && self.context == WheelContext::MainMenu {
+            return false;
+        }
         if choice == Choice::LoadInspectedGenome {
             return self.cell_info.loadable;
         }
@@ -682,12 +738,34 @@ impl Controls {
                     | Choice::Fast
             )
     }
-    fn start_angle(&self, count: usize) -> f32 {
+    fn start_angle(&self, count: usize, inner: f32) -> f32 {
         if self.page == Page::Home {
-            -std::f32::consts::FRAC_PI_2 - 1.5 * std::f32::consts::TAU / count as f32
+            if self.context == WheelContext::Gpu && inner > 200.0 {
+                // Keep scene tools stationary when Advanced changes the inner ring.
+                return -std::f32::consts::FRAC_PI_2 - 1.5 * std::f32::consts::TAU / count as f32;
+            }
+            let simulation = self
+                .home_choices()
+                .iter()
+                .take_while(|c| Self::simulation_action(**c))
+                .count();
+            -std::f32::consts::FRAC_PI_2
+                - simulation as f32 * 0.5 * std::f32::consts::TAU / count as f32
         } else {
             -std::f32::consts::FRAC_PI_2
         }
+    }
+    fn simulation_action(choice: Choice) -> bool {
+        matches!(
+            choice,
+            Choice::Pause | Choice::SimSpeed | Choice::ResetScene
+        )
+    }
+    fn home_choices(&self) -> Vec<Choice> {
+        HOME.iter()
+            .copied()
+            .filter(|choice| self.enabled(*choice))
+            .collect()
     }
     fn heading(
         &self,
@@ -726,7 +804,7 @@ impl Controls {
         }
         let choices = match self.page {
             Page::CellDetails => vec![],
-            Page::Home => HOME.to_vec(),
+            Page::Home => self.home_choices(),
             Page::Scenes => vec![Choice::Simulation, Choice::GenomeEditor, Choice::MainMenu],
             Page::Tools => TOOLS.map(Choice::Tool).to_vec(),
             Page::World => vec![
@@ -759,6 +837,13 @@ impl Controls {
             ],
             Page::Help => unreachable!(),
         };
+        let choices: Vec<_> = choices
+            .into_iter()
+            .filter(|choice| self.enabled(*choice))
+            .collect();
+        if choices.is_empty() {
+            return Vec::new();
+        }
         if self.page == Page::Home && self.context == WheelContext::Gpu {
             // All scene tools are directly selectable without opening a submenu.
             vec![
@@ -802,7 +887,7 @@ impl Controls {
         }
         for (choices, min, max) in self.rings() {
             if (min..=max).contains(&offset.length()) {
-                let angle = (offset.y.atan2(offset.x) - self.start_angle(choices.len()))
+                let angle = (offset.y.atan2(offset.x) - self.start_angle(choices.len(), min))
                     .rem_euclid(std::f32::consts::TAU);
                 let index = (angle / std::f32::consts::TAU * choices.len() as f32) as usize;
                 let choice = choices[index.min(choices.len() - 1)];
@@ -1022,6 +1107,11 @@ impl Controls {
                 Choice::FullUi => {
                     self.full_ui = true;
                     self.wheel_open = false;
+                }
+                Choice::Advanced => {
+                    let mut access = self.menu_access;
+                    access.advanced = !access.advanced;
+                    self.set_menu_access(access);
                 }
                 Choice::Tool(_) | Choice::Simulation | Choice::GenomeEditor | Choice::MainMenu => {
                     self.wheel_open = false
@@ -1489,9 +1579,14 @@ impl Controls {
                 color,
             );
         }
-        if self.page == Page::Home {
-            let start = self.start_angle(HOME.len());
-            let span = std::f32::consts::TAU * 3.0 / HOME.len() as f32;
+        if self.page == Page::Home && self.context == WheelContext::Gpu {
+            let choices = self.home_choices();
+            let simulation = choices
+                .iter()
+                .take_while(|c| Self::simulation_action(**c))
+                .count();
+            let start = self.start_angle(choices.len(), 100.0);
+            let span = std::f32::consts::TAU * simulation as f32 / choices.len() as f32;
             let points = (0..=60)
                 .map(|i| {
                     let a = start + span * i as f32 / 60.0;
@@ -1509,8 +1604,8 @@ impl Controls {
         for (choices, inner, outer) in self.rings() {
             let count = choices.len();
             for (index, choice) in choices.into_iter().enumerate() {
-                let angle =
-                    index as f32 * std::f32::consts::TAU / count as f32 + self.start_angle(count);
+                let angle = index as f32 * std::f32::consts::TAU / count as f32
+                    + self.start_angle(count, inner);
                 let span = std::f32::consts::TAU / count as f32;
                 let selected = self.hovered == Some(choice)
                     || self.adjustment == Some(choice)
@@ -1520,6 +1615,8 @@ impl Controls {
                     || (choice == Choice::Slow && self.speed == 0.35)
                     || (choice == Choice::Normal && self.speed == 1.5)
                     || (choice == Choice::Fast && self.speed == 5.0);
+                let selected =
+                    selected || (choice == Choice::Advanced && self.menu_access.advanced);
                 let enabled = self.enabled(choice);
                 let (_, tint) = choice.category_with_palette(palette);
                 let press = if self.pressed_button == Some((self.page, choice)) {
@@ -1527,10 +1624,18 @@ impl Controls {
                 } else {
                     0.0
                 };
-                let group_edges = if self.page == Page::Home && inner > 200.0 {
+                let group_edges = if self.page == Page::Home
+                    && self.context == WheelContext::Gpu
+                    && inner > 200.0
+                {
                     (false, false) // One tools group with shallow internal grooves.
                 } else if self.page == Page::Home {
-                    (index == 0 || index >= 3, index >= 2)
+                    let simulation = self
+                        .home_choices()
+                        .iter()
+                        .take_while(|c| Self::simulation_action(**c))
+                        .count();
+                    (index == 0 || index >= simulation, index + 1 >= simulation)
                 } else if self.page == Page::World {
                     (true, true)
                 } else {
@@ -1575,6 +1680,13 @@ impl Controls {
                 if choice == Choice::SimSpeed {
                     label.push_str(&format!("\n{:.2}x", self.simulation_speed));
                 }
+                if choice == Choice::Advanced {
+                    label.push_str(if self.menu_access.advanced {
+                        "\nON"
+                    } else {
+                        "\nOFF"
+                    });
+                }
                 if choice.opens_submenu() {
                     label.push_str("\n›");
                 } else if self.context == WheelContext::Gpu && choice != Choice::FullUi {
@@ -1597,7 +1709,16 @@ impl Controls {
                 };
                 let mut job = egui::text::LayoutJob::simple(
                     label,
-                    egui::FontId::proportional(if inner > 200.0 { 15.0 } else { 17.0 }),
+                    egui::FontId::proportional(
+                        if self.page == Page::Home
+                            && self.context == WheelContext::Gpu
+                            && inner > 200.0
+                        {
+                            15.0
+                        } else {
+                            17.0
+                        },
+                    ),
                     text_color,
                     f32::INFINITY,
                 );
@@ -1610,7 +1731,7 @@ impl Controls {
                 );
             }
         }
-        if self.page == Page::Home {
+        if self.page == Page::Home && self.context == WheelContext::Gpu {
             painter.text(
                 center
                     + egui::vec2(
@@ -1645,7 +1766,7 @@ impl Controls {
         let label = if let Some(dial) = &self.dial {
             format!("{}\n{}", dial.label, dial.value)
         } else if self.page == Page::Help {
-            "X / Y: menu    B: back\nRight ray + trigger: select\nRight stick click: screenshot\nRight stick up/down: scroll / travel speed\n\nLeft stick: ground travel\nHold left grip: rise / fall\nRight stick left/right: 45 deg turn\nRadial: walk around the planet\n\nHome: play / reset / sim speed\nOuter ring: scene tools\nWorld: water / physics / lighting\nNavigation: travel / turn sliders\nWheel slider: right stick changes value\nHold trigger: grab dial\nGrab scene: right grip to pan\nBoth grips: rotate / scale"
+            "X / Y: menu    B: back\nRight ray + trigger: select\nRight stick click: screenshot\nRight stick up/down: scroll / travel speed\n\nLeft stick: ground travel\nHold left grip: rise / fall\nRight stick left/right: 45 deg turn\nRadial: walk around the planet\n\nHome: play / reset\nAdvanced Options: simulation speed\nOuter ring: scene tools\nWorld: water / physics / lighting\nNavigation: travel / turn sliders\nWheel slider: right stick changes value\nHold trigger: grab dial\nGrab scene: right grip to pan\nBoth grips: rotate / scale"
                 .to_owned()
         } else if self.page == Page::Reset {
             "Choose a scope\nCells or cells + water".to_owned()
@@ -1868,11 +1989,199 @@ mod tests {
             - std::f32::consts::FRAC_PI_2;
         Vec2::splat(360.0) + Vec2::new(angle.cos(), angle.sin()) * radius
     }
-    fn home_pixel(choice: Choice, radius: f32) -> Vec2 {
-        let index = HOME.iter().position(|c| *c == choice).unwrap();
-        let angle = -std::f32::consts::FRAC_PI_2
-            + (index as f32 - 1.0) * std::f32::consts::TAU / HOME.len() as f32;
+    fn menu_pixel(controls: &Controls, choice: Choice, radius: f32) -> Vec2 {
+        let (choices, inner, _) = controls
+            .rings()
+            .into_iter()
+            .find(|(choices, _, _)| choices.contains(&choice))
+            .unwrap();
+        let index = choices.iter().position(|c| *c == choice).unwrap();
+        let angle = controls.start_angle(choices.len(), inner)
+            + (index as f32 + 0.5) * std::f32::consts::TAU / choices.len() as f32;
         Vec2::splat(360.0) + Vec2::new(angle.cos(), angle.sin()) * radius
+    }
+    #[test]
+    fn wheel_uses_reviewed_tiers_and_omits_inactive_scene_controls() {
+        for context in [
+            WheelContext::MainMenu,
+            WheelContext::Preview,
+            WheelContext::Gpu,
+        ] {
+            for access in [
+                MenuAccess::default(),
+                MenuAccess {
+                    advanced: true,
+                    developer: false,
+                },
+                MenuAccess {
+                    advanced: false,
+                    developer: true,
+                },
+            ] {
+                let mut controls = Controls::default();
+                controls.set_context(context);
+                controls.set_menu_access(access);
+                let home = controls.home_choices();
+                assert!(home.contains(&Choice::Advanced));
+                assert!(home.contains(&Choice::Scenes) && home.contains(&Choice::FullUi));
+                assert_eq!(
+                    home.contains(&Choice::SimSpeed),
+                    context == WheelContext::Gpu && access.allows(390)
+                );
+                assert_eq!(home.contains(&Choice::Pause), context == WheelContext::Gpu);
+                assert_eq!(
+                    home.contains(&Choice::MainMenu),
+                    context != WheelContext::MainMenu
+                );
+                for page in [
+                    Page::Home,
+                    Page::World,
+                    Page::Water,
+                    Page::Physics,
+                    Page::Lighting,
+                    Page::Simulation,
+                    Page::Navigation,
+                    Page::Screen,
+                    Page::Tune,
+                    Page::Reset,
+                    Page::Scenes,
+                    Page::Tools,
+                ] {
+                    controls.page = page;
+                    for (choices, inner, outer) in controls.rings() {
+                        assert!(!choices.is_empty());
+                        for choice in choices {
+                            assert!(controls.enabled(choice));
+                            assert_eq!(
+                                controls.choice_at(menu_pixel(
+                                    &controls,
+                                    choice,
+                                    (inner + outer) * 0.5
+                                )),
+                                Some(choice),
+                                "{context:?} / {page:?} / {choice:?}"
+                            );
+                        }
+                    }
+                }
+                controls.page = Page::Navigation;
+                assert!(controls.rings()[0].0.contains(&Choice::ScreenSettings));
+                controls.page = Page::Screen;
+                assert_eq!(
+                    controls.rings()[0].0.len(),
+                    3,
+                    "comfort controls stay accessible"
+                );
+                if context == WheelContext::Gpu {
+                    for choice in [
+                        Choice::Brightness,
+                        Choice::SunPosition,
+                        Choice::Gravity,
+                        Choice::Water,
+                        Choice::StaticWater,
+                        Choice::Floor,
+                        Choice::Nutrients,
+                    ] {
+                        assert!(
+                            controls.enabled(choice),
+                            "keep reviewed basic setting {choice:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn advanced_toggle_is_controller_accessible_without_unlocking_developer_controls() {
+        let mut controls = Controls {
+            wheel_open: true,
+            wheel_introduced: true,
+            ..Default::default()
+        };
+        let mut camera = CameraController::new();
+        let mut input = VrInput {
+            head_position: Some(Vec3::ZERO),
+            grips: [
+                Some(pose(Vec3::new(-0.2, -0.2, -0.5), Quat::IDENTITY)),
+                None,
+            ],
+            ..Default::default()
+        };
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        let tool_pixel = menu_pixel(&controls, Choice::Tool(RadialTool::Insert), 245.0);
+        aim_at_wheel(
+            &mut input,
+            controls.wheel_pose.unwrap(),
+            menu_pixel(&controls, Choice::Advanced, 170.0),
+        );
+        input.triggers[1] = true;
+        assert_eq!(
+            controls.update(&input, &mut camera, &mut 20.0, 0.01),
+            Some(Choice::Advanced)
+        );
+        assert!(controls.menu_access.advanced && !controls.menu_access.developer);
+        assert!(controls.home_choices().contains(&Choice::SimSpeed));
+        assert!(
+            !controls.menu_access.allows(275),
+            "Advanced cannot reveal developer camera settings"
+        );
+        assert_eq!(
+            menu_pixel(&controls, Choice::Tool(RadialTool::Insert), 245.0),
+            tool_pixel
+        );
+        assert_eq!(
+            controls.update(&input, &mut camera, &mut 20.0, 0.01),
+            None,
+            "held trigger must not select a moved sector"
+        );
+        input.triggers[1] = false;
+        controls.update(&input, &mut camera, &mut 20.0, 0.01);
+        aim_at_wheel(
+            &mut input,
+            controls.wheel_pose.unwrap(),
+            menu_pixel(&controls, Choice::Advanced, 170.0),
+        );
+        input.triggers[1] = true;
+        assert_eq!(
+            controls.update(&input, &mut camera, &mut 20.0, 0.01),
+            Some(Choice::Advanced)
+        );
+        assert_eq!(controls.menu_access, MenuAccess::default());
+    }
+    #[test]
+    fn closing_advanced_cancels_hidden_slider_and_its_pending_edit() {
+        let mut controls = Controls::default();
+        controls.set_menu_access(MenuAccess {
+            advanced: true,
+            developer: false,
+        });
+        controls.open_choice_slider(Choice::SimSpeed, 1.0, 0.1, 10.0);
+        controls.adjustment = Some(Choice::SimSpeed);
+        controls.dial.as_mut().unwrap().pending = Some(0.9);
+        controls.set_menu_access(MenuAccess::default());
+        assert!(controls.dial.is_none() && controls.adjustment.is_none());
+        controls.open_choice_slider(Choice::SimSpeed, 1.0, 0.1, 10.0);
+        assert!(
+            controls.dial.is_none(),
+            "direct slider requests must obey the same policy"
+        );
+        controls.dial = Some(Dial::new(
+            Target::Ui(egui::Id::new("hidden setting")),
+            "Setting".into(),
+            0.5,
+            "1".into(),
+            "0".into(),
+            "2".into(),
+            egui::Color32::WHITE,
+        ));
+        controls.set_menu_access(MenuAccess {
+            advanced: false,
+            developer: true,
+        });
+        assert!(
+            controls.dial.is_none(),
+            "full-UI sliders must be reselected after access changes"
+        );
     }
     #[test]
     fn reset_scope_requires_a_fresh_selection_and_back_keeps_parent_group() {
@@ -1891,16 +2200,10 @@ mod tests {
             ..Default::default()
         };
         controls.update(&input, &mut camera, &mut 20.0, 0.01);
-        let home_pixel = |choice: Choice| {
-            let i = HOME.iter().position(|c| *c == choice).unwrap();
-            let a = -std::f32::consts::FRAC_PI_2
-                + (i as f32 - 1.0) * std::f32::consts::TAU / HOME.len() as f32;
-            Vec2::splat(360.0) + Vec2::new(a.cos(), a.sin()) * 187.0
-        };
         aim_at_wheel(
             &mut input,
             controls.wheel_pose.unwrap(),
-            home_pixel(Choice::ResetScene),
+            menu_pixel(&controls, Choice::ResetScene, 187.0),
         );
         input.triggers[1] = true;
         assert_eq!(
@@ -1932,6 +2235,10 @@ mod tests {
         controls.back();
         assert_eq!(controls.page, Page::Home);
         assert!(HOME.contains(&Choice::Pause) && HOME.contains(&Choice::SimSpeed));
+        controls.set_menu_access(MenuAccess {
+            advanced: true,
+            developer: false,
+        });
         controls.open_choice_slider(Choice::SimSpeed, 1.0, 0.1, 10.0);
         assert!(
             (controls.dial.as_ref().unwrap().normalized - 0.5).abs() < 0.001,
@@ -2220,7 +2527,7 @@ mod tests {
             aim_at_wheel(
                 &mut input,
                 controls.wheel_pose.unwrap(),
-                home_pixel(Choice::Navigation, 170.0),
+                menu_pixel(&controls, Choice::Navigation, 170.0),
             );
             input.triggers[1] = true;
             assert_eq!(
@@ -2232,7 +2539,7 @@ mod tests {
             aim_at_wheel(
                 &mut input,
                 controls.wheel_pose.unwrap(),
-                sector_pixel(3, NAVIGATION.len(), 170.0),
+                menu_pixel(&controls, Choice::ScreenSettings, 170.0),
             );
             input.triggers[1] = true;
             assert_eq!(
@@ -2308,16 +2615,16 @@ mod tests {
             } else {
                 225.0
             };
-            for choice in HOME.iter().copied() {
+            for choice in controls.home_choices() {
                 assert_eq!(
-                    controls.choice_at(home_pixel(choice, radius)),
+                    controls.choice_at(menu_pixel(&controls, choice, radius)),
                     controls.enabled(choice).then_some(choice)
                 );
             }
             aim_at_wheel(
                 &mut input,
                 controls.wheel_pose.unwrap(),
-                home_pixel(Choice::Scenes, radius),
+                menu_pixel(&controls, Choice::Scenes, radius),
             );
             input.triggers[1] = true;
             assert_eq!(
@@ -2925,9 +3232,10 @@ mod tests {
         input.grips[0] = Some(pose(Vec3::new(-0.3, -0.2, -0.5), Quat::IDENTITY));
         controls.update(&input, &mut camera, &mut 20.0, 0.01);
         assert!(
-            (position(controls.wheel_pose.unwrap()) - position(first_pose)
+            (position(controls.wheel_pose.unwrap())
+                - position(first_pose)
                 - Vec3::new(-0.1, 0.0, 0.0))
-                .length()
+            .length()
                 < 0.001
         );
         aim_at_wheel(
@@ -3059,6 +3367,9 @@ mod tests {
             ("left-hand-wheel-light", light),
             ("left-hand-wheel-custom", custom),
             ("home-tools-wheel", dark),
+            ("home-advanced-wheel", dark),
+            ("main-menu-wheel", dark),
+            ("preview-wheel", light),
             ("world-wheel-light", light),
             ("inspected-cell", dark),
             ("inspected-cell-dead", light),
@@ -3066,7 +3377,24 @@ mod tests {
             if name == "home-tools-wheel" {
                 controls.dial = None;
             }
+            if name == "home-advanced-wheel" {
+                controls.set_menu_access(MenuAccess {
+                    advanced: true,
+                    developer: false,
+                });
+            }
+            if name == "main-menu-wheel" || name == "preview-wheel" {
+                controls.set_context(if name == "main-menu-wheel" {
+                    WheelContext::MainMenu
+                } else {
+                    WheelContext::Preview
+                });
+                controls.set_menu_access(MenuAccess::default());
+                controls.wheel_open = true;
+            }
             if name == "world-wheel-light" {
+                controls.set_context(WheelContext::Gpu);
+                controls.wheel_open = true;
                 controls.page = Page::World;
                 controls.dial = None;
                 controls.hovered = None;
@@ -3186,17 +3514,35 @@ mod tests {
                 .chunks(stride as usize)
                 .flat_map(|row| row[..size as usize * 4].iter().copied())
                 .collect();
-            assert!(
-                rgba.chunks_exact(4)
-                    .filter(|pixel| pixel[3] > 200
+            std::fs::create_dir_all("target/vr-visual-checks").unwrap();
+            image::save_buffer(
+                format!("target/vr-visual-checks/{name}.png"),
+                &rgba,
+                size,
+                size,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+            let text_pixels = rgba
+                .chunks_exact(4)
+                .filter(|pixel| {
+                    pixel[3] > 200
                         && if palette.text_primary.r() < 100 {
                             pixel[0] < 100 && pixel[1] < 100 && pixel[2] < 100
                         } else {
                             pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200
-                        })
-                    .count()
-                    > 1000,
-                "wheel labels must render"
+                        }
+                })
+                .count();
+            // The main menu and editor omit the GPU simulation/tool rings.
+            let minimum = if controls.context == WheelContext::Gpu {
+                1000
+            } else {
+                500
+            };
+            assert!(
+                text_pixels > minimum,
+                "{name}: wheel labels must render ({text_pixels} pixels)"
             );
 
             // The clear hub surface must change with the resolved palette,
@@ -3209,16 +3555,6 @@ mod tests {
                 assert!(brightness < 300, "dark theme must produce a dark console");
             }
             assert!(hub[3] < 255, "console surfaces retain transparency");
-            std::fs::create_dir_all("target/vr-visual-checks").unwrap();
-
-            image::save_buffer(
-                format!("target/vr-visual-checks/{name}.png"),
-                &rgba,
-                size,
-                size,
-                image::ColorType::Rgba8,
-            )
-            .unwrap();
         }
     }
     #[test]
@@ -3462,8 +3798,8 @@ mod tests {
                 .round(),
             Vec2::splat(360.0)
         );
-        let angle =
-            controls.start_angle(TOOLS.len()) + 2.5 * std::f32::consts::TAU / TOOLS.len() as f32;
+        let angle = controls.start_angle(TOOLS.len(), 215.0)
+            + 2.5 * std::f32::consts::TAU / TOOLS.len() as f32;
         let pixel = Vec2::splat(360.0) + Vec2::new(angle.cos(), angle.sin()) * 245.0;
         let target = position(panel)
             + rotation(panel)

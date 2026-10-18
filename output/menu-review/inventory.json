@@ -1,0 +1,3103 @@
+{
+  "groups": [
+    {
+      "name": "Top bar and general menus",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "Scene switch",
+              "choice": "show",
+              "id": "menu-0001"
+            },
+            {
+              "label": "Tutorial",
+              "choice": "show",
+              "id": "menu-0002"
+            },
+            {
+              "label": "Help",
+              "choice": "show",
+              "id": "menu-0003"
+            },
+            {
+              "label": "Themes",
+              "choice": "advanced",
+              "id": "menu-0004"
+            },
+            {
+              "label": "Panels",
+              "choice": "show",
+              "id": "menu-0005"
+            },
+            {
+              "label": "Save Sphere…",
+              "choice": "show",
+              "id": "menu-0006"
+            },
+            {
+              "label": "Load Sphere…",
+              "choice": "show",
+              "id": "menu-0007"
+            },
+            {
+              "label": "Save genome",
+              "choice": "show",
+              "id": "menu-0008"
+            },
+            {
+              "label": "Load genome",
+              "choice": "show",
+              "id": "menu-0009"
+            },
+            {
+              "label": "New genome",
+              "choice": "show",
+              "id": "menu-0010"
+            },
+            {
+              "label": "Genome name",
+              "choice": "show",
+              "id": "menu-0011"
+            },
+            {
+              "label": "UI Scale",
+              "choice": "show",
+              "id": "menu-0012"
+            },
+            {
+              "label": "Frame rate limit",
+              "choice": "show",
+              "id": "menu-0013"
+            },
+            {
+              "label": "Horizontal FOV",
+              "choice": "show",
+              "id": "menu-0014"
+            },
+            {
+              "label": "Speed 1",
+              "choice": "advanced",
+              "id": "menu-0015"
+            },
+            {
+              "label": "Speed 2",
+              "choice": "advanced",
+              "id": "menu-0016"
+            },
+            {
+              "label": "Scroll Sensitivity",
+              "choice": "advanced",
+              "id": "menu-0017"
+            },
+            {
+              "label": "Panel visibility toggles",
+              "choice": "show",
+              "id": "menu-0018"
+            },
+            {
+              "label": "Panel Lock/Unlock",
+              "choice": "advanced",
+              "id": "menu-0019"
+            },
+            {
+              "label": "Reset to Default (layout)",
+              "choice": "show",
+              "id": "menu-0020"
+            },
+            {
+              "label": "Layout Files: Active / Default",
+              "choice": "hide",
+              "id": "menu-0021"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Left button rail",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "Generate Procedural Genome",
+              "choice": "show",
+              "id": "menu-0022"
+            },
+            {
+              "label": "Take Screenshot",
+              "choice": "show",
+              "id": "menu-0023"
+            },
+            {
+              "label": "Open Bio-Spheres Folder",
+              "choice": "advanced",
+              "id": "menu-0024"
+            },
+            {
+              "label": "Advanced Options",
+              "choice": "show",
+              "id": "menu-0025"
+            },
+            {
+              "label": "Lineage Viewer",
+              "choice": "show",
+              "id": "menu-0026"
+            },
+            {
+              "label": "Toggle Water Fill",
+              "choice": "show",
+              "id": "menu-0027"
+            },
+            {
+              "label": "Static Water World (fill world, disable dynamic water physics)",
+              "choice": "advanced",
+              "id": "menu-0028"
+            },
+            {
+              "label": "Flat Ground (fill lower third with sandy ocean floor)",
+              "choice": "advanced",
+              "id": "menu-0029"
+            },
+            {
+              "label": "Reset scene settings",
+              "choice": "show",
+              "id": "menu-0030"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Panels and windows",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "Viewport",
+              "choice": "show",
+              "id": "menu-0031"
+            },
+            {
+              "label": "Scene Manager",
+              "choice": "show",
+              "id": "menu-0032"
+            },
+            {
+              "label": "Cell Inspector",
+              "choice": "show",
+              "id": "menu-0033"
+            },
+            {
+              "label": "Lineage Viewer",
+              "choice": "show",
+              "id": "menu-0034"
+            },
+            {
+              "label": "Genome Editor",
+              "choice": "show",
+              "id": "menu-0035"
+            },
+            {
+              "label": "Performance",
+              "choice": "show",
+              "id": "menu-0036"
+            },
+            {
+              "label": "Rendering",
+              "choice": "hide",
+              "id": "menu-0037"
+            },
+            {
+              "label": "Time Scrubber",
+              "choice": "show",
+              "id": "menu-0038"
+            },
+            {
+              "label": "Theme Editor",
+              "choice": "advanced",
+              "id": "menu-0039"
+            },
+            {
+              "label": "Camera",
+              "choice": "show",
+              "id": "menu-0040"
+            },
+            {
+              "label": "Lighting",
+              "choice": "show",
+              "id": "menu-0041"
+            },
+            {
+              "label": "Gizmo Rendering",
+              "choice": "advanced",
+              "id": "menu-0042"
+            },
+            {
+              "label": "Cell Visuals",
+              "choice": "show",
+              "id": "menu-0043"
+            },
+            {
+              "label": "Cave System",
+              "choice": "show",
+              "id": "menu-0044"
+            },
+            {
+              "label": "Fluid System",
+              "choice": "show",
+              "id": "menu-0045"
+            },
+            {
+              "label": "World Settings",
+              "choice": "show",
+              "id": "menu-0046"
+            },
+            {
+              "label": "Modes",
+              "choice": "show",
+              "id": "menu-0047"
+            },
+            {
+              "label": "Adhesion Settings",
+              "choice": "show",
+              "id": "menu-0048"
+            },
+            {
+              "label": "Parent Settings",
+              "choice": "show",
+              "id": "menu-0049"
+            },
+            {
+              "label": "Circle Sliders",
+              "choice": "show",
+              "id": "menu-0050"
+            },
+            {
+              "label": "Child Rotation",
+              "choice": "show",
+              "id": "menu-0051"
+            },
+            {
+              "label": "Time Slider",
+              "choice": "show",
+              "id": "menu-0052"
+            },
+            {
+              "label": "Mode Graph",
+              "choice": "show",
+              "id": "menu-0053"
+            },
+            {
+              "label": "Help",
+              "choice": "show",
+              "id": "menu-0054"
+            },
+            {
+              "label": "Left Panel",
+              "choice": "hide",
+              "id": "menu-0055"
+            },
+            {
+              "label": "Right Panel",
+              "choice": "hide",
+              "id": "menu-0056"
+            },
+            {
+              "label": "Bottom Panel",
+              "choice": "hide",
+              "id": "menu-0057"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cave System",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "🏔️ Generate Cave System",
+              "field": "button:🏔️ Generate Cave System",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4015",
+              "id": "menu-0058"
+            }
+          ]
+        },
+        {
+          "name": "Generation Parameters",
+          "items": [
+            {
+              "label": "Density:",
+              "field": "density",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:4106",
+              "id": "menu-0059"
+            },
+            {
+              "label": "Scale:",
+              "field": "scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:4112",
+              "id": "menu-0060"
+            },
+            {
+              "label": "Octaves:",
+              "field": "octaves",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4119",
+              "id": "menu-0061"
+            },
+            {
+              "label": "Smoothness:",
+              "field": "smoothness",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4125",
+              "id": "menu-0062"
+            },
+            {
+              "label": "Resolution:",
+              "field": "resolution",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4131",
+              "id": "menu-0063"
+            },
+            {
+              "label": "Fragment Cull:",
+              "field": "isolated_chunk_cull_volume",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4137",
+              "id": "menu-0064"
+            },
+            {
+              "label": "Mesh Smoothing Iterations:",
+              "field": "mesh_smoothing_iterations",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4146",
+              "id": "menu-0065"
+            },
+            {
+              "label": "Mesh Smoothing Factor:",
+              "field": "mesh_smoothing_factor",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4152",
+              "id": "menu-0066"
+            },
+            {
+              "label": "Smooth Normals",
+              "field": "mesh_smooth_normals",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4157",
+              "id": "menu-0067"
+            },
+            {
+              "label": "Seed:",
+              "field": "seed_text",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:4169",
+              "id": "menu-0068"
+            }
+          ]
+        },
+        {
+          "name": "Appearance",
+          "items": [
+            {
+              "label": "Preset:",
+              "field": "picker:cave_appearance",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4205",
+              "id": "menu-0069"
+            },
+            {
+              "label": "Basalt: / Dark:",
+              "field": "cave_rock_dark_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4317",
+              "id": "menu-0070"
+            },
+            {
+              "label": "Glass: / Cool:",
+              "field": "cave_rock_cool_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4332",
+              "id": "menu-0071"
+            },
+            {
+              "label": "Iron: / Warm:",
+              "field": "cave_rock_warm_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4347",
+              "id": "menu-0072"
+            },
+            {
+              "label": "Ash: / Pale:",
+              "field": "cave_rock_pale_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4358",
+              "id": "menu-0073"
+            },
+            {
+              "label": "Flow Scale: / Layer Scale:",
+              "field": "cave_rock_layer_scale",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4384",
+              "id": "menu-0074"
+            },
+            {
+              "label": "Warp:",
+              "field": "cave_rock_warp_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4391",
+              "id": "menu-0075"
+            },
+            {
+              "label": "Plate Variation: / Fine Bands:",
+              "field": "cave_rock_fine_band_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4403",
+              "id": "menu-0076"
+            },
+            {
+              "label": "Blistering: / Cool Mottle:",
+              "field": "cave_rock_cool_mottle_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4418",
+              "id": "menu-0077"
+            },
+            {
+              "label": "Glass Grain: / Grain:",
+              "field": "cave_rock_grain_strength",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4433",
+              "id": "menu-0078"
+            },
+            {
+              "label": "Ash Deposits: / Patch Contrast:",
+              "field": "cave_rock_patch_contrast",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4445",
+              "id": "menu-0079"
+            },
+            {
+              "label": "Seam Darkness: / Seam Darkening:",
+              "field": "cave_rock_seam_darkening",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4457",
+              "id": "menu-0080"
+            },
+            {
+              "label": "Shelf Scuffs: / Wall Lines:",
+              "field": "cave_rock_wall_line_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4469",
+              "id": "menu-0081"
+            },
+            {
+              "label": "Texture Scale:",
+              "field": "cave_rock_texture_scale",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4488",
+              "id": "menu-0082"
+            },
+            {
+              "label": "Conform:",
+              "field": "cave_rock_geometry_conform",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4498",
+              "id": "menu-0083"
+            },
+            {
+              "label": "Relief:",
+              "field": "cave_rock_parallax_depth",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4509",
+              "id": "menu-0084"
+            },
+            {
+              "label": "Plate Size: / Major Lines:",
+              "field": "cave_rock_coarse_frequency",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4522",
+              "id": "menu-0085"
+            },
+            {
+              "label": "Surface Breakup: / Fine Lines:",
+              "field": "cave_rock_fine_frequency",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4537",
+              "id": "menu-0086"
+            },
+            {
+              "label": "Crack Density: / Seam Lines:",
+              "field": "cave_rock_seam_frequency",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4552",
+              "id": "menu-0087"
+            },
+            {
+              "label": "Flow Noise Scale: / Fine Warp Scale:",
+              "field": "cave_rock_fine_noise_scale",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4567",
+              "id": "menu-0088"
+            },
+            {
+              "label": "Flow Warp: / Fine Warp:",
+              "field": "cave_rock_fine_noise_strength",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4581",
+              "id": "menu-0089"
+            },
+            {
+              "label": "Crack Noise Scale: / Seam Warp Scale:",
+              "field": "cave_rock_seam_noise_scale",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4597",
+              "id": "menu-0090"
+            },
+            {
+              "label": "Crack Warp: / Seam Warp:",
+              "field": "cave_rock_seam_noise_strength",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:4611",
+              "id": "menu-0091"
+            },
+            {
+              "label": "Plate Low: / Major Low:",
+              "field": "cave_rock_coarse_band_low",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4626",
+              "id": "menu-0092"
+            },
+            {
+              "label": "Plate High: / Major High:",
+              "field": "cave_rock_coarse_band_high",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4641",
+              "id": "menu-0093"
+            },
+            {
+              "label": "Blister Low: / Fine Low:",
+              "field": "cave_rock_fine_band_low",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4656",
+              "id": "menu-0094"
+            },
+            {
+              "label": "Blister High: / Fine High:",
+              "field": "cave_rock_fine_band_high",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4668",
+              "id": "menu-0095"
+            },
+            {
+              "label": "Crack Thin: / Seam Low:",
+              "field": "cave_rock_seam_low",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4680",
+              "id": "menu-0096"
+            },
+            {
+              "label": "Crack Thick: / Seam High:",
+              "field": "cave_rock_seam_high",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4692",
+              "id": "menu-0097"
+            },
+            {
+              "label": "Ambient:",
+              "field": "cave_rock_ambient_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4698",
+              "id": "menu-0098"
+            },
+            {
+              "label": "Diffuse:",
+              "field": "cave_rock_diffuse_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4704",
+              "id": "menu-0099"
+            },
+            {
+              "label": "Specular:",
+              "field": "cave_rock_specular_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4710",
+              "id": "menu-0100"
+            },
+            {
+              "label": "Spec Power:",
+              "field": "cave_rock_specular_power",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4717",
+              "id": "menu-0101"
+            },
+            {
+              "label": "Min Tone:",
+              "field": "cave_rock_min_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4722",
+              "id": "menu-0102"
+            },
+            {
+              "label": "Max Tone:",
+              "field": "cave_rock_max_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4725",
+              "id": "menu-0103"
+            }
+          ]
+        },
+        {
+          "name": "Thermal Smoke Stacks",
+          "items": [
+            {
+              "label": "Enable Vents",
+              "field": "geothermal_enabled",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:4736",
+              "id": "menu-0104"
+            },
+            {
+              "label": "Placement:",
+              "field": "picker:geothermal_placement_mode",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4746",
+              "id": "menu-0105"
+            },
+            {
+              "label": "Lower Hemisphere Only",
+              "field": "geothermal_lower_hemisphere",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4761",
+              "id": "menu-0106"
+            },
+            {
+              "label": "Frequency:",
+              "field": "geothermal_count",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4770",
+              "id": "menu-0107"
+            },
+            {
+              "label": "Length:",
+              "field": "geothermal_length",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4780",
+              "id": "menu-0108"
+            },
+            {
+              "label": "Width:",
+              "field": "geothermal_width",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4785",
+              "id": "menu-0109"
+            },
+            {
+              "label": "Depth:",
+              "field": "geothermal_depth",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4790",
+              "id": "menu-0110"
+            },
+            {
+              "label": "Back Margin:",
+              "field": "geothermal_back_margin",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4796",
+              "id": "menu-0111"
+            },
+            {
+              "label": "Top Margin:",
+              "field": "geothermal_top_margin",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4801",
+              "id": "menu-0112"
+            },
+            {
+              "label": "Heat Output:",
+              "field": "geothermal_heat_output",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4812",
+              "id": "menu-0113"
+            },
+            {
+              "label": "Heat Radius:",
+              "field": "geothermal_heat_radius",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4817",
+              "id": "menu-0114"
+            },
+            {
+              "label": "Color:",
+              "field": "geothermal_glow_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4827",
+              "id": "menu-0115"
+            },
+            {
+              "label": "Glow Strength:",
+              "field": "geothermal_glow_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4835",
+              "id": "menu-0116"
+            },
+            {
+              "label": "Glow Radius:",
+              "field": "geothermal_glow_radius",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4841",
+              "id": "menu-0117"
+            }
+          ]
+        },
+        {
+          "name": "🌿 Moss",
+          "items": [
+            {
+              "label": "Enable Moss",
+              "field": "show_moss",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:4945",
+              "id": "menu-0118"
+            },
+            {
+              "label": "Growth Rate:",
+              "field": "context.editor_state.moss_growth_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4964",
+              "id": "menu-0119"
+            },
+            {
+              "label": "Min Light Level:",
+              "field": "context.editor_state.moss_min_light",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4976",
+              "id": "menu-0120"
+            },
+            {
+              "label": "Water Radius (voxels):",
+              "field": "context.editor_state.moss_water_radius",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:4989",
+              "id": "menu-0121"
+            },
+            {
+              "label": "Decay Rate:",
+              "field": "context.editor_state.moss_decay_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5003",
+              "id": "menu-0122"
+            },
+            {
+              "label": "Water Erosion Rate:",
+              "field": "context.editor_state.moss_erosion_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5018",
+              "id": "menu-0123"
+            },
+            {
+              "label": "Wetness Evaporation:",
+              "field": "context.editor_state.moss_wetness_evaporation",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5032",
+              "id": "menu-0124"
+            },
+            {
+              "label": "Graze Cooldown:",
+              "field": "context.editor_state.moss_consume_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5050",
+              "id": "menu-0125"
+            },
+            {
+              "label": "Nutrients per Moss:",
+              "field": "context.editor_state.moss_nutrient_per_moss",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5063",
+              "id": "menu-0126"
+            },
+            {
+              "label": "Texture Scale:",
+              "field": "context.editor_state.moss_scale",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5080",
+              "id": "menu-0127"
+            },
+            {
+              "label": "Parallax Depth:",
+              "field": "context.editor_state.moss_parallax_depth",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:5093",
+              "id": "menu-0128"
+            },
+            {
+              "label": "Noise Type:",
+              "field": "picker:moss_noise_type",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:5107",
+              "id": "menu-0129"
+            },
+            {
+              "label": "Noise Frequency:",
+              "field": "context.editor_state.moss_noise_frequency",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:5126",
+              "id": "menu-0130"
+            },
+            {
+              "label": "Noise Lacunarity:",
+              "field": "context.editor_state.moss_noise_lacunarity",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:5140",
+              "id": "menu-0131"
+            },
+            {
+              "label": "Height Sharpness (low):",
+              "field": "context.editor_state.moss_height_sharpness_low",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5152",
+              "id": "menu-0132"
+            },
+            {
+              "label": "Height Sharpness (high):",
+              "field": "context.editor_state.moss_height_sharpness_high",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5164",
+              "id": "menu-0133"
+            },
+            {
+              "label": "Bump Strength:",
+              "field": "context.editor_state.moss_bump_strength",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:5176",
+              "id": "menu-0134"
+            },
+            {
+              "label": "Dark (base):",
+              "field": "color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5193",
+              "id": "menu-0135"
+            },
+            {
+              "label": "Bright (tips):",
+              "field": "color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5203",
+              "id": "menu-0136"
+            }
+          ]
+        },
+        {
+          "name": "🪨 Mossrocks",
+          "items": [
+            {
+              "label": "Enable Mossrocks",
+              "field": "show_boulders",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:5231",
+              "id": "menu-0137"
+            },
+            {
+              "label": "Target Count:",
+              "field": "target",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5247",
+              "id": "menu-0138"
+            },
+            {
+              "label": "Approx. Spawn Interval (seconds):",
+              "field": "interval",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5261",
+              "id": "menu-0139"
+            },
+            {
+              "label": "Radius Range: Min",
+              "field": "rmin",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5279",
+              "id": "menu-0140"
+            },
+            {
+              "label": "Radius Range: Max",
+              "field": "rmax",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5297",
+              "id": "menu-0141"
+            },
+            {
+              "label": "Moss Store Range (nutrients): Min",
+              "field": "mmin",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5321",
+              "id": "menu-0142"
+            },
+            {
+              "label": "Moss Store Range (nutrients): Max",
+              "field": "mmax",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5338",
+              "id": "menu-0143"
+            },
+            {
+              "label": "Buoyancy in Water:",
+              "field": "buoyancy",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5363",
+              "id": "menu-0144"
+            },
+            {
+              "label": "Size Gate (half-saturation):",
+              "field": "gate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5387",
+              "id": "menu-0145"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Fluid System",
+      "sections": [
+        {
+          "name": "Nutrients",
+          "items": [
+            {
+              "label": "Density:",
+              "field": "context.editor_state.nutrient_density",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:5556",
+              "id": "menu-0146"
+            },
+            {
+              "label": "Epoch Duration:",
+              "field": "context.editor_state.nutrient_epoch_duration",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5571",
+              "id": "menu-0147"
+            },
+            {
+              "label": "Epoch Spacing:",
+              "field": "context.editor_state.nutrient_epoch_spacing",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5590",
+              "id": "menu-0148"
+            },
+            {
+              "label": "Spawn Ramp:",
+              "field": "context.editor_state.nutrient_spawn_end",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5612",
+              "id": "menu-0149"
+            },
+            {
+              "label": "Despawn Ramp:",
+              "field": "context.editor_state.nutrient_despawn_start",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5635",
+              "id": "menu-0150"
+            }
+          ]
+        },
+        {
+          "name": "Fluid Physics",
+          "items": [
+            {
+              "label": "Surface Pressure:",
+              "field": "state.fluid_settings.surface_pressure",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5664",
+              "id": "menu-0151"
+            },
+            {
+              "label": "Humidity Diffusion Rate:",
+              "field": "state.fluid_settings.climate.humidity_diffusion_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5686",
+              "id": "menu-0152"
+            },
+            {
+              "label": "Freeze Rate:",
+              "field": "state.fluid_settings.climate.freeze_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5705",
+              "id": "menu-0153"
+            },
+            {
+              "label": "Melt Rate:",
+              "field": "state.fluid_settings.climate.melt_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5720",
+              "id": "menu-0154"
+            },
+            {
+              "label": "Snow Melt Rate:",
+              "field": "state.fluid_settings.climate.snow_melt_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5735",
+              "id": "menu-0155"
+            },
+            {
+              "label": "Snow Compaction Rate:",
+              "field": "state.fluid_settings.climate.snow_compact_rate",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5749",
+              "id": "menu-0156"
+            },
+            {
+              "label": "Lateral Flow Probability:",
+              "field": "probabilities[selected_fluid_type as usize]",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5776",
+              "id": "menu-0157"
+            }
+          ]
+        },
+        {
+          "name": "Ice Appearance",
+          "items": [
+            {
+              "label": "Facet Size:",
+              "field": "facet_size",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5813",
+              "id": "menu-0158"
+            },
+            {
+              "label": "Facet Depth:",
+              "field": "ice.displacement_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5827",
+              "id": "menu-0159"
+            },
+            {
+              "label": "Facet Shading:",
+              "field": "ice.facet_diffuse",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5836",
+              "id": "menu-0160"
+            },
+            {
+              "label": "Glint Intensity:",
+              "field": "ice.glint_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5845",
+              "id": "menu-0161"
+            },
+            {
+              "label": "Opacity:",
+              "field": "ice.alpha",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5854",
+              "id": "menu-0162"
+            },
+            {
+              "label": "Surface Color",
+              "field": "ice.surface_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5861",
+              "id": "menu-0163"
+            },
+            {
+              "label": "Deep Color",
+              "field": "ice.deep_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5863",
+              "id": "menu-0164"
+            },
+            {
+              "label": "Glint Sharpness:",
+              "field": "ice.glint_shininess",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5872",
+              "id": "menu-0165"
+            },
+            {
+              "label": "Reflection:",
+              "field": "ice.fresnel_reflection",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5882",
+              "id": "menu-0166"
+            },
+            {
+              "label": "Reflection Brightness:",
+              "field": "ice.reflection_brightness",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5891",
+              "id": "menu-0167"
+            }
+          ]
+        },
+        {
+          "name": "Water Surface Lighting",
+          "items": [
+            {
+              "label": "Ambient:",
+              "field": "context.editor_state.fluid_ambient",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5908",
+              "id": "menu-0168"
+            },
+            {
+              "label": "Diffuse:",
+              "field": "context.editor_state.fluid_diffuse",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5921",
+              "id": "menu-0169"
+            },
+            {
+              "label": "Specular:",
+              "field": "context.editor_state.fluid_specular",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5934",
+              "id": "menu-0170"
+            },
+            {
+              "label": "Shininess:",
+              "field": "context.editor_state.fluid_shininess",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5947",
+              "id": "menu-0171"
+            },
+            {
+              "label": "Rim Light:",
+              "field": "context.editor_state.fluid_rim",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5961",
+              "id": "menu-0172"
+            },
+            {
+              "label": "Alpha (Transparency):",
+              "field": "context.editor_state.fluid_alpha",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5976",
+              "id": "menu-0173"
+            }
+          ]
+        },
+        {
+          "name": "Cubemap Reflection",
+          "items": [
+            {
+              "label": "Fresnel Strength:",
+              "field": "context.editor_state.fluid_fresnel",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:5994",
+              "id": "menu-0174"
+            },
+            {
+              "label": "Fresnel Power:",
+              "field": "context.editor_state.fluid_fresnel_power",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6007",
+              "id": "menu-0175"
+            },
+            {
+              "label": "Reflection Intensity:",
+              "field": "context.editor_state.fluid_reflection",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6021",
+              "id": "menu-0176"
+            },
+            {
+              "label": "Reflection Brightness:",
+              "field": "context.editor_state.fluid_reflection_brightness",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6034",
+              "id": "menu-0177"
+            },
+            {
+              "label": "Below-Waterline Opacity:",
+              "field": "context.editor_state.fluid_waterline_alpha",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6050",
+              "id": "menu-0178"
+            }
+          ]
+        },
+        {
+          "name": "Water Surface Waves",
+          "items": [
+            {
+              "label": "Wave Height:",
+              "field": "context.editor_state.fluid_wave_height",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6068",
+              "id": "menu-0179"
+            },
+            {
+              "label": "Wave Speed:",
+              "field": "context.editor_state.fluid_wave_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6082",
+              "id": "menu-0180"
+            },
+            {
+              "label": "Noise Scale (lower = larger waves):",
+              "field": "context.editor_state.fluid_noise_scale",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6096",
+              "id": "menu-0181"
+            },
+            {
+              "label": "Octaves:",
+              "field": "context.editor_state.fluid_noise_octaves",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:6111",
+              "id": "menu-0182"
+            },
+            {
+              "label": "Lacunarity (freq per octave):",
+              "field": "context.editor_state.fluid_noise_lacunarity",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:6125",
+              "id": "menu-0183"
+            },
+            {
+              "label": "Persistence (amp per octave):",
+              "field": "context.editor_state.fluid_noise_persistence",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:6139",
+              "id": "menu-0184"
+            }
+          ]
+        },
+        {
+          "name": "Underwater Light",
+          "items": [
+            {
+              "label": "Sunlight Attenuation:",
+              "field": "context.editor_state.water_light_attenuation",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6156",
+              "id": "menu-0185"
+            },
+            {
+              "label": "Ambient Spread:",
+              "field": "context.editor_state.light_field_ambient_floor",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6180",
+              "id": "menu-0186"
+            },
+            {
+              "label": "Shadow Depth:",
+              "field": "context.editor_state.shadow_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6202",
+              "id": "menu-0187"
+            }
+          ]
+        },
+        {
+          "name": "Caustics",
+          "items": [
+            {
+              "label": "Intensity:",
+              "field": "context.editor_state.caustic_intensity",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6228",
+              "id": "menu-0188"
+            },
+            {
+              "label": "Scale:",
+              "field": "context.editor_state.caustic_scale",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6238",
+              "id": "menu-0189"
+            },
+            {
+              "label": "Speed:",
+              "field": "context.editor_state.caustic_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6248",
+              "id": "menu-0190"
+            }
+          ]
+        },
+        {
+          "name": "Fluid Spawning",
+          "items": [
+            {
+              "label": "Water Fill: ON / OFF",
+              "field": "editor.fluid_continuous_spawn",
+              "choice": "show",
+              "id": "menu-0191"
+            },
+            {
+              "label": "Static Water World: ON / OFF",
+              "field": "editor.fluid_static_water_world",
+              "choice": "advanced",
+              "id": "menu-0192"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Organism Skins",
+      "sections": [
+        {
+          "name": "Organism Skins",
+          "items": [
+            {
+              "label": "Show Organism Skins",
+              "field": "organism_skin.enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6287",
+              "id": "menu-0193"
+            },
+            {
+              "label": "Skin Offset (gap from cell surface, world units):",
+              "field": "organism_skin.radius_scale",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6304",
+              "id": "menu-0194"
+            },
+            {
+              "label": "Shrink Speed (fraction of gap closed per iteration):",
+              "field": "organism_skin.shrink_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6313",
+              "id": "menu-0195"
+            },
+            {
+              "label": "Smooth Factor (Laplacian blend per iteration):",
+              "field": "organism_skin.smooth_factor",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6322",
+              "id": "menu-0196"
+            },
+            {
+              "label": "Shrink Iterations:",
+              "field": "organism_skin.shrink_iters",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6331",
+              "id": "menu-0197"
+            },
+            {
+              "label": "Smooth Iterations:",
+              "field": "organism_skin.smooth_iters",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6339",
+              "id": "menu-0198"
+            },
+            {
+              "label": "Min Cells for Skin:",
+              "field": "organism_skin.min_cells",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6349",
+              "id": "menu-0199"
+            },
+            {
+              "label": "Skin Colour:",
+              "field": "organism_skin.base_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6357",
+              "id": "menu-0200"
+            },
+            {
+              "label": "Opacity:",
+              "field": "organism_skin.alpha",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6365",
+              "id": "menu-0201"
+            },
+            {
+              "label": "Subsurface Scattering:",
+              "field": "organism_skin.sss_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6374",
+              "id": "menu-0202"
+            },
+            {
+              "label": "Rim Light:",
+              "field": "organism_skin.rim_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6383",
+              "id": "menu-0203"
+            },
+            {
+              "label": "Cell Membrane",
+              "field": "button:Cell Membrane",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6392",
+              "id": "menu-0204"
+            },
+            {
+              "label": "Bioluminescent",
+              "field": "button:Bioluminescent",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6398",
+              "id": "menu-0205"
+            },
+            {
+              "label": "Opaque Shell",
+              "field": "button:Opaque Shell",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6404",
+              "id": "menu-0206"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Lighting",
+      "sections": [
+        {
+          "name": "Sun",
+          "items": [
+            {
+              "label": "Sun Disc",
+              "field": "context.editor_state.show_sun",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6646",
+              "id": "menu-0207"
+            },
+            {
+              "label": "Orbit",
+              "field": "context.editor_state.sun_rotation_enabled",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:6650",
+              "id": "menu-0208"
+            },
+            {
+              "label": "Show Ring",
+              "field": "context.editor_state.show_orbit_ring",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6658",
+              "id": "menu-0209"
+            },
+            {
+              "label": "Brightness (0-5)",
+              "field": "context.editor_state.sun_intensity",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:6666",
+              "id": "menu-0210"
+            },
+            {
+              "label": "Tint",
+              "field": "context.editor_state.sun_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6684",
+              "id": "menu-0211"
+            },
+            {
+              "label": "Position",
+              "field": "context.editor_state.sun_orbit_angle",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6696",
+              "id": "menu-0212"
+            },
+            {
+              "label": "Speed",
+              "field": "speed_degrees",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6706",
+              "id": "menu-0213"
+            },
+            {
+              "label": "Path Tilt",
+              "field": "orbit_pitch",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6725",
+              "id": "menu-0214"
+            },
+            {
+              "label": "Path Yaw",
+              "field": "orbit_yaw",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6733",
+              "id": "menu-0215"
+            },
+            {
+              "label": "Light Direction",
+              "field": "context.editor_state.light_dir",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6747",
+              "id": "menu-0216"
+            },
+            {
+              "label": "Disc Size",
+              "field": "context.editor_state.sun_angular_radius",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6754",
+              "id": "menu-0217"
+            }
+          ]
+        },
+        {
+          "name": "Day & Night",
+          "items": [
+            {
+              "label": "Night Ratio (0-1)",
+              "field": "context.editor_state.sun_night_ratio",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:6772",
+              "id": "menu-0218"
+            },
+            {
+              "label": "Cycle Length",
+              "field": "context.editor_state.sun_cycle_period",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:6784",
+              "id": "menu-0219"
+            },
+            {
+              "label": "Thermal Inertia (0-5)",
+              "field": "state.fluid_settings.climate.thermal_inertia",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6797",
+              "id": "menu-0220"
+            },
+            {
+              "label": "Seasonal Cycle",
+              "field": "context.editor_state.sun_cycle_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6815",
+              "id": "menu-0221"
+            },
+            {
+              "label": "Season Min",
+              "field": "context.editor_state.sun_cycle_min",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6824",
+              "id": "menu-0222"
+            },
+            {
+              "label": "Season Max",
+              "field": "context.editor_state.sun_cycle_max",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6831",
+              "id": "menu-0223"
+            }
+          ]
+        },
+        {
+          "name": "Luminocyte Lighting",
+          "items": [
+            {
+              "label": "Hardware Ray Tracing",
+              "field": "enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6850",
+              "id": "menu-0224"
+            }
+          ]
+        },
+        {
+          "name": "Surfaces & Shadows",
+          "items": [
+            {
+              "label": "Surface Shadows",
+              "field": "context.editor_state.shadow_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6889",
+              "id": "menu-0225"
+            },
+            {
+              "label": "Strength",
+              "field": "context.editor_state.shadow_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6895",
+              "id": "menu-0226"
+            },
+            {
+              "label": "Quality",
+              "field": "context.editor_state.shadow_quality",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6902",
+              "id": "menu-0227"
+            }
+          ]
+        },
+        {
+          "name": "Light Field",
+          "items": [
+            {
+              "label": "Ray Steps",
+              "field": "steps",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6926",
+              "id": "menu-0228"
+            },
+            {
+              "label": "Step Size",
+              "field": "context.editor_state.light_field_step_size",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:6935",
+              "id": "menu-0229"
+            },
+            {
+              "label": "Rock Absorption",
+              "field": "context.editor_state.light_field_absorption_solid",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:6945",
+              "id": "menu-0230"
+            },
+            {
+              "label": "Cell Absorption",
+              "field": "context.editor_state.light_field_absorption_cell",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:6955",
+              "id": "menu-0231"
+            },
+            {
+              "label": "Ambient Floor",
+              "field": "context.editor_state.light_field_ambient_floor",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6965",
+              "id": "menu-0232"
+            }
+          ]
+        },
+        {
+          "name": "Volumetric Fog",
+          "items": [
+            {
+              "label": "Enabled",
+              "field": "context.editor_state.show_volumetric_fog",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6982",
+              "id": "menu-0233"
+            },
+            {
+              "label": "Density",
+              "field": "context.editor_state.fog_density",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6989",
+              "id": "menu-0234"
+            },
+            {
+              "label": "Glow",
+              "field": "context.editor_state.light_intensity",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:6996",
+              "id": "menu-0235"
+            },
+            {
+              "label": "Directionality",
+              "field": "context.editor_state.fog_scattering_anisotropy",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7004",
+              "id": "menu-0236"
+            },
+            {
+              "label": "Absorption",
+              "field": "context.editor_state.fog_absorption",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7017",
+              "id": "menu-0237"
+            },
+            {
+              "label": "Ambient Color",
+              "field": "context.editor_state.fog_color",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7026",
+              "id": "menu-0238"
+            }
+          ]
+        },
+        {
+          "name": "Height Fog",
+          "items": [
+            {
+              "label": "Bottom Density",
+              "field": "context.editor_state.fog_height_density",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7037",
+              "id": "menu-0239"
+            },
+            {
+              "label": "Falloff",
+              "field": "context.editor_state.fog_height_falloff",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7044",
+              "id": "menu-0240"
+            }
+          ]
+        },
+        {
+          "name": "Quality",
+          "items": [
+            {
+              "label": "Steps",
+              "field": "fsteps",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7057",
+              "id": "menu-0241"
+            },
+            {
+              "label": "Smooth Voxels",
+              "field": "context.editor_state.fog_smooth_light_field",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7064",
+              "id": "menu-0242"
+            },
+            {
+              "label": "Blur",
+              "field": "context.editor_state.fog_composite_blur",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:7072",
+              "id": "menu-0243"
+            }
+          ]
+        },
+        {
+          "name": "Water Distortion",
+          "items": [
+            {
+              "label": "Strength",
+              "field": "context.editor_state.fog_water_wave_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7082",
+              "id": "menu-0244"
+            },
+            {
+              "label": "Scale",
+              "field": "context.editor_state.fog_water_wave_scale",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7092",
+              "id": "menu-0245"
+            }
+          ]
+        },
+        {
+          "name": "Luminocyte Glow",
+          "items": [
+            {
+              "label": "Enabled",
+              "field": "context.editor_state.luminocyte_bloom_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7109",
+              "id": "menu-0246"
+            },
+            {
+              "label": "Halo Radius",
+              "field": "context.editor_state.luminocyte_bloom_radius",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7119",
+              "id": "menu-0247"
+            }
+          ]
+        },
+        {
+          "name": "Camera Response",
+          "items": [
+            {
+              "label": "Depth of Field",
+              "field": "context.editor_state.show_dof",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7152",
+              "id": "menu-0248"
+            }
+          ]
+        },
+        {
+          "name": "Contrast & Eye Adaptation",
+          "items": [
+            {
+              "label": "Contrast",
+              "field": "context.editor_state.pp_contrast",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7163",
+              "id": "menu-0249"
+            },
+            {
+              "label": "Eye Adaptation",
+              "field": "context.editor_state.pp_adapt_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7178",
+              "id": "menu-0250"
+            },
+            {
+              "label": "Adapt Speed",
+              "field": "context.editor_state.pp_adapt_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7196",
+              "id": "menu-0251"
+            },
+            {
+              "label": "Min Exposure",
+              "field": "context.editor_state.pp_adapt_min",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7211",
+              "id": "menu-0252"
+            },
+            {
+              "label": "Max Exposure",
+              "field": "context.editor_state.pp_adapt_max",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7226",
+              "id": "menu-0253"
+            },
+            {
+              "label": "Focal Distance",
+              "field": "context.editor_state.dof_focal_distance",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7245",
+              "id": "menu-0254"
+            },
+            {
+              "label": "Focal Range",
+              "field": "context.editor_state.dof_focal_range",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7255",
+              "id": "menu-0255"
+            },
+            {
+              "label": "Max Blur",
+              "field": "context.editor_state.dof_max_blur_radius",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7265",
+              "id": "menu-0256"
+            },
+            {
+              "label": "Blur Strength",
+              "field": "context.editor_state.dof_blur_strength",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7275",
+              "id": "menu-0257"
+            }
+          ]
+        },
+        {
+          "name": "Performance",
+          "items": [
+            {
+              "label": "Max Steps / Frame:",
+              "field": "max_steps",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:7331",
+              "id": "menu-0258"
+            },
+            {
+              "label": "Light Field Interval: Every /2 /4 /8",
+              "field": "world.light_field_update_interval",
+              "choice": "hide",
+              "id": "menu-0259"
+            },
+            {
+              "label": "Physics Rate: 32 / 48 / 64 Hz",
+              "field": "world.physics_hz",
+              "choice": "hide",
+              "id": "menu-0260"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "World Settings",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "World Radius:",
+              "field": "world.world_radius",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13270",
+              "id": "menu-0261"
+            },
+            {
+              "label": "Cell Capacity:",
+              "field": "capacity_k_mut",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13285",
+              "id": "menu-0262"
+            }
+          ]
+        },
+        {
+          "name": "Physics",
+          "items": [
+            {
+              "label": "Gravity:",
+              "field": "world.gravity",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13307",
+              "id": "menu-0263"
+            },
+            {
+              "label": "Velocity Damping:",
+              "field": "world.acceleration_damping",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13340",
+              "id": "menu-0264"
+            },
+            {
+              "label": "Constraint Iterations:",
+              "field": "world.constraint_iterations",
+              "choice": "hide",
+              "source": "src/ui/tab_viewer.rs:13357",
+              "id": "menu-0265"
+            },
+            {
+              "label": "Water Viscosity:",
+              "field": "world.water_viscosity",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13370",
+              "id": "menu-0266"
+            },
+            {
+              "label": "Gravity Axis: X / Y / Z / Radial",
+              "field": "world.gravity_mode",
+              "choice": "show",
+              "id": "menu-0267"
+            }
+          ]
+        },
+        {
+          "name": "Biology",
+          "items": [
+            {
+              "label": "Solo cell metabolism penalty",
+              "field": "world.solo_metabolism_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13385",
+              "id": "menu-0268"
+            },
+            {
+              "label": "Metabolism Multiplier:",
+              "field": "world.solo_metabolism_multiplier",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13393",
+              "id": "menu-0269"
+            }
+          ]
+        },
+        {
+          "name": "Mutation",
+          "items": [
+            {
+              "label": "Radiation Level:",
+              "field": "log_slider",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13423",
+              "id": "menu-0270"
+            },
+            {
+              "label": "Subtle mutations",
+              "field": "world.subtle_mutations",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13464",
+              "id": "menu-0271"
+            },
+            {
+              "label": "All",
+              "field": "button:All",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13471",
+              "id": "menu-0272"
+            },
+            {
+              "label": "Clear",
+              "field": "button:Clear",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:13474",
+              "id": "menu-0273"
+            },
+            {
+              "label": "Gene Pool: cell type selection",
+              "field": "world.mutation_gene_pool_mask",
+              "choice": "advanced",
+              "id": "menu-0274"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Camera",
+      "sections": [
+        {
+          "name": "Camera",
+          "items": [
+            {
+              "label": "Base Movement Speed:",
+              "field": "camera.move_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7975",
+              "id": "menu-0275"
+            },
+            {
+              "label": "Speed 1:",
+              "field": "ui_state.camera_sprint_multiplier",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7980",
+              "id": "menu-0276"
+            },
+            {
+              "label": "Speed 2:",
+              "field": "ui_state.camera_alternate_speed_multiplier",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:7994",
+              "id": "menu-0277"
+            },
+            {
+              "label": "Zoom Speed:",
+              "field": "ui_state.camera_scroll_sensitivity",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:8007",
+              "id": "menu-0278"
+            },
+            {
+              "label": "Mouse Sensitivity:",
+              "field": "camera.mouse_sensitivity",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:8021",
+              "id": "menu-0279"
+            },
+            {
+              "label": "Enable Spring",
+              "field": "camera.enable_spring",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:8022",
+              "id": "menu-0280"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cell Visuals",
+      "sections": [
+        {
+          "name": "Cell Outline",
+          "items": [
+            {
+              "label": "Outline Width:",
+              "field": "context.editor_state.cell_outline_width",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12417",
+              "id": "menu-0281"
+            },
+            {
+              "label": "Cell Type:",
+              "field": "picker:cell_type_visuals_selector",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12437",
+              "id": "menu-0282"
+            }
+          ]
+        },
+        {
+          "name": "Lighting",
+          "items": [
+            {
+              "label": "Specular Strength:",
+              "field": "visuals.specular_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12466",
+              "id": "menu-0283"
+            },
+            {
+              "label": "Specular Sharpness:",
+              "field": "visuals.specular_power",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:12473",
+              "id": "menu-0284"
+            },
+            {
+              "label": "Rim Lighting:",
+              "field": "visuals.fresnel_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12480",
+              "id": "menu-0285"
+            }
+          ]
+        },
+        {
+          "name": "Presets",
+          "items": [
+            {
+              "label": "Matte",
+              "field": "button:Matte",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12490",
+              "id": "menu-0286"
+            },
+            {
+              "label": "Glossy",
+              "field": "button:Glossy",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12495",
+              "id": "menu-0287"
+            },
+            {
+              "label": "Shiny",
+              "field": "button:Shiny",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12500",
+              "id": "menu-0288"
+            }
+          ]
+        },
+        {
+          "name": "Flagella",
+          "items": [
+            {
+              "label": "Tail Length:",
+              "field": "visuals.tail_length",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12519",
+              "id": "menu-0289"
+            },
+            {
+              "label": "Tail Thickness:",
+              "field": "visuals.tail_thickness",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12526",
+              "id": "menu-0290"
+            },
+            {
+              "label": "Wave Amplitude:",
+              "field": "visuals.tail_amplitude",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12533",
+              "id": "menu-0291"
+            },
+            {
+              "label": "Wave Frequency:",
+              "field": "visuals.tail_frequency",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12540",
+              "id": "menu-0292"
+            },
+            {
+              "label": "Taper:",
+              "field": "visuals.tail_taper",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12547",
+              "id": "menu-0293"
+            },
+            {
+              "label": "Segments:",
+              "field": "visuals.tail_segments",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:12554",
+              "id": "menu-0294"
+            }
+          ]
+        },
+        {
+          "name": "Slime Pattern",
+          "items": [
+            {
+              "label": "Cell Scale:",
+              "field": "visuals.goldberg_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12570",
+              "id": "menu-0295"
+            },
+            {
+              "label": "Border Width:",
+              "field": "visuals.goldberg_ridge_width",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12576",
+              "id": "menu-0296"
+            },
+            {
+              "label": "Meander:",
+              "field": "visuals.goldberg_meander",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12582",
+              "id": "menu-0297"
+            },
+            {
+              "label": "Border Darkness:",
+              "field": "visuals.goldberg_ridge_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12588",
+              "id": "menu-0298"
+            },
+            {
+              "label": "Anim Speed:",
+              "field": "visuals.membrane_noise_speed",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12594",
+              "id": "menu-0299"
+            },
+            {
+              "label": "Pattern Scale:",
+              "field": "visuals.membrane_noise_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12600",
+              "id": "menu-0300"
+            },
+            {
+              "label": "Pattern Strength:",
+              "field": "visuals.membrane_noise_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12606",
+              "id": "menu-0301"
+            }
+          ]
+        },
+        {
+          "name": "Membrane Ridges",
+          "items": [
+            {
+              "label": "Nucleus Scale:",
+              "field": "visuals.nucleus_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12622",
+              "id": "menu-0302"
+            },
+            {
+              "label": "Subdivision:",
+              "field": "visuals.goldberg_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12629",
+              "id": "menu-0303"
+            },
+            {
+              "label": "Ridge Width:",
+              "field": "visuals.goldberg_ridge_width",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12637",
+              "id": "menu-0304"
+            },
+            {
+              "label": "Meander:",
+              "field": "visuals.goldberg_meander",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12644",
+              "id": "menu-0305"
+            },
+            {
+              "label": "Ridge Depth:",
+              "field": "visuals.goldberg_ridge_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12651",
+              "id": "menu-0306"
+            }
+          ]
+        },
+        {
+          "name": "Cilia Rings",
+          "items": [
+            {
+              "label": "Ring Frequency:",
+              "field": "visuals.cilia_ring_frequency",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12666",
+              "id": "menu-0307"
+            },
+            {
+              "label": "Ring Depth:",
+              "field": "visuals.cilia_ring_depth",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12672",
+              "id": "menu-0308"
+            },
+            {
+              "label": "Scroll Speed:",
+              "field": "visuals.cilia_ring_speed",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12678",
+              "id": "menu-0309"
+            }
+          ]
+        },
+        {
+          "name": "Concentric Rings",
+          "items": [
+            {
+              "label": "Ring Frequency:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12693",
+              "id": "menu-0310"
+            },
+            {
+              "label": "Ring Sharpness:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12699",
+              "id": "menu-0311"
+            },
+            {
+              "label": "Ring Brightness:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12705",
+              "id": "menu-0312"
+            }
+          ]
+        },
+        {
+          "name": "Nucleus",
+          "items": [
+            {
+              "label": "Nucleus Radius:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12720",
+              "id": "menu-0313"
+            },
+            {
+              "label": "Nucleus Darkness:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12726",
+              "id": "menu-0314"
+            },
+            {
+              "label": "Edge Softness:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12732",
+              "id": "menu-0315"
+            }
+          ]
+        },
+        {
+          "name": "Fat Droplets",
+          "items": [
+            {
+              "label": "Droplet Scale:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12747",
+              "id": "menu-0316"
+            },
+            {
+              "label": "Droplet Threshold:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12753",
+              "id": "menu-0317"
+            },
+            {
+              "label": "Boundary Sharpness:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12759",
+              "id": "menu-0318"
+            },
+            {
+              "label": "Brightness:",
+              "field": "visuals.param_d",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12765",
+              "id": "menu-0319"
+            }
+          ]
+        },
+        {
+          "name": "Gas Bubbles",
+          "items": [
+            {
+              "label": "Bubble Size:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12780",
+              "id": "menu-0320"
+            },
+            {
+              "label": "Rotation Speed:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12786",
+              "id": "menu-0321"
+            },
+            {
+              "label": "Membrane Brightness:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12792",
+              "id": "menu-0322"
+            },
+            {
+              "label": "Gas Brightness:",
+              "field": "visuals.param_d",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12798",
+              "id": "menu-0323"
+            }
+          ]
+        },
+        {
+          "name": "Spikes",
+          "items": [
+            {
+              "label": "Spike Length:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12813",
+              "id": "menu-0324"
+            },
+            {
+              "label": "Spike Sharpness:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12819",
+              "id": "menu-0325"
+            },
+            {
+              "label": "Embed Depth:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12825",
+              "id": "menu-0326"
+            },
+            {
+              "label": "Tip Fade:",
+              "field": "visuals.param_d",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12831",
+              "id": "menu-0327"
+            }
+          ]
+        },
+        {
+          "name": "Muscle Fibers",
+          "items": [
+            {
+              "label": "Fiber Count:",
+              "field": "visuals.goldberg_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12846",
+              "id": "menu-0328"
+            },
+            {
+              "label": "Bulge Strength:",
+              "field": "visuals.goldberg_ridge_width",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12852",
+              "id": "menu-0329"
+            },
+            {
+              "label": "Fiber Warp:",
+              "field": "visuals.goldberg_meander",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12858",
+              "id": "menu-0330"
+            }
+          ]
+        },
+        {
+          "name": "Egg Yolk",
+          "items": [
+            {
+              "label": "Yolk Radius:",
+              "field": "visuals.goldberg_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12873",
+              "id": "menu-0331"
+            },
+            {
+              "label": "Yolk Drop:",
+              "field": "visuals.goldberg_ridge_width",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12879",
+              "id": "menu-0332"
+            },
+            {
+              "label": "Yolk Brightness:",
+              "field": "visuals.goldberg_meander",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12885",
+              "id": "menu-0333"
+            }
+          ]
+        },
+        {
+          "name": "Eye",
+          "items": [
+            {
+              "label": "Pupil Size:",
+              "field": "visuals.goldberg_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12900",
+              "id": "menu-0334"
+            },
+            {
+              "label": "Iris Detail:",
+              "field": "visuals.goldberg_ridge_width",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12906",
+              "id": "menu-0335"
+            },
+            {
+              "label": "Iris Texture:",
+              "field": "visuals.goldberg_meander",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12912",
+              "id": "menu-0336"
+            },
+            {
+              "label": "Pupil Darkness:",
+              "field": "visuals.goldberg_ridge_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12918",
+              "id": "menu-0337"
+            }
+          ]
+        },
+        {
+          "name": "Vessel Wall",
+          "items": [
+            {
+              "label": "Cell Scale:",
+              "field": "visuals.goldberg_scale",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12933",
+              "id": "menu-0338"
+            },
+            {
+              "label": "Border Width:",
+              "field": "visuals.goldberg_ridge_width",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12939",
+              "id": "menu-0339"
+            },
+            {
+              "label": "Meander:",
+              "field": "visuals.goldberg_meander",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12945",
+              "id": "menu-0340"
+            },
+            {
+              "label": "Border Depth:",
+              "field": "visuals.goldberg_ridge_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12951",
+              "id": "menu-0341"
+            }
+          ]
+        },
+        {
+          "name": "Nozzle",
+          "items": [
+            {
+              "label": "Crater Radius:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12966",
+              "id": "menu-0342"
+            },
+            {
+              "label": "Throat Darkness:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12972",
+              "id": "menu-0343"
+            },
+            {
+              "label": "Rim Brightness:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12978",
+              "id": "menu-0344"
+            },
+            {
+              "label": "Nozzle Height:",
+              "field": "visuals.param_d",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12984",
+              "id": "menu-0345"
+            },
+            {
+              "label": "Embed Depth:",
+              "field": "visuals.goldberg_ridge_strength",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:12990",
+              "id": "menu-0346"
+            }
+          ]
+        },
+        {
+          "name": "Feathers",
+          "items": [
+            {
+              "label": "Feather Length:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13005",
+              "id": "menu-0347"
+            },
+            {
+              "label": "Feather Width:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13011",
+              "id": "menu-0348"
+            },
+            {
+              "label": "Feather Brightness:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13017",
+              "id": "menu-0349"
+            },
+            {
+              "label": "Stroke Speed:",
+              "field": "visuals.param_d",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13023",
+              "id": "menu-0350"
+            }
+          ]
+        },
+        {
+          "name": "Pluripotent Rosette",
+          "items": [
+            {
+              "label": "Core Radius:",
+              "field": "visuals.param_a",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13039",
+              "id": "menu-0351"
+            },
+            {
+              "label": "Daughter Bud Size:",
+              "field": "visuals.param_b",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13045",
+              "id": "menu-0352"
+            },
+            {
+              "label": "Branch Brightness:",
+              "field": "visuals.param_c",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13051",
+              "id": "menu-0353"
+            },
+            {
+              "label": "Developmental Pulse:",
+              "field": "visuals.param_d",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13057",
+              "id": "menu-0354"
+            }
+          ]
+        },
+        {
+          "name": "Save / Reset",
+          "items": [
+            {
+              "label": "Save",
+              "field": "button:Save",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13066",
+              "id": "menu-0355"
+            },
+            {
+              "label": "Reset Type",
+              "field": "button:Reset Type",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13069",
+              "id": "menu-0356"
+            },
+            {
+              "label": "Reset All",
+              "field": "button:Reset All",
+              "choice": "show",
+              "source": "src/ui/tab_viewer.rs:13074",
+              "id": "menu-0357"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Theme Editor",
+      "sections": [
+        {
+          "name": "Active Theme",
+          "items": [
+            {
+              "label": "Active Theme",
+              "field": "picker:theme_editor_selector",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8037",
+              "id": "menu-0358"
+            },
+            {
+              "label": "Copy current theme to Custom",
+              "field": "button:Copy current theme to Custom",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8056",
+              "id": "menu-0359"
+            }
+          ]
+        },
+        {
+          "name": "Backgrounds",
+          "items": [
+            {
+              "label": "Darkest Background",
+              "field": "theme:Darkest Background",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8111",
+              "id": "menu-0360"
+            },
+            {
+              "label": "Panel Background",
+              "field": "theme:Panel Background",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8116",
+              "id": "menu-0361"
+            },
+            {
+              "label": "Widget Background",
+              "field": "theme:Widget Background",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8121",
+              "id": "menu-0362"
+            },
+            {
+              "label": "Hover Background",
+              "field": "theme:Hover Background",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8126",
+              "id": "menu-0363"
+            },
+            {
+              "label": "Active Background",
+              "field": "theme:Active Background",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8131",
+              "id": "menu-0364"
+            },
+            {
+              "label": "Selected Background",
+              "field": "theme:Selected Background",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8136",
+              "id": "menu-0365"
+            }
+          ]
+        },
+        {
+          "name": "Accents",
+          "items": [
+            {
+              "label": "Primary Accent",
+              "field": "theme:Primary Accent",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8149",
+              "id": "menu-0366"
+            },
+            {
+              "label": "Secondary Accent",
+              "field": "theme:Secondary Accent",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8154",
+              "id": "menu-0367"
+            }
+          ]
+        },
+        {
+          "name": "Text",
+          "items": [
+            {
+              "label": "Primary Text",
+              "field": "theme:Primary Text",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8167",
+              "id": "menu-0368"
+            },
+            {
+              "label": "Secondary Text",
+              "field": "theme:Secondary Text",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8172",
+              "id": "menu-0369"
+            },
+            {
+              "label": "Dim Text",
+              "field": "theme:Dim Text",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8177",
+              "id": "menu-0370"
+            }
+          ]
+        },
+        {
+          "name": "Borders",
+          "items": [
+            {
+              "label": "Subtle Border",
+              "field": "theme:Subtle Border",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8190",
+              "id": "menu-0371"
+            },
+            {
+              "label": "Normal Border",
+              "field": "theme:Normal Border",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8195",
+              "id": "menu-0372"
+            },
+            {
+              "label": "Bright Border",
+              "field": "theme:Bright Border",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8200",
+              "id": "menu-0373"
+            }
+          ]
+        },
+        {
+          "name": "Top Bar",
+          "items": [
+            {
+              "label": "Top Bar Background",
+              "field": "theme:Top Bar Background",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8213",
+              "id": "menu-0374"
+            },
+            {
+              "label": "Top Bar Border",
+              "field": "theme:Top Bar Border",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8218",
+              "id": "menu-0375"
+            }
+          ]
+        },
+        {
+          "name": "Status Colors",
+          "items": [
+            {
+              "label": "Status OK",
+              "field": "theme:Status OK",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8231",
+              "id": "menu-0376"
+            },
+            {
+              "label": "Status Warn",
+              "field": "theme:Status Warn",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8236",
+              "id": "menu-0377"
+            },
+            {
+              "label": "Status Error",
+              "field": "theme:Status Error",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8241",
+              "id": "menu-0378"
+            },
+            {
+              "label": "Status Info",
+              "field": "theme:Status Info",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:8246",
+              "id": "menu-0379"
+            }
+          ]
+        },
+        {
+          "name": "Custom theme",
+          "items": [
+            {
+              "label": "Reset to Defaults",
+              "field": "button:Reset to Defaults",
+              "choice": "advanced",
+              "id": "menu-0380"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Gizmo Rendering",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "Show Orientation Lines",
+              "field": "context.editor_state.gizmo_visible",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:12393",
+              "id": "menu-0381"
+            },
+            {
+              "label": "Show Split Rings",
+              "field": "context.editor_state.split_rings_visible",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:12395",
+              "id": "menu-0382"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Performance",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "GPU Telemetry",
+              "field": "state.gpu_readbacks_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:3526",
+              "id": "menu-0383"
+            },
+            {
+              "label": "GPU Frame Timing",
+              "field": "state.gpu_timing_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:3528",
+              "id": "menu-0384"
+            },
+            {
+              "label": "Frustum",
+              "field": "state.frustum_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:3539",
+              "id": "menu-0385"
+            },
+            {
+              "label": "Occlusion",
+              "field": "state.occlusion_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:3541",
+              "id": "menu-0386"
+            },
+            {
+              "label": "Scale",
+              "field": "state.lod_scale_factor",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:3628",
+              "id": "menu-0387"
+            },
+            {
+              "label": "Full Detail",
+              "field": "state.lod_threshold_low",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:3640",
+              "id": "menu-0388"
+            },
+            {
+              "label": "Debug Colors",
+              "field": "state.lod_debug_colors",
+              "choice": "hide",
+              "id": "menu-0389"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Lineage Viewer — Headless Simulation",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "Simulation speed",
+              "field": "sim_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:1408",
+              "id": "menu-0390"
+            },
+            {
+              "label": "Adaptive",
+              "field": "button:Adaptive",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:1426",
+              "id": "menu-0391"
+            },
+            {
+              "label": "Fast Forward",
+              "field": "button:Fast Forward",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:1430",
+              "id": "menu-0392"
+            },
+            {
+              "label": "Auto target FPS",
+              "field": "state.gpu_headless_auto_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:1444",
+              "id": "menu-0393"
+            },
+            {
+              "label": "Auto bounds",
+              "field": "state.gpu_headless_min_speed",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:1466",
+              "id": "menu-0394"
+            },
+            {
+              "label": "GPU telemetry",
+              "field": "state.gpu_readbacks_enabled",
+              "choice": "advanced",
+              "source": "src/ui/tab_viewer.rs:1490",
+              "id": "menu-0395"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Genome Editor — authoring panels",
+      "sections": [
+        {
+          "name": "Controls",
+          "items": [
+            {
+              "label": "Modes: cell type, color, mode name and mode selection",
+              "choice": "show",
+              "id": "menu-0396"
+            },
+            {
+              "label": "Adhesion Settings: breaking, spring and connection properties",
+              "choice": "show",
+              "id": "menu-0397"
+            },
+            {
+              "label": "Parent Settings: cell functions, signaling and division rules",
+              "choice": "show",
+              "id": "menu-0398"
+            },
+            {
+              "label": "Circle Sliders: split angles",
+              "choice": "show",
+              "id": "menu-0399"
+            },
+            {
+              "label": "Child Rotation: quaternion/orientation controls",
+              "choice": "show",
+              "id": "menu-0400"
+            },
+            {
+              "label": "Time Slider: preview time and resimulation progress",
+              "choice": "show",
+              "id": "menu-0401"
+            },
+            {
+              "label": "Mode Graph: nodes and mode transitions",
+              "choice": "show",
+              "id": "menu-0402"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "total": 402
+}

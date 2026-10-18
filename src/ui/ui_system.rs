@@ -1230,7 +1230,7 @@ impl UiSystem {
 
                         ui.add_space(8.0); topbar_divider(ui); ui.add_space(8.0);
 
-                        if ui_state_copy.cosmetic_options_visible() {
+                        if ui_state_copy.menu_access().allows(4) {
                             // Themes button - opens theme picker popup
                             let themes_resp = ui.add(
                                 egui::Button::new(egui::RichText::new("🎨 Themes").size(11.5).color(tb_text_primary))
@@ -1952,6 +1952,8 @@ impl UiSystem {
             // when switching away without closing.
             ui_state_copy.gpu_headless_mode = false;
 
+            dock_manager.apply_menu_visibility(ui_state_copy.menu_access());
+
             // Show dock area (scoped to release borrows after)
             {
                 let mut panel_context = crate::ui::panel_context::PanelContext::new(
@@ -2574,7 +2576,8 @@ impl UiSystem {
         }
 
         // Handle mode graph panel toggle request
-        if editor_state.toggle_mode_graph_panel {
+        if std::mem::take(&mut editor_state.toggle_mode_graph_panel)
+            && ui_state_copy.menu_access().allows_panel(crate::ui::panel::Panel::ModeGraph) {
             editor_state.toggle_mode_graph_panel = false;
             let panel = crate::ui::panel::Panel::ModeGraph;
             if let Some(location) = dock_manager.current_tree().find_tab(&panel) {
@@ -3079,6 +3082,8 @@ fn show_windows_menu(
     scene_manager: &mut crate::scene::SceneManager,
 ) {
     use crate::ui::panel::Panel;
+    let access = state.menu_access();
+    if access.developer { ui.weak("Developer settings (F11)"); }
 
     // UI Scale radio buttons
     ui.label("UI Scale:");
@@ -3138,358 +3143,120 @@ fn show_windows_menu(
     }
 
     ui.add_space(6.0);
-    ui.label("Speed 1:")
-        .on_hover_text("Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed in FreeFly mode.");
-    let sprint_response = ui.add(
-        egui::Slider::new(&mut state.camera_sprint_multiplier, 0.05..=20.0)
-            .custom_formatter(|value, _| format!("{value:.1}x")),
-    );
-    let mut sprint_multiplier_changed = sprint_response.changed();
-    if sprint_response.double_clicked() {
-        state.camera_sprint_multiplier = 6.0;
-        sprint_multiplier_changed = true;
-    }
-    if sprint_multiplier_changed {
-        scene_manager
-            .active_scene_mut()
-            .camera_mut()
-            .sprint_multiplier = state.camera_sprint_multiplier;
-    }
-
-    ui.label("Speed 2:")
-        .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
-    let alternate_response = ui.add(
-        egui::Slider::new(&mut state.camera_alternate_speed_multiplier, 0.05..=20.0)
-            .logarithmic(true)
-            .custom_formatter(|value, _| format!("{value:.2}x")),
-    );
-    if alternate_response.double_clicked() {
-        state.camera_alternate_speed_multiplier = 1.0;
-    }
-    if alternate_response.changed() || alternate_response.double_clicked() {
-        scene_manager
-            .active_scene_mut()
-            .camera_mut()
-            .alternate_speed_multiplier = state.camera_alternate_speed_multiplier;
-    }
-    ui.add_space(6.0);
-    ui.label("Scroll Sensitivity:")
-        .on_hover_text("How strongly mouse-wheel scrolling zooms the active scene camera. Double-click the slider to reset.");
-    let scroll_response = ui.add(
-        egui::Slider::new(&mut state.camera_scroll_sensitivity, 0.01..=2.0)
-            .logarithmic(true)
-            .custom_formatter(|value, _| format!("{value:.2}x")),
-    );
-    let mut scroll_sensitivity_changed = scroll_response.changed();
-    if scroll_response.double_clicked() {
-        state.camera_scroll_sensitivity = 0.2;
-        scroll_sensitivity_changed = true;
-    }
-    if scroll_sensitivity_changed {
-        scene_manager.active_scene_mut().camera_mut().zoom_speed = state.camera_scroll_sensitivity;
-    }
-
-    ui.separator();
-
-    // List of genome editor panels that can be toggled (only show in Preview mode)
-    let genome_editor_panels = [
-        Panel::Modes,
-        Panel::ModeGraph,
-        Panel::AdhesionSettings,
-        Panel::ParentSettings,
-        Panel::CircleSliders,
-        Panel::QuaternionBall,
-        Panel::TimeSlider,
-        Panel::CellTypeVisuals,
-    ];
-
-    // Only show genome editor windows in Preview mode
-    if state.current_mode == crate::ui::types::SimulationMode::Preview {
-        ui.label("Genome Editor:");
-        for panel in &genome_editor_panels {
-            let is_open = is_panel_open(dock_manager.current_tree(), panel);
-            let panel_name = format!("{:?}", panel);
-            let is_locked = state.is_panel_locked(&panel_name);
-
-            ui.horizontal(|ui| {
-                // Window toggle button
-                if ui
-                    .selectable_label(is_open, format!("  {}", panel.display_name()))
-                    .clicked()
-                {
-                    if is_open {
-                        close_panel(dock_manager.current_tree_mut(), panel);
-                    } else {
-                        open_panel(dock_manager.current_tree_mut(), panel);
-                    }
-                }
-
-                // Lock/Unlock button
-                let lock_icon = if is_locked { "🔒" } else { "🔓" };
-                if ui.small_button(lock_icon).clicked() {
-                    state.set_panel_locked(&panel_name, !is_locked);
-                }
-            });
+    if access.allows(15) {
+        ui.label("Speed 1:")
+            .on_hover_text("Hold Shift for Speed 2; release for Speed 1. Scroll adjusts the active speed in FreeFly mode.");
+        let sprint_response = ui.add(
+            egui::Slider::new(&mut state.camera_sprint_multiplier, 0.05..=20.0)
+                .custom_formatter(|value, _| format!("{value:.1}x")),
+        );
+        let mut sprint_multiplier_changed = sprint_response.changed();
+        if sprint_response.double_clicked() {
+            state.camera_sprint_multiplier = 6.0;
+            sprint_multiplier_changed = true;
+        }
+        if sprint_multiplier_changed {
+            scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .sprint_multiplier = state.camera_sprint_multiplier;
         }
 
+        ui.label("Speed 2:")
+            .on_hover_text("Hold Shift and scroll to adjust this speed. Double-click to reset.");
+        let alternate_response = ui.add(
+            egui::Slider::new(&mut state.camera_alternate_speed_multiplier, 0.05..=20.0)
+                .logarithmic(true)
+                .custom_formatter(|value, _| format!("{value:.2}x")),
+        );
+        if alternate_response.double_clicked() {
+            state.camera_alternate_speed_multiplier = 1.0;
+        }
+        if alternate_response.changed() || alternate_response.double_clicked() {
+            scene_manager
+                .active_scene_mut()
+                .camera_mut()
+                .alternate_speed_multiplier = state.camera_alternate_speed_multiplier;
+        }
+        ui.add_space(6.0);
+        ui.label("Scroll Sensitivity:")
+            .on_hover_text("How strongly mouse-wheel scrolling zooms the active scene camera. Double-click the slider to reset.");
+        let scroll_response = ui.add(
+            egui::Slider::new(&mut state.camera_scroll_sensitivity, 0.01..=2.0)
+                .logarithmic(true)
+                .custom_formatter(|value, _| format!("{value:.2}x")),
+        );
+        let mut scroll_sensitivity_changed = scroll_response.changed();
+        if scroll_response.double_clicked() {
+            state.camera_scroll_sensitivity = 0.2;
+            scroll_sensitivity_changed = true;
+        }
+        if scroll_sensitivity_changed {
+            scene_manager.active_scene_mut().camera_mut().zoom_speed = state.camera_scroll_sensitivity;
+        }
+
+    }
+    ui.separator();
+
+    if access.allows(18) {
+        if state.current_mode == crate::ui::types::SimulationMode::Preview {
+            ui.label("Genome Editor:");
+            for panel in [Panel::Modes, Panel::ModeGraph, Panel::AdhesionSettings, Panel::ParentSettings,
+                Panel::CircleSliders, Panel::QuaternionBall, Panel::TimeSlider, Panel::CellTypeVisuals] {
+                reviewed_panel_toggle(ui, state, dock_manager, panel);
+            }
+            ui.separator();
+        }
+        ui.label("Layout Panels:");
+        for panel in [Panel::LeftPanel, Panel::RightPanel, Panel::BottomPanel, Panel::Viewport, Panel::GizmoSettings] {
+            reviewed_panel_toggle(ui, state, dock_manager, panel);
+        }
         ui.separator();
+        ui.label("Other Windows:");
+        for panel in [Panel::SceneManager, Panel::PerformanceMonitor, Panel::CellInspector, Panel::LineageViewer,
+            Panel::CaveSystem, Panel::FluidSettings, Panel::WorldSettings, Panel::LightSettings,
+            Panel::CameraSettings, Panel::RenderingControls, Panel::ThemeEditor, Panel::TimeScrubber,
+            Panel::GenomeEditor, Panel::Help] {
+            if state.current_mode != crate::ui::types::SimulationMode::Gpu
+                && matches!(panel, Panel::CaveSystem | Panel::FluidSettings | Panel::WorldSettings | Panel::LightSettings) { continue; }
+            reviewed_panel_toggle(ui, state, dock_manager, panel);
+        }
     }
-
-    // Layout Panels
-    ui.label("Layout Panels:");
-
-    let layout_panels = [
-        Panel::LeftPanel,
-        Panel::RightPanel,
-        Panel::BottomPanel,
-        Panel::Viewport,
-        Panel::GizmoSettings,
-    ];
-
-    for panel in &layout_panels {
-        if panel.is_cosmetic() && !state.cosmetic_options_visible() { continue; }
-        let is_open = is_panel_open(dock_manager.current_tree(), panel);
-        let panel_name = format!("{:?}", panel);
-        let is_locked = state.is_panel_locked(&panel_name);
-
-        ui.horizontal(|ui| {
-            // Window toggle button
-            if ui
-                .selectable_label(is_open, format!("  {}", panel.display_name()))
-                .clicked()
-            {
-                if is_open {
-                    close_panel(dock_manager.current_tree_mut(), panel);
-                } else {
-                    open_panel(dock_manager.current_tree_mut(), panel);
-                }
-            }
-
-            // Lock/Unlock button
-            let lock_icon = if is_locked { "🔒" } else { "🔓" };
-            if ui.small_button(lock_icon).clicked() {
-                state.set_panel_locked(&panel_name, !is_locked);
-            }
-        });
-    }
-
     ui.separator();
-
-    // Other Windows
-    ui.label("Other Windows:");
-
-    // Scene Manager
-    let scene_manager_open = is_panel_open(dock_manager.current_tree(), &Panel::SceneManager);
-    let scene_manager_name = format!("{:?}", Panel::SceneManager);
-    let scene_manager_locked = state.is_panel_locked(&scene_manager_name);
-
-    ui.horizontal(|ui| {
-        if ui
-            .selectable_label(scene_manager_open, "  Scene Manager")
-            .clicked()
-        {
-            if scene_manager_open {
-                close_panel(dock_manager.current_tree_mut(), &Panel::SceneManager);
-            } else {
-                open_panel(dock_manager.current_tree_mut(), &Panel::SceneManager);
-            }
-        }
-
-        let lock_icon = if scene_manager_locked { "🔒" } else { "🔓" };
-        if ui.small_button(lock_icon).clicked() {
-            state.set_panel_locked(&scene_manager_name, !scene_manager_locked);
-        }
-    });
-
-    // Performance Monitor
-    let perf_open = is_panel_open(dock_manager.current_tree(), &Panel::PerformanceMonitor);
-    let perf_name = format!("{:?}", Panel::PerformanceMonitor);
-    let perf_locked = state.is_panel_locked(&perf_name);
-
-    ui.horizontal(|ui| {
-        if ui.selectable_label(perf_open, "  Performance").clicked() {
-            if perf_open {
-                close_panel(dock_manager.current_tree_mut(), &Panel::PerformanceMonitor);
-            } else {
-                open_panel(dock_manager.current_tree_mut(), &Panel::PerformanceMonitor);
-            }
-        }
-
-        let lock_icon = if perf_locked { "🔒" } else { "🔓" };
-        if ui.small_button(lock_icon).clicked() {
-            state.set_panel_locked(&perf_name, !perf_locked);
-        }
-    });
-
-    // Cell Inspector
-    let inspector_open = is_panel_open(dock_manager.current_tree(), &Panel::CellInspector);
-    let inspector_name = format!("{:?}", Panel::CellInspector);
-    let inspector_locked = state.is_panel_locked(&inspector_name);
-
-    ui.horizontal(|ui| {
-        if ui
-            .selectable_label(inspector_open, "  Cell Inspector")
-            .clicked()
-        {
-            if inspector_open {
-                close_panel(dock_manager.current_tree_mut(), &Panel::CellInspector);
-            } else {
-                open_panel(dock_manager.current_tree_mut(), &Panel::CellInspector);
-            }
-        }
-
-        let lock_icon = if inspector_locked { "🔒" } else { "🔓" };
-        if ui.small_button(lock_icon).clicked() {
-            state.set_panel_locked(&inspector_name, !inspector_locked);
-        }
-    });
-
-    // Cave System (GPU mode only)
-    if state.current_mode == crate::ui::types::SimulationMode::Gpu {
-        // Lineage Viewer (GPU mode only)
-        let lineage_open = is_panel_open(dock_manager.current_tree(), &Panel::LineageViewer);
-        let lineage_name = format!("{:?}", Panel::LineageViewer);
-        let lineage_locked = state.is_panel_locked(&lineage_name);
-
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(lineage_open, "  Lineage Viewer")
-                .clicked()
-            {
-                if lineage_open {
-                    close_panel(dock_manager.current_tree_mut(), &Panel::LineageViewer);
-                } else {
-                    open_panel_docked_to_viewport(
-                        dock_manager.current_tree_mut(),
-                        &Panel::LineageViewer,
-                    );
-                }
-            }
-
-            let lock_icon = if lineage_locked {
-                "ðŸ”’"
-            } else {
-                "ðŸ”“"
-            };
-            if ui.small_button(lock_icon).clicked() {
-                state.set_panel_locked(&lineage_name, !lineage_locked);
-            }
-        });
-
-        let cave_open = is_panel_open(dock_manager.current_tree(), &Panel::CaveSystem);
-        let cave_name = format!("{:?}", Panel::CaveSystem);
-        let cave_locked = state.is_panel_locked(&cave_name);
-
-        ui.horizontal(|ui| {
-            if ui.selectable_label(cave_open, "  Cave System").clicked() {
-                if cave_open {
-                    close_panel(dock_manager.current_tree_mut(), &Panel::CaveSystem);
-                } else {
-                    open_panel(dock_manager.current_tree_mut(), &Panel::CaveSystem);
-                }
-            }
-
-            let lock_icon = if cave_locked { "🔒" } else { "🔓" };
-            if ui.small_button(lock_icon).clicked() {
-                state.set_panel_locked(&cave_name, !cave_locked);
-            }
-        });
-
-        // Fluid Settings (GPU mode only)
-        let fluid_open = is_panel_open(dock_manager.current_tree(), &Panel::FluidSettings);
-        let fluid_name = format!("{:?}", Panel::FluidSettings);
-        let fluid_locked = state.is_panel_locked(&fluid_name);
-
-        ui.horizontal(|ui| {
-            if ui.selectable_label(fluid_open, "  Fluid System").clicked() {
-                if fluid_open {
-                    close_panel(dock_manager.current_tree_mut(), &Panel::FluidSettings);
-                } else {
-                    open_panel(dock_manager.current_tree_mut(), &Panel::FluidSettings);
-                }
-            }
-
-            let lock_icon = if fluid_locked { "🔒" } else { "🔓" };
-            if ui.small_button(lock_icon).clicked() {
-                state.set_panel_locked(&fluid_name, !fluid_locked);
-            }
-        });
-
-        // World Settings (GPU mode only)
-        let world_open = is_panel_open(dock_manager.current_tree(), &Panel::WorldSettings);
-        let world_name = format!("{:?}", Panel::WorldSettings);
-        let world_locked = state.is_panel_locked(&world_name);
-
-        ui.horizontal(|ui| {
-            if ui
-                .selectable_label(world_open, "  World Settings")
-                .clicked()
-            {
-                if world_open {
-                    close_panel(dock_manager.current_tree_mut(), &Panel::WorldSettings);
-                } else {
-                    open_panel(dock_manager.current_tree_mut(), &Panel::WorldSettings);
-                }
-            }
-
-            let lock_icon = if world_locked { "🔒" } else { "🔓" };
-            if ui.small_button(lock_icon).clicked() {
-                state.set_panel_locked(&world_name, !world_locked);
-            }
-        });
-
-        // Lighting Settings (GPU mode only)
-        let light_open = is_panel_open(dock_manager.current_tree(), &Panel::LightSettings);
-        let light_name = format!("{:?}", Panel::LightSettings);
-        let light_locked = state.is_panel_locked(&light_name);
-
-        ui.horizontal(|ui| {
-            if ui.selectable_label(light_open, "  Lighting").clicked() {
-                if light_open {
-                    close_panel(dock_manager.current_tree_mut(), &Panel::LightSettings);
-                } else {
-                    open_panel(dock_manager.current_tree_mut(), &Panel::LightSettings);
-                }
-            }
-
-            let lock_icon = if light_locked { "🔒" } else { "🔓" };
-            if ui.small_button(lock_icon).clicked() {
-                state.set_panel_locked(&light_name, !light_locked);
-            }
-        });
-    }
-
-    ui.separator();
-
-    // Layout Management
     ui.label("Layout Management:");
-
-    // Reset to default layout button
     if ui.button("🔄 Reset to Default").clicked() {
         dock_manager.reset_current_to_default();
     }
+    if access.allows(21) {
+        ui.separator();
+        ui.label("Layout Files:");
+        ui.small("Current layout files:");
+        let current_mode = dock_manager.current_mode();
+        let layout_file = format!("dock_state_{}.ron", current_mode.dock_file_suffix());
+        let default_file = format!("default_dock_state_{}.ron", current_mode.dock_file_suffix());
+        ui.horizontal(|ui| { ui.small("• Active:"); ui.small(&layout_file); });
+        ui.horizontal(|ui| {
+            ui.small("• Default:");
+            ui.small(if std::path::Path::new(&default_file).exists() { &default_file } else { "(using hardcoded default)" });
+        });
+    }
+}
 
-    ui.separator();
-
-    // Layout file information
-    ui.label("Layout Files:");
-    ui.small("Current layout files:");
-
-    let current_mode = dock_manager.current_mode();
-    let layout_file = format!("dock_state_{}.ron", current_mode.dock_file_suffix());
-    let default_file = format!("default_dock_state_{}.ron", current_mode.dock_file_suffix());
-
+fn reviewed_panel_toggle(ui: &mut egui::Ui, state: &mut GlobalUiState,
+    dock_manager: &mut crate::ui::dock::DockManager, panel: crate::ui::panel::Panel) {
+    if !panel.available_in_mode(state.current_mode) || !state.menu_access().allows_panel(panel) { return; }
+    let open = is_panel_open(dock_manager.current_tree(), &panel);
+    let name = format!("{panel:?}");
+    let locked = state.is_panel_locked(&name);
     ui.horizontal(|ui| {
-        ui.small("• Active:");
-        ui.small(&layout_file);
-    });
-
-    ui.horizontal(|ui| {
-        ui.small("• Default:");
-        if std::path::Path::new(&default_file).exists() {
-            ui.small(&default_file);
-        } else {
-            ui.small("(using hardcoded default)");
+        if ui.selectable_label(open, format!("  {}", panel.display_name())).clicked() {
+            if open { close_panel(dock_manager.current_tree_mut(), &panel); }
+            else if panel == crate::ui::panel::Panel::LineageViewer {
+                open_panel_docked_to_viewport(dock_manager.current_tree_mut(), &panel);
+            } else { open_panel(dock_manager.current_tree_mut(), &panel); }
+        }
+        if state.menu_access().allows(19) && ui.small_button(if locked { "🔒" } else { "🔓" }).clicked() {
+            state.set_panel_locked(&name, !locked);
         }
     });
 }
@@ -3781,6 +3548,19 @@ pub(super) fn render_side_rail(
     let p = palette();
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
 
+    // Advanced Options toggle
+    let adv_active = state.show_advanced_options;
+    if rail_button_toggle(
+        ui,
+        "⚙",
+        "Advanced Options (appearance settings and fine-tuning sliders)",
+        adv_active,
+        &p,
+    ) {
+        state.show_advanced_options = !adv_active;
+    }
+
+
     match state.current_mode {
         crate::ui::types::SimulationMode::Preview => {
             // Adhesion expansion toggle
@@ -3812,14 +3592,17 @@ pub(super) fn render_side_rail(
                 editor_state.qball_snapping = !snap_active;
             }
 
-            // Mode graph toggle
-            let graph_open = is_panel_open(
-                dock_manager.current_tree(),
-                &crate::ui::panel::Panel::ModeGraph,
-            );
-            if rail_button_toggle(ui, "🕸", "Toggle Mode Graph", graph_open, &p) {
-                editor_state.toggle_mode_graph_panel = true;
-            }
+            if state.menu_access().allows_panel(crate::ui::panel::Panel::ModeGraph) {
+                // Mode graph toggle
+                let graph_open = is_panel_open(
+                    dock_manager.current_tree(),
+                    &crate::ui::panel::Panel::ModeGraph,
+                );
+                if rail_button_toggle(ui, "🕸", "Toggle Mode Graph", graph_open, &p) {
+                    editor_state.toggle_mode_graph_panel = true;
+                }
+
+                }
 
             // Screenshot
             if rail_button(ui, "📷", "Take Screenshot", &p) {
@@ -3838,18 +3621,6 @@ pub(super) fn render_side_rail(
             }
         }
         crate::ui::types::SimulationMode::Gpu => {
-            // Advanced Options toggle
-            let adv_active = state.show_advanced_options;
-            if rail_button_toggle(
-                ui,
-                "⚙",
-                "Advanced Options (appearance settings and fine-tuning sliders)",
-                adv_active,
-                &p,
-            ) {
-                state.show_advanced_options = !adv_active;
-            }
-
             // Hide UI toggle
             let hide_active = state.hide_ui;
             if rail_button_toggle(ui, "👁", "Hide UI (toggle)", hide_active, &p) {

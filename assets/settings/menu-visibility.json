@@ -1,0 +1,3154 @@
+[
+  {
+    "id": "menu-0001",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Scene switch",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0002",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Tutorial",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0003",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Help",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0004",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Themes",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0005",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Panels",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0006",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Save Sphere…",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0007",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Load Sphere…",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0008",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Save genome",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0009",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Load genome",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0010",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "New genome",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0011",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Genome name",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0012",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "UI Scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0013",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Frame rate limit",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0014",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Horizontal FOV",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0015",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Speed 1",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0016",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Speed 2",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0017",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Scroll Sensitivity",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0018",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Panel visibility toggles",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0019",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Panel Lock/Unlock",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0020",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Reset to Default (layout)",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0021",
+    "panel": "Top bar and general menus",
+    "section": "Controls",
+    "label": "Layout Files: Active / Default",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0022",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Generate Procedural Genome",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0023",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Take Screenshot",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0024",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Open Bio-Spheres Folder",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0025",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Advanced Options",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0026",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Lineage Viewer",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0027",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Toggle Water Fill",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0028",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Static Water World (fill world, disable dynamic water physics)",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0029",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Flat Ground (fill lower third with sandy ocean floor)",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0030",
+    "panel": "Left button rail",
+    "section": "Controls",
+    "label": "Reset scene settings",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0031",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Viewport",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0032",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Scene Manager",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0033",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Cell Inspector",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0034",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Lineage Viewer",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0035",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Genome Editor",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0036",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Performance",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0037",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Rendering",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0038",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Time Scrubber",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0039",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Theme Editor",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0040",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Camera",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0041",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Lighting",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0042",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Gizmo Rendering",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0043",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Cell Visuals",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0044",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Cave System",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0045",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Fluid System",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0046",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "World Settings",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0047",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Modes",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0048",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Adhesion Settings",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0049",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Parent Settings",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0050",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Circle Sliders",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0051",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Child Rotation",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0052",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Time Slider",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0053",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Mode Graph",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0054",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Help",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0055",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Left Panel",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0056",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Right Panel",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0057",
+    "panel": "Panels and windows",
+    "section": "Controls",
+    "label": "Bottom Panel",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0058",
+    "panel": "Cave System",
+    "section": "Controls",
+    "label": "🏔️ Generate Cave System",
+    "field": "button:🏔️ Generate Cave System",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0059",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Density:",
+    "field": "density",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0060",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Scale:",
+    "field": "scale",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0061",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Octaves:",
+    "field": "octaves",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0062",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Smoothness:",
+    "field": "smoothness",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0063",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Resolution:",
+    "field": "resolution",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0064",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Fragment Cull:",
+    "field": "isolated_chunk_cull_volume",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0065",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Mesh Smoothing Iterations:",
+    "field": "mesh_smoothing_iterations",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0066",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Mesh Smoothing Factor:",
+    "field": "mesh_smoothing_factor",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0067",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Smooth Normals",
+    "field": "mesh_smooth_normals",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0068",
+    "panel": "Cave System",
+    "section": "Generation Parameters",
+    "label": "Seed:",
+    "field": "seed_text",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0069",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Preset:",
+    "field": "picker:cave_appearance",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0070",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Basalt: / Dark:",
+    "field": "cave_rock_dark_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0071",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Glass: / Cool:",
+    "field": "cave_rock_cool_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0072",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Iron: / Warm:",
+    "field": "cave_rock_warm_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0073",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Ash: / Pale:",
+    "field": "cave_rock_pale_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0074",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Flow Scale: / Layer Scale:",
+    "field": "cave_rock_layer_scale",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0075",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Warp:",
+    "field": "cave_rock_warp_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0076",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Plate Variation: / Fine Bands:",
+    "field": "cave_rock_fine_band_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0077",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Blistering: / Cool Mottle:",
+    "field": "cave_rock_cool_mottle_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0078",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Glass Grain: / Grain:",
+    "field": "cave_rock_grain_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0079",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Ash Deposits: / Patch Contrast:",
+    "field": "cave_rock_patch_contrast",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0080",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Seam Darkness: / Seam Darkening:",
+    "field": "cave_rock_seam_darkening",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0081",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Shelf Scuffs: / Wall Lines:",
+    "field": "cave_rock_wall_line_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0082",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Texture Scale:",
+    "field": "cave_rock_texture_scale",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0083",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Conform:",
+    "field": "cave_rock_geometry_conform",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0084",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Relief:",
+    "field": "cave_rock_parallax_depth",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0085",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Plate Size: / Major Lines:",
+    "field": "cave_rock_coarse_frequency",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0086",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Surface Breakup: / Fine Lines:",
+    "field": "cave_rock_fine_frequency",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0087",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Crack Density: / Seam Lines:",
+    "field": "cave_rock_seam_frequency",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0088",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Flow Noise Scale: / Fine Warp Scale:",
+    "field": "cave_rock_fine_noise_scale",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0089",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Flow Warp: / Fine Warp:",
+    "field": "cave_rock_fine_noise_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0090",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Crack Noise Scale: / Seam Warp Scale:",
+    "field": "cave_rock_seam_noise_scale",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0091",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Crack Warp: / Seam Warp:",
+    "field": "cave_rock_seam_noise_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0092",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Plate Low: / Major Low:",
+    "field": "cave_rock_coarse_band_low",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0093",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Plate High: / Major High:",
+    "field": "cave_rock_coarse_band_high",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0094",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Blister Low: / Fine Low:",
+    "field": "cave_rock_fine_band_low",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0095",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Blister High: / Fine High:",
+    "field": "cave_rock_fine_band_high",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0096",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Crack Thin: / Seam Low:",
+    "field": "cave_rock_seam_low",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0097",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Crack Thick: / Seam High:",
+    "field": "cave_rock_seam_high",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0098",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Ambient:",
+    "field": "cave_rock_ambient_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0099",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Diffuse:",
+    "field": "cave_rock_diffuse_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0100",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Specular:",
+    "field": "cave_rock_specular_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0101",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Spec Power:",
+    "field": "cave_rock_specular_power",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0102",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Min Tone:",
+    "field": "cave_rock_min_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0103",
+    "panel": "Cave System",
+    "section": "Appearance",
+    "label": "Max Tone:",
+    "field": "cave_rock_max_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0104",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Enable Vents",
+    "field": "geothermal_enabled",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0105",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Placement:",
+    "field": "picker:geothermal_placement_mode",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0106",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Lower Hemisphere Only",
+    "field": "geothermal_lower_hemisphere",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0107",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Frequency:",
+    "field": "geothermal_count",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0108",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Length:",
+    "field": "geothermal_length",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0109",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Width:",
+    "field": "geothermal_width",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0110",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Depth:",
+    "field": "geothermal_depth",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0111",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Back Margin:",
+    "field": "geothermal_back_margin",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0112",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Top Margin:",
+    "field": "geothermal_top_margin",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0113",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Heat Output:",
+    "field": "geothermal_heat_output",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0114",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Heat Radius:",
+    "field": "geothermal_heat_radius",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0115",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Color:",
+    "field": "geothermal_glow_color",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0116",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Glow Strength:",
+    "field": "geothermal_glow_strength",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0117",
+    "panel": "Cave System",
+    "section": "Thermal Smoke Stacks",
+    "label": "Glow Radius:",
+    "field": "geothermal_glow_radius",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0118",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Enable Moss",
+    "field": "show_moss",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0119",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Growth Rate:",
+    "field": "context.editor_state.moss_growth_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0120",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Min Light Level:",
+    "field": "context.editor_state.moss_min_light",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0121",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Water Radius (voxels):",
+    "field": "context.editor_state.moss_water_radius",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0122",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Decay Rate:",
+    "field": "context.editor_state.moss_decay_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0123",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Water Erosion Rate:",
+    "field": "context.editor_state.moss_erosion_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0124",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Wetness Evaporation:",
+    "field": "context.editor_state.moss_wetness_evaporation",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0125",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Graze Cooldown:",
+    "field": "context.editor_state.moss_consume_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0126",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Nutrients per Moss:",
+    "field": "context.editor_state.moss_nutrient_per_moss",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0127",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Texture Scale:",
+    "field": "context.editor_state.moss_scale",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0128",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Parallax Depth:",
+    "field": "context.editor_state.moss_parallax_depth",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0129",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Noise Type:",
+    "field": "picker:moss_noise_type",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0130",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Noise Frequency:",
+    "field": "context.editor_state.moss_noise_frequency",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0131",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Noise Lacunarity:",
+    "field": "context.editor_state.moss_noise_lacunarity",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0132",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Height Sharpness (low):",
+    "field": "context.editor_state.moss_height_sharpness_low",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0133",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Height Sharpness (high):",
+    "field": "context.editor_state.moss_height_sharpness_high",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0134",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Bump Strength:",
+    "field": "context.editor_state.moss_bump_strength",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0135",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Dark (base):",
+    "field": "color",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0136",
+    "panel": "Cave System",
+    "section": "🌿 Moss",
+    "label": "Bright (tips):",
+    "field": "color",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0137",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Enable Mossrocks",
+    "field": "show_boulders",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0138",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Target Count:",
+    "field": "target",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0139",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Approx. Spawn Interval (seconds):",
+    "field": "interval",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0140",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Radius Range: Min",
+    "field": "rmin",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0141",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Radius Range: Max",
+    "field": "rmax",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0142",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Moss Store Range (nutrients): Min",
+    "field": "mmin",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0143",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Moss Store Range (nutrients): Max",
+    "field": "mmax",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0144",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Buoyancy in Water:",
+    "field": "buoyancy",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0145",
+    "panel": "Cave System",
+    "section": "🪨 Mossrocks",
+    "label": "Size Gate (half-saturation):",
+    "field": "gate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0146",
+    "panel": "Fluid System",
+    "section": "Nutrients",
+    "label": "Density:",
+    "field": "context.editor_state.nutrient_density",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0147",
+    "panel": "Fluid System",
+    "section": "Nutrients",
+    "label": "Epoch Duration:",
+    "field": "context.editor_state.nutrient_epoch_duration",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0148",
+    "panel": "Fluid System",
+    "section": "Nutrients",
+    "label": "Epoch Spacing:",
+    "field": "context.editor_state.nutrient_epoch_spacing",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0149",
+    "panel": "Fluid System",
+    "section": "Nutrients",
+    "label": "Spawn Ramp:",
+    "field": "context.editor_state.nutrient_spawn_end",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0150",
+    "panel": "Fluid System",
+    "section": "Nutrients",
+    "label": "Despawn Ramp:",
+    "field": "context.editor_state.nutrient_despawn_start",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0151",
+    "panel": "Fluid System",
+    "section": "Fluid Physics",
+    "label": "Surface Pressure:",
+    "field": "state.fluid_settings.surface_pressure",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0152",
+    "panel": "Fluid System",
+    "section": "Fluid Physics",
+    "label": "Humidity Diffusion Rate:",
+    "field": "state.fluid_settings.climate.humidity_diffusion_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0153",
+    "panel": "Fluid System",
+    "section": "Fluid Physics",
+    "label": "Freeze Rate:",
+    "field": "state.fluid_settings.climate.freeze_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0154",
+    "panel": "Fluid System",
+    "section": "Fluid Physics",
+    "label": "Melt Rate:",
+    "field": "state.fluid_settings.climate.melt_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0155",
+    "panel": "Fluid System",
+    "section": "Fluid Physics",
+    "label": "Snow Melt Rate:",
+    "field": "state.fluid_settings.climate.snow_melt_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0156",
+    "panel": "Fluid System",
+    "section": "Fluid Physics",
+    "label": "Snow Compaction Rate:",
+    "field": "state.fluid_settings.climate.snow_compact_rate",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0157",
+    "panel": "Fluid System",
+    "section": "Fluid Physics",
+    "label": "Lateral Flow Probability:",
+    "field": "probabilities[selected_fluid_type as usize]",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0158",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Facet Size:",
+    "field": "facet_size",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0159",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Facet Depth:",
+    "field": "ice.displacement_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0160",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Facet Shading:",
+    "field": "ice.facet_diffuse",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0161",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Glint Intensity:",
+    "field": "ice.glint_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0162",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Opacity:",
+    "field": "ice.alpha",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0163",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Surface Color",
+    "field": "ice.surface_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0164",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Deep Color",
+    "field": "ice.deep_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0165",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Glint Sharpness:",
+    "field": "ice.glint_shininess",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0166",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Reflection:",
+    "field": "ice.fresnel_reflection",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0167",
+    "panel": "Fluid System",
+    "section": "Ice Appearance",
+    "label": "Reflection Brightness:",
+    "field": "ice.reflection_brightness",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0168",
+    "panel": "Fluid System",
+    "section": "Water Surface Lighting",
+    "label": "Ambient:",
+    "field": "context.editor_state.fluid_ambient",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0169",
+    "panel": "Fluid System",
+    "section": "Water Surface Lighting",
+    "label": "Diffuse:",
+    "field": "context.editor_state.fluid_diffuse",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0170",
+    "panel": "Fluid System",
+    "section": "Water Surface Lighting",
+    "label": "Specular:",
+    "field": "context.editor_state.fluid_specular",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0171",
+    "panel": "Fluid System",
+    "section": "Water Surface Lighting",
+    "label": "Shininess:",
+    "field": "context.editor_state.fluid_shininess",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0172",
+    "panel": "Fluid System",
+    "section": "Water Surface Lighting",
+    "label": "Rim Light:",
+    "field": "context.editor_state.fluid_rim",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0173",
+    "panel": "Fluid System",
+    "section": "Water Surface Lighting",
+    "label": "Alpha (Transparency):",
+    "field": "context.editor_state.fluid_alpha",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0174",
+    "panel": "Fluid System",
+    "section": "Cubemap Reflection",
+    "label": "Fresnel Strength:",
+    "field": "context.editor_state.fluid_fresnel",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0175",
+    "panel": "Fluid System",
+    "section": "Cubemap Reflection",
+    "label": "Fresnel Power:",
+    "field": "context.editor_state.fluid_fresnel_power",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0176",
+    "panel": "Fluid System",
+    "section": "Cubemap Reflection",
+    "label": "Reflection Intensity:",
+    "field": "context.editor_state.fluid_reflection",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0177",
+    "panel": "Fluid System",
+    "section": "Cubemap Reflection",
+    "label": "Reflection Brightness:",
+    "field": "context.editor_state.fluid_reflection_brightness",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0178",
+    "panel": "Fluid System",
+    "section": "Cubemap Reflection",
+    "label": "Below-Waterline Opacity:",
+    "field": "context.editor_state.fluid_waterline_alpha",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0179",
+    "panel": "Fluid System",
+    "section": "Water Surface Waves",
+    "label": "Wave Height:",
+    "field": "context.editor_state.fluid_wave_height",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0180",
+    "panel": "Fluid System",
+    "section": "Water Surface Waves",
+    "label": "Wave Speed:",
+    "field": "context.editor_state.fluid_wave_speed",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0181",
+    "panel": "Fluid System",
+    "section": "Water Surface Waves",
+    "label": "Noise Scale (lower = larger waves):",
+    "field": "context.editor_state.fluid_noise_scale",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0182",
+    "panel": "Fluid System",
+    "section": "Water Surface Waves",
+    "label": "Octaves:",
+    "field": "context.editor_state.fluid_noise_octaves",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0183",
+    "panel": "Fluid System",
+    "section": "Water Surface Waves",
+    "label": "Lacunarity (freq per octave):",
+    "field": "context.editor_state.fluid_noise_lacunarity",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0184",
+    "panel": "Fluid System",
+    "section": "Water Surface Waves",
+    "label": "Persistence (amp per octave):",
+    "field": "context.editor_state.fluid_noise_persistence",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0185",
+    "panel": "Fluid System",
+    "section": "Underwater Light",
+    "label": "Sunlight Attenuation:",
+    "field": "context.editor_state.water_light_attenuation",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0186",
+    "panel": "Fluid System",
+    "section": "Underwater Light",
+    "label": "Ambient Spread:",
+    "field": "context.editor_state.light_field_ambient_floor",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0187",
+    "panel": "Fluid System",
+    "section": "Underwater Light",
+    "label": "Shadow Depth:",
+    "field": "context.editor_state.shadow_strength",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0188",
+    "panel": "Fluid System",
+    "section": "Caustics",
+    "label": "Intensity:",
+    "field": "context.editor_state.caustic_intensity",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0189",
+    "panel": "Fluid System",
+    "section": "Caustics",
+    "label": "Scale:",
+    "field": "context.editor_state.caustic_scale",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0190",
+    "panel": "Fluid System",
+    "section": "Caustics",
+    "label": "Speed:",
+    "field": "context.editor_state.caustic_speed",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0191",
+    "panel": "Fluid System",
+    "section": "Fluid Spawning",
+    "label": "Water Fill: ON / OFF",
+    "field": "editor.fluid_continuous_spawn",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0192",
+    "panel": "Fluid System",
+    "section": "Fluid Spawning",
+    "label": "Static Water World: ON / OFF",
+    "field": "editor.fluid_static_water_world",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0193",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Show Organism Skins",
+    "field": "organism_skin.enabled",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0194",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Skin Offset (gap from cell surface, world units):",
+    "field": "organism_skin.radius_scale",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0195",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Shrink Speed (fraction of gap closed per iteration):",
+    "field": "organism_skin.shrink_speed",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0196",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Smooth Factor (Laplacian blend per iteration):",
+    "field": "organism_skin.smooth_factor",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0197",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Shrink Iterations:",
+    "field": "organism_skin.shrink_iters",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0198",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Smooth Iterations:",
+    "field": "organism_skin.smooth_iters",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0199",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Min Cells for Skin:",
+    "field": "organism_skin.min_cells",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0200",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Skin Colour:",
+    "field": "organism_skin.base_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0201",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Opacity:",
+    "field": "organism_skin.alpha",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0202",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Subsurface Scattering:",
+    "field": "organism_skin.sss_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0203",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Rim Light:",
+    "field": "organism_skin.rim_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0204",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Cell Membrane",
+    "field": "button:Cell Membrane",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0205",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Bioluminescent",
+    "field": "button:Bioluminescent",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0206",
+    "panel": "Organism Skins",
+    "section": "Organism Skins",
+    "label": "Opaque Shell",
+    "field": "button:Opaque Shell",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0207",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Sun Disc",
+    "field": "context.editor_state.show_sun",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0208",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Orbit",
+    "field": "context.editor_state.sun_rotation_enabled",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0209",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Show Ring",
+    "field": "context.editor_state.show_orbit_ring",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0210",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Brightness (0-5)",
+    "field": "context.editor_state.sun_intensity",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0211",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Tint",
+    "field": "context.editor_state.sun_color",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0212",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Position",
+    "field": "context.editor_state.sun_orbit_angle",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0213",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Speed",
+    "field": "speed_degrees",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0214",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Path Tilt",
+    "field": "orbit_pitch",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0215",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Path Yaw",
+    "field": "orbit_yaw",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0216",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Light Direction",
+    "field": "context.editor_state.light_dir",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0217",
+    "panel": "Lighting",
+    "section": "Sun",
+    "label": "Disc Size",
+    "field": "context.editor_state.sun_angular_radius",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0218",
+    "panel": "Lighting",
+    "section": "Day & Night",
+    "label": "Night Ratio (0-1)",
+    "field": "context.editor_state.sun_night_ratio",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0219",
+    "panel": "Lighting",
+    "section": "Day & Night",
+    "label": "Cycle Length",
+    "field": "context.editor_state.sun_cycle_period",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0220",
+    "panel": "Lighting",
+    "section": "Day & Night",
+    "label": "Thermal Inertia (0-5)",
+    "field": "state.fluid_settings.climate.thermal_inertia",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0221",
+    "panel": "Lighting",
+    "section": "Day & Night",
+    "label": "Seasonal Cycle",
+    "field": "context.editor_state.sun_cycle_enabled",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0222",
+    "panel": "Lighting",
+    "section": "Day & Night",
+    "label": "Season Min",
+    "field": "context.editor_state.sun_cycle_min",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0223",
+    "panel": "Lighting",
+    "section": "Day & Night",
+    "label": "Season Max",
+    "field": "context.editor_state.sun_cycle_max",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0224",
+    "panel": "Lighting",
+    "section": "Luminocyte Lighting",
+    "label": "Hardware Ray Tracing",
+    "field": "enabled",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0225",
+    "panel": "Lighting",
+    "section": "Surfaces & Shadows",
+    "label": "Surface Shadows",
+    "field": "context.editor_state.shadow_enabled",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0226",
+    "panel": "Lighting",
+    "section": "Surfaces & Shadows",
+    "label": "Strength",
+    "field": "context.editor_state.shadow_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0227",
+    "panel": "Lighting",
+    "section": "Surfaces & Shadows",
+    "label": "Quality",
+    "field": "context.editor_state.shadow_quality",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0228",
+    "panel": "Lighting",
+    "section": "Light Field",
+    "label": "Ray Steps",
+    "field": "steps",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0229",
+    "panel": "Lighting",
+    "section": "Light Field",
+    "label": "Step Size",
+    "field": "context.editor_state.light_field_step_size",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0230",
+    "panel": "Lighting",
+    "section": "Light Field",
+    "label": "Rock Absorption",
+    "field": "context.editor_state.light_field_absorption_solid",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0231",
+    "panel": "Lighting",
+    "section": "Light Field",
+    "label": "Cell Absorption",
+    "field": "context.editor_state.light_field_absorption_cell",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0232",
+    "panel": "Lighting",
+    "section": "Light Field",
+    "label": "Ambient Floor",
+    "field": "context.editor_state.light_field_ambient_floor",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0233",
+    "panel": "Lighting",
+    "section": "Volumetric Fog",
+    "label": "Enabled",
+    "field": "context.editor_state.show_volumetric_fog",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0234",
+    "panel": "Lighting",
+    "section": "Volumetric Fog",
+    "label": "Density",
+    "field": "context.editor_state.fog_density",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0235",
+    "panel": "Lighting",
+    "section": "Volumetric Fog",
+    "label": "Glow",
+    "field": "context.editor_state.light_intensity",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0236",
+    "panel": "Lighting",
+    "section": "Volumetric Fog",
+    "label": "Directionality",
+    "field": "context.editor_state.fog_scattering_anisotropy",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0237",
+    "panel": "Lighting",
+    "section": "Volumetric Fog",
+    "label": "Absorption",
+    "field": "context.editor_state.fog_absorption",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0238",
+    "panel": "Lighting",
+    "section": "Volumetric Fog",
+    "label": "Ambient Color",
+    "field": "context.editor_state.fog_color",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0239",
+    "panel": "Lighting",
+    "section": "Height Fog",
+    "label": "Bottom Density",
+    "field": "context.editor_state.fog_height_density",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0240",
+    "panel": "Lighting",
+    "section": "Height Fog",
+    "label": "Falloff",
+    "field": "context.editor_state.fog_height_falloff",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0241",
+    "panel": "Lighting",
+    "section": "Quality",
+    "label": "Steps",
+    "field": "fsteps",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0242",
+    "panel": "Lighting",
+    "section": "Quality",
+    "label": "Smooth Voxels",
+    "field": "context.editor_state.fog_smooth_light_field",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0243",
+    "panel": "Lighting",
+    "section": "Quality",
+    "label": "Blur",
+    "field": "context.editor_state.fog_composite_blur",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0244",
+    "panel": "Lighting",
+    "section": "Water Distortion",
+    "label": "Strength",
+    "field": "context.editor_state.fog_water_wave_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0245",
+    "panel": "Lighting",
+    "section": "Water Distortion",
+    "label": "Scale",
+    "field": "context.editor_state.fog_water_wave_scale",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0246",
+    "panel": "Lighting",
+    "section": "Luminocyte Glow",
+    "label": "Enabled",
+    "field": "context.editor_state.luminocyte_bloom_enabled",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0247",
+    "panel": "Lighting",
+    "section": "Luminocyte Glow",
+    "label": "Halo Radius",
+    "field": "context.editor_state.luminocyte_bloom_radius",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0248",
+    "panel": "Lighting",
+    "section": "Camera Response",
+    "label": "Depth of Field",
+    "field": "context.editor_state.show_dof",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0249",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Contrast",
+    "field": "context.editor_state.pp_contrast",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0250",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Eye Adaptation",
+    "field": "context.editor_state.pp_adapt_enabled",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0251",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Adapt Speed",
+    "field": "context.editor_state.pp_adapt_speed",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0252",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Min Exposure",
+    "field": "context.editor_state.pp_adapt_min",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0253",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Max Exposure",
+    "field": "context.editor_state.pp_adapt_max",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0254",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Focal Distance",
+    "field": "context.editor_state.dof_focal_distance",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0255",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Focal Range",
+    "field": "context.editor_state.dof_focal_range",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0256",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Max Blur",
+    "field": "context.editor_state.dof_max_blur_radius",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0257",
+    "panel": "Lighting",
+    "section": "Contrast & Eye Adaptation",
+    "label": "Blur Strength",
+    "field": "context.editor_state.dof_blur_strength",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0258",
+    "panel": "Lighting",
+    "section": "Performance",
+    "label": "Max Steps / Frame:",
+    "field": "max_steps",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0259",
+    "panel": "Lighting",
+    "section": "Performance",
+    "label": "Light Field Interval: Every /2 /4 /8",
+    "field": "world.light_field_update_interval",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0260",
+    "panel": "Lighting",
+    "section": "Performance",
+    "label": "Physics Rate: 32 / 48 / 64 Hz",
+    "field": "world.physics_hz",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0261",
+    "panel": "World Settings",
+    "section": "Controls",
+    "label": "World Radius:",
+    "field": "world.world_radius",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0262",
+    "panel": "World Settings",
+    "section": "Controls",
+    "label": "Cell Capacity:",
+    "field": "capacity_k_mut",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0263",
+    "panel": "World Settings",
+    "section": "Physics",
+    "label": "Gravity:",
+    "field": "world.gravity",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0264",
+    "panel": "World Settings",
+    "section": "Physics",
+    "label": "Velocity Damping:",
+    "field": "world.acceleration_damping",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0265",
+    "panel": "World Settings",
+    "section": "Physics",
+    "label": "Constraint Iterations:",
+    "field": "world.constraint_iterations",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0266",
+    "panel": "World Settings",
+    "section": "Physics",
+    "label": "Water Viscosity:",
+    "field": "world.water_viscosity",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0267",
+    "panel": "World Settings",
+    "section": "Physics",
+    "label": "Gravity Axis: X / Y / Z / Radial",
+    "field": "world.gravity_mode",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0268",
+    "panel": "World Settings",
+    "section": "Biology",
+    "label": "Solo cell metabolism penalty",
+    "field": "world.solo_metabolism_enabled",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0269",
+    "panel": "World Settings",
+    "section": "Biology",
+    "label": "Metabolism Multiplier:",
+    "field": "world.solo_metabolism_multiplier",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0270",
+    "panel": "World Settings",
+    "section": "Mutation",
+    "label": "Radiation Level:",
+    "field": "log_slider",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0271",
+    "panel": "World Settings",
+    "section": "Mutation",
+    "label": "Subtle mutations",
+    "field": "world.subtle_mutations",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0272",
+    "panel": "World Settings",
+    "section": "Mutation",
+    "label": "All",
+    "field": "button:All",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0273",
+    "panel": "World Settings",
+    "section": "Mutation",
+    "label": "Clear",
+    "field": "button:Clear",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0274",
+    "panel": "World Settings",
+    "section": "Mutation",
+    "label": "Gene Pool: cell type selection",
+    "field": "world.mutation_gene_pool_mask",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0275",
+    "panel": "Camera",
+    "section": "Camera",
+    "label": "Base Movement Speed:",
+    "field": "camera.move_speed",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0276",
+    "panel": "Camera",
+    "section": "Camera",
+    "label": "Speed 1:",
+    "field": "ui_state.camera_sprint_multiplier",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0277",
+    "panel": "Camera",
+    "section": "Camera",
+    "label": "Speed 2:",
+    "field": "ui_state.camera_alternate_speed_multiplier",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0278",
+    "panel": "Camera",
+    "section": "Camera",
+    "label": "Zoom Speed:",
+    "field": "ui_state.camera_scroll_sensitivity",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0279",
+    "panel": "Camera",
+    "section": "Camera",
+    "label": "Mouse Sensitivity:",
+    "field": "camera.mouse_sensitivity",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0280",
+    "panel": "Camera",
+    "section": "Camera",
+    "label": "Enable Spring",
+    "field": "camera.enable_spring",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0281",
+    "panel": "Cell Visuals",
+    "section": "Cell Outline",
+    "label": "Outline Width:",
+    "field": "context.editor_state.cell_outline_width",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0282",
+    "panel": "Cell Visuals",
+    "section": "Cell Outline",
+    "label": "Cell Type:",
+    "field": "picker:cell_type_visuals_selector",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0283",
+    "panel": "Cell Visuals",
+    "section": "Lighting",
+    "label": "Specular Strength:",
+    "field": "visuals.specular_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0284",
+    "panel": "Cell Visuals",
+    "section": "Lighting",
+    "label": "Specular Sharpness:",
+    "field": "visuals.specular_power",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0285",
+    "panel": "Cell Visuals",
+    "section": "Lighting",
+    "label": "Rim Lighting:",
+    "field": "visuals.fresnel_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0286",
+    "panel": "Cell Visuals",
+    "section": "Presets",
+    "label": "Matte",
+    "field": "button:Matte",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0287",
+    "panel": "Cell Visuals",
+    "section": "Presets",
+    "label": "Glossy",
+    "field": "button:Glossy",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0288",
+    "panel": "Cell Visuals",
+    "section": "Presets",
+    "label": "Shiny",
+    "field": "button:Shiny",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0289",
+    "panel": "Cell Visuals",
+    "section": "Flagella",
+    "label": "Tail Length:",
+    "field": "visuals.tail_length",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0290",
+    "panel": "Cell Visuals",
+    "section": "Flagella",
+    "label": "Tail Thickness:",
+    "field": "visuals.tail_thickness",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0291",
+    "panel": "Cell Visuals",
+    "section": "Flagella",
+    "label": "Wave Amplitude:",
+    "field": "visuals.tail_amplitude",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0292",
+    "panel": "Cell Visuals",
+    "section": "Flagella",
+    "label": "Wave Frequency:",
+    "field": "visuals.tail_frequency",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0293",
+    "panel": "Cell Visuals",
+    "section": "Flagella",
+    "label": "Taper:",
+    "field": "visuals.tail_taper",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0294",
+    "panel": "Cell Visuals",
+    "section": "Flagella",
+    "label": "Segments:",
+    "field": "visuals.tail_segments",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0295",
+    "panel": "Cell Visuals",
+    "section": "Slime Pattern",
+    "label": "Cell Scale:",
+    "field": "visuals.goldberg_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0296",
+    "panel": "Cell Visuals",
+    "section": "Slime Pattern",
+    "label": "Border Width:",
+    "field": "visuals.goldberg_ridge_width",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0297",
+    "panel": "Cell Visuals",
+    "section": "Slime Pattern",
+    "label": "Meander:",
+    "field": "visuals.goldberg_meander",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0298",
+    "panel": "Cell Visuals",
+    "section": "Slime Pattern",
+    "label": "Border Darkness:",
+    "field": "visuals.goldberg_ridge_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0299",
+    "panel": "Cell Visuals",
+    "section": "Slime Pattern",
+    "label": "Anim Speed:",
+    "field": "visuals.membrane_noise_speed",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0300",
+    "panel": "Cell Visuals",
+    "section": "Slime Pattern",
+    "label": "Pattern Scale:",
+    "field": "visuals.membrane_noise_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0301",
+    "panel": "Cell Visuals",
+    "section": "Slime Pattern",
+    "label": "Pattern Strength:",
+    "field": "visuals.membrane_noise_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0302",
+    "panel": "Cell Visuals",
+    "section": "Membrane Ridges",
+    "label": "Nucleus Scale:",
+    "field": "visuals.nucleus_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0303",
+    "panel": "Cell Visuals",
+    "section": "Membrane Ridges",
+    "label": "Subdivision:",
+    "field": "visuals.goldberg_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0304",
+    "panel": "Cell Visuals",
+    "section": "Membrane Ridges",
+    "label": "Ridge Width:",
+    "field": "visuals.goldberg_ridge_width",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0305",
+    "panel": "Cell Visuals",
+    "section": "Membrane Ridges",
+    "label": "Meander:",
+    "field": "visuals.goldberg_meander",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0306",
+    "panel": "Cell Visuals",
+    "section": "Membrane Ridges",
+    "label": "Ridge Depth:",
+    "field": "visuals.goldberg_ridge_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0307",
+    "panel": "Cell Visuals",
+    "section": "Cilia Rings",
+    "label": "Ring Frequency:",
+    "field": "visuals.cilia_ring_frequency",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0308",
+    "panel": "Cell Visuals",
+    "section": "Cilia Rings",
+    "label": "Ring Depth:",
+    "field": "visuals.cilia_ring_depth",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0309",
+    "panel": "Cell Visuals",
+    "section": "Cilia Rings",
+    "label": "Scroll Speed:",
+    "field": "visuals.cilia_ring_speed",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0310",
+    "panel": "Cell Visuals",
+    "section": "Concentric Rings",
+    "label": "Ring Frequency:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0311",
+    "panel": "Cell Visuals",
+    "section": "Concentric Rings",
+    "label": "Ring Sharpness:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0312",
+    "panel": "Cell Visuals",
+    "section": "Concentric Rings",
+    "label": "Ring Brightness:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0313",
+    "panel": "Cell Visuals",
+    "section": "Nucleus",
+    "label": "Nucleus Radius:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0314",
+    "panel": "Cell Visuals",
+    "section": "Nucleus",
+    "label": "Nucleus Darkness:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0315",
+    "panel": "Cell Visuals",
+    "section": "Nucleus",
+    "label": "Edge Softness:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0316",
+    "panel": "Cell Visuals",
+    "section": "Fat Droplets",
+    "label": "Droplet Scale:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0317",
+    "panel": "Cell Visuals",
+    "section": "Fat Droplets",
+    "label": "Droplet Threshold:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0318",
+    "panel": "Cell Visuals",
+    "section": "Fat Droplets",
+    "label": "Boundary Sharpness:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0319",
+    "panel": "Cell Visuals",
+    "section": "Fat Droplets",
+    "label": "Brightness:",
+    "field": "visuals.param_d",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0320",
+    "panel": "Cell Visuals",
+    "section": "Gas Bubbles",
+    "label": "Bubble Size:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0321",
+    "panel": "Cell Visuals",
+    "section": "Gas Bubbles",
+    "label": "Rotation Speed:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0322",
+    "panel": "Cell Visuals",
+    "section": "Gas Bubbles",
+    "label": "Membrane Brightness:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0323",
+    "panel": "Cell Visuals",
+    "section": "Gas Bubbles",
+    "label": "Gas Brightness:",
+    "field": "visuals.param_d",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0324",
+    "panel": "Cell Visuals",
+    "section": "Spikes",
+    "label": "Spike Length:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0325",
+    "panel": "Cell Visuals",
+    "section": "Spikes",
+    "label": "Spike Sharpness:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0326",
+    "panel": "Cell Visuals",
+    "section": "Spikes",
+    "label": "Embed Depth:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0327",
+    "panel": "Cell Visuals",
+    "section": "Spikes",
+    "label": "Tip Fade:",
+    "field": "visuals.param_d",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0328",
+    "panel": "Cell Visuals",
+    "section": "Muscle Fibers",
+    "label": "Fiber Count:",
+    "field": "visuals.goldberg_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0329",
+    "panel": "Cell Visuals",
+    "section": "Muscle Fibers",
+    "label": "Bulge Strength:",
+    "field": "visuals.goldberg_ridge_width",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0330",
+    "panel": "Cell Visuals",
+    "section": "Muscle Fibers",
+    "label": "Fiber Warp:",
+    "field": "visuals.goldberg_meander",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0331",
+    "panel": "Cell Visuals",
+    "section": "Egg Yolk",
+    "label": "Yolk Radius:",
+    "field": "visuals.goldberg_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0332",
+    "panel": "Cell Visuals",
+    "section": "Egg Yolk",
+    "label": "Yolk Drop:",
+    "field": "visuals.goldberg_ridge_width",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0333",
+    "panel": "Cell Visuals",
+    "section": "Egg Yolk",
+    "label": "Yolk Brightness:",
+    "field": "visuals.goldberg_meander",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0334",
+    "panel": "Cell Visuals",
+    "section": "Eye",
+    "label": "Pupil Size:",
+    "field": "visuals.goldberg_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0335",
+    "panel": "Cell Visuals",
+    "section": "Eye",
+    "label": "Iris Detail:",
+    "field": "visuals.goldberg_ridge_width",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0336",
+    "panel": "Cell Visuals",
+    "section": "Eye",
+    "label": "Iris Texture:",
+    "field": "visuals.goldberg_meander",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0337",
+    "panel": "Cell Visuals",
+    "section": "Eye",
+    "label": "Pupil Darkness:",
+    "field": "visuals.goldberg_ridge_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0338",
+    "panel": "Cell Visuals",
+    "section": "Vessel Wall",
+    "label": "Cell Scale:",
+    "field": "visuals.goldberg_scale",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0339",
+    "panel": "Cell Visuals",
+    "section": "Vessel Wall",
+    "label": "Border Width:",
+    "field": "visuals.goldberg_ridge_width",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0340",
+    "panel": "Cell Visuals",
+    "section": "Vessel Wall",
+    "label": "Meander:",
+    "field": "visuals.goldberg_meander",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0341",
+    "panel": "Cell Visuals",
+    "section": "Vessel Wall",
+    "label": "Border Depth:",
+    "field": "visuals.goldberg_ridge_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0342",
+    "panel": "Cell Visuals",
+    "section": "Nozzle",
+    "label": "Crater Radius:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0343",
+    "panel": "Cell Visuals",
+    "section": "Nozzle",
+    "label": "Throat Darkness:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0344",
+    "panel": "Cell Visuals",
+    "section": "Nozzle",
+    "label": "Rim Brightness:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0345",
+    "panel": "Cell Visuals",
+    "section": "Nozzle",
+    "label": "Nozzle Height:",
+    "field": "visuals.param_d",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0346",
+    "panel": "Cell Visuals",
+    "section": "Nozzle",
+    "label": "Embed Depth:",
+    "field": "visuals.goldberg_ridge_strength",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0347",
+    "panel": "Cell Visuals",
+    "section": "Feathers",
+    "label": "Feather Length:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0348",
+    "panel": "Cell Visuals",
+    "section": "Feathers",
+    "label": "Feather Width:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0349",
+    "panel": "Cell Visuals",
+    "section": "Feathers",
+    "label": "Feather Brightness:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0350",
+    "panel": "Cell Visuals",
+    "section": "Feathers",
+    "label": "Stroke Speed:",
+    "field": "visuals.param_d",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0351",
+    "panel": "Cell Visuals",
+    "section": "Pluripotent Rosette",
+    "label": "Core Radius:",
+    "field": "visuals.param_a",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0352",
+    "panel": "Cell Visuals",
+    "section": "Pluripotent Rosette",
+    "label": "Daughter Bud Size:",
+    "field": "visuals.param_b",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0353",
+    "panel": "Cell Visuals",
+    "section": "Pluripotent Rosette",
+    "label": "Branch Brightness:",
+    "field": "visuals.param_c",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0354",
+    "panel": "Cell Visuals",
+    "section": "Pluripotent Rosette",
+    "label": "Developmental Pulse:",
+    "field": "visuals.param_d",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0355",
+    "panel": "Cell Visuals",
+    "section": "Save / Reset",
+    "label": "Save",
+    "field": "button:Save",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0356",
+    "panel": "Cell Visuals",
+    "section": "Save / Reset",
+    "label": "Reset Type",
+    "field": "button:Reset Type",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0357",
+    "panel": "Cell Visuals",
+    "section": "Save / Reset",
+    "label": "Reset All",
+    "field": "button:Reset All",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0358",
+    "panel": "Theme Editor",
+    "section": "Active Theme",
+    "label": "Active Theme",
+    "field": "picker:theme_editor_selector",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0359",
+    "panel": "Theme Editor",
+    "section": "Active Theme",
+    "label": "Copy current theme to Custom",
+    "field": "button:Copy current theme to Custom",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0360",
+    "panel": "Theme Editor",
+    "section": "Backgrounds",
+    "label": "Darkest Background",
+    "field": "theme:Darkest Background",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0361",
+    "panel": "Theme Editor",
+    "section": "Backgrounds",
+    "label": "Panel Background",
+    "field": "theme:Panel Background",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0362",
+    "panel": "Theme Editor",
+    "section": "Backgrounds",
+    "label": "Widget Background",
+    "field": "theme:Widget Background",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0363",
+    "panel": "Theme Editor",
+    "section": "Backgrounds",
+    "label": "Hover Background",
+    "field": "theme:Hover Background",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0364",
+    "panel": "Theme Editor",
+    "section": "Backgrounds",
+    "label": "Active Background",
+    "field": "theme:Active Background",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0365",
+    "panel": "Theme Editor",
+    "section": "Backgrounds",
+    "label": "Selected Background",
+    "field": "theme:Selected Background",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0366",
+    "panel": "Theme Editor",
+    "section": "Accents",
+    "label": "Primary Accent",
+    "field": "theme:Primary Accent",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0367",
+    "panel": "Theme Editor",
+    "section": "Accents",
+    "label": "Secondary Accent",
+    "field": "theme:Secondary Accent",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0368",
+    "panel": "Theme Editor",
+    "section": "Text",
+    "label": "Primary Text",
+    "field": "theme:Primary Text",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0369",
+    "panel": "Theme Editor",
+    "section": "Text",
+    "label": "Secondary Text",
+    "field": "theme:Secondary Text",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0370",
+    "panel": "Theme Editor",
+    "section": "Text",
+    "label": "Dim Text",
+    "field": "theme:Dim Text",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0371",
+    "panel": "Theme Editor",
+    "section": "Borders",
+    "label": "Subtle Border",
+    "field": "theme:Subtle Border",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0372",
+    "panel": "Theme Editor",
+    "section": "Borders",
+    "label": "Normal Border",
+    "field": "theme:Normal Border",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0373",
+    "panel": "Theme Editor",
+    "section": "Borders",
+    "label": "Bright Border",
+    "field": "theme:Bright Border",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0374",
+    "panel": "Theme Editor",
+    "section": "Top Bar",
+    "label": "Top Bar Background",
+    "field": "theme:Top Bar Background",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0375",
+    "panel": "Theme Editor",
+    "section": "Top Bar",
+    "label": "Top Bar Border",
+    "field": "theme:Top Bar Border",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0376",
+    "panel": "Theme Editor",
+    "section": "Status Colors",
+    "label": "Status OK",
+    "field": "theme:Status OK",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0377",
+    "panel": "Theme Editor",
+    "section": "Status Colors",
+    "label": "Status Warn",
+    "field": "theme:Status Warn",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0378",
+    "panel": "Theme Editor",
+    "section": "Status Colors",
+    "label": "Status Error",
+    "field": "theme:Status Error",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0379",
+    "panel": "Theme Editor",
+    "section": "Status Colors",
+    "label": "Status Info",
+    "field": "theme:Status Info",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0380",
+    "panel": "Theme Editor",
+    "section": "Custom theme",
+    "label": "Reset to Defaults",
+    "field": "button:Reset to Defaults",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0381",
+    "panel": "Gizmo Rendering",
+    "section": "Controls",
+    "label": "Show Orientation Lines",
+    "field": "context.editor_state.gizmo_visible",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0382",
+    "panel": "Gizmo Rendering",
+    "section": "Controls",
+    "label": "Show Split Rings",
+    "field": "context.editor_state.split_rings_visible",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0383",
+    "panel": "Performance",
+    "section": "Controls",
+    "label": "GPU Telemetry",
+    "field": "state.gpu_readbacks_enabled",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0384",
+    "panel": "Performance",
+    "section": "Controls",
+    "label": "GPU Frame Timing",
+    "field": "state.gpu_timing_enabled",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0385",
+    "panel": "Performance",
+    "section": "Controls",
+    "label": "Frustum",
+    "field": "state.frustum_enabled",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0386",
+    "panel": "Performance",
+    "section": "Controls",
+    "label": "Occlusion",
+    "field": "state.occlusion_enabled",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0387",
+    "panel": "Performance",
+    "section": "Controls",
+    "label": "Scale",
+    "field": "state.lod_scale_factor",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0388",
+    "panel": "Performance",
+    "section": "Controls",
+    "label": "Full Detail",
+    "field": "state.lod_threshold_low",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0389",
+    "panel": "Performance",
+    "section": "Controls",
+    "label": "Debug Colors",
+    "field": "state.lod_debug_colors",
+    "visibility": "Developer"
+  },
+  {
+    "id": "menu-0390",
+    "panel": "Lineage Viewer — Headless Simulation",
+    "section": "Controls",
+    "label": "Simulation speed",
+    "field": "sim_speed",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0391",
+    "panel": "Lineage Viewer — Headless Simulation",
+    "section": "Controls",
+    "label": "Adaptive",
+    "field": "button:Adaptive",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0392",
+    "panel": "Lineage Viewer — Headless Simulation",
+    "section": "Controls",
+    "label": "Fast Forward",
+    "field": "button:Fast Forward",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0393",
+    "panel": "Lineage Viewer — Headless Simulation",
+    "section": "Controls",
+    "label": "Auto target FPS",
+    "field": "state.gpu_headless_auto_speed",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0394",
+    "panel": "Lineage Viewer — Headless Simulation",
+    "section": "Controls",
+    "label": "Auto bounds",
+    "field": "state.gpu_headless_min_speed",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0395",
+    "panel": "Lineage Viewer — Headless Simulation",
+    "section": "Controls",
+    "label": "GPU telemetry",
+    "field": "state.gpu_readbacks_enabled",
+    "visibility": "Advanced"
+  },
+  {
+    "id": "menu-0396",
+    "panel": "Genome Editor — authoring panels",
+    "section": "Controls",
+    "label": "Modes: cell type, color, mode name and mode selection",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0397",
+    "panel": "Genome Editor — authoring panels",
+    "section": "Controls",
+    "label": "Adhesion Settings: breaking, spring and connection properties",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0398",
+    "panel": "Genome Editor — authoring panels",
+    "section": "Controls",
+    "label": "Parent Settings: cell functions, signaling and division rules",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0399",
+    "panel": "Genome Editor — authoring panels",
+    "section": "Controls",
+    "label": "Circle Sliders: split angles",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0400",
+    "panel": "Genome Editor — authoring panels",
+    "section": "Controls",
+    "label": "Child Rotation: quaternion/orientation controls",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0401",
+    "panel": "Genome Editor — authoring panels",
+    "section": "Controls",
+    "label": "Time Slider: preview time and resimulation progress",
+    "visibility": "Show"
+  },
+  {
+    "id": "menu-0402",
+    "panel": "Genome Editor — authoring panels",
+    "section": "Controls",
+    "label": "Mode Graph: nodes and mode transitions",
+    "visibility": "Show"
+  }
+]

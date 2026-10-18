@@ -708,8 +708,10 @@ impl App {
             }
             self.editor_state.radial_menu.close(false);
         }
-        if previous_context != self.vr_controls.context {
+        let access_changed = self.vr_controls.set_menu_access(self.ui.state.menu_access());
+        if previous_context != self.vr_controls.context || access_changed {
             egui::ControllerSlider::close(&self.ui.ctx);
+            egui::ControllerNumberPad::set_enabled(&self.ui.ctx, false);
         }
         if let Some(slider) = egui::ControllerSlider::active(&self.ui.ctx) {
             self.vr_controls.sync_ui_slider(&slider);
@@ -931,6 +933,10 @@ impl App {
                 | Choice::LoadInspectedGenome => self.vr_scene_request = Some(choice),
                 Choice::FullUi if self.app_phase == AppPhase::MainMenu => {
                     self.main_menu_settings_open = true
+                }
+                Choice::Advanced => {
+                    self.ui.state.show_advanced_options = !self.ui.state.show_advanced_options;
+                    self.ui.mark_ui_state_dirty();
                 }
                 Choice::Tool(tool) => {
                     self.scene_manager.clear_dragged_cell();
@@ -2543,6 +2549,15 @@ impl App {
 
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         if let WindowEvent::KeyboardInput { event, .. } = event {
+            if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::F11) {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    let enabled = self.ui.state.toggle_developer_settings();
+                    self.ui.toasts.push(crate::ui::toast::Toast::info(
+                        if enabled { "Developer settings enabled (F11)" } else { "Developer settings hidden (F11)" },
+                    ));
+                }
+                return true;
+            }
             if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::F8) {
                 if event.state == ElementState::Pressed && !event.repeat {
                     self.start_bug_report();

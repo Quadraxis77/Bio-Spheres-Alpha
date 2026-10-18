@@ -1195,6 +1195,10 @@ pub struct GlobalUiState {
     #[serde(skip)]
     pub show_advanced_options: bool,
 
+    /// Transient developer-control visibility, toggled with F11.
+    #[serde(skip)]
+    pub show_developer_options: bool,
+
     /// Whether the UI chrome (top bar, side rail, status bar, panels) is hidden.
     /// When true only the raw viewport is visible. Toggle with the rail button or Tab key.
     #[serde(skip)]
@@ -1273,6 +1277,7 @@ impl Default for GlobalUiState {
             pending_save_ready: false,
             mode_request: None,
             show_advanced_options: false,
+            show_developer_options: false,
             hide_ui: false,
             pending_close_panel: None,
         }

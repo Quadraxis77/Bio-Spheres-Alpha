@@ -6,6 +6,7 @@
 
 use crate::ui::panel::Panel;
 use crate::ui::types::SimulationMode;
+use crate::ui::menu_visibility::MenuAccess;
 use egui_dock::{DockState, NodeIndex};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,6 +28,31 @@ pub struct DockManager {
     save_timer: Instant,
     /// Whether the layout has changed since last save.
     dirty: bool,
+    visibility_access: HashMap<SimulationMode, MenuAccess>,
+    visibility_snapshots: HashMap<SimulationMode, VisibilitySnapshot>,
+}
+
+struct VisibilitySnapshot {
+    full: DockState<Panel>,
+    projected_structure: serde_json::Value,
+    hidden: Vec<(Panel, Vec<Panel>)>,
+}
+
+// Rendering updates rectangles and focus without changing the player's layout.
+fn layout_structure(tree: &DockState<Panel>) -> serde_json::Value {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for key in ["rect", "viewport", "scroll", "active", "focused_node", "focused_surface"] { fields.remove(key); }
+                for value in fields.values_mut() { strip(value); }
+            }
+            serde_json::Value::Array(values) => for value in values { strip(value); },
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(tree).expect("dock layout is serializable");
+    strip(&mut value);
+    value
 }
 
 impl DockManager {
@@ -45,6 +71,8 @@ impl DockManager {
             current_mode: SimulationMode::Preview,
             save_timer: Instant::now(),
             dirty: false,
+            visibility_access: HashMap::new(),
+            visibility_snapshots: HashMap::new(),
         }
     }
 
@@ -66,6 +94,56 @@ impl DockManager {
     /// Get the current simulation mode.
     pub fn current_mode(&self) -> SimulationMode {
         self.current_mode
+    }
+
+    /// Temporarily remove inaccessible panels, including saved floating windows.
+    /// Keep their complete layout for restoration and persistence.
+    pub fn apply_menu_visibility(&mut self, access: MenuAccess) {
+        let mode = self.current_mode;
+        if self.visibility_access.get(&mode) == Some(&access)
+            && self.current_tree().iter_all_tabs().all(|(_, panel)| access.allows_panel(*panel)) {
+            return;
+        }
+        let full = self.layout_for_save(mode);
+        let mut projected = full.clone();
+        let mut hidden = Vec::new();
+        for ((surface, node), panel) in full.iter_all_tabs() {
+            if !access.allows_panel(*panel) {
+                let neighbors = full[surface][node].iter_tabs().copied().filter(|p| access.allows_panel(*p)).collect();
+                hidden.push((*panel, neighbors));
+            }
+        }
+        projected.retain_tabs(|panel| access.allows_panel(*panel));
+        if hidden.is_empty() {
+            self.visibility_snapshots.remove(&mode);
+        } else {
+            self.visibility_snapshots.insert(mode, VisibilitySnapshot {
+                full, hidden, projected_structure: layout_structure(&projected),
+            });
+        }
+        self.scene_trees.insert(mode, projected);
+        self.visibility_access.insert(mode, access);
+    }
+
+    fn layout_for_save(&self, mode: SimulationMode) -> DockState<Panel> {
+        let current = self.scene_trees.get(&mode).expect("scene layout");
+        let Some(snapshot) = self.visibility_snapshots.get(&mode) else { return current.clone(); };
+        if layout_structure(current) == snapshot.projected_structure { return snapshot.full.clone(); }
+        let mut merged = current.clone();
+        for (panel, neighbors) in &snapshot.hidden {
+            if merged.find_tab(panel).is_some() { continue; }
+            if let Some((surface, node, _)) = neighbors.iter().find_map(|neighbor| merged.find_tab(neighbor)) {
+                merged[surface][node].append_tab(*panel);
+            } else {
+                merged.push_to_first_leaf(*panel);
+            }
+        }
+        merged
+    }
+
+    fn clear_visibility(&mut self, mode: SimulationMode) {
+        self.visibility_access.remove(&mode);
+        self.visibility_snapshots.remove(&mode);
     }
 
     /// Switch to a different simulation mode's layout.
@@ -115,6 +193,7 @@ impl DockManager {
 
     /// Reset current scene to embedded default layout.
     pub fn reset_current_to_embedded_default(&mut self) {
+        self.clear_visibility(self.current_mode);
         log::info!(
             "Resetting {} layout to embedded default",
             self.current_mode.display_name()
@@ -130,6 +209,8 @@ impl DockManager {
 
     /// Reset all scenes to embedded default layouts.
     pub fn reset_all_to_embedded_default(&mut self) {
+        self.visibility_access.clear();
+        self.visibility_snapshots.clear();
         for mode in SimulationMode::all() {
             let default_state = Self::load_default_layout(*mode);
             self.scene_trees.insert(*mode, default_state);
@@ -140,6 +221,7 @@ impl DockManager {
 
     /// Reset current scene to default layout.
     pub fn reset_current_to_default(&mut self) {
+        self.clear_visibility(self.current_mode);
         log::info!(
             "Resetting {} layout to default",
             self.current_mode.display_name()
@@ -155,6 +237,8 @@ impl DockManager {
 
     /// Reset all scenes to default layouts.
     pub fn reset_all_to_default(&mut self) {
+        self.visibility_access.clear();
+        self.visibility_snapshots.clear();
         for mode in SimulationMode::all() {
             let default_state = Self::load_default_layout(*mode);
             self.scene_trees.insert(*mode, default_state);
@@ -179,9 +263,9 @@ impl DockManager {
     /// that will be used when the layout files don't exist (first-time startup).
     pub fn save_current_as_default(&self) -> Result<(), DockSaveError> {
         // Save current layouts to backup files that will be used as defaults
-        for (mode, state) in &self.scene_trees {
+        for mode in self.scene_trees.keys() {
             let default_path = Self::default_layout_file_path(*mode);
-            Self::save_to_file(&default_path, state)?;
+            Self::save_to_file(&default_path, &self.layout_for_save(*mode))?;
             log::info!(
                 "Saved current {} layout as new default to {:?}",
                 mode.display_name(),
@@ -296,8 +380,8 @@ impl DockManager {
         }
 
         let path = Self::dock_file_path(self.current_mode);
-        if let Some(state) = self.scene_trees.get(&self.current_mode) {
-            match Self::save_to_file(&path, state) {
+        if self.scene_trees.contains_key(&self.current_mode) {
+            match Self::save_to_file(&path, &self.layout_for_save(self.current_mode)) {
                 Ok(()) => {
                     log::debug!(
                         "Saved dock layout for {} to {:?}",
@@ -319,16 +403,15 @@ impl DockManager {
 
     /// Save only the active scene's layout, reporting any failure.
     pub fn save_current_checked(&self) -> Result<(), String> {
-        let state = self.scene_trees.get(&self.current_mode).expect("current layout");
-        Self::save_to_file(&Self::dock_file_path(self.current_mode), state)
+        Self::save_to_file(&Self::dock_file_path(self.current_mode), &self.layout_for_save(self.current_mode))
             .map_err(|error| format!("{} layout: {error}", self.current_mode.display_name()))
     }
 
     /// Save all scene layouts to disk.
     pub fn save_all(&self) {
-        for (mode, state) in &self.scene_trees {
+        for mode in self.scene_trees.keys() {
             let path = Self::dock_file_path(*mode);
-            match Self::save_to_file(&path, state) {
+            match Self::save_to_file(&path, &self.layout_for_save(*mode)) {
                 Ok(()) => {
                     log::debug!(
                         "Saved dock layout for {} to {:?}",
@@ -349,6 +432,7 @@ impl DockManager {
 
     /// Load layout from disk for a specific mode.
     pub fn load_for_mode(&mut self, mode: SimulationMode) {
+        self.clear_visibility(mode);
         let dock_state = Self::load_or_create_default(mode);
         self.scene_trees.insert(mode, dock_state);
         log::info!("Reloaded dock layout for {}", mode.display_name());
@@ -473,6 +557,63 @@ pub fn create_default_gpu_layout() -> DockState<Panel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restricted_docked_and_floating_panels_restore_without_erasing_their_layout() {
+        let mut manager = DockManager::new();
+        let mode = SimulationMode::Preview;
+        let mut layout = DockState::new(vec![Panel::Viewport, Panel::CellTypeVisuals, Panel::ModeGraph]);
+        layout.add_window(vec![Panel::ThemeEditor, Panel::LeftPanel]);
+        let original = ron::to_string(&layout).unwrap();
+        manager.scene_trees.insert(mode, layout);
+        manager.apply_menu_visibility(MenuAccess::default());
+        assert!(manager.current_tree().find_tab(&Panel::CellTypeVisuals).is_some());
+        for panel in [Panel::ModeGraph, Panel::ThemeEditor, Panel::LeftPanel] {
+            assert!(manager.current_tree().find_tab(&panel).is_none());
+        }
+        assert_eq!(ron::to_string(&manager.layout_for_save(mode)).unwrap(), original);
+        manager.apply_menu_visibility(MenuAccess { advanced: true, developer: false });
+        assert!(manager.current_tree().find_tab(&Panel::ModeGraph).is_some());
+        assert!(manager.current_tree().find_tab(&Panel::ThemeEditor).is_some());
+        assert!(manager.current_tree().find_tab(&Panel::LeftPanel).is_none());
+        manager.apply_menu_visibility(MenuAccess { advanced: false, developer: true });
+        assert_eq!(ron::to_string(manager.current_tree()).unwrap(), original);
+        manager.apply_menu_visibility(MenuAccess::default());
+        manager.apply_menu_visibility(MenuAccess { advanced: false, developer: true });
+        assert_eq!(ron::to_string(manager.current_tree()).unwrap(), original);
+    }
+
+    #[test]
+    fn visible_layout_edits_and_hidden_panels_both_survive_access_changes() {
+        let mut manager = DockManager::new();
+        let mode = SimulationMode::Preview;
+        manager.scene_trees.insert(mode, DockState::new(vec![Panel::Viewport, Panel::Modes, Panel::ModeGraph]));
+        manager.apply_menu_visibility(MenuAccess::default());
+        manager.current_tree_mut().retain_tabs(|p| *p != Panel::Modes);
+        manager.current_tree_mut().push_to_first_leaf(Panel::CellTypeVisuals);
+        let saved = manager.layout_for_save(mode);
+        assert!(saved.find_tab(&Panel::Modes).is_none());
+        assert!(saved.find_tab(&Panel::CellTypeVisuals).is_some());
+        assert!(saved.find_tab(&Panel::ModeGraph).is_some());
+        manager.apply_menu_visibility(MenuAccess { advanced: true, developer: false });
+        assert!(manager.current_tree().find_tab(&Panel::Modes).is_none());
+        assert!(manager.current_tree().find_tab(&Panel::CellTypeVisuals).is_some());
+        assert!(manager.current_tree().find_tab(&Panel::ModeGraph).is_some());
+    }
+
+    #[test]
+    fn opening_a_restricted_panel_cannot_bypass_an_unchanged_access_level() {
+        let mut manager = DockManager::new();
+        let mode = SimulationMode::Preview;
+        manager.scene_trees.insert(mode, DockState::new(vec![Panel::Viewport]));
+        manager.apply_menu_visibility(MenuAccess::default());
+        manager.current_tree_mut().add_window(vec![Panel::ThemeEditor]);
+        manager.apply_menu_visibility(MenuAccess::default());
+        assert!(manager.current_tree().find_tab(&Panel::ThemeEditor).is_none());
+        assert!(manager.layout_for_save(mode).find_tab(&Panel::ThemeEditor).is_some());
+        manager.apply_menu_visibility(MenuAccess { advanced: true, developer: false });
+        assert!(manager.current_tree().find_tab(&Panel::ThemeEditor).is_some());
+    }
 
     #[test]
     fn reset_restores_only_the_current_layout() {
