@@ -135,7 +135,7 @@ pub struct SunRenderer {
     depth_sampler: wgpu::Sampler,
     camera_bind_group: wgpu::BindGroup,
     sun_data_bind_group: Option<wgpu::BindGroup>,
-    sun_data_bg_dirty: bool,
+    bound_depth_view: Option<wgpu::TextureView>,
 
     // Configurable parameters (exposed for UI)
     pub sun_angular_radius: f32,
@@ -313,7 +313,7 @@ impl SunRenderer {
             depth_sampler,
             camera_bind_group,
             sun_data_bind_group: None,
-            sun_data_bg_dirty: true,
+            bound_depth_view: None,
             sun_angular_radius: 0.025,
             sun_color: [1.0, 1.0, 0.85],
             enabled: true,
@@ -331,7 +331,7 @@ impl SunRenderer {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.sun_data_bg_dirty = true;
+        self.bound_depth_view = None;
         self.sun_params_dirty = true;
     }
 
@@ -417,8 +417,10 @@ impl SunRenderer {
             self.sun_params_dirty = false;
         }
 
-        // Recreate sun_data_bind_group only when depth texture changes (on resize)
-        if self.sun_data_bg_dirty || self.sun_data_bind_group.is_none() {
+        // Scene resets can transfer this renderer while replacing terrain depth
+        // without a resize. Track the actual view, including switches between
+        // render targets, so occlusion never samples the previous scene.
+        if self.bound_depth_view.as_ref() != Some(depth_view) || self.sun_data_bind_group.is_none() {
             self.sun_data_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Sun Data Bind Group"),
                 layout: &self.sun_data_layout,
@@ -437,7 +439,7 @@ impl SunRenderer {
                     },
                 ],
             }));
-            self.sun_data_bg_dirty = false;
+            self.bound_depth_view = Some(depth_view.clone());
         }
 
         // Render full-screen sun pass

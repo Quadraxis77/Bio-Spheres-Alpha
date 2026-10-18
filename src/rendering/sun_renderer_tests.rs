@@ -36,7 +36,7 @@ fn sun_is_a_stereo_world_sphere_with_roll_stable_detail_and_real_occlusion() {
         view_formats: &[],
     });
     let color_view = color.create_view(&Default::default());
-    let depth_view = depth.create_view(&Default::default());
+    let depth_view = std::cell::RefCell::new(depth.create_view(&Default::default()));
     let output = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Sun pixel readback"),
         size: (SIZE * SIZE * 4) as u64,
@@ -55,6 +55,7 @@ fn sun_is_a_stereo_world_sphere_with_roll_stable_detail_and_real_occlusion() {
                       depth_value: f32,
                       tint: [f32; 3],
                       intensity: f32| {
+        let depth_view = depth_view.borrow();
         sun.sun_color = tint;
         let vp = projection * Mat4::from_rotation_translation(rotation, eye).inverse();
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -293,6 +294,51 @@ fn sun_is_a_stereo_world_sphere_with_roll_stable_detail_and_real_occlusion() {
         ),
         base
     );
+    // Scene reset transfers this renderer to a new, same-sized depth target.
+    // The previous target remains valid and contains sky, so stale bindings
+    // would draw the sun straight over the replacement scene's terrain.
+    for reset in 0..3 {
+        let replacement = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Replacement scene depth"),
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let previous_view = depth_view.replace(replacement.create_view(&Default::default()));
+        let occluded = render(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            projection,
+            depth_at(-40.0),
+            [1.0, 0.65, 0.25],
+            0.4,
+        );
+        assert!(
+            occluded.iter().all(|&value| value == 0),
+            "reset {reset}: new terrain depth must hide the sun and corona without a resize"
+        );
+        depth_view.replace(previous_view);
+        assert_eq!(
+            render(
+                Vec3::ZERO,
+                Quat::IDENTITY,
+                projection,
+                1.0,
+                [1.0, 0.65, 0.25],
+                0.4
+            ),
+            base,
+            "reset {reset}: switching back to sky must restore the sun"
+        );
+    }
     std::fs::create_dir_all("target/vr-visual-checks").unwrap();
     for (name, pixels) in [
         ("sun-world-sphere", base),

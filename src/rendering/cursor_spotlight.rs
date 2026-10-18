@@ -45,7 +45,6 @@ impl CursorSpotlight {
         // Emit from the optical center of the camera, along the world-space ray
         // through the cursor. The cursor only steers the beam, never its origin.
         let mut light = Self::from_ray(camera_pos, direction, world_radius);
-        light.direction_outer[3] = 24.0_f32.to_radians().cos();
         light.color_inner = [0.6, 0.57, 0.51, 7.0_f32.to_radians().cos()];
         light
     }
@@ -57,7 +56,7 @@ impl CursorSpotlight {
         }
         Self {
             position_range: origin.extend((world_radius * 4.0).max(100.0)).to_array(),
-            direction_outer: direction.extend(13.0_f32.to_radians().cos()).to_array(),
+            direction_outer: direction.extend(24.0_f32.to_radians().cos()).to_array(),
             color_inner: [2.4, 2.28, 2.04, 7.0_f32.to_radians().cos()],
         }
     }
