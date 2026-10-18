@@ -247,6 +247,8 @@ pub struct App {
     device: wgpu::Device,
     /// Current high-level application phase (main menu vs in-game).
     app_phase: AppPhase,
+    /// First GPU scene creation waits until its loading dialog is presented.
+    main_scene_load_pending: bool,
     /// Main menu scene (two live genome previews + egui overlay).
     main_menu_scene: Option<MainMenuScene>,
     /// Last menu option hovered, used to play hover audio only on transitions.
@@ -1138,6 +1140,9 @@ impl App {
         let Some(choice) = self.vr_scene_request.take() else {
             return;
         };
+        if choice == Choice::Simulation && self.defer_first_main_scene_switch(SimulationMode::Gpu, true) {
+            return;
+        }
         self.scene_manager.clear_dragged_cell();
         self.editor_state.radial_menu.clear_drag_state();
         self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
@@ -1307,7 +1312,8 @@ impl App {
             egui::vec2(ui_width as f32, ui_height as f32),
         );
         let preview = self.app_phase == AppPhase::InGame
-            && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview;
+            && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Preview
+            && !self.main_scene_load_pending;
         if preview {
             let views = vr.panel_views(
                 self.scene_manager.active_scene().camera(),
@@ -1332,7 +1338,7 @@ impl App {
                 self.editor_state.cell_outline_width,
             );
         }
-        let menu_views = if self.app_phase == AppPhase::MainMenu {
+        let menu_views = if self.app_phase == AppPhase::MainMenu && !self.main_scene_load_pending {
             self.main_menu_scene.as_ref().map(|menu| {
                 // Read the actual egui image apertures, including DPI and margins.
                 let aperture = |id| {
@@ -1548,6 +1554,7 @@ impl App {
             surface,
             graphics_instance,
             app_phase: AppPhase::MainMenu,
+            main_scene_load_pending: false,
             main_menu_scene: Some(main_menu_scene),
             main_menu_hovered: MenuAction::None,
             main_menu_settings_open: false,
@@ -3465,6 +3472,7 @@ impl App {
         // Handle button actions.
         match menu_response.action {
             MenuAction::BugReport => self.start_bug_report(),
+            MenuAction::Play if self.defer_first_main_scene_switch(crate::ui::SimulationMode::Gpu, false) => {}
             MenuAction::Play => {
                 self.app_phase = AppPhase::InGame;
                 self.main_menu_hovered = MenuAction::None;
@@ -3559,6 +3567,143 @@ impl App {
         }
 
         self.window.request_redraw();
+    }
+
+    fn defer_first_main_scene_switch(&mut self, target: crate::ui::SimulationMode, sync_preview: bool) -> bool {
+        if target != crate::ui::SimulationMode::Gpu || self.scene_manager.gpu_scene().is_some() {
+            return false;
+        }
+        if sync_preview {
+            if let Some(preview) = self.scene_manager.get_preview_scene() {
+                self.working_genome = preview.genome.clone();
+            }
+        }
+        self.main_scene_load_pending = true;
+        self.next_frame_time = std::time::Instant::now();
+        #[cfg(feature = "vr")]
+        {
+            self.vr_controls.wheel_open = false;
+            self.vr_controls.trigger_consumed = true;
+        }
+        self.window.request_redraw();
+        true
+    }
+
+    /// Present on desktop and in the headset before creating expensive GPU resources.
+    fn render_main_scene_loading_frame(&mut self) {
+        let Some(output) = self.acquire_presentation_frame() else {
+            return; // Keep the request pending until a frame can actually be shown.
+        };
+        let view = output.texture.create_view(&Default::default());
+        self.ui.begin_frame(&self.window);
+        let dialog_visible = Self::show_main_scene_loading_dialog(&self.ui.ctx);
+        let egui_output = self.ui.ctx.end_pass();
+        #[cfg(feature = "vr")]
+        self.render_vr_ui(&egui_output);
+        #[cfg(feature = "vr")]
+        let mut desktop_output = egui_output;
+        #[cfg(not(feature = "vr"))]
+        let desktop_output = egui_output;
+        #[cfg(feature = "vr")]
+        if self.vr.is_some() {
+            desktop_output.pixels_per_point =
+                self.window.scale_factor() as f32 * self.ui.ctx.zoom_factor();
+        }
+        let screen = ScreenDescriptor {
+            size_in_pixels: [self.config.width, self.config.height],
+            pixels_per_point: desktop_output.pixels_per_point,
+        };
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("main_scene_loading") },
+        );
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("main_scene_loading_clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        self.ui.render(
+            &self.device, &self.queue, &mut encoder, &view, screen, desktop_output,
+        );
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.present_frame(output);
+        if !dialog_visible {
+            // egui sizes a new modal invisibly on its first pass. Wait for its
+            // visible pass to be presented before starting any blocking work.
+            self.window.request_redraw();
+            return;
+        }
+
+        // The loading frame remains visible through initialization and the first
+        // scene render. No timer or player acknowledgement delays entering play.
+        self.main_scene_load_pending = false;
+        let started = std::time::Instant::now();
+        let mode = crate::ui::SimulationMode::Gpu;
+        let initialized = self.scene_manager.switch_mode(
+            mode,
+            &self.device,
+            &self.queue,
+            &self.config,
+            self.ui.state.world_diameter,
+            self.ui.state.world_settings.cell_capacity,
+            &self.editor_state,
+        );
+        self.editor_state.cave_params_dirty |= initialized;
+        self.ui.state.current_mode = mode;
+        self.dock_manager.switch_mode(mode);
+        self.app_phase = AppPhase::InGame;
+        self.main_menu_hovered = MenuAction::None;
+        self.scene_manager.clear_dragged_cell();
+        self.editor_state.radial_menu.clear_drag_state();
+        self.editor_state.radial_menu.active_tool = crate::ui::radial_menu::RadialTool::None;
+        self.editor_state.radial_menu.visible = false;
+        let _ = self.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+        self.window.set_cursor_visible(true);
+        #[cfg(feature = "vr")]
+        {
+            self.vr_controls.set_context(crate::vr::controls::WheelContext::Gpu);
+            self.vr_controls.wheel_open = false;
+            self.vr_controls.full_ui = false;
+            self.vr_controls.trigger_consumed = true;
+            self.vr_input_state.0 = false;
+            if let Some(vr) = &mut self.vr {
+                vr.recenter_panel();
+            }
+        }
+        self.sync_music_for_current_phase();
+        self.last_render_time = std::time::Instant::now();
+        self.next_frame_time = self.last_render_time;
+        log::info!(
+            "First main scene initialized in {:.2}s",
+            started.elapsed().as_secs_f32(),
+        );
+        self.window.request_redraw();
+    }
+
+    fn show_main_scene_loading_dialog(ctx: &egui::Context) -> bool {
+        let id = egui::Id::new("first_main_scene_loading");
+        egui::Modal::new(id)
+            .area(egui::Modal::default_area(id).fade_in(false))
+            .backdrop_color(crate::ui::ui_system::palette().bg_darkest)
+            .show(ctx, |ui| {
+                ui.set_width(300.0);
+                ui.heading("Loading main scene…");
+                ui.add_space(8.0);
+                ui.label("Preparing the world, lighting, and water.");
+                ui.add_space(4.0);
+                ui.label("This may take a moment on first entry.");
+                ui.is_visible() && !ui.is_sizing_pass()
+            })
+            .inner
     }
 
     fn restore_current_scene_settings(&mut self) {
@@ -4275,6 +4420,10 @@ impl App {
         // user's desktop diagnostics preference.
         let gpu_timing_enabled = self.ui.state.gpu_timing_enabled || runtime_paced;
         if !runtime_paced && now < self.next_frame_time {
+            return;
+        }
+        if self.main_scene_load_pending {
+            self.render_main_scene_loading_frame();
             return;
         }
 
@@ -6204,7 +6353,7 @@ impl App {
 
         // Check if mode switch was requested via UI
         if let Some(requested_mode) = self.ui.state.take_mode_request() {
-            if requested_mode != current_mode {
+            if requested_mode != current_mode && !self.defer_first_main_scene_switch(requested_mode, true) {
                 // Sync genome from preview scene before switching to GPU mode
                 if requested_mode == crate::ui::types::SimulationMode::Gpu {
                     if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
@@ -6251,7 +6400,7 @@ impl App {
 
         // Check if mode switch was requested via dock manager (for layout persistence)
         let dock_mode = self.dock_manager.current_mode();
-        if dock_mode != current_mode {
+        if dock_mode != current_mode && !self.defer_first_main_scene_switch(dock_mode, true) {
             // Sync genome from preview scene before switching to GPU mode
             if dock_mode == crate::ui::types::SimulationMode::Gpu {
                 if let Some(preview_scene) = self.scene_manager.get_preview_scene() {
@@ -7330,6 +7479,10 @@ pub fn run() {
 #[cfg(test)]
 #[path = "bug_report_ui_tests.rs"]
 mod bug_report_ui_tests;
+
+#[cfg(test)]
+#[path = "main_scene_loading_ui_tests.rs"]
+mod main_scene_loading_ui_tests;
 
 #[cfg(all(test, feature = "vr", target_os = "windows"))]
 mod vr_tests {
