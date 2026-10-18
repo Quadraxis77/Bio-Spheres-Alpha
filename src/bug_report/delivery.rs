@@ -181,7 +181,7 @@ fn save_pending(config_dir: &Path, request: ReportRequest) -> std::io::Result<Pe
         schema_version: 1,
         privacy_revision: 1,
         report_id: request.id,
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: env!("BIO_SPHERES_VERSION").into(),
         message: Redactor::local().text(&request.message),
         diagnostics,
     };
@@ -307,7 +307,7 @@ mod tests {
             schema_version: 1,
             privacy_revision: 1,
             report_id: id.clone(),
-            version: env!("CARGO_PKG_VERSION").into(),
+            version: env!("BIO_SPHERES_VERSION").into(),
             message: "Automatic bug report delivery test. This verifies the message and diagnostics attachment; no player data is included.".into(),
             diagnostics: "BIO-SPHERES BUG REPORT\nSynthetic delivery test. No player logs or settings were collected.\n".into(),
         };

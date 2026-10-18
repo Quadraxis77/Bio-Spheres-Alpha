@@ -36,6 +36,13 @@ sudo apt install pkg-config libasound2-dev libx11-dev libxcursor-dev libxrandr-d
 cargo build --release
 ```
 
+The main menu title and bug reports show an automatically generated version such
+as `v0.1.0+473.e1004b7d`: the Cargo package version, commit count, and short commit
+ID. Every commit or checkout updates it on the next build, without a Git hook or
+scheduled task. `.dev` marks a build with uncommitted changes. Source archives
+without Git use the source fingerprint instead. Update `version` in `Cargo.toml`
+when choosing a new release version; the commit identifier updates itself.
+
 ## Running
 
 ```bash

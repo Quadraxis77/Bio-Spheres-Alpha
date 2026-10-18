@@ -3832,7 +3832,7 @@ impl App {
                 let btn_h = 44.0_f32;
                 let gap = 12.0_f32;
 
-                let block_h = 56.0
+                let block_h = 70.0
                     + 30.0
                     + btn_h
                     + gap
@@ -3850,14 +3850,21 @@ impl App {
                 let mut y = rect.center().y - block_h * 0.5;
 
                 // Title
-                ui.painter().text(
+                let title_rect = ui.painter().text(
                     Pos2::new(cx, y + 20.0),
                     Align2::CENTER_CENTER,
                     "BIO-SPHERES",
                     FontId::new(36.0, FontFamily::Proportional),
                     Color32::from_rgb(232, 244, 240),
                 );
-                y += 48.0;
+                ui.painter().text(
+                    Pos2::new(title_rect.right(), title_rect.bottom() + 2.0),
+                    Align2::RIGHT_TOP,
+                    concat!("v", env!("BIO_SPHERES_VERSION")),
+                    FontId::new(11.0, FontFamily::Proportional),
+                    Color32::from_rgb(100, 150, 135),
+                );
+                y += 62.0;
                 ui.painter().text(
                     Pos2::new(cx, y),
                     Align2::CENTER_CENTER,

@@ -31,6 +31,7 @@ fn main() {
         }
     }
     println!("cargo:rustc-env=BIO_SPHERES_SOURCE_ID={fingerprint:016x}");
+    embed_version(fingerprint);
     println!(
         "cargo:rustc-env=BIO_SPHERES_BUILD_PROFILE={}",
         std::env::var("PROFILE").unwrap_or_default()
@@ -73,6 +74,54 @@ fn main() {
 
         res.compile().unwrap();
     }
+}
+
+/// Embed the checked-out revision without changing Cargo.toml or creating commits.
+fn embed_version(source_fingerprint: u64) {
+    let git = |args: &[&str]| -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+
+    // HEAD changes on checkout; its symbolic branch ref changes on commit.
+    // Resolve paths through Git so this also works with linked worktrees.
+    let mut paths = vec![
+        "HEAD".to_owned(),
+        "index".to_owned(),
+        "packed-refs".to_owned(),
+    ];
+    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        paths.push(branch);
+    }
+    for name in paths {
+        if let Some(path) = git(&["rev-parse", "--git-path", &name]) {
+            if std::path::Path::new(&path).exists() {
+                println!("cargo:rerun-if-changed={path}");
+            }
+        }
+    }
+
+    let base = std::env::var("CARGO_PKG_VERSION").unwrap();
+    let version = match (
+        git(&["rev-list", "--count", "HEAD"]),
+        git(&["rev-parse", "--short=8", "HEAD"]),
+    ) {
+        (Some(count), Some(commit)) => {
+            let dirty = git(&["status", "--porcelain", "--untracked-files=normal"])
+                .is_some_and(|status| !status.is_empty());
+            format!("{base}+{count}.{commit}{}", if dirty { ".dev" } else { "" })
+        }
+        // Source archives can still produce identifiable builds without Git.
+        _ => format!("{base}+src.{source_fingerprint:016x}"),
+    };
+    println!("cargo:rustc-env=BIO_SPHERES_VERSION={version}");
 }
 
 fn collect_sources(directory: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {

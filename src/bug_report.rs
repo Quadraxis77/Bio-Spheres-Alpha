@@ -264,7 +264,7 @@ fn settings_snapshot(path: &Path) -> String {
 
 pub(crate) fn build_identity() -> serde_json::Value {
     serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": env!("BIO_SPHERES_VERSION"),
         "source_fingerprint": env!("BIO_SPHERES_SOURCE_ID"),
         "profile": env!("BIO_SPHERES_BUILD_PROFILE"),
         "built_at_unix_seconds": env!("BIO_SPHERES_BUILT_AT"),
@@ -292,7 +292,7 @@ pub fn create_report(config_dir: &Path, context: &serde_json::Value) -> std::io:
     system.refresh_memory();
     let mut text = format!(
         "BIO-SPHERES BUG REPORT\nVersion: {}\nBuild: {}\nPlatform: {} / {}\nOS: {}\nCPU: {}\nLogical CPUs: {}\nRAM: {} MiB total / {} MiB available\n\nCURRENT GAME STATE\n{}\n",
-        env!("CARGO_PKG_VERSION"), if cfg!(debug_assertions) { "debug" } else { "release" },
+        env!("BIO_SPHERES_VERSION"), if cfg!(debug_assertions) { "debug" } else { "release" },
         std::env::consts::OS, std::env::consts::ARCH,
         sysinfo::System::long_os_version().unwrap_or_else(|| "unknown".into()),
         system.cpus().first().map_or("unknown", |cpu| cpu.brand()), system.cpus().len(),
