@@ -14,10 +14,12 @@ pub mod reset_settings;
 pub mod settings;
 pub mod tab_viewer;
 pub mod toast;
+mod texture_updates;
 pub mod tutorial;
 pub mod types;
 pub mod ui_system;
 pub mod widgets;
+pub mod vr_mode;
 
 // Re-export commonly used types
 pub use dock::DockManager;

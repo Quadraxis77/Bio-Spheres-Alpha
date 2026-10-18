@@ -388,6 +388,8 @@ mod tests {
         }
         let mut uploads = 0u32;
         for _ in 0..10 {
+            vr.set_presentation_enabled(false);
+            assert!(!vr.headset_active());
             // Exercise the real idle xrBeginFrame/xrEndFrame worker used on
             // removal while desktop uploads continue on the same device.
             vr.frame_waiter.request(vr.session_epoch).unwrap();
@@ -423,6 +425,7 @@ mod tests {
             // Unworn desktop frames do not submit idle work indefinitely.
             assert!(vr.frame_waiter.drain(vr.session_epoch).unwrap().is_none());
             assert!(!vr.frame_waiter.pending);
+            vr.set_presentation_enabled(true);
         }
         let _gpu = gpu_access.lock();
         let readback = device.create_buffer(&wgpu::BufferDescriptor {

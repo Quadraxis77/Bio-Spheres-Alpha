@@ -2920,6 +2920,34 @@ impl UiSystem {
         self.ctx.end_pass()
     }
 
+    /// Keep presentation switching available from the main menu as well.
+    pub fn show_vr_mode_button(&mut self) {
+        let ctx = self.ctx.clone();
+        egui::Area::new(egui::Id::new("vr_mode_button"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
+            .show(&ctx, |ui| {
+                let mode = &mut self.state.vr_mode;
+                let button = egui::Button::new(mode.label()).selected(mode.selected());
+                if ui.add_enabled(mode.available, button)
+                    .on_hover_text(mode.tooltip())
+                    .on_disabled_hover_text(mode.tooltip()).clicked()
+                {
+                    mode.toggle();
+                }
+            });
+    }
+
+    /// Upload texture changes even if this frame's main UI is hidden in VR.
+    /// Call before making copies of the output for desktop and headset views.
+    pub fn prepare_output(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        output: &mut egui::FullOutput,
+    ) {
+        super::texture_updates::upload(&mut self.renderer, device, queue, output);
+    }
+
     /// Render egui output to the screen.
     ///
     /// This method handles texture updates, buffer uploads, and the actual
@@ -2931,17 +2959,13 @@ impl UiSystem {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         screen_descriptor: ScreenDescriptor,
-        output: egui::FullOutput,
+        mut output: egui::FullOutput,
     ) {
         // Handle platform output (clipboard, cursor, etc.)
         // Note: We don't have access to window here, so platform output
         // should be handled separately if needed
 
-        // Process texture updates
-        for (id, image_delta) in &output.textures_delta.set {
-            self.renderer
-                .update_texture(device, queue, *id, image_delta);
-        }
+        self.prepare_output(device, queue, &mut output);
 
         // Tessellate shapes into primitives
         let paint_jobs = self.ctx.tessellate(output.shapes, output.pixels_per_point);
@@ -3517,6 +3541,15 @@ pub(super) fn render_side_rail(
 ) {
     let p = palette();
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
+
+    let vr_selected = state.vr_mode.selected();
+    let vr_tooltip = state.vr_mode.tooltip();
+    let clicked = ui.add_enabled_ui(state.vr_mode.available, |ui| {
+        rail_button_toggle(ui, "VR", vr_tooltip, vr_selected, &p)
+    }).inner;
+    if clicked {
+        state.vr_mode.toggle();
+    }
 
     // Advanced Options toggle
     let adv_active = state.show_advanced_options;

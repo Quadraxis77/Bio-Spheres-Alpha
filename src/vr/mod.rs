@@ -561,6 +561,7 @@ pub struct VrState {
     focused: bool,
     visible: bool,
     user_present: Option<bool>,
+    presentation_enabled: bool,
     frame_activity: activity::FrameActivity,
     display_refresh_hz: Option<f32>,
     exiting: bool,
@@ -777,6 +778,7 @@ impl VrState {
             focused: false,
             visible: false,
             user_present: None,
+            presentation_enabled: true,
             frame_activity: Default::default(),
             display_refresh_hz,
             exiting: false,
@@ -831,7 +833,7 @@ impl VrState {
             && (self.frame.is_some() || self.frame_activity.active(std::time::Instant::now()))
     }
     fn headset_available(&self) -> bool {
-        self.running && !self.exiting && self.visible && self.user_present.unwrap_or(self.focused)
+        self.presentation_enabled && self.running && !self.exiting && self.visible && self.user_present.unwrap_or(self.focused)
     }
     pub fn presenting(&self) -> bool {
         self.headset_active() && self.frame.is_some_and(|frame| frame.should_render)
@@ -841,6 +843,15 @@ impl VrState {
     }
     pub fn frame_active(&self) -> bool {
         self.frame.is_some()
+    }
+    pub(crate) fn set_presentation_enabled(&mut self, enabled: bool) {
+        if self.presentation_enabled != enabled {
+            self.frame_activity.reset();
+            if enabled {
+                self.ui_anchor.reset();
+            }
+        }
+        self.presentation_enabled = enabled;
     }
     pub fn set_immersive(&mut self, immersive: bool) {
         if self.immersive && !immersive {
@@ -992,7 +1003,7 @@ impl VrState {
         if !self.running || self.exiting {
             return Ok(());
         }
-        let waited = if self.user_present == Some(false) {
+        let waited = if !self.presentation_enabled || self.user_present == Some(false) {
             self.frame_waiter.drain(self.session_epoch)?
         } else {
             self.frame_waiter.poll(self.session_epoch, self.headset_active())?
@@ -1428,7 +1439,7 @@ impl VrState {
             .and(end)?;
         // Start waiting for the next headset frame immediately so the runtime
         // wait overlaps app work instead of blocking at the next render entry.
-        if self.user_present != Some(false) {
+        if self.presentation_enabled && self.user_present != Some(false) {
             self.frame_waiter.request(self.session_epoch)?;
         }
         Ok(())

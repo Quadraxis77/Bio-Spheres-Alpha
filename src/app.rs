@@ -382,7 +382,7 @@ impl App {
 
     #[cfg(feature = "vr")]
     fn detect_headset(&mut self) {
-        if self.vr.is_some() || std::env::args().any(|arg| arg == "--no-vr") {
+        if self.vr.is_some() || !self.ui.state.vr_mode.enabled() {
             return;
         }
         let now = std::time::Instant::now();
@@ -1406,6 +1406,8 @@ impl App {
         dock_manager: DockManager,
         mut ui: UiSystem,
     ) -> Self {
+        ui.state.vr_mode.available = cfg!(feature = "vr")
+            && !std::env::args().any(|arg| arg == "--no-vr");
         // Apply the saved window preference after UI settings have loaded.
         if ui.state.fullscreen {
             window.set_fullscreen(Some(Fullscreen::Borderless(window.current_monitor())));
@@ -2503,6 +2505,15 @@ impl App {
 
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         if let WindowEvent::KeyboardInput { event, .. } = event {
+            if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::F10) {
+                if event.state == ElementState::Pressed && !event.repeat {
+                    self.ui.state.vr_mode.toggle();
+                    #[cfg(feature = "vr")]
+                    { self.vr_probe_next = std::time::Instant::now(); }
+                    self.window.request_redraw();
+                }
+                return true;
+            }
             if event.physical_key == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::F11) {
                 if event.state == ElementState::Pressed && !event.repeat {
                     let enabled = self.ui.state.toggle_developer_settings();
@@ -3386,7 +3397,9 @@ impl App {
         crate::ui::toast::render_toasts(&self.ui.ctx, &self.ui.toasts);
         crate::ui::toast::tick_toasts(&mut self.ui.toasts, dt);
         self.show_bug_report_ui();
-        let egui_output = self.ui.ctx.end_pass();
+        self.ui.show_vr_mode_button();
+        let mut egui_output = self.ui.ctx.end_pass();
+        self.ui.prepare_output(&self.device, &self.queue, &mut egui_output);
         self.ui.collect_control_usage("Main menu");
         #[cfg(feature = "vr")]
         let mut desktop_output = egui_output.clone();
@@ -3561,7 +3574,8 @@ impl App {
         let view = output.texture.create_view(&Default::default());
         self.ui.begin_frame(&self.window);
         let dialog_visible = Self::show_main_scene_loading_dialog(&self.ui.ctx);
-        let egui_output = self.ui.ctx.end_pass();
+        let mut egui_output = self.ui.ctx.end_pass();
+        self.ui.prepare_output(&self.device, &self.queue, &mut egui_output);
         #[cfg(feature = "vr")]
         self.render_vr_ui(&egui_output);
         #[cfg(feature = "vr")]
@@ -4282,6 +4296,7 @@ impl App {
         self.detect_headset();
         #[cfg(feature = "vr")]
         if let Some(vr) = &mut self.vr {
+            vr.set_presentation_enabled(self.ui.state.vr_mode.enabled());
             vr.set_immersive(
                 self.app_phase == AppPhase::InGame
                     && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu,
@@ -4297,6 +4312,7 @@ impl App {
         #[cfg(feature = "vr")]
         {
             let presenting = self.vr.as_ref().is_some_and(|vr| vr.headset_active());
+            self.ui.state.vr_mode.active = presenting;
             self.performance.set_vr_refresh_hz(
                 self.vr
                     .as_ref()
@@ -6430,6 +6446,7 @@ impl App {
             pixels_per_point: desktop_pixels_per_point,
         };
 
+        self.ui.prepare_output(&self.device, &self.queue, &mut egui_output);
         let ui_build_done = std::time::Instant::now();
         if self.ui.native_ui_hidden && !self.bug_reporter.open {
             egui_output.shapes.clear();

@@ -1199,6 +1199,10 @@ pub struct GlobalUiState {
     #[serde(skip)]
     pub show_developer_options: bool,
 
+    /// Runtime desktop/VR choice; never changes simulation mode or saved worlds.
+    #[serde(skip)]
+    pub vr_mode: super::vr_mode::VrModeControl,
+
     /// Whether the UI chrome (top bar, side rail, status bar, panels) is hidden.
     /// When true only the raw viewport is visible. Toggle with the rail button or Tab key.
     #[serde(skip)]
@@ -1278,6 +1282,7 @@ impl Default for GlobalUiState {
             mode_request: None,
             show_advanced_options: false,
             show_developer_options: false,
+            vr_mode: Default::default(),
             hide_ui: false,
             pending_close_panel: None,
         }
