@@ -1766,7 +1766,7 @@ impl Controls {
         let label = if let Some(dial) = &self.dial {
             format!("{}\n{}", dial.label, dial.value)
         } else if self.page == Page::Help {
-            "X / Y: menu    B: back\nRight ray + trigger: select\nRight stick click: screenshot\nRight stick up/down: scroll / travel speed\n\nLeft stick: ground travel\nHold left grip: rise / fall\nRight stick left/right: 45 deg turn\nRadial: walk around the planet\n\nHome: play / reset\nAdvanced Options: simulation speed\nOuter ring: scene tools\nWorld: water / physics / lighting\nNavigation: travel / turn sliders\nWheel slider: right stick changes value\nHold trigger: grab dial\nGrab scene: right grip to pan\nBoth grips: rotate / scale"
+            "X / Y: menu    B: back\nRight ray + trigger: select\nRight stick click: screenshot\nShake right hand: flashlight on/off\nRight stick up/down: scroll / travel speed\n\nLeft stick: ground travel\nHold left grip: rise / fall\nRight stick left/right: 45 deg turn\nRadial: walk around the planet\n\nHome: play / reset\nAdvanced Options: simulation speed\nOuter ring: scene tools\nWorld: water / physics / lighting\nNavigation: travel / turn sliders\nWheel slider: right stick changes value\nHold trigger: grab dial\nGrab scene: right grip to pan\nBoth grips: rotate / scale"
                 .to_owned()
         } else if self.page == Page::Reset {
             "Choose a scope\nCells or cells + water".to_owned()

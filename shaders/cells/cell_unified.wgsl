@@ -68,6 +68,11 @@ struct ShadowFieldParams {
     moss_color_bright_b: f32,
     _pad_moss_0: f32,
     _pad_moss_1: f32,
+    _pad_spotlight_0: f32,
+    _pad_spotlight_1: f32,
+    spotlight_position_range: vec4<f32>,
+    spotlight_direction_outer: vec4<f32>,
+    spotlight_color_inner: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
@@ -1172,7 +1177,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let local_light_color = sample_light_color_field(clamped_pos);
 
         let ndotl = max(dot(world_normal_front, -light_dir), 0.0);
-        let diffuse = ndotl * local_light_color * shadow + sample_local_irradiance(in.center);
+        let diffuse = ndotl * local_light_color * shadow + sample_local_irradiance(in.center)
+            + cursor_spotlight_surface(in.center + world_normal_front * in.radius, world_normal_front);
         var simple_color =
             base_color * (lighting.ambient + (1.0 - lighting.ambient) * diffuse);
 
@@ -1616,7 +1622,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     let shadow = apply_shadow_contrast(sample_light_field(clamped_pos));
     let local_light_color = sample_light_color_field(clamped_pos);
     let front_ndotl = max(dot(perturbed_normal, -light_dir), 0.0);
-    let front_diffuse = front_ndotl * local_light_color * shadow + sample_local_irradiance(in.center);
+    let front_diffuse = front_ndotl * local_light_color * shadow + sample_local_irradiance(in.center)
+            + cursor_spotlight_surface(in.center + world_normal_front * in.radius, world_normal_front);
 
     // Apply scene lighting to the detailed composite. Non-emissive cell material
     // receives no artificial fill light in shadow.
@@ -1801,7 +1808,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
             let spike_local_light = sample_local_irradiance(hit_world);
             let spike_ndotl = max(dot(spike_world_normal, -light_dir), 0.0);
             let spike_diffuse = spike_ndotl * spike_light_color * spike_shadow
-                              + spike_local_light;
+                              + spike_local_light + cursor_spotlight_surface(hit_world, spike_world_normal);
             let spike_view = normalize(camera.camera_pos - hit_world);
             let spike_half = normalize(-light_dir + spike_view);
             let spike_spec = pow(
@@ -1882,4 +1889,24 @@ fn fs_depth(in: VertexOutput) -> DepthOnlyOutput {
     var out: DepthOnlyOutput;
     out.depth = sphere_clip.z / sphere_clip.w;
     return out;
+}
+
+// Inspection light: a soft cone with finite range, independent of sunlight.
+fn cursor_spotlight_radiance(world_pos: vec3<f32>) -> vec3<f32> {
+    let light = shadow_params.spotlight_position_range;
+    if (light.w <= 0.0) { return vec3<f32>(0.0); }
+    let delta = world_pos - light.xyz;
+    let distance = length(delta);
+    let direction = delta / max(distance, 0.0001);
+    let cone = smoothstep(shadow_params.spotlight_direction_outer.w,
+        shadow_params.spotlight_color_inner.w, dot(direction, shadow_params.spotlight_direction_outer.xyz));
+    let range_fade = 1.0 - smoothstep(light.w * 0.65, light.w, distance);
+    let falloff = 1.0 / (1.0 + 3.0 * distance * distance / (light.w * light.w));
+    return shadow_params.spotlight_color_inner.rgb * cone * range_fade * falloff;
+}
+
+fn cursor_spotlight_surface(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let to_light = (shadow_params.spotlight_position_range.xyz - world_pos);
+    let light_dir = to_light / max(length(to_light), 0.0001);
+    return cursor_spotlight_radiance(world_pos) * (0.15 + 0.85 * max(dot(normal, light_dir), 0.0));
 }

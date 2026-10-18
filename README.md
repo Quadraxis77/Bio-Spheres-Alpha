@@ -17,6 +17,9 @@ The project uses local forks of egui and egui_dock for the user interface, with 
 - Cell division and adhesion mechanics
 - Genome-based cell behavior
 - Real-time 3D rendering with volumetric effects
+- Main-scene flashlight: aim with the cursor and press **L** to toggle. In VR,
+  aim with the right hand and shake it back and forth to toggle; a short
+  cooldown prevents repeated toggles. The beam also works with global fog off.
 - Interactive UI with genome editor
 
 ## Building

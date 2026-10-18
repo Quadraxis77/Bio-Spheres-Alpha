@@ -651,6 +651,10 @@ impl App {
             egui::ControllerSlider::set_circular(&self.ui.ctx, self.vr_controls.wheel_open);
             self.ui
                 .set_native_input(false, None, false, 0.0, self.window.scale_factor() as f32);
+            if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+                scene.flashlight_hand = None;
+                scene.flashlight_shake.update(None, 0.0);
+            }
             self.vr_input_state.3 = std::time::Instant::now();
             self.vr_screenshot_button_down = false;
             self.scene_manager
@@ -682,10 +686,8 @@ impl App {
             vr.panel_pointer_ray(self.scene_manager.active_scene().camera(), pointer)
         });
         let now = std::time::Instant::now();
-        let dt = now
-            .duration_since(self.vr_input_state.3)
-            .as_secs_f32()
-            .min(0.1);
+        let shake_dt = now.duration_since(self.vr_input_state.3).as_secs_f32();
+        let dt = shake_dt.min(0.1);
         self.vr_input_state.3 = now;
         let old_full_ui = self.vr_controls.full_ui;
         let old_hover = self.vr_controls.hovered;
@@ -1019,6 +1021,29 @@ impl App {
                     camera.view_rotation() * direction,
                 )
             });
+            let flashlight_ray = camera.interaction_ray;
+            // Track physical hand motion relative to the head, before world scale/locomotion.
+            let shake_position = input.grips[1]
+                .or(input.aims[1])
+                .and_then(|pose| {
+                    input.head_position.map(|head| {
+                        glam::Vec3::new(pose.position.x, pose.position.y, pose.position.z) - head
+                    })
+                })
+                .filter(|_| !input.squeeze[0] && !input.squeeze[1]);
+            let mut toggled = false;
+            if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+                scene.flashlight_hand = flashlight_ray;
+                toggled = scene.flashlight_shake.update(shake_position, shake_dt);
+                if toggled {
+                    scene.flashlight_enabled = !scene.flashlight_enabled;
+                }
+            }
+            if toggled {
+                if let Some(vr) = &self.vr {
+                    vr.selection_feedback(true);
+                }
+            }
         } else {
             self.scene_manager
                 .active_scene_mut()
@@ -3106,6 +3131,23 @@ impl App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && event.physical_key
+                        == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyL)
+                    && self.app_phase == AppPhase::InGame
+                    && self.scene_manager.current_mode() == crate::ui::types::SimulationMode::Gpu
+                    && !self.ui.wants_keyboard_input()
+                    && !self.ui.ctx.input(|i| {
+                        i.modifiers.ctrl || i.modifiers.alt || i.modifiers.command
+                    })
+                {
+                    if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+                        scene.flashlight_enabled = !scene.flashlight_enabled;
+                    }
+                    self.window.request_redraw();
+                    return true;
+                }
                 #[cfg(feature = "vr")]
                 if event.state == ElementState::Pressed
                     && !event.repeat
@@ -4531,6 +4573,20 @@ impl App {
                 .active_scene_mut()
                 .camera_mut()
                 .update(dt);
+        }
+
+        let flashlight_cursor = (!runtime_paced
+            && !gpu_headless
+            && self.window_focused
+            && self.ui.pointer_hover_pos().is_some()
+            && !self.ui.wants_pointer_input()
+            && !self.editor_state.radial_menu.visible)
+            .then_some(self.mouse_position);
+        if let Some(scene) = self.scene_manager.gpu_scene_mut() {
+            scene.flashlight_cursor = flashlight_cursor;
+            if !runtime_paced {
+                scene.flashlight_hand = None;
+            }
         }
 
         // -- Per-frame cursor visibility ---------------------------------------

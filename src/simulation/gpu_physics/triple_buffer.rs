@@ -288,7 +288,7 @@ pub struct GpuTripleBufferSystem {
     /// >= 0 means cell is ready and this is the frame number when it became ready
     pub split_ready_frame: wgpu::Buffer,
 
-    /// Maximum splits allowed (0 = unlimited)
+    /// Maximum splits allowed (0 = terminal, u32::MAX = unlimited)
     pub max_splits: wgpu::Buffer,
 
     /// Genome IDs for each cell

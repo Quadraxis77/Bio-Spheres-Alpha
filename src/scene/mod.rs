@@ -4,6 +4,7 @@
 //! simulation modes (Preview and GPU).
 
 mod frame_timing;
+mod water_transition;
 pub mod gpu_scene;
 pub mod gpu_timer;
 pub mod lineage;

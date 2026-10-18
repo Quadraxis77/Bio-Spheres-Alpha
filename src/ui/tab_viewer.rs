@@ -13628,6 +13628,9 @@ fn render_help(ui: &mut Ui, _context: &mut PanelContext, _state: &mut GlobalUiSt
     ui.heading("Help");
     ui.add_space(8.0);
     ui.label("Select a panel to see context-specific controls and shortcuts.");
+    if _context.current_mode == crate::ui::types::SimulationMode::Gpu {
+        ui.label("L: toggle cursor flashlight. In VR, aim with the right hand and shake it back and forth to toggle.");
+    }
     ui.separator();
     crate::ui::control_usage::show(ui);
 }

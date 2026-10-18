@@ -7,6 +7,10 @@
 use bytemuck::{Pod, Zeroable};
 
 #[cfg(test)]
+#[path = "cursor_spotlight_fog_tests.rs"]
+mod cursor_spotlight_tests;
+
+#[cfg(test)]
 mod stereo_tests {
     use super::*;
     use wgpu::util::DeviceExt;
@@ -141,6 +145,7 @@ pub struct FogCameraUniforms {
     pub tan_half_vertical_fov: f32,
     pub camera_forward: [f32; 3],
     pub _pad0: f32,
+    pub cursor_spotlight: super::cursor_spotlight::CursorSpotlight,
 }
 
 impl FogCameraUniforms {
@@ -172,6 +177,7 @@ impl FogCameraUniforms {
             tan_half_vertical_fov,
             camera_forward: (camera_rotation * center_ray).to_array(),
             _pad0: 0.0,
+            cursor_spotlight: Default::default(),
         }
     }
 }
@@ -210,7 +216,7 @@ pub struct FogParams {
     pub water_wave_scale: f32,
     /// 1 = trilinear interpolation of light field (smooth voxels), 0 = nearest
     pub smooth_light_field: u32,
-    pub _pad0: u32,
+    pub fog_enabled: u32,
     pub _pad1: u32,
     pub _pad2: u32,
 }
@@ -258,6 +264,7 @@ pub struct VolumetricFogRenderer {
     pub ray_start: f32,
     pub ray_end: f32,
     pub enabled: bool,
+    pub cursor_spotlight: super::cursor_spotlight::CursorSpotlight,
     /// Amplitude of wave distortion on light field samples (0 = off, ~0.5 = visible)
     pub water_wave_strength: f32,
     /// Spatial frequency of wave distortion
@@ -616,6 +623,7 @@ impl VolumetricFogRenderer {
             ray_start: 1.0,
             ray_end: 1500.0,
             enabled: false,
+            cursor_spotlight: Default::default(),
             water_wave_strength: 0.4,
             water_wave_scale: 0.15,
             smooth_light_field: true,
@@ -771,8 +779,9 @@ impl VolumetricFogRenderer {
             0.1,
             5000.0,
         );
-        let camera_uniform =
+        let mut camera_uniform =
             FogCameraUniforms::for_view(view_proj, camera_pos, camera_rotation, projection, time);
+        camera_uniform.cursor_spotlight = self.cursor_spotlight;
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
         // Update fog parameters
@@ -786,25 +795,41 @@ impl VolumetricFogRenderer {
             light_dir_x: light_dir[0],
             light_dir_y: light_dir[1],
             light_dir_z: light_dir[2],
-            fog_density: self.fog_density,
-            fog_steps: self.fog_steps,
+            fog_density: if self.enabled { self.fog_density } else { 0.0 },
+            fog_steps: if self.cursor_spotlight.enabled() {
+                self.fog_steps.max(32)
+            } else {
+                self.fog_steps
+            },
             light_color_r: self.light_color[0],
             light_color_g: self.light_color[1],
             light_color_b: self.light_color[2],
-            light_intensity: self.light_intensity,
+            light_intensity: if self.enabled {
+                self.light_intensity
+            } else {
+                0.0
+            },
             fog_color_r: self.fog_color[0],
             fog_color_g: self.fog_color[1],
             fog_color_b: self.fog_color[2],
             scattering_anisotropy: self.scattering_anisotropy,
             absorption: self.absorption,
-            height_fog_density: self.height_fog_density,
+            height_fog_density: if self.enabled {
+                self.height_fog_density
+            } else {
+                0.0
+            },
             height_fog_falloff: self.height_fog_falloff,
             ray_start: self.ray_start,
-            ray_end: self.ray_end,
+            ray_end: if self.cursor_spotlight.enabled() {
+                self.ray_end.max(self.cursor_spotlight.position_range[3])
+            } else {
+                self.ray_end
+            },
             water_wave_strength: self.water_wave_strength,
             water_wave_scale: self.water_wave_scale,
             smooth_light_field: self.smooth_light_field as u32,
-            _pad0: 0,
+            fog_enabled: self.enabled as u32,
             _pad1: 0,
             _pad2: 0,
         };

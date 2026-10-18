@@ -25,6 +25,9 @@ struct Lighting {
     ambient: f32,
     light_color: vec3<f32>,
     outline_width: f32,
+    spotlight_position_range: vec4<f32>,
+    spotlight_direction_outer: vec4<f32>,
+    spotlight_color_inner: vec4<f32>,
 }
 
 // Must match GpuBoulder in boulder_buffers.rs exactly (80 bytes).
@@ -268,7 +271,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Diffuse + ambient
     let ndotl   = max(dot(n, l), 0.0);
-    let diffuse = ndotl * lighting.light_color;
+    let diffuse = ndotl * lighting.light_color + cursor_spotlight_surface(in.world_pos, n);
     let ambient = vec3<f32>(lighting.ambient);
 
     // Blinn-Phong specular - rock is rough, keep it subtle
@@ -313,4 +316,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let lit = base_color * (ambient + diffuse) + vec3<f32>(spec);
     return vec4<f32>(lit, 1.0);
+}
+
+// Inspection light: a soft cone with finite range, independent of sunlight.
+fn cursor_spotlight_radiance(world_pos: vec3<f32>) -> vec3<f32> {
+    let light = lighting.spotlight_position_range;
+    if (light.w <= 0.0) { return vec3<f32>(0.0); }
+    let delta = world_pos - light.xyz;
+    let distance = length(delta);
+    let direction = delta / max(distance, 0.0001);
+    let cone = smoothstep(lighting.spotlight_direction_outer.w,
+        lighting.spotlight_color_inner.w, dot(direction, lighting.spotlight_direction_outer.xyz));
+    let range_fade = 1.0 - smoothstep(light.w * 0.65, light.w, distance);
+    let falloff = 1.0 / (1.0 + 3.0 * distance * distance / (light.w * light.w));
+    return lighting.spotlight_color_inner.rgb * cone * range_fade * falloff;
+}
+
+fn cursor_spotlight_surface(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let to_light = (lighting.spotlight_position_range.xyz - world_pos);
+    let light_dir = to_light / max(length(to_light), 0.0001);
+    return cursor_spotlight_radiance(world_pos) * (0.15 + 0.85 * max(dot(normal, light_dir), 0.0));
 }

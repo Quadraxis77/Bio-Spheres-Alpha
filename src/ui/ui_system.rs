@@ -1739,7 +1739,13 @@ impl UiSystem {
                     .stroke(egui::Stroke::new(1.0, p.border_subtle)),
             )
             .show(&self.ctx, |ui| {
-                render_side_rail(ui, &mut ui_state_copy, editor_state, dock_manager);
+                render_side_rail(
+                    ui,
+                    &mut ui_state_copy,
+                    editor_state,
+                    dock_manager,
+                    scene_manager.gpu_scene_mut().map(|scene| &mut scene.flashlight_enabled),
+                );
             });
 
         {
@@ -3544,6 +3550,7 @@ pub(super) fn render_side_rail(
     state: &mut GlobalUiState,
     editor_state: &mut crate::ui::panel_context::GenomeEditorState,
     dock_manager: &mut crate::ui::dock::DockManager,
+    flashlight_enabled: Option<&mut bool>,
 ) {
     let p = palette();
     ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
@@ -3621,6 +3628,12 @@ pub(super) fn render_side_rail(
             }
         }
         crate::ui::types::SimulationMode::Gpu => {
+            if let Some(enabled) = flashlight_enabled {
+                if rail_button_toggle(ui, "🔦", "Flashlight (L)", *enabled, &p) {
+                    *enabled = !*enabled;
+                }
+            }
+
             // Hide UI toggle
             let hide_active = state.hide_ui;
             if rail_button_toggle(ui, "👁", "Hide UI (toggle)", hide_active, &p) {

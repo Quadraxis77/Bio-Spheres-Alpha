@@ -18,6 +18,9 @@ struct CameraUniforms {
     tan_half_vertical_fov: f32,
     camera_forward: vec3<f32>,
     _pad0: f32,
+    spotlight_position_range: vec4<f32>,
+    spotlight_direction_outer: vec4<f32>,
+    spotlight_color_inner: vec4<f32>,
 }
 
 struct FogParams {
@@ -60,7 +63,7 @@ struct FogParams {
     water_wave_scale: f32,
     // 1 = trilinear interpolation of light field, 0 = nearest-neighbour
     smooth_light_field: u32,
-    _pad0: u32,
+    fog_enabled: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -292,6 +295,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     var accumulated_color = vec3<f32>(0.0);
     var transmittance = 1.0;
+    var beam_transmittance = 1.0;
     
     // Interleaved gradient noise - lower visual frequency than white noise, smoother result.
     let px = in.position.xy;
@@ -322,6 +326,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // when the global atmospheric fog density is zero.
         let density = fog_density_at(sample_pos);
         let water_amount = sample_water_density_fog(sample_pos);
+        let spotlight = cursor_spotlight_radiance(sample_pos);
+        // Single scattering in a faint participating medium. Integrating an
+        // exponential fraction keeps long beams and underwater paths bounded;
+        // a camera-mounted light must not become a flat, overexposed disk.
+        let beam_density = 0.12 + min(density, 0.4) * 0.2 + water_amount * 0.35;
+        let beam_scatter = 1.0 - exp(-beam_density * step_size * 0.01);
+        accumulated_color += transmittance * beam_transmittance * spotlight * beam_scatter * 0.25;
+        beam_transmittance *= 1.0 - beam_scatter;
         let effective_density = density + water_amount * 0.6;
         if (effective_density <= 0.0) {
             continue;
@@ -368,7 +380,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // Beer-Lambert absorption (fast exp approximation)
         let medium_absorption = fog_params.absorption + fog_params.fog_density + water_amount * 0.18;
-        let sample_extinction = effective_density * medium_absorption * step_size * 0.01;
+        let sample_extinction = select(0.0, effective_density * medium_absorption * step_size * 0.01, fog_params.fog_enabled != 0u);
         let sample_transmittance = 1.0 / (1.0 + sample_extinction + sample_extinction * sample_extinction * 0.5);
 
         // Accumulate (energy-conserving integration)
@@ -385,4 +397,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Output: RGB = fog color contribution, A = opacity (1 - transmittance)
     let opacity = 1.0 - transmittance;
     return vec4<f32>(accumulated_color, opacity);
+}
+
+// Inspection light: a soft cone with finite range, independent of sunlight.
+fn cursor_spotlight_radiance(world_pos: vec3<f32>) -> vec3<f32> {
+    let light = camera.spotlight_position_range;
+    if (light.w <= 0.0) { return vec3<f32>(0.0); }
+    let delta = world_pos - light.xyz;
+    let distance = length(delta);
+    let direction = delta / max(distance, 0.0001);
+    let cone = smoothstep(camera.spotlight_direction_outer.w,
+        camera.spotlight_color_inner.w, dot(direction, camera.spotlight_direction_outer.xyz));
+    let range_fade = 1.0 - smoothstep(light.w * 0.65, light.w, distance);
+    let falloff = 1.0 / (1.0 + 3.0 * distance * distance / (light.w * light.w));
+    return camera.spotlight_color_inner.rgb * cone * range_fade * falloff;
 }

@@ -145,6 +145,11 @@ struct ShadowFieldParams {
     moss_color_bright_b: f32,
     _pad_moss_0: f32,
     _pad_moss_1: f32,
+    _pad_spotlight_0: f32,
+    _pad_spotlight_1: f32,
+    spotlight_position_range: vec4<f32>,
+    spotlight_direction_outer: vec4<f32>,
+    spotlight_color_inner: vec4<f32>,
 }
 
 @group(2) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
@@ -941,6 +946,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = sun_color * cave_params.rock_ambient_strength * ao * ambient_visibility;
     var final_color = final_base_color * (ambient + sun_color * diffuse * cave_params.rock_diffuse_strength * shadow)
         + sun_color * vec3<f32>(specular * cave_params.rock_specular_strength * shadow);
+    final_color += final_base_color * cursor_spotlight_surface(in.world_position, N);
     let vent_color = local_surface_color;
     let vent_wrap = clamp(dot(N, local_light_direction) * 0.45 + 0.55, 0.0, 1.0);
     let vent_surface_breakup = mix(0.72, 1.18, noise(in.world_position.xz * 0.18 + vec2<f32>(shadow_params.time * 0.04, 17.0)))
@@ -968,4 +974,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let alpha = 1.0;
     
     return vec4<f32>(final_color, alpha);
+}
+
+// Inspection light: a soft cone with finite range, independent of sunlight.
+fn cursor_spotlight_radiance(world_pos: vec3<f32>) -> vec3<f32> {
+    let light = shadow_params.spotlight_position_range;
+    if (light.w <= 0.0) { return vec3<f32>(0.0); }
+    let delta = world_pos - light.xyz;
+    let distance = length(delta);
+    let direction = delta / max(distance, 0.0001);
+    let cone = smoothstep(shadow_params.spotlight_direction_outer.w,
+        shadow_params.spotlight_color_inner.w, dot(direction, shadow_params.spotlight_direction_outer.xyz));
+    let range_fade = 1.0 - smoothstep(light.w * 0.65, light.w, distance);
+    let falloff = 1.0 / (1.0 + 3.0 * distance * distance / (light.w * light.w));
+    return shadow_params.spotlight_color_inner.rgb * cone * range_fade * falloff;
+}
+
+fn cursor_spotlight_surface(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let to_light = (shadow_params.spotlight_position_range.xyz - world_pos);
+    let light_dir = to_light / max(length(to_light), 0.0001);
+    return cursor_spotlight_radiance(world_pos) * (0.15 + 0.85 * max(dot(normal, light_dir), 0.0));
 }

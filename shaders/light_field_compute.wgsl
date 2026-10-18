@@ -92,10 +92,8 @@ var<storage, read> geothermal_glow: array<vec4<f32>>;
 @group(0) @binding(9)
 var<storage, read_write> solar_transmittance: array<f32>;
 
-// Full sunlight is 1.0. Photocytes gain 20 nutrients/sec at that level.
-// A default photocyte needs 50 nutrients/sec to replace itself
-// (split_mass 1.5 over split_interval 1.0), so vents are capped at 1.5x
-// replacement: 75 nutrients/sec, or 3.75 light units.
+// Full sunlight is 1.0. Vents retain 3.75 units of visual radiance.
+// The photocyte shader normalizes this independently for nutrient production.
 const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
 
 // Per-voxel absorption coefficient for ice (liquid water uses 0.055).

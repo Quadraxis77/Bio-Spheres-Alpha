@@ -9,6 +9,16 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+/// Full sunlight at brightness 3 supplies 5 nutrients/sec before metabolism.
+pub const DEFAULT_PHOTOCYTE_MASS_RATE: f32 = 0.05;
+
+/// Solar production falls quadratically below brightness 3 and increases above it.
+/// Keep explicit low/zero production settings instead of promoting them at runtime.
+pub fn photocyte_solar_mass_rate(configured_rate: f32, brightness: f32) -> f32 {
+    let exposure = brightness.clamp(0.0, 5.0) / 3.0;
+    configured_rate.max(0.0) * exposure * exposure
+}
+
 /// Grid resolution (must match fluid simulation)
 const GRID_RESOLUTION: u32 = 128;
 const TOTAL_VOXELS: usize = (GRID_RESOLUTION * GRID_RESOLUTION * GRID_RESOLUTION) as usize;
@@ -112,6 +122,8 @@ pub struct ShadowFieldParams {
     pub moss_color_bright_g: f32,
     pub moss_color_bright_b: f32,
     pub _pad_moss: [f32; 2], // padding for alignment
+    pub _pad_spotlight: [f32; 2],
+    pub cursor_spotlight: crate::rendering::cursor_spotlight::CursorSpotlight,
 }
 
 /// GPU Light Field System
@@ -123,6 +135,7 @@ pub struct ShadowFieldParams {
 ///   3. Compute light field (ray march with occlusion)
 ///   4. Photocyte light consumption (photocytes gain mass)
 pub struct LightFieldSystem {
+    pub cursor_spotlight: crate::rendering::cursor_spotlight::CursorSpotlight,
     pub luminocyte_emission: super::luminocyte_emission::LuminocyteEmission,
     // Buffers
     light_field_buffer: wgpu::Buffer,
@@ -1040,6 +1053,7 @@ impl LightFieldSystem {
             });
 
         Self {
+            cursor_spotlight: Default::default(),
             luminocyte_emission: super::luminocyte_emission::LuminocyteEmission::new(
                 device,
                 grid_origin,
@@ -1083,8 +1097,8 @@ impl LightFieldSystem {
             ambient_floor: 0.0,
             scattering_coefficient: 0.2,
             water_light_attenuation: 1.0,
-            mass_per_second_full_light: 0.2,
-            geothermal_mass_per_second_full_light: 0.2,
+            mass_per_second_full_light: DEFAULT_PHOTOCYTE_MASS_RATE,
+            geothermal_mass_per_second_full_light: DEFAULT_PHOTOCYTE_MASS_RATE,
             min_light_threshold: 0.05,
             shadow_strength: 1.0,
             shadow_enabled: true,
@@ -1479,6 +1493,8 @@ impl LightFieldSystem {
             moss_color_bright_g: self.moss_color_bright[1],
             moss_color_bright_b: self.moss_color_bright[2],
             _pad_moss: [0.0; 2],
+            _pad_spotlight: [0.0; 2],
+            cursor_spotlight: self.cursor_spotlight,
         };
         queue.write_buffer(
             &self.shadow_field_params_buffer,

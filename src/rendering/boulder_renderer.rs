@@ -28,7 +28,7 @@ struct CameraUniform {
     lod_threshold_high: f32,
 }
 
-/// Lighting uniform matching the cell renderer layout.
+/// Directional lighting and the cursor/controller inspection light.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct LightingUniform {
@@ -36,6 +36,7 @@ struct LightingUniform {
     ambient: f32,
     light_color: [f32; 3],
     outline_width: f32,
+    cursor_spotlight: super::cursor_spotlight::CursorSpotlight,
 }
 
 pub struct BoulderRenderer {
@@ -125,6 +126,7 @@ impl BoulderRenderer {
             ambient: 0.15,
             light_color: [1.0, 0.98, 0.95],
             outline_width: 0.0,
+            cursor_spotlight: Default::default(),
         };
         queue.write_buffer(&lighting_buffer, 0, bytemuck::bytes_of(&default_lighting));
 
@@ -232,6 +234,18 @@ impl BoulderRenderer {
         })
     }
 
+    pub fn set_cursor_spotlight(
+        &self,
+        queue: &wgpu::Queue,
+        light: super::cursor_spotlight::CursorSpotlight,
+    ) {
+        queue.write_buffer(
+            &self.lighting_buffer,
+            std::mem::offset_of!(LightingUniform, cursor_spotlight) as u64,
+            bytemuck::bytes_of(&light),
+        );
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
@@ -243,6 +257,7 @@ impl BoulderRenderer {
             ambient: 0.15,
             light_color: [1.0, 0.98, 0.95],
             outline_width: 0.0,
+            cursor_spotlight: Default::default(),
         };
         queue.write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&lighting));
     }

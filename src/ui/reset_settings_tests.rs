@@ -20,7 +20,7 @@ fn frame(
             ui.set_width(44.0);
             let mut editor = crate::ui::GenomeEditorState::factory_defaults();
             let mut dock = crate::ui::DockManager::new();
-            crate::ui::ui_system::render_side_rail(ui, state, &mut editor, &mut dock);
+            crate::ui::ui_system::render_side_rail(ui, state, &mut editor, &mut dock, None);
             let rect = editor.panel_rects["ResetSettings"];
             active = render_dialogs(ui.ctx(), state, Some(rect), None);
         },
@@ -233,6 +233,7 @@ fn reset_icon_shares_the_rail_center_and_stays_at_the_bottom() {
                             &mut state,
                             &mut editor,
                             &mut dock,
+                            None,
                         );
                     });
             },

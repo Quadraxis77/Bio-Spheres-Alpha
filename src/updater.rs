@@ -103,7 +103,7 @@ pub fn migrate_config_files() {
         if *filename == "light_settings.ron" {
             match migrate_legacy_photocyte_production(&path) {
                 Ok(true) => {
-                    log::info!("Config migration: increased legacy photocyte production rate")
+                    log::info!("Config migration: rebalanced legacy photocyte production rate")
                 }
                 Ok(false) => {}
                 Err(e) => log::warn!(
@@ -283,16 +283,51 @@ fn migrate_legacy_fluid_nutrient_density(path: &Path) -> Result<bool, String> {
 
 fn migrate_legacy_photocyte_production(path: &Path) -> Result<bool, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
-
-    let legacy_value = if text.contains("photocyte_mass_per_second: 0.012") {
-        "photocyte_mass_per_second: 0.012"
-    } else if text.contains("photocyte_mass_per_second: 2.0") {
-        "photocyte_mass_per_second: 2.0"
-    } else {
+    let Some(updated) = rebalance_legacy_photocyte_production(&text) else {
         return Ok(false);
     };
-
-    let updated = text.replacen(legacy_value, "photocyte_mass_per_second: 0.2", 1);
     std::fs::write(path, updated).map_err(|e| format!("write error: {}", e))?;
     Ok(true)
+}
+
+fn rebalance_legacy_photocyte_production(text: &str) -> Option<String> {
+    // Migrate only the previous shipped defaults. In particular, do not raise
+    // deliberately reduced rates (the old migration raised 0.012 to 0.2).
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if let Some(value) = trimmed.strip_prefix("photocyte_mass_per_second:") {
+            let end = value.find(',')?;
+            let rate: f32 = value[..end].trim().parse().ok()?;
+            if rate != 0.2 && rate != 2.0 {
+                return None;
+            }
+            let start = offset + line.len() - value.len();
+            let mut updated = text.to_owned();
+            updated.replace_range(start..start + end, " 0.05");
+            return Some(updated);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+#[cfg(test)]
+mod photocyte_tests {
+    use super::rebalance_legacy_photocyte_production;
+
+    #[test]
+    fn photocyte_migration_updates_only_previous_defaults() {
+        for old in ["0.2", "2.0", "0.2000"] {
+            let text = format!("(\r\n    photocyte_mass_per_second: {old}, // rate\r\n)\r\n");
+            assert_eq!(
+                rebalance_legacy_photocyte_production(&text),
+                Some("(\r\n    photocyte_mass_per_second: 0.05, // rate\r\n)\r\n".into())
+            );
+        }
+        for value in ["0.0", "0.012", "0.02", "0.05", "0.25", "2.05"] {
+            let text = format!("(\n    photocyte_mass_per_second: {value},\n)");
+            assert_eq!(rebalance_legacy_photocyte_production(&text), None);
+        }
+    }
 }

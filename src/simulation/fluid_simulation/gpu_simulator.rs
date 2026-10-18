@@ -350,10 +350,9 @@ pub struct GpuFluidSimulator {
     listener_water_fraction: std::cell::Cell<f32>,
     listener_water_smoothed_at: std::cell::Cell<std::time::Instant>,
     /// Hysteresis output derived from `listener_water_fraction` - see
-    /// `poll_listener_water`. Debounced on purpose (audio switching needs
-    /// stability), so anything that needs to react to the *instant* a
-    /// crossing happens (a one-shot visual transition, not sustained state)
-    /// should use `listener_underwater_instant` instead.
+    /// `poll_listener_water`. Debounced to keep audio stable at the surface.
+    /// Visual crossing effects apply additional confirmation to the continuous
+    /// fraction so waterline noise cannot repeatedly restart a full-screen pulse.
     listener_underwater: std::cell::Cell<bool>,
     /// Raw per-poll occupancy sample, not run through the EMA/hysteresis at
     /// all - reacts as fast as the async GPU readback allows (~1 frame).
@@ -1870,11 +1869,8 @@ impl GpuFluidSimulator {
         self.listener_underwater.get()
     }
 
-    /// Un-debounced occupancy sample from the most recent completed readback -
-    /// reacts within ~1 frame of an actual crossing, unlike
-    /// `is_listener_underwater`'s deliberately smoothed/hysteresis-banded
-    /// output. Use this to trigger one-shot visual transitions; use the
-    /// debounced version for anything that needs to stay stable (audio).
+    /// Raw occupancy from the latest readback, useful for diagnostics. This can
+    /// alternate at the waterline; it must not directly trigger visual pulses.
     pub fn is_listener_underwater_instant(&self) -> bool {
         self.listener_underwater_instant.get()
     }

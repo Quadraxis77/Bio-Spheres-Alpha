@@ -92,6 +92,7 @@ struct CameraUniform {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 3],
     _padding: f32,
+    cursor_spotlight: super::cursor_spotlight::CursorSpotlight,
 }
 
 /// Organism skin material params - same as before, kept for API compatibility
@@ -314,6 +315,7 @@ fn build_icosphere_positions() -> Vec<[f32; 3]> {
 // -- OrganismSkinRenderer ------------------------------------------------------
 
 pub struct OrganismSkinRenderer {
+    pub cursor_spotlight: super::cursor_spotlight::CursorSpotlight,
     // -- Compute pipelines -----------------------------------------------------
     clear_pipeline: wgpu::ComputePipeline,
     accumulate_pipeline: wgpu::ComputePipeline,
@@ -527,6 +529,7 @@ impl OrganismSkinRenderer {
             view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
             camera_pos: [0.0; 3],
             _padding: 0.0,
+            cursor_spotlight: Default::default(),
         };
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ShrinkWrap Camera"),
@@ -622,6 +625,7 @@ impl OrganismSkinRenderer {
         let total_indices = MAX_ORGANISMS * TRIS_PER_ORG * 3;
 
         Self {
+            cursor_spotlight: Default::default(),
             clear_pipeline,
             accumulate_pipeline,
             finalize_pipeline,
@@ -876,6 +880,7 @@ impl OrganismSkinRenderer {
             view_proj: (proj * view).to_cols_array_2d(),
             camera_pos: camera_pos.to_array(),
             _padding: 0.0,
+            cursor_spotlight: self.cursor_spotlight,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&cam));
 

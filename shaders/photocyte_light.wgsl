@@ -135,8 +135,8 @@ const LUMINOCYTE_PHOTOCYTE_NUTRIENTS_PER_LIGHT_SECOND: f32 = 5.0;
 // Do not scale this by sampled sunlight; true darkness would otherwise drain
 // nothing and blocked cells could survive indefinitely.
 const PHOTOCYTE_SHADE_LOSS_RATE: f32 = 10.0;
-// Full sunlight is 1.0. Geothermal vents are allowed to be worth 1.5x the
-// default photocyte replacement rate: 75 nutrients/sec / 20 nutrients/sec.
+// The radiative field uses up to 3.75 units for vent glow. Normalize that
+// visual intensity before feeding: a full vent supplies 1.5x brightness-3 sun.
 const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
 
 // Fixed-point conversion
@@ -311,12 +311,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         0.0,
         GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE,
     );
-    let usable_light = direct_sun + geothermal_light + luminocyte_light;
+    let geothermal_exposure = geothermal_light / GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE;
+    let usable_light = direct_sun + geothermal_exposure + luminocyte_light;
 
     // Sun, geothermal glow, and luminocyte radiance add. Luminocyte food uses
     // its own conversion coefficient so it stays below the emitter's cost.
     let nutrient_rate = photocyte_params.mass_per_second_full_light * 100.0 * direct_sun
-        + photocyte_params.geothermal_mass_per_second_full_light * 100.0 * geothermal_light
+        + photocyte_params.geothermal_mass_per_second_full_light * 100.0 * 1.5 * geothermal_exposure
         + LUMINOCYTE_PHOTOCYTE_NUTRIENTS_PER_LIGHT_SECOND * luminocyte_light;
     let capacity = max(max_nutrients - current_nutrients, 0.0);
     let nutrient_gain = min(nutrient_rate * params.delta_time, capacity);

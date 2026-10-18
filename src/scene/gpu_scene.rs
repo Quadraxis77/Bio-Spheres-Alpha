@@ -31,10 +31,6 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-const PHOTOCYTE_BASELINE_BRIGHTNESS: f32 = 2.5;
-const MAX_SUN_BRIGHTNESS: f32 = 5.0;
-const PHOTOCYTE_BASELINE_MASS_RATE: f32 = 0.2;
-const LEGACY_PHOTOCYTE_MASS_RATE_MAX: f32 = 0.02;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES: usize = 256;
 const DIVISION_AUDIO_PLAYBACK_CANDIDATES_U32: u32 = DIVISION_AUDIO_PLAYBACK_CANDIDATES as u32;
 /// Number of staging buffers in the division-audio readback pool. Measured GPU
@@ -48,24 +44,6 @@ const DIVISION_AUDIO_READBACK_BUFFER_COUNT: usize = 8;
 const DIVISION_AUDIO_SEARCH_RADIUS_CELLS: u32 = 18;
 const DIVISION_AUDIO_GRID_RESOLUTION: u32 = 128;
 const DIVISION_AUDIO_MAX_CELLS_PER_GRID: u32 = 16;
-
-/// Scale photocyte nutrient production across the sun's 0-5 brightness range.
-/// The squared response keeps very low brightness weak, preserves the configured
-/// baseline at 2.5, and strongly rewards brightness above the baseline.
-fn photocyte_production_multiplier(brightness: f32) -> f32 {
-    let normalized = brightness.clamp(0.0, MAX_SUN_BRIGHTNESS) / PHOTOCYTE_BASELINE_BRIGHTNESS;
-    normalized * normalized
-}
-
-/// Promote the original underpowered rate at runtime while preserving current
-/// configured rates.
-fn effective_photocyte_mass_rate(configured_rate: f32) -> f32 {
-    if configured_rate <= LEGACY_PHOTOCYTE_MASS_RATE_MAX {
-        PHOTOCYTE_BASELINE_MASS_RATE
-    } else {
-        configured_rate
-    }
-}
 
 /// Camera uniform for voxel rendering
 #[repr(C)]
@@ -118,6 +96,13 @@ struct PendingCellInsertion {
 /// Uses compute shaders for physics simulation, allowing for
 /// much larger cell counts than the CPU preview mode.
 pub struct GpuScene {
+    /// Visual inspection light, toggled with L or a right-hand shake in VR.
+    pub flashlight_enabled: bool,
+    pub flashlight_cursor: Option<(f32, f32)>,
+    /// World-space controller ray, independent of the tool/UI ray.
+    pub flashlight_hand: Option<(glam::Vec3, glam::Vec3)>,
+    #[cfg(feature = "vr")]
+    pub flashlight_shake: crate::rendering::cursor_spotlight::ShakeToggle,
     /// Cell renderer for visualization
     pub renderer: CellRenderer,
     /// GPU-based adhesion line renderer (reads directly from GPU buffers)
@@ -484,16 +469,13 @@ pub struct GpuScene {
     /// either side (and while actively pressing against it - see
     /// `CameraController::boundary_push_progress`), for a subtle glassy tint.
     pub world_boundary_proximity: f32,
-    /// Decaying 0-1 pulses, set to 1.0 the instant a genuine crossing event
-    /// happens (not mere proximity) and relaxed back to 0 over
+    /// Decaying 0-1 pulses, set to 1.0 when a genuine crossing is confirmed
+    /// (not mere proximity) and relaxed back to 0 over
     /// `CROSSING_PULSE_DECAY_SECONDS` - see `update_boundary_visual_state`.
     pub water_crossing_pulse: f32,
     pub world_boundary_crossing_pulse: f32,
-    /// Tracks the un-debounced instant water sample (not `listener_underwater`,
-    /// which is deliberately smoothed for audio) so the crossing pulse fires
-    /// within ~1 frame of an actual crossing instead of waiting on that
-    /// smoothing to settle.
-    listener_underwater_instant_prev: bool,
+    /// Confirms a stable change of side before playing the waterline effect.
+    water_transition: super::water_transition::WaterTransition,
     visual_state_updated_at: std::time::Instant,
     /// Moss system for cave wall vegetation (growth, erosion, consumption)
     pub moss_system: Option<MossSystem>,
@@ -869,6 +851,11 @@ impl GpuScene {
         let cave_renderer = None;
 
         Self {
+            flashlight_enabled: false,
+            flashlight_cursor: None,
+            flashlight_hand: None,
+            #[cfg(feature = "vr")]
+            flashlight_shake: Default::default(),
             renderer,
             adhesion_renderer,
             world_sphere_renderer,
@@ -1061,7 +1048,7 @@ impl GpuScene {
             world_boundary_proximity: 0.0,
             water_crossing_pulse: 0.0,
             world_boundary_crossing_pulse: 0.0,
-            listener_underwater_instant_prev: false,
+            water_transition: Default::default(),
             visual_state_updated_at: std::time::Instant::now(),
             moss_system: None,
             show_moss: true,
@@ -2082,8 +2069,8 @@ impl GpuScene {
     /// Refreshes the continuous world-sphere proximity tint and the two
     /// decaying crossing pulses (world sphere membrane, water surface) -
     /// called once per frame from `render`. Pulses only fire on an actual
-    /// crossing event (`CameraController::last_boundary_crossing`, or
-    /// `listener_underwater` toggling), never on mere proximity, so the
+    /// crossing event (`CameraController::last_boundary_crossing`, or a
+    /// confirmed change in water immersion), never on mere proximity, so the
     /// "whoosh" reads as a real transition instead of ambient shimmer.
     fn update_boundary_visual_state(&mut self) {
         const BOUNDARY_TINT_RANGE: f32 = 20.0;
@@ -2109,22 +2096,16 @@ impl GpuScene {
             (self.world_boundary_crossing_pulse - decay).max(0.0)
         };
 
-        // Driven by the un-debounced instant sample, not `listener_underwater`
-        // (which is deliberately smoothed over ~0.1-0.3s so audio doesn't flip
-        // flap at the surface) - the pulse should react to an actual crossing
-        // within about a frame, not wait for that smoothing to settle.
-        let listener_underwater_instant = self
-            .fluid_simulator
-            .as_ref()
-            .map(|sim| sim.is_listener_underwater_instant())
-            .unwrap_or(false);
-        self.water_crossing_pulse =
-            if listener_underwater_instant != self.listener_underwater_instant_prev {
-                1.0
-            } else {
-                (self.water_crossing_pulse - decay).max(0.0)
-            };
-        self.listener_underwater_instant_prev = listener_underwater_instant;
+        // A raw voxel sample can alternate every frame at the waterline.
+        // Only a sustained, unambiguous change of immersion may restart the pulse.
+        self.water_crossing_pulse = if self
+            .water_transition
+            .update(self.listener_underwater_fraction, dt)
+        {
+            1.0
+        } else {
+            (self.water_crossing_pulse - decay).max(0.0)
+        };
     }
 
     /// Get the world sphere renderer for customization.
@@ -7296,8 +7277,7 @@ impl GpuScene {
 
         // Update light field system parameters
         if let Some(ref mut light_field) = self.light_field_system {
-            let base_photocyte_mass_rate =
-                effective_photocyte_mass_rate(editor_state.photocyte_mass_per_second);
+            let base_photocyte_mass_rate = editor_state.photocyte_mass_per_second.max(0.0);
             light_field.set_light_dir(editor_state.light_dir);
             light_field.set_max_steps(editor_state.light_field_max_steps);
             light_field.set_absorption_solid(editor_state.light_field_absorption_solid);
@@ -7305,7 +7285,10 @@ impl GpuScene {
             light_field.set_ambient_floor(editor_state.light_field_ambient_floor);
             light_field.set_water_light_attenuation(editor_state.water_light_attenuation);
             light_field.set_mass_per_second(
-                base_photocyte_mass_rate * photocyte_production_multiplier(effective_sun_intensity),
+                crate::simulation::gpu_physics::light_field::photocyte_solar_mass_rate(
+                    base_photocyte_mass_rate,
+                    effective_sun_intensity,
+                ),
             );
             light_field.set_geothermal_mass_per_second(base_photocyte_mass_rate);
             light_field.set_min_light_threshold(editor_state.photocyte_min_light_threshold);
@@ -7677,6 +7660,12 @@ impl GpuScene {
                 &self.gpu_triple_buffers.genome_ids,
                 &self.gpu_triple_buffers.mode_indices,
                 &self.gpu_triple_buffers.cell_types,
+                &self.gpu_triple_buffers.split_intervals,
+                &self.gpu_triple_buffers.split_nutrient_thresholds,
+                &self.gpu_triple_buffers.max_splits,
+                &self.gpu_triple_buffers.nutrient_gain_rates,
+                &self.gpu_triple_buffers.max_cell_sizes,
+                &self.gpu_triple_buffers.stiffnesses,
                 &self.gpu_triple_buffers.mode_properties_v0,
                 &self.gpu_triple_buffers.mode_properties_v1,
                 &self.gpu_triple_buffers.mode_properties_v2,
@@ -8193,7 +8182,6 @@ impl Scene for GpuScene {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_photocyte_mass_rate, photocyte_production_multiplier};
 
     #[test]
     fn stereo_view_does_not_advance_gpu_simulation_twice() {
@@ -8402,46 +8390,6 @@ mod tests {
             "Both eye targets must receive distinct projected views"
         );
     }
-
-    #[test]
-    fn photocyte_production_is_centered_on_brightness_2_5() {
-        assert_eq!(photocyte_production_multiplier(0.0), 0.0);
-        assert_eq!(photocyte_production_multiplier(1.25), 0.25);
-        assert_eq!(photocyte_production_multiplier(2.5), 1.0);
-        assert_eq!(photocyte_production_multiplier(3.75), 2.25);
-        assert_eq!(photocyte_production_multiplier(5.0), 4.0);
-
-        let configured_mass_rate = effective_photocyte_mass_rate(0.2);
-        assert_eq!(
-            configured_mass_rate * photocyte_production_multiplier(2.5) * 100.0,
-            20.0
-        );
-        assert_eq!(
-            configured_mass_rate * photocyte_production_multiplier(5.0) * 100.0,
-            80.0
-        );
-
-        let gain_at_brightness_one_full_light =
-            configured_mass_rate * photocyte_production_multiplier(1.0) * 100.0;
-        assert!((gain_at_brightness_one_full_light - 3.2).abs() < 1e-5);
-
-        let gain_at_extremely_low_brightness =
-            configured_mass_rate * photocyte_production_multiplier(0.1) * 100.0;
-        assert!((gain_at_extremely_low_brightness - 0.032).abs() < 1e-5);
-    }
-
-    #[test]
-    fn photocyte_production_stays_within_the_brightness_range() {
-        assert_eq!(photocyte_production_multiplier(-1.0), 0.0);
-        assert_eq!(photocyte_production_multiplier(6.0), 4.0);
-    }
-
-    #[test]
-    fn legacy_photocyte_rates_are_promoted_at_runtime() {
-        assert_eq!(effective_photocyte_mass_rate(0.012), 0.2);
-        assert_eq!(effective_photocyte_mass_rate(0.02), 0.2);
-        assert_eq!(effective_photocyte_mass_rate(0.25), 0.25);
-    }
 }
 
 impl GpuScene {
@@ -8480,6 +8428,32 @@ impl GpuScene {
         let aspect = self.renderer.width as f32 / self.renderer.height as f32;
         let proj_matrix = self.camera.projection_matrix(aspect, 0.1, 5000.0);
         let view_proj = proj_matrix * view_matrix;
+        let spotlight = if !self.flashlight_enabled {
+            crate::rendering::cursor_spotlight::CursorSpotlight::default()
+        } else if let Some((origin, direction)) = self.flashlight_hand {
+            crate::rendering::cursor_spotlight::CursorSpotlight::from_ray(
+                origin,
+                direction,
+                world_diameter * 0.5,
+            )
+        } else {
+            crate::rendering::cursor_spotlight::CursorSpotlight::from_cursor(
+                self.flashlight_cursor,
+                self.renderer.width,
+                self.renderer.height,
+                view_proj,
+                self.camera.position(),
+                world_diameter * 0.5,
+            )
+        };
+        if let Some(ref mut light_field) = self.light_field_system {
+            light_field.cursor_spotlight = spotlight;
+            light_field.update_shadow_params(queue);
+        }
+        if let Some(ref mut fog) = self.volumetric_fog_renderer {
+            fog.cursor_spotlight = spotlight;
+            fog.enabled = self.show_volumetric_fog;
+        }
 
         // TODO: Update instance builder to work without canonical state
         // This will be updated in task 13 when GPU systems are fully integrated
@@ -9182,6 +9156,7 @@ impl GpuScene {
                 if advance_world {
                     bs.update_bubbles(&mut encoder, queue, frame_dt, self.gravity_mode);
                 }
+                bs.renderer.set_cursor_spotlight(queue, spotlight);
                 bs.render(
                     &mut encoder,
                     queue,
@@ -9416,7 +9391,8 @@ impl GpuScene {
             }
 
             // Render pass: draw the updated mesh over adhesion lines
-            if let Some(ref renderer) = self.organism_skin_renderer {
+            if let Some(ref mut renderer) = self.organism_skin_renderer {
+                renderer.cursor_spotlight = spotlight;
                 if self.current_cell_count > 0 {
                     renderer.set_time(queue, self.current_time);
                     renderer.render(
@@ -9728,7 +9704,7 @@ impl GpuScene {
         }
 
         // Render volumetric fog if enabled (post-process over scene, half-res + composite)
-        if self.show_volumetric_fog {
+        if self.show_volumetric_fog || spotlight.enabled() {
             if let (Some(ref light_field), true) = (
                 &self.light_field_system,
                 self.volumetric_fog_renderer.is_some(),

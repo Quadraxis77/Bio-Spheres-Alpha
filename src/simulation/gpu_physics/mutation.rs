@@ -9,8 +9,13 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Maximum number of mutation candidates per frame (2 per division: child A + child B)
-const MAX_MUTATION_CANDIDATES: u32 = 8192;
+#[cfg(test)]
+#[path = "mutation_batch_tests.rs"]
+mod batch_tests;
+
+#[cfg(test)]
+#[path = "mutation_morphology_tests.rs"]
+mod morphology_tests;
 
 /// Maximum mutation log entries for debug/UI feedback
 const MAX_MUTATION_LOG_ENTRIES: u32 = 1024;
@@ -128,6 +133,10 @@ pub mod data_type {
     ///   ~10% -> 15 deg fine (small rotations around each axis)
     /// element_offset encodes which vec4 sub-buffer (0=v0, 4=v1, 8=v2, 12=v3, 16=v4).
     pub const QUAT_SNAP: u32 = 9;
+    /// Coordinated geometry and adhesion on a mode and its immediate children.
+    /// element_offset: 0 = planar lattice, 1 = cubic lattice, 2 = side branch.
+    /// Keeps the developmental graph and cell types, including reusable sequences.
+    pub const BODY_PLAN: u32 = 12;
 }
 
 /// Buffer IDs matching the WGSL switch cases
@@ -463,6 +472,12 @@ impl MutationSystem {
                     },
                     count: None,
                 },
+                Self::storage_rw_entry(5), // per-cell split interval
+                Self::storage_rw_entry(6), // per-cell nutrient threshold
+                Self::storage_rw_entry(7), // per-cell max splits
+                Self::storage_rw_entry(8), // per-cell nutrient gain
+                Self::storage_rw_entry(9), // per-cell max size
+                Self::storage_rw_entry(10), // per-cell stiffness
             ],
         });
 
@@ -889,15 +904,21 @@ impl MutationSystem {
 
         let mutation_candidates_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Mutation Candidates"),
-            size: (MAX_MUTATION_CANDIDATES * 8) as u64, // vec2<u32> per candidate
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            // Each surviving newborn occupies a distinct cell slot. Cover the
+            // whole world so dense division bursts do not lower mutation odds.
+            size: u64::from(cell_capacity.max(1)) * 8,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
         let mutation_candidate_count_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Mutation Candidate Count"),
             size: 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -1025,14 +1046,14 @@ impl MutationSystem {
                 max_value: 10.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
-            // split_interval [0.1, 60.0]: delta ~1-8% of range
+            // split_interval [1.0, 60.0]: mutations cannot divide faster than once a second.
             MutationParamEntry {
                 buffer_id: buffer_id::MODE_PROPERTIES,
                 element_offset: 3,
                 weight: 1.0,
                 min_delta: 0.5,
                 max_delta: 5.0,
-                min_value: 0.1,
+                min_value: 1.0,
                 max_value: 60.0,
                 data_type: data_type::CONTINUOUS_F32,
             },
@@ -1941,6 +1962,19 @@ impl MutationSystem {
                 data_type: data_type::MODE_TRIM,
             },
         ];
+        // Independent quaternion snaps rarely assemble the matching rotations,
+        // balanced inheritance, and keep flags required by a lattice. Give
+        // coordinated changes a share of the existing orientation-family budget.
+        entries.extend((0..3).map(|pattern| MutationParamEntry {
+            buffer_id: buffer_id::GENOME_MODE_DATA,
+            element_offset: pattern,
+            weight: 10.0,
+            min_delta: 0.0,
+            max_delta: 0.0,
+            min_value: 0.0,
+            max_value: 0.0,
+            data_type: data_type::BODY_PLAN,
+        }));
         entries.extend(Self::listener_response_entries(0.3));
         entries
     }
@@ -2059,14 +2093,14 @@ impl MutationSystem {
                     max_value: 10.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
-                // split_interval [0.1, 60.0]
+                // split_interval [1.0, 60.0]
                 MutationParamEntry {
                     buffer_id: buffer_id::MODE_PROPERTIES,
                     element_offset: 3,
                     weight: 1.0,
                     min_delta: 0.2,
                     max_delta: 2.0,
-                    min_value: 0.1,
+                    min_value: 1.0,
                     max_value: 60.0,
                     data_type: data_type::CONTINUOUS_F32,
                 },
@@ -2680,6 +2714,12 @@ impl MutationSystem {
         genome_ids_buffer: &wgpu::Buffer,
         mode_indices_buffer: &wgpu::Buffer,
         cell_types_buffer: &wgpu::Buffer,
+        cell_split_intervals: &wgpu::Buffer,
+        cell_split_nutrient_thresholds: &wgpu::Buffer,
+        cell_max_splits: &wgpu::Buffer,
+        cell_nutrient_gain_rates: &wgpu::Buffer,
+        cell_max_sizes: &wgpu::Buffer,
+        cell_stiffnesses: &wgpu::Buffer,
         mode_properties_v0: &wgpu::Buffer,
         mode_properties_v1: &wgpu::Buffer,
         mode_properties_v2: &wgpu::Buffer,
@@ -2778,6 +2818,30 @@ impl MutationSystem {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: cell_types_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: cell_split_intervals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: cell_split_nutrient_thresholds.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: cell_max_splits.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: cell_nutrient_gain_rates.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: cell_max_sizes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: cell_stiffnesses.as_entire_binding(),
                 },
             ],
         }));
@@ -3113,9 +3177,9 @@ impl MutationSystem {
     /// Call this AFTER the division execute pass completes.
     pub fn dispatch(
         &mut self,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         current_frame: u32,
         mode_pool_capacity: u32,
     ) {
@@ -3138,62 +3202,16 @@ impl MutationSystem {
             return; // Mutation bind groups not yet built
         };
 
-        // Clear mutation candidate count before collect pass
-        queue.write_buffer(
-            &self.mutation_candidate_count_buffer,
-            0,
-            bytemuck::bytes_of(&0u32),
-        );
-
         // Stage 1: Collect candidates from division results
         // Must be a separate compute pass so all division_execute workgroups have finished
         // writing division_flags and division_slot_assignments before we read them.
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Mutation Collect Candidates Pass"),
-                timestamp_writes: None,
-            });
-
-            pass.set_pipeline(&self.collect_pipeline);
-            pass.set_bind_group(0, collect_input_bg, &[]);
-            pass.set_bind_group(1, collect_output_bg, &[]);
-
-            // Dispatch at full capacity - collect shader reads cell_count_buffer internally
-            let workgroups = (self.cell_capacity + 127) / 128;
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
+        self.collect_candidates(encoder, collect_input_bg, collect_output_bg);
 
         // Stage 2: Apply mutations to collected candidates
         // Must be a separate compute pass so all collect workgroups have finished
         // writing mutation_candidates before the mutation shader reads them.
         {
-            // Advance RNG seed
-            let rng_seed = self.rng_counter.fetch_add(1, Ordering::Relaxed);
-
-            // Upload uniform params
-            let params = MutationParamsUniform {
-                radiation_level: self.radiation_level,
-                rng_seed,
-                current_frame,
-                param_table_size: self.vulnerability_table.len() as u32,
-                total_mode_count: mode_pool_capacity,
-                max_modes_per_genome: crate::genome::MAX_MODES as u32,
-                genome_ring_capacity: GENOME_RING_CAPACITY,
-                subtle_color_mutation: if self.subtle_mutations { 1 } else { 0 },
-                cell_type_gene_pool_mask: self.cell_type_gene_pool_mask,
-                _pad0: 0,
-                _pad1: 0,
-                _pad2: 0,
-            };
-            queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
-
-            // Clear mutation log count and telemetry counters
-            let zeroed_telemetry = [0u32; MUTATION_TELEMETRY_COUNTERS as usize];
-            queue.write_buffer(
-                &self.mutation_log_count_buffer,
-                0,
-                bytemuck::cast_slice(&zeroed_telemetry),
-            );
+            self.encode_dispatch_params(device, encoder, current_frame, mode_pool_capacity);
 
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Mutation Pass"),
@@ -3206,9 +3224,57 @@ impl MutationSystem {
             pass.set_bind_group(2, buffers_bg, &[]);
 
             // Dispatch enough workgroups for max candidates
-            let workgroups = (MAX_MUTATION_CANDIDATES + 63) / 64;
+            let workgroups = self.cell_capacity.max(1).div_ceil(64);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
+    }
+
+    fn collect_candidates(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        input: &wgpu::BindGroup,
+        output: &wgpu::BindGroup,
+    ) {
+        // Queue writes run before the entire submission, not between fixed steps.
+        encoder.clear_buffer(&self.mutation_candidate_count_buffer, 0, None);
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Mutation Collect Candidates Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.collect_pipeline);
+        pass.set_bind_group(0, input, &[]);
+        pass.set_bind_group(1, output, &[]);
+        pass.dispatch_workgroups(self.cell_capacity.div_ceil(128), 1, 1);
+    }
+
+    fn encode_dispatch_params(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        current_frame: u32,
+        mode_pool_capacity: u32,
+    ) {
+        let params = MutationParamsUniform {
+            radiation_level: self.radiation_level,
+            rng_seed: self.rng_counter.fetch_add(1, Ordering::Relaxed),
+            current_frame,
+            param_table_size: self.vulnerability_table.len() as u32,
+            total_mode_count: mode_pool_capacity,
+            max_modes_per_genome: crate::genome::MAX_MODES as u32,
+            genome_ring_capacity: GENOME_RING_CAPACITY,
+            subtle_color_mutation: u32::from(self.subtle_mutations),
+            cell_type_gene_pool_mask: self.cell_type_gene_pool_mask,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        };
+        crate::simulation::gpu_upload::encode_buffer_write(
+            device,
+            encoder,
+            &self.params_buffer,
+            bytemuck::bytes_of(&params),
+        );
+        encoder.clear_buffer(&self.mutation_log_count_buffer, 0, None);
     }
 
     /// Genome reclamation is required for fusion even with radiation disabled.

@@ -3415,7 +3415,7 @@ impl GenomeEditorState {
             1.0
         }
         fn default_photocyte_mass() -> f32 {
-            0.2
+            crate::simulation::gpu_physics::light_field::DEFAULT_PHOTOCYTE_MASS_RATE
         }
         fn default_photocyte_threshold() -> f32 {
             0.05
@@ -3602,7 +3602,7 @@ impl GenomeEditorState {
             0.5,
             0.5,
             0.6,
-            0.2,
+            crate::simulation::gpu_physics::light_field::DEFAULT_PHOTOCYTE_MASS_RATE,
             0.05,
             true,
             0.02,

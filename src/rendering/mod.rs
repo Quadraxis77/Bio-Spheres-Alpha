@@ -128,6 +128,7 @@ pub mod boulder_renderer;
 pub mod boundary_crossing;
 pub mod cave_system;
 pub mod cells;
+pub mod cursor_spotlight;
 pub mod view;
 pub use view::{CameraProjection, RenderView};
 pub mod death_particles;

@@ -80,6 +80,11 @@ struct ShadowFieldParams {
     moss_color_bright_b: f32,
     _pad_moss_0: f32,
     _pad_moss_1: f32,
+    _pad_spotlight_0: f32,
+    _pad_spotlight_1: f32,
+    spotlight_position_range: vec4<f32>,
+    spotlight_direction_outer: vec4<f32>,
+    spotlight_color_inner: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
@@ -426,6 +431,7 @@ fn shade_ice(in: VertexOutput) -> ShadeResult {
         fresnel * params.fresnel_reflection,
     );
 
+    final_color += body_color * cursor_spotlight_surface(in.world_position, smooth_normal);
     return ShadeResult(final_color, fresnel, facing);
 }
 
@@ -445,4 +451,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let alpha = clamp(params.alpha_base + shaded.fresnel * 0.12 + (1.0 - shaded.facing) * 0.06, 0.0, 1.0);
 
     return vec4<f32>(shaded.color, alpha);
+}
+
+// Inspection light: a soft cone with finite range, independent of sunlight.
+fn cursor_spotlight_radiance(world_pos: vec3<f32>) -> vec3<f32> {
+    let light = shadow_params.spotlight_position_range;
+    if (light.w <= 0.0) { return vec3<f32>(0.0); }
+    let delta = world_pos - light.xyz;
+    let distance = length(delta);
+    let direction = delta / max(distance, 0.0001);
+    let cone = smoothstep(shadow_params.spotlight_direction_outer.w,
+        shadow_params.spotlight_color_inner.w, dot(direction, shadow_params.spotlight_direction_outer.xyz));
+    let range_fade = 1.0 - smoothstep(light.w * 0.65, light.w, distance);
+    let falloff = 1.0 / (1.0 + 3.0 * distance * distance / (light.w * light.w));
+    return shadow_params.spotlight_color_inner.rgb * cone * range_fade * falloff;
+}
+
+fn cursor_spotlight_surface(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let to_light = (shadow_params.spotlight_position_range.xyz - world_pos);
+    let light_dir = to_light / max(length(to_light), 0.0001);
+    return cursor_spotlight_radiance(world_pos) * (0.15 + 0.85 * max(dot(normal, light_dir), 0.0));
 }

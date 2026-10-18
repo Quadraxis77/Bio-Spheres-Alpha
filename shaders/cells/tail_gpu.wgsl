@@ -73,6 +73,11 @@ struct ShadowFieldParams {
     moss_color_bright_b: f32,
     _pad_moss_0: f32,
     _pad_moss_1: f32,
+    _pad_spotlight_0: f32,
+    _pad_spotlight_1: f32,
+    spotlight_position_range: vec4<f32>,
+    spotlight_direction_outer: vec4<f32>,
+    spotlight_color_inner: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> shadow_params: ShadowFieldParams;
@@ -253,7 +258,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let local_color = select(sample_light_color_field(sample_position), lighting.light_color,
         shadow_params.shadow_enabled == 0u);
     let ndotl = max(dot(normal, -light_dir), 0.0);
-    let diffuse = ndotl * local_color * shadow;
+    let diffuse = ndotl * local_color * shadow + cursor_spotlight_surface(in.world_position, normal);
     
     // Slight darkening toward tip
     let tip_darken = 1.0 - in.t * 0.3;
@@ -261,4 +266,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let final_color = in.color.rgb * (lighting.ambient + (1.0 - lighting.ambient) * diffuse) * tip_darken;
     
     return vec4<f32>(final_color, in.color.a);
+}
+
+// Inspection light: a soft cone with finite range, independent of sunlight.
+fn cursor_spotlight_radiance(world_pos: vec3<f32>) -> vec3<f32> {
+    let light = shadow_params.spotlight_position_range;
+    if (light.w <= 0.0) { return vec3<f32>(0.0); }
+    let delta = world_pos - light.xyz;
+    let distance = length(delta);
+    let direction = delta / max(distance, 0.0001);
+    let cone = smoothstep(shadow_params.spotlight_direction_outer.w,
+        shadow_params.spotlight_color_inner.w, dot(direction, shadow_params.spotlight_direction_outer.xyz));
+    let range_fade = 1.0 - smoothstep(light.w * 0.65, light.w, distance);
+    let falloff = 1.0 / (1.0 + 3.0 * distance * distance / (light.w * light.w));
+    return shadow_params.spotlight_color_inner.rgb * cone * range_fade * falloff;
+}
+
+fn cursor_spotlight_surface(world_pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let to_light = (shadow_params.spotlight_position_range.xyz - world_pos);
+    let light_dir = to_light / max(length(to_light), 0.0001);
+    return cursor_spotlight_radiance(world_pos) * (0.15 + 0.85 * max(dot(normal, light_dir), 0.0));
 }
