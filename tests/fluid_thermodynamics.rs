@@ -2164,6 +2164,119 @@ fn mean_momentum(states: &[u32], axis: u32) -> f32 {
 }
 
 #[test]
+fn supported_water_spreads_promptly_and_respects_the_lateral_flow_setting() {
+    const N: u32 = 32;
+    let mut grid = ClimateGrid::<N>::new();
+    grid.params.gravity_mode = 1;
+    grid.params.gravity_magnitude = 9.8;
+    grid.params.lateral_flow_probability_empty = 1.0;
+    let mut means = Vec::new();
+    for lateral in [0.0, 0.1, 0.8] {
+        grid.reset(0, 20.0, 0.0);
+        grid.tick = 0;
+        grid.params.lateral_flow_probability_water = lateral;
+        let mut states = vec![0; (N * N * N) as usize];
+        let mut solids = states.clone();
+        for z in 0..N {
+            for y in 0..N {
+                for x in 0..N {
+                    let i = (x + y * N + z * N * N) as usize;
+                    // Separate straight channels measure spreading without
+                    // phase changes, collisions between parcels, or falling.
+                    solids[i] = u32::from(y <= 4 || z % 3 != 2 || x <= 3 || x >= 28);
+                    if x == 4 && y == 5 && z % 3 == 2 {
+                        states[i] = 0xffff0001;
+                    }
+                }
+            }
+        }
+        let volume = states.iter().filter(|s| **s & 7 == 1).count();
+        grid.write(1, &states);
+        grid.write(2, &solids);
+        grid.flow_ticks(12);
+        let moved = grid.read(1);
+        let water: Vec<_> = moved
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| **s & 7 == 1)
+            .collect();
+        assert_eq!(water.len(), volume);
+        assert!(water
+            .iter()
+            .all(|(i, s)| solids[*i] == 0 && **s >> 16 == 65535));
+        let mean_x = water
+            .iter()
+            .map(|(i, _)| (i % N as usize) as f32)
+            .sum::<f32>()
+            / volume as f32;
+        eprintln!("lateral {lateral}, after 0.2 s: mean x {mean_x:.2}");
+        means.push(mean_x);
+    }
+    assert_eq!(
+        means[0], 4.0,
+        "zero lateral flow must leave resting water still"
+    );
+    assert!(
+        means[2] > 12.0,
+        "default lateral flow must spread promptly: {means:?}"
+    );
+    assert!(
+        means[2] > means[1] + 3.0,
+        "the slider must control ongoing spreading: {means:?}"
+    );
+}
+
+#[test]
+fn radial_surface_water_spreads_without_waiting_for_packed_momentum() {
+    const N: u32 = 32;
+    let mut grid = ClimateGrid::<N>::new();
+    grid.params.gravity_mode = 3;
+    grid.params.gravity_magnitude = -9.8; // outward gravity holds water on the shell
+    grid.params.grid_origin_x = -16.0;
+    grid.params.grid_origin_y = -16.0;
+    grid.params.grid_origin_z = -16.0;
+    grid.params.world_radius = 13.0;
+    grid.params.surface_pressure = 0.5;
+    grid.params.lateral_flow_probability_empty = 1.0;
+    grid.params.lateral_flow_probability_water = 0.8;
+    grid.reset(0, 20.0, 0.0);
+    let mut states = vec![0; (N * N * N) as usize];
+    let mut solids = states.clone();
+    for z in 0..N {
+        for y in 0..N {
+            for x in 0..N {
+                let i = (x + y * N + z * N * N) as usize;
+                let r2: f32 = [x, y, z]
+                    .into_iter()
+                    .map(|v| (v as f32 + 0.5 - 16.0).powi(2))
+                    .sum();
+                solids[i] = u32::from(r2 >= 144.0);
+                if (14..18).contains(&x) && y == 4 && (14..18).contains(&z) {
+                    states[i] = 0xffff0001;
+                }
+            }
+        }
+    }
+    grid.write(1, &states);
+    grid.write(2, &solids);
+    grid.flow_ticks(30);
+    let moved = grid.read(1);
+    let water: Vec<_> = moved
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| **s & 7 == 1)
+        .collect();
+    assert_eq!(water.len(), 16);
+    assert!(water.iter().all(|(i, _)| solids[*i] == 0));
+    let spread = water.iter().filter(|(i, _)| states[*i] & 7 != 1).count();
+    eprintln!("radial patch, after 0.5 s: {spread}/16 outside original footprint");
+    assert!(
+        spread >= 8,
+        "surface water should spread promptly around the shell"
+    );
+}
+
+#[test]
 fn water_momentum_retains_old_direction_then_reverses_and_damps_to_rest() {
     let mut grid = ClimateGrid::<16>::new();
     grid.reset(0, 20.0, 0.0);

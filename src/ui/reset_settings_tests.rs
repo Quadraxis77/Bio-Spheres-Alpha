@@ -395,21 +395,33 @@ fn reset_preserves_live_editor_state_and_only_restores_the_active_scenes_control
 #[test]
 fn main_scene_reset_uses_the_captured_personal_preset_including_seed_and_lighting() {
     let mut editor = crate::ui::GenomeEditorState::factory_defaults();
-    assert_eq!(editor.cave_seed, 6064);
-    assert_eq!(editor.sun_intensity, 3.0);
-    assert_eq!(editor.fluid_alpha, 0.22);
+    assert_eq!(editor.cave_seed, 0);
+    assert_eq!(editor.cave_density, 0.99); // UI density is 1 - stored density.
+    assert!(!editor.cave_flat_ground_enabled);
+    assert!(!editor.fluid_continuous_spawn);
+    assert!(!editor.fluid_static_water_world);
+    assert_eq!(editor.sun_intensity, 2.0);
+    assert_eq!(editor.fluid_alpha, 0.25);
     let visuals = crate::cell::types::CellTypeVisualsStore::bundled_defaults();
     assert_eq!(
         serde_json::to_value(&editor.cell_type_visuals).unwrap(),
         serde_json::to_value(&visuals.visuals).unwrap()
     );
     editor.cave_seed = 9;
+    editor.cave_density = 0.2;
+    editor.cave_flat_ground_enabled = true;
+    editor.fluid_continuous_spawn = true;
+    editor.fluid_static_water_world = true;
     editor.sun_intensity = 0.0;
     editor.fluid_alpha = 1.0;
     editor.reset_scene_settings(SimulationMode::Gpu);
-    assert_eq!(editor.cave_seed, 6064);
-    assert_eq!(editor.sun_intensity, 3.0);
-    assert_eq!(editor.fluid_alpha, 0.22);
+    assert_eq!(editor.cave_seed, 0);
+    assert_eq!(editor.cave_density, 0.99);
+    assert!(!editor.cave_flat_ground_enabled);
+    assert!(!editor.fluid_continuous_spawn);
+    assert!(!editor.fluid_static_water_world);
+    assert_eq!(editor.sun_intensity, 2.0);
+    assert_eq!(editor.fluid_alpha, 0.25);
 
     let defaults: GlobalUiState =
         ron::from_str(include_str!("../../default_ui_state.ron")).unwrap();

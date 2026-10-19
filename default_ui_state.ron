@@ -11,6 +11,29 @@
     lock_tabs: false,
     lock_close_buttons: false,
     scene_configs: {
+        Gpu: (
+            visibility: (
+                show_cell_inspector: true,
+                show_genome_editor: false,
+                show_scene_manager: true,
+                show_performance_monitor: true,
+                show_rendering_controls: false,
+                show_time_scrubber: false,
+                show_theme_editor: false,
+                show_camera_settings: true,
+                show_lighting_settings: false,
+            ),
+            locked_windows: [
+                "RightPanel",
+                "SceneManager",
+                "Viewport",
+            ],
+            lock_settings: (
+                lock_tab_bar: false,
+                lock_tabs: false,
+                lock_close_buttons: false,
+            ),
+        ),
         Preview: (
             visibility: (
                 show_cell_inspector: false,
@@ -40,29 +63,6 @@
                 lock_close_buttons: false,
             ),
         ),
-        Gpu: (
-            visibility: (
-                show_cell_inspector: true,
-                show_genome_editor: false,
-                show_scene_manager: true,
-                show_performance_monitor: true,
-                show_rendering_controls: false,
-                show_time_scrubber: false,
-                show_theme_editor: false,
-                show_camera_settings: true,
-                show_lighting_settings: false,
-            ),
-            locked_windows: [
-                "Viewport",
-                "SceneManager",
-                "RightPanel",
-            ],
-            lock_settings: (
-                lock_tab_bar: false,
-                lock_tabs: false,
-                lock_close_buttons: false,
-            ),
-        ),
     },
     occlusion_bias: 0.007,
     occlusion_mip_override: -1,
@@ -79,7 +79,7 @@
     camera_alternate_speed_multiplier: 1.0,
     camera_scroll_sensitivity: 0.8,
     field_report_interval_seconds: 300.0,
-    fullscreen: false,
+    fullscreen: true,
     music_volume: 0.18,
     sfx_volume: 0.45,
     gpu_headless_auto_speed: false,
@@ -94,7 +94,7 @@
     lod_threshold_high: 60.0,
     lod_debug_colors: false,
     world_settings: (
-        cell_capacity: 100000,
+        cell_capacity: 200000,
         gravity: 50.0,
         gravity_mode: 1,
         constraint_iterations: 4,

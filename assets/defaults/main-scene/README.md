@@ -1,4 +1,4 @@
-This preset captures the developer's saved main-scene configuration on 2026-10-17: cave seed 6064 and sun brightness 3.0.
+This preset captures the developer's saved main-scene configuration on 2026-10-19: an empty world with cave seed 0, 1% displayed cave density (stored as 0.99), no ground plane or starting water, and sun brightness 2.0. Water Fill and Static Water World both start disabled.
 
 The cave, fluid, water-rendering, lighting, and cell-appearance files are embedded fallbacks, independent of each player's saved settings. The UI and GPU dock snapshots are mirrored in the root `default_ui_state.ron` and `default_dock_state_gpu.ron` files. Preview layout and onboarding progress are excluded from the personal snapshot; new players still receive the introductions.
 

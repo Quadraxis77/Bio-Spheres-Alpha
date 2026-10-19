@@ -1217,13 +1217,18 @@ fn move_water_pair(gid: vec3<u32>, neighbor: vec3<u32>, direction: u32, state_a:
     let seed = hash_position(source) ^ u32(params.time * 1000.0)
         ^ (direction * 0x9E3779B9u) ^ (params.sub_step * 0x85EBCA6Bu);
 
-    // Slow pressure leveling seeds a little lateral momentum. Never use it
-    // to cancel an existing component or drive random flow at zero gravity.
-    if abs(speed) < 0.001 && length(gravity) > 0.001
+    // Pool leveling is pressure-driven, in addition to velocity advection.
+    // The slider is a probability per reference sub-step, not a velocity in
+    // voxels/s: multiplying it by dt made 80% spreading become only 4%.
+    // Keep applying pressure while moving along it; only seeding zero-speed
+    // parcels made subsequent moves crawl at the 4 voxels/s packing quantum.
+    // Pressure cannot instantly reverse momentum or drive zero-gravity flow.
+    if speed >= 0.0 && length(gravity) > 0.001
         && abs(dot(gravity, dir)) < 0.001 && water_is_supported(source) {
-        probability = params.lateral_flow_probability_water
-            * params.lateral_flow_probability_empty * 12.0 * dt;
-        velocity += dir * WATER_SPEED_QUANTUM;
+        probability = max(probability, lateral_flow_chance());
+        if speed < 0.001 {
+            velocity += dir * WATER_SPEED_QUANTUM;
+        }
     }
     if random_unit(seed) >= min(probability, 1.0) { return; }
 
@@ -1246,6 +1251,15 @@ fn move_water_pair(gid: vec3<u32>, neighbor: vec3<u32>, direction: u32, state_a:
     atomicStore(&voxels[idx_b], select(state_a, moved, a_water));
 }
 
+fn lateral_flow_chance() -> f32 {
+    if params.motion_dt <= 0.0 { return 0.0; }
+    let chance = clamp(params.lateral_flow_probability_water
+        * params.lateral_flow_probability_empty, 0.0, 1.0);
+    // Match the original 60 Hz, four-sub-step tuning while keeping the
+    // same chance of no flow over equal elapsed time at other tick rates.
+    return 1.0 - pow(1.0 - chance, min(params.motion_dt, 1.0 / 15.0) * 60.0);
+}
+
 // Radial movement: score all 26 neighbors, pick the best empty one, atomic swap.
 // This is the 3D equivalent of the JS reference demo's "evaluate 8 neighbors" logic.
 fn radial_move(gid: vec3<u32>) {
@@ -1266,8 +1280,20 @@ fn radial_move(gid: vec3<u32>) {
     // Combined force for direction scoring: gravity + tangential surface tension
     let surf_force = get_surface_force(gid);
     var total_force = grav_force + surf_force;
+    var pressure_probability = 0.0;
     if fluid_type == 1u {
         total_force = water_momentum(state);
+        // Tangential pressure must be able to level resting surface water
+        // without waiting for small accelerations to round up into momentum.
+        // Retain ballistic motion, including coasting with gravity disabled.
+        let pressure_strength = length(surf_force);
+        if grav_mag > 0.001 && pressure_strength > 0.02 && water_is_supported(gid) {
+            let pressure_dir = surf_force / pressure_strength;
+            if dot(total_force, pressure_dir) >= 0.0 {
+                pressure_probability = lateral_flow_chance();
+                total_force += pressure_dir * WATER_SPEED_QUANTUM * pressure_probability;
+            }
+        }
     }
 
     // Reverse force for steam (rises against gravity)
@@ -1286,7 +1312,8 @@ fn radial_move(gid: vec3<u32>) {
     let surf_mag = length(surf_force);
     let is_surface_voxel = surf_mag > 0.02;
     if fluid_type == 1u {
-        let probability = min(1.0, force_mag * min(params.motion_dt, 1.0 / 15.0) / WATER_SUB_STEPS);
+        let probability = min(1.0, max(pressure_probability,
+            force_mag * min(params.motion_dt, 1.0 / 15.0) / WATER_SUB_STEPS));
         let seed = hash_position(gid) ^ u32(params.time * 1000.0) ^ (params.sub_step * 0x85EBCA6Bu);
         if random_unit(seed) >= probability { return; }
     } else if !is_surface_voxel {

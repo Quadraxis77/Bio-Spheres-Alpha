@@ -121,12 +121,17 @@ fn light_uvw_in_bounds(uvw: vec3<f32>) -> bool {
     return all(uvw >= vec3<f32>(0.0)) && all(uvw <= vec3<f32>(1.0));
 }
 
+fn light_uvw_in_world(uvw: vec3<f32>) -> bool {
+    let centered = uvw - vec3<f32>(0.5);
+    return dot(centered, centered) < 0.25;
+}
+
 fn sample_light_field(world_pos: vec3<f32>) -> f32 {
     if (shadow_params.shadow_enabled == 0u) {
         return 1.0;
     }
     let uvw = world_to_light_uvw(world_pos);
-    if (!light_uvw_in_bounds(uvw)) {
+    if (!light_uvw_in_world(uvw)) {
         return 1.0;
     }
     return textureSampleLevel(light_field_tex, light_field_sampler, uvw, 0.0).r;
@@ -136,14 +141,13 @@ fn apply_shadow_contrast(raw_light: f32) -> f32 {
     return max(raw_light, 1.0 - shadow_params.shadow_strength);
 }
 
-fn sample_light_field_clamped(world_pos: vec3<f32>) -> f32 {
-    let grid_size = shadow_params.cell_size * f32(shadow_params.grid_resolution);
-    let grid_min = vec3<f32>(shadow_params.grid_origin_x, shadow_params.grid_origin_y, shadow_params.grid_origin_z);
-    let grid_max = grid_min + vec3<f32>(grid_size);
-    return sample_light_field(clamp(world_pos, grid_min, grid_max));
-}
-
 fn sample_sun_shadow_soft(world_pos: vec3<f32>) -> f32 {
+    // The field defines open sky outside its inscribed world sphere. Never
+    // clamp exterior surface samples onto the cube's containment voxels:
+    // its six face centers otherwise become circular shadows at the poles.
+    if shadow_params.shadow_enabled == 0u || !light_uvw_in_world(world_to_light_uvw(world_pos)) {
+        return 1.0;
+    }
     let light_axis = normalize(vec3<f32>(
         shadow_params.light_dir_x,
         shadow_params.light_dir_y,
@@ -157,24 +161,25 @@ fn sample_sun_shadow_soft(world_pos: vec3<f32>) -> f32 {
     let inner_diag = inner_radius * 0.70710678;
     let outer_diag = outer_radius * 0.70710678;
 
-    var light_sum = sample_light_field_clamped(world_pos) * 0.18;
-    light_sum += sample_light_field_clamped(world_pos + tangent * inner_radius) * 0.065;
-    light_sum += sample_light_field_clamped(world_pos - tangent * inner_radius) * 0.065;
-    light_sum += sample_light_field_clamped(world_pos + bitangent * inner_radius) * 0.065;
-    light_sum += sample_light_field_clamped(world_pos - bitangent * inner_radius) * 0.065;
-    light_sum += sample_light_field_clamped(world_pos + tangent * inner_diag + bitangent * inner_diag) * 0.055;
-    light_sum += sample_light_field_clamped(world_pos - tangent * inner_diag + bitangent * inner_diag) * 0.055;
-    light_sum += sample_light_field_clamped(world_pos + tangent * inner_diag - bitangent * inner_diag) * 0.055;
-    light_sum += sample_light_field_clamped(world_pos - tangent * inner_diag - bitangent * inner_diag) * 0.055;
-    light_sum += sample_light_field_clamped(world_pos + tangent * outer_radius) * 0.040;
-    light_sum += sample_light_field_clamped(world_pos - tangent * outer_radius) * 0.040;
-    light_sum += sample_light_field_clamped(world_pos + bitangent * outer_radius) * 0.040;
-    light_sum += sample_light_field_clamped(world_pos - bitangent * outer_radius) * 0.040;
-    light_sum += sample_light_field_clamped(world_pos + tangent * outer_diag + bitangent * outer_diag) * 0.035;
-    light_sum += sample_light_field_clamped(world_pos - tangent * outer_diag + bitangent * outer_diag) * 0.035;
-    light_sum += sample_light_field_clamped(world_pos + tangent * outer_diag - bitangent * outer_diag) * 0.035;
-    light_sum += sample_light_field_clamped(world_pos - tangent * outer_diag - bitangent * outer_diag) * 0.035;
-    return light_sum;
+    var light_sum = sample_light_field(world_pos) * 0.18;
+    light_sum += sample_light_field(world_pos + tangent * inner_radius) * 0.065;
+    light_sum += sample_light_field(world_pos - tangent * inner_radius) * 0.065;
+    light_sum += sample_light_field(world_pos + bitangent * inner_radius) * 0.065;
+    light_sum += sample_light_field(world_pos - bitangent * inner_radius) * 0.065;
+    light_sum += sample_light_field(world_pos + tangent * inner_diag + bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field(world_pos - tangent * inner_diag + bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field(world_pos + tangent * inner_diag - bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field(world_pos - tangent * inner_diag - bitangent * inner_diag) * 0.055;
+    light_sum += sample_light_field(world_pos + tangent * outer_radius) * 0.040;
+    light_sum += sample_light_field(world_pos - tangent * outer_radius) * 0.040;
+    light_sum += sample_light_field(world_pos + bitangent * outer_radius) * 0.040;
+    light_sum += sample_light_field(world_pos - bitangent * outer_radius) * 0.040;
+    light_sum += sample_light_field(world_pos + tangent * outer_diag + bitangent * outer_diag) * 0.035;
+    light_sum += sample_light_field(world_pos - tangent * outer_diag + bitangent * outer_diag) * 0.035;
+    light_sum += sample_light_field(world_pos + tangent * outer_diag - bitangent * outer_diag) * 0.035;
+    light_sum += sample_light_field(world_pos - tangent * outer_diag - bitangent * outer_diag) * 0.035;
+    // Normalize the filter weights so uniform light stays uniform at the edge.
+    return light_sum / 0.96;
 }
 
 fn sample_light_color_field_full(world_pos: vec3<f32>) -> vec4<f32> {
