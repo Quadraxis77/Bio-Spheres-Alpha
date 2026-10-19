@@ -1,6 +1,5 @@
-// GPU Fluid Simulation - Pair-based swapping
-// 6 directional passes (X, Y, Z), each with 2 checkered phases
-// Simple rule: swap neighbors unless it's air-above-water (anti-gravity)
+// GPU fluid simulation: conservative parcel swaps with persistent water
+// momentum, buoyant steam, and temperature-driven phase changes.
 
 struct FluidParams {
     grid_resolution: u32,
@@ -47,7 +46,7 @@ struct FluidParams {
     snow_threshold: u32,
     evaporation_threshold: u32,
     optimal_cell_temp: u32,
-    // (average air Celsius + 50) * 256; zero until the first air readback.
+    // Diagnostic air readback; never used as a global heat source.
     air_temperature_reference: u32,
 
     // ---- Climate tunables (see CLIMATE_SPEC) ----
@@ -64,6 +63,7 @@ struct FluidParams {
     // Current climate phase from the CPU scheduler. Phase changes only accrue
     // debt on phase 0, the same tick that updates temperature.
     climate_phase: u32,
+    motion_dt: f32,
 }
 
 struct ExtractParams {
@@ -153,12 +153,22 @@ fn grid_index(x: u32, y: u32, z: u32) -> u32 {
 
 // Voxel state word layout (32 bits):
 //   bits 0-2:   fluid_type (0-7; 0=empty, 1=water, 2=ice, 3=steam, 4=snow)
-//   bits 3-15:  unused (formerly packed temperature - now in temp_field)
+//   bits 3-14:  water momentum, three signed-magnitude 4-bit components
+//   bit 15:     last movement sub-step parity (limits water to one move/pass)
 //   bits 16-31: fill_fraction (16 bits, 0-65535 -> 0.0-1.0)
 //
 // Temperature lives in the separate per-voxel `temp_field`; movement sites
 // call swap_field_temp so heat travels with the medium.
 const FLUID_TYPE_MASK: u32 = 0x7u;
+const WATER_MOMENTUM_MASK: u32 = 0x7ff8u;
+const WATER_MOVED_MASK: u32 = 0x8000u;
+// Velocity is in voxels/second. Packing it with the parcel makes CAS swaps,
+// clears, spawns, and scene snapshots carry/reset momentum without another
+// full-grid storage buffer. Stochastic rounding preserves small accelerations
+// and lets damping reach zero instead of sticking at the quantization floor.
+const WATER_SPEED_QUANTUM: f32 = 4.0;
+const WATER_DRAG: f32 = 1.2;
+const WATER_SUB_STEPS: f32 = 4.0; // NUM_FLUID_SUB_STEPS on the CPU
 const TEMP_MIN_C: f32 = -50.0;
 const TEMP_MAX_C: f32 = 150.0;
 
@@ -166,23 +176,35 @@ fn get_fluid_type(state: u32) -> u32 {
     return state & FLUID_TYPE_MASK;
 }
 
+fn water_momentum(state: u32) -> vec3<f32> {
+    let packed = (vec3<u32>(state) >> vec3<u32>(3u, 7u, 11u)) & vec3<u32>(15u);
+    return vec3<f32>(packed & vec3<u32>(7u)) * WATER_SPEED_QUANTUM
+        * select(vec3<f32>(1.0), vec3<f32>(-1.0), (packed & vec3<u32>(8u)) != vec3<u32>(0u));
+}
+
+fn with_water_momentum(state: u32, velocity: vec3<f32>, seed: u32) -> u32 {
+    let scaled = min(abs(velocity) / WATER_SPEED_QUANTUM, vec3<f32>(7.0));
+    let draws = vec3<f32>(random_unit(seed), random_unit(seed ^ 0xA511E9B3u), random_unit(seed ^ 0x63D83595u));
+    let magnitude = vec3<u32>(floor(scaled) + select(vec3<f32>(0.0), vec3<f32>(1.0), draws < fract(scaled)));
+    let packed = magnitude | select(vec3<u32>(0u), vec3<u32>(8u), velocity < vec3<f32>(0.0));
+    return (state & ~WATER_MOMENTUM_MASK) | (packed.x << 3u) | (packed.y << 7u) | (packed.z << 11u);
+}
+
+fn water_has_moved(state: u32) -> bool {
+    return ((state >> 15u) & 1u) == (params.sub_step & 1u);
+}
+
+fn mark_water_moved(state: u32) -> u32 {
+    return (state & ~WATER_MOVED_MASK) | ((params.sub_step & 1u) << 15u);
+}
+
 // ---- Thermal model constants ----
 // Sun brightness 3 is the reference intensity for solar heating.
 const REFERENCE_SUN_BRIGHTNESS: f32 = 3.0;
 const DARK_BASELINE_C: f32 = -18.0;
-// Brightness controls the bulk climate as well as direct surface heating.
-// Unresolved atmospheric circulation and re-radiation supply most air/steam
-// heating. At brightness 3 this gives 24 C in shade and 30 C in direct sun
-// before exchange with colder terrain/water. Treating all shaded atmosphere
-// as -18 C made the world average approach freezing whenever the sun moved.
-// This is independent of the visual ambient-light floor and local emitters.
-const ATMOSPHERIC_REDISTRIBUTED_SOLAR: f32 = 0.875;
-// Unresolved atmospheric exchange slowly brings water/ice toward the measured
-// air mean. A modest evaporative offset keeps shaded water a little cooler;
-// direct sun recovers part of that offset rather than driving a separate climate.
-const WATER_AIR_COOLING_OFFSET_C: f32 = 3.0;
-const WATER_DIRECT_SOLAR_WARMING_C: f32 = 2.0;
-const WATER_AIR_EXCHANGE_RATE: f32 = 0.25;
+// The active water inlet supplies hot water below boiling. Its heat stays
+// local to the source; parcels cool normally once they flow away.
+const INJECTED_WATER_TEMPERATURE_C: f32 = 60.0;
 const VAPOR_DEPOSITION_C: f32 = -12.0;    // deeply cold vapor gradually deposits as snow; liquid evaporation has no cutoff
 const COLD_VAPOR_DEPOSITION_RATE: f32 = 0.004; // let cold wisps linger instead of disappearing on their first movement pass
 const BOILING_POINT_C: f32 = 100.0;        // steam stays vapor at/above this; condensation possible at any cooler ambient
@@ -209,7 +231,7 @@ const SHEET_SPREAD_BONUS: f32 = 16.0;
 const ICE_THICKEN_MULT: f32 = 0.15;
 // ---- Simplified thermodynamics: per-voxel conduction model ----
 // Every voxel carries a temperature in `temp_field`. Each tick, heat conducts
-// between face neighbors: flux is proportional to the temperature
+// between nearby voxels: flux is proportional to the temperature
 // differential and the pair's conductivity, and each side's temperature
 // change is divided by its own thermal mass. Consequences that fall out of
 // the mass ratios rather than special cases:
@@ -222,12 +244,11 @@ const ICE_THICKEN_MULT: f32 = 0.15;
 // heating response is mass / (60 * cooling_coupling * cooling_strength * rate):
 // air 4.1 s, water 71.2 s, ice 93.2 s, vapor 4.1 s, snow 6.8 s, rock 32.7 s.
 // These represent the active surface layer, not SI masses of entire boulders.
-// Buried layers retain heat and exchange it by conduction. Water/ice also
-// follow the bulk atmosphere over minutes, so shading alone cannot freeze a
-// pool while the air remains warm.
+// Buried layers retain heat and exchange it by conduction. Neighbor exchange,
+// rather than a world-average temperature target, warms shaded material.
 const THERMAL_MASS_AIR: f32 = 1.0;
-const THERMAL_MASS_WATER: f32 = 5.0;
-const THERMAL_MASS_ICE: f32 = 6.0;
+const THERMAL_MASS_WATER: f32 = 20.0;
+const THERMAL_MASS_ICE: f32 = 24.0;
 const THERMAL_MASS_STEAM: f32 = 1.2;
 const THERMAL_MASS_SNOW: f32 = 0.75;
 const THERMAL_MASS_SOLID: f32 = 10.0;
@@ -261,11 +282,10 @@ const WATER_BUOYANCY_MAX_PROBABILITY: f32 = 0.9;
 // was chilling the column under a new ice sheet 3x faster than anything
 // lateral, growing plunging funnels).
 const WATER_DENSITY_INVERSION_C: f32 = 4.0;
-// Direct surface heating follows occlusion-aware solar exposure. The bulk
-// atmosphere also receives redistributed solar energy (see above).
+// Direct heating follows occlusion-aware solar exposure at each voxel.
 // Brightness is a climate control, not a linear watts scale. At 3, clear
 // sunlight supplies a 48 C rise above the cold baseline to air and rock.
-// Water/ice receive slow atmospheric exchange and a smaller direct-sun boost.
+// Water/ice absorb and lose heat more slowly than air.
 // Brightness 5 targets roughly 70-80 C air instead of the 150 C field cap.
 const SOLAR_COUPLING: f32 = 0.018;
 // Vent output uses the same heat-input scale as reference sunlight. Dividing
@@ -273,8 +293,7 @@ const SOLAR_COUPLING: f32 = 0.018;
 const GEOTHERMAL_HEAT_COUPLING: f32 = 0.018;
 const SOLAR_INPUT_C_PER_REFERENCE_PASS: f32 = 48.0 / 1.4;
 const RADIATIVE_COOLING_COUPLING: f32 = 0.018;
-// Base absorption is balanced by phase-specific heat loss; additional
-// condensed-water absorption and atmospheric redistribution are applied below.
+// Base absorption is balanced by phase-specific heat loss.
 const RADIATIVE_COOLING_STRENGTH_ICE: f32 = 0.75;
 const RADIATIVE_COOLING_STRENGTH_AIR: f32 = 0.71428573;
 const RADIATIVE_COOLING_STRENGTH_WATER: f32 = 0.8214286;
@@ -314,27 +333,17 @@ fn heat_flow_rate_scale() -> f32 {
 fn solar_heat_scale() -> f32 {
     let brightness = clamp(params.sun_brightness, 0.0, 5.0);
     let relative = brightness / REFERENCE_SUN_BRIGHTNESS;
-    // Preserve the temperate anchor and the cold side of the slider. Above
-    // 3, use a gentle rise with a continuous slope rather than the quartic
+    // Preserve the temperate anchor. Below 3, a 1.7 power leaves enough
+    // direct heat at brightness 2 to thaw an exposed surface (~6 C before
+    // neighbor exchange), while attenuated light and shadow can freeze it. Above
+    // 3, use a gentle bounded rise rather than the quartic
     // boost that drove both 4.5 and 5 to the 150 C field cap. At 5 this gives
-    // 80 C in direct sun and 67.75 C in shade before thermal exchange.
+    // 80 C in direct sun before thermal exchange.
     let boost = max(brightness - REFERENCE_SUN_BRIGHTNESS, 0.0);
     if boost > 0.0 {
         return 1.0 + (2.0 / REFERENCE_SUN_BRIGHTNESS) * boost / (1.0 + 0.14 * boost);
     }
-    return relative * relative;
-}
-
-fn average_air_temperature_c() -> f32 {
-    if params.air_temperature_reference != 0u {
-        return TEMP_MIN_C + f32(params.air_temperature_reference) / TFIELD_FP;
-    }
-    // Static water worlds contain no air voxels. Also provides a consistent
-    // startup reference until the asynchronous atmosphere readback is ready.
-    return clamp(DARK_BASELINE_C + ATMOSPHERIC_REDISTRIBUTED_SOLAR * solar_heat_scale()
-        * SOLAR_INPUT_C_PER_REFERENCE_PASS * SOLAR_COUPLING
-        / (RADIATIVE_COOLING_COUPLING * RADIATIVE_COOLING_STRENGTH_AIR),
-        TEMP_MIN_C, TEMP_MAX_C);
+    return pow(relative, 1.7);
 }
 
 fn water_phase_threshold() -> f32 {
@@ -1139,6 +1148,104 @@ fn get_surface_force(gid: vec3<u32>) -> vec3<f32> {
     return -tangential_sum * params.surface_pressure * grav_mag * 0.1;
 }
 
+// Acceleration and drag run once per tick, separately from parcel movement.
+// Changing gravity changes acceleration, never replaces the existing velocity.
+@compute @workgroup_size(4, 4, 4)
+fn update_water_momentum(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if any(gid >= vec3<u32>(params.grid_resolution)) { return; }
+    let idx = grid_index(gid.x, gid.y, gid.z);
+    let state = atomicLoad(&voxels[idx]);
+    if get_fluid_type(state) != 1u {
+        atomicStore(&voxels[idx], state & ~(WATER_MOMENTUM_MASK | WATER_MOVED_MASK));
+        return;
+    }
+
+    let dt = clamp(params.motion_dt, 0.0, 1.0 / 15.0);
+    var velocity = water_momentum(state) * exp(-WATER_DRAG * dt);
+    // Match the grid-based flow tuning: gravity accelerates in voxels/s^2,
+    // so enlarging the world does not make water take minutes to settle.
+    var acceleration = get_effective_gravity(gid);
+    if params.gravity_mode == 3u {
+        acceleration += get_surface_force(gid);
+    }
+    for (var direction = 0u; direction < 6u; direction++) {
+        let offset = get_offset(direction);
+        let neighbor = vec3<i32>(gid) + offset;
+        let normal = vec3<f32>(offset);
+        var wall = any(neighbor < vec3<i32>(0)) || any(neighbor >= vec3<i32>(i32(params.grid_resolution)));
+        var water_support = false;
+        if !wall {
+            let n = vec3<u32>(neighbor);
+            let neighbor_type = get_fluid_type(atomicLoad(&voxels[grid_index(n.x, n.y, n.z)]));
+            wall = is_solid(n.x, n.y, n.z) || neighbor_type == 2u || neighbor_type == 4u;
+            water_support = neighbor_type == 1u;
+        }
+        if wall || water_support {
+            // A supported pool must not accumulate gravity indefinitely.
+            acceleration -= normal * max(0.0, dot(acceleration, normal));
+        }
+        if wall {
+            // Preserve the tangential motion along walls and the spherical
+            // shell. Strong impacts rebound weakly; resting water stays still.
+            let impact = max(0.0, dot(velocity, normal));
+            let restitution = select(0.0, 0.3, impact > WATER_SPEED_QUANTUM);
+            velocity -= normal * impact * (1.0 + restitution);
+        }
+    }
+    velocity += acceleration * dt;
+    let seed = hash_position(gid) ^ u32(params.time * 1000.0);
+    let next = with_water_momentum(state, velocity, seed);
+    // Sub-step zero is eligible even for a voxel that moved on the last tick.
+    atomicStore(&voxels[idx], next | WATER_MOVED_MASK);
+}
+
+// Water/air and water/steam exchanges use the liquid parcel's velocity.
+// The existing six-direction solver still supplies lateral pool leveling,
+// but cannot instantly reverse a moving parcel when gravity changes.
+fn move_water_pair(gid: vec3<u32>, neighbor: vec3<u32>, direction: u32, state_a: u32, state_b: u32) {
+    let a_water = get_fluid_type(state_a) == 1u;
+    let state = select(state_b, state_a, a_water);
+    if water_has_moved(state) || params.motion_dt <= 0.0 { return; }
+    let source = select(neighbor, gid, a_water);
+    let displacement = get_offset(direction) * select(-1, 1, a_water);
+    let dir = vec3<f32>(displacement);
+    var velocity = water_momentum(state);
+    let speed = dot(velocity, dir);
+    let dt = min(params.motion_dt, 1.0 / 15.0) / WATER_SUB_STEPS;
+    var probability = max(0.0, speed) * dt;
+    let gravity = get_effective_gravity(source);
+    let seed = hash_position(source) ^ u32(params.time * 1000.0)
+        ^ (direction * 0x9E3779B9u) ^ (params.sub_step * 0x85EBCA6Bu);
+
+    // Slow pressure leveling seeds a little lateral momentum. Never use it
+    // to cancel an existing component or drive random flow at zero gravity.
+    if abs(speed) < 0.001 && length(gravity) > 0.001
+        && abs(dot(gravity, dir)) < 0.001 && water_is_supported(source) {
+        probability = params.lateral_flow_probability_water
+            * params.lateral_flow_probability_empty * 12.0 * dt;
+        velocity += dir * WATER_SPEED_QUANTUM;
+    }
+    if random_unit(seed) >= min(probability, 1.0) { return; }
+
+    let idx_a = grid_index(gid.x, gid.y, gid.z);
+    let idx_b = grid_index(neighbor.x, neighbor.y, neighbor.z);
+    let claim_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
+    if !claim_a.exchanged { return; }
+    let claim_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
+    if !claim_b.exchanged {
+        atomicStore(&voxels[idx_a], state_a);
+        return;
+    }
+
+    // Keep both parcels claimed until all of their fields have moved.
+    swap_field_temp(idx_a, idx_b);
+    let moved = mark_water_moved(with_water_momentum(state, velocity, seed ^ 0xD1B54A35u));
+    let destination = select(idx_a, idx_b, a_water);
+    write_water_velocity(destination, 1u, displacement.x, displacement.y, displacement.z);
+    atomicStore(&voxels[idx_a], select(moved, state_b, a_water));
+    atomicStore(&voxels[idx_b], select(state_a, moved, a_water));
+}
+
 // Radial movement: score all 26 neighbors, pick the best empty one, atomic swap.
 // This is the 3D equivalent of the JS reference demo's "evaluate 8 neighbors" logic.
 fn radial_move(gid: vec3<u32>) {
@@ -1153,11 +1260,15 @@ fn radial_move(gid: vec3<u32>) {
     // Gravity force (used for probability gate)
     let grav_force = get_effective_gravity(gid);
     let grav_mag = length(grav_force);
-    if grav_mag < 0.001 { return; }
+    if grav_mag < 0.001 && fluid_type != 1u { return; }
+    if fluid_type == 1u && water_has_moved(state) { return; }
 
     // Combined force for direction scoring: gravity + tangential surface tension
     let surf_force = get_surface_force(gid);
     var total_force = grav_force + surf_force;
+    if fluid_type == 1u {
+        total_force = water_momentum(state);
+    }
 
     // Reverse force for steam (rises against gravity)
     if fluid_type == 3u {
@@ -1174,7 +1285,11 @@ fn radial_move(gid: vec3<u32>) {
     // Use non-linear hash to avoid planar banding artifacts.
     let surf_mag = length(surf_force);
     let is_surface_voxel = surf_mag > 0.02;
-    if !is_surface_voxel {
+    if fluid_type == 1u {
+        let probability = min(1.0, force_mag * min(params.motion_dt, 1.0 / 15.0) / WATER_SUB_STEPS);
+        let seed = hash_position(gid) ^ u32(params.time * 1000.0) ^ (params.sub_step * 0x85EBCA6Bu);
+        if random_unit(seed) >= probability { return; }
+    } else if !is_surface_voxel {
         let gravity_probability = min(1.0, grav_mag * grav_mag * 0.0004);
         let prob_hash = (hash_position(gid) ^ u32(params.time * 1000.0)) & 255u;
         if prob_hash > u32(gravity_probability * 255.0) { return; }
@@ -1255,12 +1370,12 @@ fn radial_move(gid: vec3<u32>) {
     }
 
     // Both claimed - swap
-    atomicStore(&voxels[idx], target_state);
-    atomicStore(&voxels[target_idx], state);
     swap_field_temp(idx, target_idx);
 
     // Record water velocity at destination
     write_water_velocity(target_idx, fluid_type, best_dx, best_dy, best_dz);
+    atomicStore(&voxels[idx], target_state);
+    atomicStore(&voxels[target_idx], select(state, mark_water_moved(state), fluid_type == 1u));
 }
 
 // Latent heat of vaporization: pull `amount` degrees out of every adjacent
@@ -1371,39 +1486,25 @@ fn update_temperature_voxel(gid: vec3<u32>) {
     // Accumulate source forcing, then quantize each pair's contribution once.
     var self_delta_c = 0.0;
 
-    // The atmosphere has a brightness-dependent background from redistributed
-    // solar heat, plus a smaller direct-sun variation. Water/ice follow the
-    // measured atmosphere slowly, even in shadow. Exposed rock also receives
-    // ambient heat rather than acting as a permanent cold-space reservoir.
-    // Visual ambient light and local radiance do not supply heat; vents use
-    // their separate heat-source field below.
+    // Only sunlight surviving the ray's terrain, cell, water, ice and cloud
+    // attenuation supplies solar heat here. Shadowed material can still warm
+    // through neighbor conduction below; the global air readout is no heat
+    // source. Visual ambient/local radiance does not supply solar heat.
     {
         let sunlight = local_light_fraction(idx);
         let solar_scale = solar_heat_scale();
-        let atmospheric = !solid_self && (fluid_type == 0u || fluid_type == 3u);
-        let thermal_exposure = select(sunlight,
-            mix(ATMOSPHERIC_REDISTRIBUTED_SOLAR, 1.0, sunlight), atmospheric);
         let cooling_strength = radiative_cooling_strength(fluid_type, solid_self, mobile_self);
-        var cooling_rate = min(
+        let cooling_rate = min(
             RADIATIVE_COOLING_COUPLING * cooling_strength * rate_scale / m_self,
             0.25
         );
         // Limit heating and cooling together, preserving the equilibrium at
         // every inertia setting. Independent caps made bright sun stop having
         // an effect on air at low inertia.
-        var equilibrium = clamp(DARK_BASELINE_C + thermal_exposure * solar_scale
+        let equilibrium = clamp(DARK_BASELINE_C + sunlight * solar_scale
             * solar_absorption_strength(fluid_type, solid_self)
             * SOLAR_INPUT_C_PER_REFERENCE_PASS * SOLAR_COUPLING
             / (RADIATIVE_COOLING_COUPLING * cooling_strength), TEMP_MIN_C, TEMP_MAX_C);
-        if !solid_self && (fluid_type == 1u || fluid_type == 2u) {
-            equilibrium = clamp(average_air_temperature_c() - WATER_AIR_COOLING_OFFSET_C
-                + sunlight * WATER_DIRECT_SOLAR_WARMING_C * solar_scale, TEMP_MIN_C, TEMP_MAX_C);
-            cooling_rate *= WATER_AIR_EXCHANGE_RATE;
-        } else if solid_self {
-            let sunlit_equilibrium = equilibrium;
-            let shaded_equilibrium = average_air_temperature_c() - WATER_AIR_COOLING_OFFSET_C;
-            equilibrium = mix(shaded_equilibrium, max(shaded_equilibrium, sunlit_equilibrium), sunlight);
-        }
         // Buried rock exchanges heat through conduction, not radiation.
         if !solid_self || sunlight > 0.0 || in_contact_with_air(gid) {
             self_delta_c += (equilibrium - t_self) * cooling_rate;
@@ -1793,7 +1894,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                 snow_debt *= PHASE_DEBT_DECAY;
             }
             if snow_debt >= PHASE_DEBT_THRESHOLD {
-                let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
+                let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 1u;
                 let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
                 if result.exchanged {
                     phase_debt[idx] = 0.0;
@@ -1803,7 +1904,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                     return;
                 }
             } else if snow_debt <= -PHASE_DEBT_THRESHOLD {
-                let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
+                let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 2u;
                 let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
                 if result.exchanged {
                     phase_debt[idx] = 0.0;
@@ -1841,7 +1942,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
             // volume). It must NOT become ice here: snowfall onto a pool
             // used to nucleate floating ice that grew into funnel-shaped
             // stalagmites from the surface down.
-            let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
+            let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 1u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
                 // Latent heat of fusion: melting absorbs warmth.
@@ -1991,7 +2092,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         if fluid_type == 1u && freeze_rate_mult >= 1.0
             && params.thermal_inertia <= 0.75
             && temp_c < FREEZE_POINT_C - FREEZE_HYSTERESIS_C - DEEP_FREEZE_MARGIN_C {
-            let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
+            let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 2u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
                 // Latent heat of fusion: freezing releases heat, pinning the
@@ -2079,7 +2180,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                     debt *= PHASE_DEBT_DECAY;
                 }
                 if debt >= water_phase_threshold() {
-                    let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
+                    let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 2u;
                     let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
                     if result.exchanged {
                         phase_debt[idx] = 0.0;
@@ -2098,7 +2199,7 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
                     debt *= PHASE_DEBT_DECAY;
                 }
                 if debt >= ice_phase_threshold() {
-                    let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
+                    let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 1u;
                     let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
                     if result.exchanged {
                         phase_debt[idx] = 0.0;
@@ -2281,84 +2382,6 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Cache support check once - reused by fast-drop and all process_direction calls below.
-    // water_is_supported() does a neighbor atomic load; calling it once here avoids
-    // repeating it up to 8 more times (twice per process_direction x 4 horizontal calls).
-    let this_voxel_supported = params.gravity_mode == 3u || fluid_type != 1u || water_is_supported(gid);
-
-    // Water fast-drop: unsupported water falls instantly to nearest support
-    // This bypasses checker/probability gates in process_direction
-    // Skip in radial mode - radial_move() handles all movement there.
-    if fluid_type == 1u && params.gravity_mode != 3u && !this_voxel_supported {
-        let grav_dir = get_effective_gravity(gid);
-        let gravity_dir_index = gravity_dir_to_index(grav_dir);
-        
-        let down = get_offset(gravity_dir_index);
-        
-        // Scan downward to find the lowest empty cell above a surface
-        // Cap at 16 steps - matches steam teleport cap, avoids 64-step worst case
-        var target_y = -1;
-        for (var step = 1; step <= 16; step++) {
-            let sx = i32(gid.x) + down.x * step;
-            let sy = i32(gid.y) + down.y * step;
-            let sz = i32(gid.z) + down.z * step;
-            
-            if sx < 0 || sx >= i32(res) || sy < 0 || sy >= i32(res) || sz < 0 || sz >= i32(res) {
-                break;
-            }
-            
-            if is_solid(u32(sx), u32(sy), u32(sz)) {
-                break; // Hit solid, target is one step above
-            }
-            
-            let scan_idx = grid_index(u32(sx), u32(sy), u32(sz));
-            let scan_state = atomicLoad(&voxels[scan_idx]);
-            let scan_type = get_fluid_type(scan_state);
-            
-            if scan_type == 3u {
-                // Dense liquid passes through buoyant steam; keep scanning
-                // for the next free voxel so rain can reach the ground.
-                continue;
-            } else if scan_type == 0u {
-                // Empty cell - this is the target (don't skip through empty space)
-                if !is_solid(u32(sx), u32(sy), u32(sz)) {
-                    target_y = step;
-                    break; // Found empty space, stop scanning
-                }
-            } else if scan_type == 1u || scan_type == 2u {
-                break; // Hit water/lava surface, target is one step above
-            }
-        }
-        
-        // If we found a position lower than current, teleport there
-        if target_y > 1 {
-            let tx = i32(gid.x) + down.x * target_y;
-            let ty = i32(gid.y) + down.y * target_y;
-            let tz = i32(gid.z) + down.z * target_y;
-            let target_idx = grid_index(u32(tx), u32(ty), u32(tz));
-            
-            // Claim source first to prevent duplication
-            let claim_result = atomicCompareExchangeWeak(&voxels[idx], state, 0xFFFFFFFFu);
-            if claim_result.exchanged {
-                let target_state = atomicLoad(&voxels[target_idx]);
-                if get_fluid_type(target_state) == 0u {
-                    let result = atomicCompareExchangeWeak(&voxels[target_idx], target_state, state);
-                    if result.exchanged {
-                        // Success: clear the claimed source
-                        atomicStore(&voxels[idx], 0u);
-                        swap_field_temp(idx, target_idx);
-                        // Record water velocity (falling in gravity direction)
-                        write_water_velocity(target_idx, fluid_type, down.x, down.y, down.z);
-                        return;
-                    }
-                }
-                // Target was taken, restore source
-                atomicStore(&voxels[idx], state);
-            }
-        }
-        // If target_y == 1, just one cell below - normal process_direction handles it
-    }
-
     // Special case: Push any fluid out of solid voxels
     // Search up to 16 voxels along each axis to find a non-solid empty cell
     if fluid_type >= 1u && is_solid(gid.x, gid.y, gid.z) {
@@ -2435,22 +2458,22 @@ fn fluid_swap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let gravity_dir_index = gravity_dir_to_index_noisy(grav_dir, gid);
     
     // Process gravity direction first (highest priority)
-    process_direction(gid, gravity_dir_index, this_voxel_supported);
+    process_direction(gid, gravity_dir_index);
     
     // Process opposite direction for upward prevention
     let opposite_dir = gravity_dir_index ^ 1u; // Flip last bit to get opposite
-    process_direction(gid, opposite_dir, this_voxel_supported);
+    process_direction(gid, opposite_dir);
     
     // Phase 2: Accelerated horizontal spreading for faster settling
     let horizontal_order = get_horizontal_direction_order(gid, params.time, gravity_dir_index);
     
     // Process all 4 horizontal directions with increased probability
     for (var i = 0u; i < 4u; i++) {
-        process_direction(gid, horizontal_order[i], this_voxel_supported);
+        process_direction(gid, horizontal_order[i]);
     }
 }
 
-fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
+fn process_direction(gid: vec3<u32>, direction: u32) {
     let res = params.grid_resolution;
     let offset = get_offset(direction);
     let nx = i32(gid.x) + offset.x;
@@ -2497,41 +2520,10 @@ fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
     // Simple dot product to check if direction aligns with gravity
     let dir_vec = get_offset(direction);
     var alignment = dot(grav_dir, vec3<f32>(f32(dir_vec.x), f32(dir_vec.y), f32(dir_vec.z)));
-    let water_moves_down_through_steam =
-        (a_is_water && b_is_steam && alignment > 0.1)
-        || (a_is_steam && b_is_water && alignment < -0.1);
-    if water_moves_down_through_steam {
-        // Rain displaces buoyant steam upward instead of getting stuck on it.
-        let claim_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
-        if !claim_a.exchanged {
-            return;
-        }
-        let claim_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
-        if !claim_b.exchanged {
-            atomicStore(&voxels[idx_a], state_a);
-            return;
-        }
-
-        atomicStore(&voxels[idx_a], state_b);
-        atomicStore(&voxels[idx_b], state_a);
-        swap_field_temp(idx_a, idx_b);
-
-        var water_destination = idx_b;
-        var water_direction = dir_vec;
-        if a_is_steam {
-            water_destination = idx_a;
-            water_direction = -dir_vec;
-        }
-        write_water_velocity(
-            water_destination,
-            1u,
-            water_direction.x,
-            water_direction.y,
-            water_direction.z,
-        );
+    if (a_is_water && (b_is_empty || b_is_steam)) || (b_is_water && (a_is_empty || a_is_steam)) {
+        move_water_pair(gid, vec3<u32>(u32(nx), u32(ny), u32(nz)), direction, state_a, state_b);
         return;
     }
-
     // Water-water thermal buoyancy: the fluid state is identical, so swapping
     // the temperature entries is the parcel exchange. This lets hot water rise
     // through cooler water instead of being dragged downward by bulk flow.
@@ -2573,8 +2565,6 @@ fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
             return;
         }
 
-        atomicStore(&voxels[idx_a], state_a);
-        atomicStore(&voxels[idx_b], state_b);
         swap_field_temp(idx_a, idx_b);
 
         let dir = get_offset(direction);
@@ -2583,166 +2573,40 @@ fn process_direction(gid: vec3<u32>, direction: u32, a_supported: bool) {
         } else {
             write_water_velocity(idx_b, 1u, dir.x, dir.y, dir.z);
         }
+        atomicStore(&voxels[idx_a], state_a);
+        atomicStore(&voxels[idx_b], state_b);
         return;
     }
 
-    // Skip if both same or neither fluid/empty
-    // Now also allow steam-water exchanges
-    if !((a_is_water && b_is_empty) || (a_is_empty && b_is_water) ||
-          (a_is_steam && b_is_empty) || (a_is_empty && b_is_steam) ||
-          (a_is_water && b_is_steam) || (a_is_steam && b_is_water)) {
-        return;
-    }
-
-    // Reverse alignment for steam (steam flows against gravity)
-    if a_is_steam || b_is_steam {
-        alignment = -alignment;
-    }
-    
-    // If alignment is positive, this direction flows with gravity
-    // If alignment is negative, this direction flows against gravity
-    // If alignment is zero, this direction is perpendicular to gravity
-    
-    // For gravity-aligned directions: use magnitude for probability
+    // Liquid exchanges were handled above. Steam keeps its buoyant rise and
+    // configurable dispersion, independent of the persistent liquid velocity.
+    if !((a_is_steam && b_is_empty) || (a_is_empty && b_is_steam)) { return; }
+    alignment = -alignment;
+    let time_hash = u32(params.time * 1000.0) + direction * 12345u;
+    let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
+    let combined_hash = time_hash ^ pos_hash;
     if abs(alignment) > 0.1 {
-        let gravity_strength = length(grav_dir);
-        // Fall rate proportional to gravity magnitude
-        // Linear scaling: gravity_magnitude of 50.0 = 100% fall rate
-        var gravity_probability = min(1.0, gravity_strength / 50.0);
-
-        // Steam's vertical rise through open air reuses this same
-        // probability (with alignment reversed above) - at any gravity
-        // magnitude worth having, that's effectively 100%, so the hash roll
-        // below has nothing left to filter and every checker-eligible steam
-        // voxel moves on the same sub-step. The whole layer advances in
-        // lockstep every tick, which is what actually reads as a discrete
-        // rising "wave" (the underwater-bubble teleport above is staggered
-        // separately, but rarely fires for steam already in open air).
-        // Capping well under 1.0 here restores real per-voxel staggering
-        // without slowing the average rise much - each voxel still gets
-        // several independent rolls per second across sub-steps and ticks.
-        if a_is_steam || b_is_steam {
-            gravity_probability = min(gravity_probability, 0.4);
-        }
-
-        // Use hash-based probability for gravity direction
-        let time_hash = u32(params.time * 1000.0) + direction * 12345u;
-        let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
-        let combined_hash = time_hash ^ pos_hash;
-        
-        // Skip movement based on gravity strength (lower gravity = less movement)
-        // EXCEPTION: Unsupported water gets guaranteed fall chance to prevent hanging in air
-        // (a_supported is pre-computed by the caller to avoid redundant neighbor lookups)
-        
-        // Always respect gravity probability, even for unsupported water
-        // Unsupported water just gets priority in the movement logic, not guaranteed movement
-        if (combined_hash & 255u) > u32(gravity_probability * 255.0) {
-            return;
-        }
-        
-        // Allow steam-water exchanges regardless of gravity direction
-        if (a_is_water && b_is_steam) || (a_is_steam && b_is_water) {
-            // Steam-water exchanges can happen in any direction
-            // No gravity restrictions for fluid-to-fluid exchanges
-        } else {
-            // If alignment is positive: fluid flows with gravity (current to neighbor)
-            if alignment > 0.0 {
-                // Movement with gravity: fluid flows from current cell to neighbor
-                if !((a_is_water && b_is_empty) || (a_is_steam && b_is_empty)) {
-                    return;
-                }
-            }
-            // If alignment is negative: fluid flows against gravity (neighbor to current)
-            else {
-                // Movement against gravity: fluid flows from neighbor to current cell
-                if !((a_is_empty && b_is_water) || (a_is_empty && b_is_steam)) {
-                    return;
-                }
-            }
-        }
+        let probability = min(length(grav_dir) / 50.0, 0.4);
+        if (combined_hash & 255u) > u32(probability * 255.0) { return; }
+        if (alignment > 0.0 && !a_is_steam) || (alignment < 0.0 && !b_is_steam) { return; }
     }
-    
-    // For non-gravity directions: Use configurable probability for lateral spreading
     if abs(alignment) <= 0.5 {
-        // Water can only move laterally if it's supported (touching other water or solids)
-        // Exception: radial mode - water on the shell surface must flow freely to round out
-        if params.gravity_mode != 3u && (a_is_water || b_is_water) {
-            // a_supported is pre-computed by the caller; only compute b's support on demand.
-            var b_supported = true;
-            if b_is_water {
-                b_supported = water_is_supported(vec3<u32>(u32(nx), u32(ny), u32(nz)));
-            }
-            
-            if !a_supported || !b_supported {
-                return; // Water not supported, no lateral movement
-            }
-        }
-        
-        // Use the configurable lateral flow probability
-        let time_hash = u32(params.time * 1000.0) + direction * 12345u;
-        let pos_hash = gid.x * 7u + gid.y * 13u + gid.z * 17u;
-        let combined_hash = time_hash ^ pos_hash;
-        
-        // Apply steam dispersion bias for more gas-like behavior
-        var fluid_probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b);
-        
-        
-        // Preferential steam-water swapping when fluids are stacked vertically
-        if (a_is_steam && b_is_water) || (a_is_water && b_is_steam) {
-            // Check if this is a vertical direction (up/down)
-            let is_vertical = (direction == 2u || direction == 3u); // +Y or -Y
-            
-            if is_vertical {
-                // Boost probability for steam-water exchanges in vertical directions
-                // This helps steam rise through water
-                fluid_probability = fluid_probability * 2.0; // Double the probability
-            }
-        }
-        
-        if a_is_steam || b_is_steam {
-            fluid_probability = fluid_probability * get_steam_dispersion_bias(gid, direction);
-        }
-        
-        let probability_threshold = fluid_probability * 255.0;
-        if (combined_hash & 255u) > u32(probability_threshold) {
-            return;
-        }
+        let probability = get_lateral_flow_probability(type_a) * get_lateral_flow_probability(type_b)
+            * get_steam_dispersion_bias(gid, direction);
+        if (combined_hash & 255u) > u32(probability * 255.0) { return; }
     }
 
-    // World sphere boundary is handled by the solid mask (same as cave walls),
-    // so no separate is_in_bounds check is needed here.
-
-    // Atomic swap using compare-and-exchange
-    // First try to claim cell A
-    let result_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
-    if !result_a.exchanged {
-        return; // Someone else modified it
-    }
-    
-    // Try to claim cell B
-    let result_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
-    if !result_b.exchanged {
-        // Restore cell A and abort
-        atomicExchange(&voxels[idx_a], state_a);
+    let claim_a = atomicCompareExchangeWeak(&voxels[idx_a], state_a, 0xFFFFFFFFu);
+    if !claim_a.exchanged { return; }
+    let claim_b = atomicCompareExchangeWeak(&voxels[idx_b], state_b, 0xFFFFFFFFu);
+    if !claim_b.exchanged {
+        atomicStore(&voxels[idx_a], state_a);
         return;
     }
-    
-    // Both cells claimed, perform the swap
+    swap_field_temp(idx_a, idx_b);
     atomicStore(&voxels[idx_a], state_b);
     atomicStore(&voxels[idx_b], state_a);
-    swap_field_temp(idx_a, idx_b);
-
-    // Record water velocity at the destination of the water
-    let dir = get_offset(direction);
-    if type_a == 1u {
-        // Water moved from A to B
-        write_water_velocity(idx_b, 1u, dir.x, dir.y, dir.z);
-    } else if type_b == 1u {
-        // Water moved from B to A (opposite direction)
-        write_water_velocity(idx_a, 1u, -dir.x, -dir.y, -dir.z);
-    }
 }
-
 // Initialize a sphere of water
 @compute @workgroup_size(4, 4, 4)
 fn fluid_init_sphere(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -2833,7 +2697,7 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         if debt >= water_phase_threshold() {
-            let new_state = (state & ~FLUID_TYPE_MASK) | 2u;
+            let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 2u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
                 atomicAdd(&temp_stats[6], 1u);
@@ -2852,7 +2716,7 @@ fn fluid_static_water_phase(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         if debt >= ice_phase_threshold() {
-            let new_state = (state & ~FLUID_TYPE_MASK) | 1u;
+            let new_state = (state & ~(FLUID_TYPE_MASK | WATER_MOMENTUM_MASK | WATER_MOVED_MASK)) | 1u;
             let result = atomicCompareExchangeWeak(&voxels[idx], state, new_state);
             if result.exchanged {
                 atomicAdd(&temp_stats[6], 1u);
@@ -2911,6 +2775,15 @@ fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let idx = grid_index(gid.x, spawn_y, gid.z);
 
+    // Keep an occupied inlet hot too: otherwise an ice plug prevents any
+    // fresh warm water from entering. Existing ice thaws through the usual
+    // melt debt, and no extra fluid volume is created in occupied voxels.
+    let current_state = atomicLoad(&voxels[idx]);
+    let current_type = get_fluid_type(current_state);
+    if params.spawn_fluid_type == 1u && (current_type == 1u || current_type == 2u) {
+        atomicMax(&temp_field[idx], encode_field_temp(INJECTED_WATER_TEMPERATURE_C));
+    }
+
     // Use time-based animation for pulsing effect
     let pulse = sin(params.time * 2.0) * 0.5 + 0.5; // Oscillates between 0 and 1
     let spawn_probability = 0.3 + pulse * 0.4; // 30% to 70% chance
@@ -2923,12 +2796,16 @@ fn fluid_spawn_continuous(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Spawn fluid based on probability
     if (combined_hash & 255u) < u32(spawn_probability * 255.0) {
         // Only spawn if current cell is empty
-        let current_state = atomicLoad(&voxels[idx]);
-        if get_fluid_type(current_state) == 0u {
-            // Spawn selected fluid type with full fill, seeded at the local
-            // fixed dark baseline.
-            atomicStore(&voxels[idx], (65535u << 16u) | params.spawn_fluid_type);
-            atomicStore(&temp_field[idx], encode_field_temp(ambient_temp_c(idx)));
+        if current_type == 0u {
+            let spawned = atomicCompareExchangeWeak(&voxels[idx], current_state,
+                (65535u << 16u) | params.spawn_fluid_type);
+            if spawned.exchanged {
+                let inlet_temperature = select(ambient_temp_c(idx),
+                    INJECTED_WATER_TEMPERATURE_C, params.spawn_fluid_type == 1u);
+                atomicStore(&temp_field[idx], encode_field_temp(inlet_temperature));
+                phase_debt[idx] = 0.0;
+                atomicStore(&water_velocity[idx], 0u);
+            }
         }
     }
 }

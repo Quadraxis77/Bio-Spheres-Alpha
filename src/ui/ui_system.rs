@@ -2924,10 +2924,13 @@ impl UiSystem {
     pub fn show_vr_mode_button(&mut self) {
         let ctx = self.ctx.clone();
         egui::Area::new(egui::Id::new("vr_mode_button"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
+            // The report button occupies y=12..40 in the main menu.
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 48.0))
             .show(&ctx, |ui| {
                 let mode = &mut self.state.vr_mode;
-                let button = egui::Button::new(mode.label()).selected(mode.selected());
+                let button = egui::Button::new(mode.label())
+                    .selected(mode.selected())
+                    .min_size(egui::vec2(156.0, 28.0));
                 if ui.add_enabled(mode.available, button)
                     .on_hover_text(mode.tooltip())
                     .on_disabled_hover_text(mode.tooltip()).clicked()

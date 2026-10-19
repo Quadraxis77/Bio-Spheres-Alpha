@@ -99,12 +99,12 @@ const GEOTHERMAL_PHOTOCYTE_LIGHT_VALUE: f32 = 3.75;
 // Per-voxel absorption coefficient for ice (liquid water uses 0.055).
 const ICE_ABSORPTION: f32 = 0.12;
 
-// Effective heat penetration for the compressed biosphere climate. At the
-// brightness-3 anchor, ordinary pool depths remain temperate (60-90 F), while
-// terrain and cell occlusion still create genuinely cold shadows. Keep this
-// independent of the appearance-only water attenuation slider.
-const THERMAL_WATER_ATTENUATION: f32 = 0.003;
-const THERMAL_ICE_ATTENUATION: f32 = 0.006;
+// Sunlight deposits energy along the water/ice column instead of supplying
+// nearly identical heating at every depth. Keep thermal absorption independent
+// of the appearance-only water attenuation slider. Scattering can still make
+// visible light fade faster than the energy available for heating.
+const THERMAL_WATER_ATTENUATION: f32 = 0.03;
+const THERMAL_ICE_ATTENUATION: f32 = 0.06;
 const THERMAL_CLOUD_ATTENUATION: f32 = 0.00025;
 const THERMAL_CLOUD_FLOOR: f32 = 0.85;
 

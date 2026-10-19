@@ -17,6 +17,11 @@ The project uses local forks of egui and egui_dock for the user interface, with 
 - Cell division and adhesion mechanics
 - Genome-based cell behavior
 - Real-time 3D rendering with volumetric effects
+- Local sunlight heating through terrain, cells, clouds, water and ice. Near
+  brightness 2, exposed ice can melt while prolonged shadows freeze water;
+  heat capacity and neighboring heat exchange delay these changes.
+- The active water inlet supplies 60°C (140°F) water and keeps its opening
+  warm enough to thaw ice plugs. Water cools normally after leaving the inlet.
 - Main-scene flashlight: aim with the cursor and press **L** to toggle. In VR,
   aim with the right hand and shake it back and forth to toggle; a short
   cooldown prevents repeated toggles. The beam also works with global fog off.
@@ -31,9 +36,15 @@ and GPU backends before building:
 
 ```bash
 sudo apt update
-sudo apt install pkg-config libasound2-dev libx11-dev libxcursor-dev libxrandr-dev \
+sudo apt install build-essential cmake python3 pkg-config libasound2-dev libx11-dev libxcursor-dev libxrandr-dev \
 	libxi-dev libwayland-dev libxkbcommon-dev libvulkan-dev libudev-dev
 ```
+
+VR is enabled by default and builds the bundled OpenXR loader with CMake and the
+C/C++ toolchain. In WSL, install these packages inside the Linux distribution.
+Verify that `cmake --version` works in the same terminal used to run Cargo.
+For a desktop-only build without OpenXR, use
+`cargo build --release --no-default-features --bin bio-spheres`.
 
 ```bash
 cargo build --release

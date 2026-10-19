@@ -75,6 +75,14 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
             compilation_options: Default::default(),
             cache: None,
         });
+        let momentum = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Water momentum regression pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("update_water_momentum"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         let mut params = GpuFluidParams::zeroed();
         params.grid_resolution = 4;
@@ -85,6 +93,7 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
         params.grid_origin_z = -2.0;
         params.gravity_mode = 1;
         params.gravity_magnitude = 50.0;
+        params.motion_dt = 1.0 / 60.0;
         params.lateral_flow_probability_steam = 0.0;
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid condensation regression parameters"),
@@ -155,6 +164,11 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
                 0,
                 std::mem::size_of::<GpuFluidParams>() as u64,
             );
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&momentum);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+            drop(pass);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Fluid condensation tick"),
                 timestamp_writes: None,
@@ -187,7 +201,7 @@ fn rain_falls_through_steam_and_cool_steam_condenses_at_the_world_shell() {
         let final_voxels: &[u32] = bytemuck::cast_slice(&mapped);
 
         assert_eq!(
-            final_voxels[pool_index],
+            final_voxels[pool_index] & 0xffff0007,
             (u16::MAX as u32) << 16 | 1,
             "rain should displace steam and settle as liquid above the solid floor"
         );

@@ -1,8 +1,6 @@
-//! GPU-based fluid simulation using pair-based swapping
-//!
-//! 6 directional passes (X, Y, Z), each with 2 checkered phases.
-//! Simple rule: swap neighbors unless it's air-above-water (anti-gravity).
-//! Single buffer - no double buffering needed.
+//! GPU fluid simulation using conservative parcel swaps. Water carries packed
+//! momentum across ticks; gravity accelerates it and drag damps it toward rest.
+//! Climate and momentum updates precede four bounded movement substeps.
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -108,7 +106,7 @@ pub struct GpuFluidParams {
     pub evaporation_threshold: u32,
     pub optimal_cell_temp: u32,
     /// Measured average air temperature, encoded as (Celsius + 50) * 256.
-    /// Zero means no air sample yet; the shader uses the atmospheric equilibrium.
+    /// Diagnostic readback only; heat exchange uses neighboring voxels.
     pub air_temperature_reference: u32,
 
     // ---- Climate tunables (see CLIMATE_SPEC) ----
@@ -123,6 +121,8 @@ pub struct GpuFluidParams {
     // Snow compaction debt rate (debt units per tick per degree below freeze threshold) - sustained cold packs snow into ice.
     pub snow_compact_rate: f32,
     pub climate_phase: u32,
+    /// Seconds advanced by this tick; momentum is integrated once before movement.
+    pub motion_dt: f32,
 }
 
 /// Extract params (must match shader)
@@ -263,6 +263,7 @@ pub struct GpuFluidSimulator {
 
     // Compute pipelines
     swap_pipeline: wgpu::ComputePipeline,
+    momentum_pipeline: wgpu::ComputePipeline,
     #[cfg(test)]
     update_temperature_pipeline: wgpu::ComputePipeline,
     update_temperature_slice_pipeline: wgpu::ComputePipeline,
@@ -470,6 +471,7 @@ impl GpuFluidSimulator {
             snow_melt_rate: DEFAULT_SNOW_MELT_RATE,
             snow_compact_rate: DEFAULT_SNOW_COMPACT_RATE,
             climate_phase: 0,
+            motion_dt: 1.0 / 60.0,
         };
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -847,6 +849,14 @@ impl GpuFluidSimulator {
         });
 
         // Create compute pipelines
+        let momentum_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Water Momentum Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("update_water_momentum"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         let swap_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Fluid Swap Pipeline"),
             layout: Some(&pipeline_layout),
@@ -1413,6 +1423,7 @@ impl GpuFluidSimulator {
             static_water_world_enabled: std::cell::Cell::new(false),
             static_water_world_needs_fill: std::cell::Cell::new(false),
             swap_pipeline,
+            momentum_pipeline,
             #[cfg(test)]
             update_temperature_pipeline,
             update_temperature_slice_pipeline,
@@ -1623,6 +1634,7 @@ impl GpuFluidSimulator {
             snow_melt_rate: self.snow_melt_rate.get(),
             snow_compact_rate: self.snow_compact_rate.get(),
             climate_phase,
+            motion_dt: 1.0 / 60.0,
         }
     }
 
@@ -2107,7 +2119,7 @@ impl GpuFluidSimulator {
         let climate_phase = climate_tick % CLIMATE_TICK_INTERVAL;
 
         // Update parameters for GPU (required for shader logic) - sub_step starts at 0
-        let params = self.make_params(
+        let mut params = self.make_params(
             3,
             climate_phase,
             current_time,
@@ -2115,6 +2127,7 @@ impl GpuFluidSimulator {
             gravity_dir,
             lateral_flow_probabilities,
         );
+        params.motion_dt = dt.clamp(0.0, 1.0 / 15.0);
         // Catch-up ticks share one encoder. Queue writes would all precede the
         // command buffer, giving every tick the final time/climate phase. An
         // encoded copy preserves each tick's parameters and resets sub_step.
@@ -2309,9 +2322,21 @@ impl GpuFluidSimulator {
             pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
         }
 
-        // Multi-pass fluid simulation with alternating checker phase
-        // Each sub-step flips which cells are active, allowing water to cascade
-        // multiple cells per frame for dramatically faster lateral flow.
+        // Integrate acceleration/drag once per tick. Momentum travels in the
+        // voxel state; water_velocity remains this tick's displacement report
+        // for cell drag, particles, and audio.
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Water Momentum Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.momentum_pipeline);
+            pass.set_bind_group(0, &self.cached_sim_bind_group, &[]);
+            pass.dispatch_workgroups(workgroup_count, workgroup_count, workgroup_count);
+        }
+
+        // Each sub-step flips the parcel's movement marker, permitting at most
+        // one water move per sub-step regardless of GPU invocation ordering.
         for sub_step in 0..NUM_FLUID_SUB_STEPS {
             if sub_step > 0 {
                 // Copy sub_step value from staging buffer to params uniform
@@ -3215,6 +3240,7 @@ mod frame_timing_tests {
                 assert_eq!(params.climate_phase, (index as u32 + 1) % 4);
                 assert!((params.time - (index + 1) as f32 / 60.0).abs() < 1e-6);
                 assert_eq!(params.sub_step, 3);
+                assert_eq!(params.motion_dt, 1.0 / 60.0);
                 assert_eq!(params.surface_pressure, 0.625);
                 assert_eq!(params.air_temperature_reference, 18208);
             }
